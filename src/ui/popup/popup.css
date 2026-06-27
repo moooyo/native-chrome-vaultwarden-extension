@@ -14,3 +14,8 @@ button.danger { background: #cf222e; }
 .item { border-bottom: 1px solid #d8dee4; padding: 8px 0; cursor: pointer; }
 .item strong { display: block; }
 .item span { color: #57606a; font-size: 12px; }
+.header { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.header h1 { margin: 0; }
+.header button { width: auto; margin: 0; padding: 6px 8px; }
+.toolbar { display: flex; gap: 8px; margin: 10px 0; }
+.toolbar button { margin: 0; }

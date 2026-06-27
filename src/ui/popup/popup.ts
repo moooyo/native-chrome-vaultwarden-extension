@@ -189,7 +189,108 @@ function renderLocked(error?: string) {
 }
 
 function renderUnlockedShell(error?: string) {
-  app.innerHTML = `<h1>Vault</h1><p class="muted">Unlocked. Vault list will be wired in Task 22.</p>${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}`;
+  app.innerHTML = `
+    <div class="header">
+      <h1>Vault</h1>
+      <button id="lock" class="secondary" type="button">Lock</button>
+    </div>
+    <div class="toolbar">
+      <button id="sync" type="button">Sync</button>
+      <button id="logoutUnlocked" class="danger" type="button">Log out</button>
+    </div>
+    <div id="vaultList"><p class="muted">Sync to load vault items.</p></div>
+    ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}`;
+
+  document.getElementById('lock')!.addEventListener('click', async () => {
+    if (isPending) return;
+    isPending = true;
+    const lockBtn = document.getElementById('lock') as HTMLButtonElement;
+    const syncBtn = document.getElementById('sync') as HTMLButtonElement;
+    const logoutBtn = document.getElementById('logoutUnlocked') as HTMLButtonElement;
+    lockBtn.disabled = true;
+    syncBtn.disabled = true;
+    logoutBtn.disabled = true;
+    try {
+      const response = await sendRequest({ type: 'auth.lock' });
+      if (!response.ok) {
+        render({ kind: 'unlocked', error: response.error.message });
+      } else {
+        render({ kind: 'locked' });
+      }
+    } finally {
+      isPending = false;
+      if (currentViewKind === 'unlocked') {
+        const liveLockBtn = document.getElementById('lock') as HTMLButtonElement | null;
+        const liveSyncBtn = document.getElementById('sync') as HTMLButtonElement | null;
+        const liveLogoutBtn = document.getElementById('logoutUnlocked') as HTMLButtonElement | null;
+        if (liveLockBtn) liveLockBtn.disabled = false;
+        if (liveSyncBtn) liveSyncBtn.disabled = false;
+        if (liveLogoutBtn) liveLogoutBtn.disabled = false;
+      }
+    }
+  });
+
+  document.getElementById('logoutUnlocked')!.addEventListener('click', async () => {
+    if (isPending) return;
+    isPending = true;
+    const lockBtn = document.getElementById('lock') as HTMLButtonElement;
+    const syncBtn = document.getElementById('sync') as HTMLButtonElement;
+    const logoutBtn = document.getElementById('logoutUnlocked') as HTMLButtonElement;
+    lockBtn.disabled = true;
+    syncBtn.disabled = true;
+    logoutBtn.disabled = true;
+    try {
+      const response = await sendRequest({ type: 'auth.logout' });
+      if (!response.ok) {
+        render({ kind: 'unlocked', error: response.error.message });
+      } else {
+        render({ kind: 'loggedOut' });
+      }
+    } finally {
+      isPending = false;
+      if (currentViewKind === 'unlocked') {
+        const liveLockBtn = document.getElementById('lock') as HTMLButtonElement | null;
+        const liveSyncBtn = document.getElementById('sync') as HTMLButtonElement | null;
+        const liveLogoutBtn = document.getElementById('logoutUnlocked') as HTMLButtonElement | null;
+        if (liveLockBtn) liveLockBtn.disabled = false;
+        if (liveSyncBtn) liveSyncBtn.disabled = false;
+        if (liveLogoutBtn) liveLogoutBtn.disabled = false;
+      }
+    }
+  });
+
+  document.getElementById('sync')!.addEventListener('click', async () => {
+    if (isPending) return;
+    isPending = true;
+    const lockBtn = document.getElementById('lock') as HTMLButtonElement;
+    const syncBtn = document.getElementById('sync') as HTMLButtonElement;
+    const logoutBtn = document.getElementById('logoutUnlocked') as HTMLButtonElement;
+    lockBtn.disabled = true;
+    syncBtn.disabled = true;
+    logoutBtn.disabled = true;
+    try {
+      const response = await sendRequest({ type: 'vault.sync' });
+      if (!response.ok) {
+        render({ kind: 'unlocked', error: response.error.message });
+      } else {
+        const items = response.data as unknown[];
+        const vaultList = document.getElementById('vaultList');
+        if (vaultList) {
+          vaultList.innerHTML = `<p class="muted">Loaded ${items.length} items. List rendering arrives in Task 22.</p>`;
+        }
+      }
+    } finally {
+      isPending = false;
+      if (currentViewKind === 'unlocked') {
+        const liveLockBtn = document.getElementById('lock') as HTMLButtonElement | null;
+        const liveSyncBtn = document.getElementById('sync') as HTMLButtonElement | null;
+        const liveLogoutBtn = document.getElementById('logoutUnlocked') as HTMLButtonElement | null;
+        if (liveLockBtn) liveLockBtn.disabled = false;
+        if (liveSyncBtn) liveSyncBtn.disabled = false;
+        if (liveLogoutBtn) liveLogoutBtn.disabled = false;
+      }
+    }
+  });
 }
 
 async function handleAuthResult(response: Awaited<ReturnType<typeof sendRequest>>) {
