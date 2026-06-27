@@ -62,8 +62,12 @@ function renderLogin(error?: string) {
     } finally {
       isPending = false;
       if (currentViewKind === 'loggedOut') {
-        button.disabled = false;
-        form.querySelectorAll('input').forEach(input => input.disabled = false);
+        const liveButton = document.querySelector('#loginForm button[type="submit"]') as HTMLButtonElement | null;
+        const liveForm = document.getElementById('loginForm') as HTMLFormElement | null;
+        if (liveButton && liveForm) {
+          liveButton.disabled = false;
+          liveForm.querySelectorAll('input').forEach(input => input.disabled = false);
+        }
       }
     }
   });
@@ -96,8 +100,12 @@ function renderTwoFactor(providers: Array<0 | 1>, error?: string) {
     } finally {
       isPending = false;
       if (currentViewKind === 'twoFactor') {
-        button.disabled = false;
-        (form.querySelectorAll('input, select') as NodeListOf<HTMLInputElement | HTMLSelectElement>).forEach(el => el.disabled = false);
+        const liveButton = document.querySelector('#twoFactorForm button[type="submit"]') as HTMLButtonElement | null;
+        const liveForm = document.getElementById('twoFactorForm') as HTMLFormElement | null;
+        if (liveButton && liveForm) {
+          liveButton.disabled = false;
+          (liveForm.querySelectorAll('input, select') as NodeListOf<HTMLInputElement | HTMLSelectElement>).forEach(el => el.disabled = false);
+        }
       }
     }
   });
@@ -114,8 +122,12 @@ function renderTwoFactor(providers: Array<0 | 1>, error?: string) {
     } finally {
       isPending = false;
       if (currentViewKind === 'twoFactor') {
-        button.disabled = false;
-        (form.querySelectorAll('input, select, button[type="submit"]') as NodeListOf<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>).forEach(el => el.disabled = false);
+        const liveButton = document.getElementById('sendEmail') as HTMLButtonElement | null;
+        const liveForm = document.getElementById('twoFactorForm') as HTMLFormElement | null;
+        if (liveButton && liveForm) {
+          liveButton.disabled = false;
+          (liveForm.querySelectorAll('input, select, button[type="submit"]') as NodeListOf<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>).forEach(el => el.disabled = false);
+        }
       }
     }
   });
@@ -147,9 +159,14 @@ function renderLocked(error?: string) {
     } finally {
       isPending = false;
       if (currentViewKind === 'locked') {
-        button.disabled = false;
-        logoutBtn.disabled = false;
-        form.querySelectorAll('input').forEach(input => input.disabled = false);
+        const liveButton = document.querySelector('#unlockForm button[type="submit"]') as HTMLButtonElement | null;
+        const liveLogoutBtn = document.getElementById('logout') as HTMLButtonElement | null;
+        const liveForm = document.getElementById('unlockForm') as HTMLFormElement | null;
+        if (liveButton && liveLogoutBtn && liveForm) {
+          liveButton.disabled = false;
+          liveLogoutBtn.disabled = false;
+          liveForm.querySelectorAll('input').forEach(input => input.disabled = false);
+        }
       }
     }
   });
