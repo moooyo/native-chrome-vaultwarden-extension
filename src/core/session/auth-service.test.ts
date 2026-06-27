@@ -183,6 +183,35 @@ describe('AuthService', () => {
     expect(secondCall?.remember).toBe(true);
   });
 
+  // Coverage-only branch tests: production guards already exist; these tests cannot be
+  // made RED without deleting production code, so RED evidence is documented as N/A.
+
+  it('refreshIfNeeded does not call api.refresh when there is no persisted auth', async () => {
+    const api = { refresh: vi.fn() };
+    const { auth } = makeService(api);
+    // No saveUnlocked call → getPersistedAuth() returns undefined
+    await auth.refreshIfNeeded(5000);
+    expect(api.refresh).not.toHaveBeenCalled();
+  });
+
+  it('refreshIfNeeded does not call api.refresh when token is not near expiry', async () => {
+    const api = { refresh: vi.fn() };
+    const { auth, sm } = makeService(api);
+    // now() = 1000, expiresAt = 10000, skewMs = 5000 → expiresAt - now() = 9000 > 5000 → skip
+    await sm.saveUnlocked({
+      email: KDF_VECTOR.email,
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      expiresAt: 10000,
+      protectedKey: USER_KEY_VECTOR.akey,
+      kdf: 0,
+      kdfIterations: KDF_VECTOR.iterations,
+      userKey: { encKey: new Uint8Array(32), macKey: new Uint8Array(32) },
+    });
+    await auth.refreshIfNeeded(5000);
+    expect(api.refresh).not.toHaveBeenCalled();
+  });
+
   it('refreshIfNeeded refreshes expiring tokens and persists the replacements', async () => {
     const api = {
       refresh: vi.fn(async () => ({
