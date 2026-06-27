@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { VaultService } from './vault-service.js';
 
+// webextension-polyfill is imported transitively by platform/store.ts at module
+// level. Without this mock the import fails in the node (vitest) environment
+// because the browser global `chrome` is absent. See store.test.ts for the
+// same pattern used across the test suite.
 vi.mock('webextension-polyfill', () => ({
   default: { storage: { local: {}, session: {} } },
 }));
@@ -65,5 +69,52 @@ describe('VaultService', () => {
     const { service } = await makeService(bad);
     const list = await service.sync();
     expect(list).toEqual([{ id: 'cipher-1', type: 1, favorite: false, name: '(undecryptable)', uris: [], undecryptable: true }]);
+  });
+
+  // Coverage-only: public method listItems() — not exercised by the sync test above.
+  it('listItems returns [] before sync and cached summaries after sync without calling api.sync again', async () => {
+    const { service, api } = await makeService();
+
+    // Before any sync the cache is empty — listItems returns [].
+    await expect(service.listItems()).resolves.toEqual([]);
+
+    // After sync the summaries are cached.
+    const synced = await service.sync();
+    expect(api.sync).toHaveBeenCalledTimes(1);
+
+    // listItems must return the cached summaries without calling api.sync a second time.
+    const listed = await service.listItems();
+    expect(listed).toEqual(synced);
+    expect(api.sync).toHaveBeenCalledTimes(1);
+  });
+
+  // Coverage-only: public method clearCache() — removes cached data.
+  it('clearCache removes cached summaries so listItems returns [] again', async () => {
+    const { service } = await makeService();
+    await service.sync();
+    expect(await service.listItems()).not.toEqual([]);
+
+    await service.clearCache();
+    await expect(service.listItems()).resolves.toEqual([]);
+  });
+
+  it('clearCache removes vault cache so getField rejects with "vault is not synced"', async () => {
+    const { service } = await makeService();
+    await service.sync();
+    await service.clearCache();
+    await expect(service.getField('cipher-1', 'password')).rejects.toThrow('vault is not synced');
+  });
+
+  // Coverage for undecryptable-cipher path through getField: decryptCipher returns a
+  // result where some fields may be undefined (e.g. when the cipher is undecryptable
+  // the returned object has undecryptable:true and no password). getField should return
+  // undefined rather than throwing in that case.
+  it('getField returns undefined for a field that is not present on an undecryptable cipher', async () => {
+    const bad = makeSync();
+    bad.ciphers[0]!.name = '2.bad|bad|bad';
+    const { service } = await makeService(bad);
+    await service.sync();
+    // password is undefined on an undecryptable cipher — should not throw.
+    await expect(service.getField('cipher-1', 'password')).resolves.toBeUndefined();
   });
 });
