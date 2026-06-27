@@ -29,6 +29,18 @@ function textResponse(body: string, status = 200): Response {
   return new Response(body, { status, headers: { 'content-type': 'text/html' } });
 }
 
+async function captureApiHttpError(operation: Promise<unknown>): Promise<ApiHttpError> {
+  try {
+    await operation;
+  } catch (error) {
+    if (error instanceof ApiHttpError) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error('Expected ApiHttpError');
+}
+
 describe('ApiClient prelogin', () => {
   it('POSTs /identity/accounts/prelogin with lowercase email in JSON body', async () => {
     const fetchFn = vi.fn(async () => jsonResponse({ kdf: 0, kdfIterations: 600000 }));
@@ -64,23 +76,24 @@ describe('ApiClient error handling', () => {
       fetchFn,
       localStore: createMemoryStore(),
     });
-    await expect(api.prelogin('invalid')).rejects.toThrow(ApiHttpError);
-    const error = (await api.prelogin('invalid').catch(e => e)) as ApiHttpError;
+    const error = await captureApiHttpError(api.prelogin('invalid'));
     expect(error.status).toBe(400);
     expect(error.body).toEqual({ error: 'Invalid email' });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it('throws ApiHttpError with status on non-OK non-JSON response (HTML error page)', async () => {
-    const fetchFn = vi.fn(async () => textResponse('<html><body>502 Bad Gateway</body></html>', 502));
+    const html = '<html><body>502 Bad Gateway</body></html>';
+    const fetchFn = vi.fn(async () => textResponse(html, 502));
     const api = new ApiClient({
       serverUrlProvider: async () => 'https://vw.example.com/',
       fetchFn,
       localStore: createMemoryStore(),
     });
-    await expect(api.prelogin('user@example.com')).rejects.toThrow(ApiHttpError);
-    const error = (await api.prelogin('user@example.com').catch(e => e)) as ApiHttpError;
+    const error = await captureApiHttpError(api.prelogin('user@example.com'));
     expect(error.status).toBe(502);
-    expect(typeof error.body).toBe('string');
+    expect(error.body).toBe(html);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it('throws ApiHttpError with status on non-OK response with no body', async () => {
@@ -90,10 +103,10 @@ describe('ApiClient error handling', () => {
       fetchFn,
       localStore: createMemoryStore(),
     });
-    await expect(api.prelogin('user@example.com')).rejects.toThrow(ApiHttpError);
-    const error = (await api.prelogin('user@example.com').catch(e => e)) as ApiHttpError;
+    const error = await captureApiHttpError(api.prelogin('user@example.com'));
     expect(error.status).toBe(503);
     expect(error.body).toBe('');
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it('rejects OK response with non-JSON body (parsing error)', async () => {
