@@ -341,11 +341,25 @@ function renderDetail(id: string) {
     <button id="copyPassword" type="button">Copy password</button>`;
   document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
   document.getElementById('copyPassword')!.addEventListener('click', async () => {
-    const response = await sendRequest({ type: 'vault.getField', id, field: 'password' });
-    if (!response.ok) return renderDetailError(item, response.error.message);
-    const { value } = response.data as { value?: string };
-    if (!value) return renderDetailError(item, 'Password is empty');
-    await navigator.clipboard.writeText(value);
+    if (isPending) return;
+    isPending = true;
+    const button = document.getElementById('copyPassword') as HTMLButtonElement;
+    button.disabled = true;
+    try {
+      const response = await sendRequest({ type: 'vault.getField', id, field: 'password' });
+      if (!response.ok) return renderDetailError(item, response.error.message);
+      const { value } = response.data as { value?: string };
+      if (!value) return renderDetailError(item, 'Password is empty');
+      try {
+        await navigator.clipboard.writeText(value);
+      } catch {
+        renderDetailError(item, 'Failed to copy password to clipboard');
+      }
+    } finally {
+      isPending = false;
+      const liveButton = document.getElementById('copyPassword') as HTMLButtonElement | null;
+      if (liveButton) liveButton.disabled = false;
+    }
   });
 }
 
