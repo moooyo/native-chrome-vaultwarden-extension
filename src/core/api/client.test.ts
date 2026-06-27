@@ -145,7 +145,7 @@ describe('ApiClient password grant', () => {
       KdfIterations: 600000,
     }));
     const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: store });
-    const result = await api.passwordLogin({ email: 'user@example.com', masterPasswordHash: 'mph' });
+    const result = await api.passwordLogin({ email: '  USER@Example.COM  ', masterPasswordHash: 'mph' });
     expect(result.kind).toBe('success');
     const call = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
     const init = call[1];
@@ -161,6 +161,19 @@ describe('ApiClient password grant', () => {
     expect(form.get('device_name')).toBe('chrome');
   });
 
+  it('normalises mixed-case/whitespace email: username field is trimmed and lowercased', async () => {
+    const store = createMemoryStore();
+    await store.set('deviceIdentifier', 'device-abc');
+    const fetchFn = vi.fn(async () => jsonResponse({
+      access_token: 'at', expires_in: 3600, refresh_token: 'rt', token_type: 'Bearer',
+      Key: '2.iv|ct|mac', Kdf: 0, KdfIterations: 600000,
+    }));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: store });
+    await api.passwordLogin({ email: '  USER@EXAMPLE.COM  ', masterPasswordHash: 'mph' });
+    const form = new URLSearchParams((fetchFn.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+    expect(form.get('username')).toBe('user@example.com');
+  });
+
   it('parses 2FA-required invalid_grant into supported provider ids', async () => {
     const fetchFn = vi.fn(async () => jsonResponse({
       error: 'invalid_grant',
@@ -171,5 +184,22 @@ describe('ApiClient password grant', () => {
     const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: createMemoryStore() });
     const result = await api.passwordLogin({ email: 'user@example.com', masterPasswordHash: 'mph' });
     expect(result).toEqual({ kind: 'twoFactor', providers: [0, 1, 7], token: 'tf-token' });
+  });
+});
+
+describe('ApiClient sendEmailLogin', () => {
+  it('POSTs /api/two-factor/send-email-login with trimmed/lowercased email and token body key', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({}));
+    const api = new ApiClient({
+      serverUrlProvider: async () => 'https://vw.example.com',
+      fetchFn,
+      localStore: createMemoryStore(),
+    });
+    await api.sendEmailLogin({ email: '  USER@EXAMPLE.COM  ', twoFactorToken: 'mytoken' });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://vw.example.com/api/two-factor/send-email-login');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ email: 'user@example.com', token: 'mytoken' });
   });
 });
