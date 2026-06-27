@@ -1,3 +1,5 @@
+import { decryptToBytes } from './encstring.js';
+
 export type SymmetricKey = { encKey: Uint8Array; macKey: Uint8Array };
 
 export function symmetricKeyFromBytes(bytes: Uint8Array): SymmetricKey {
@@ -5,4 +7,11 @@ export function symmetricKeyFromBytes(bytes: Uint8Array): SymmetricKey {
     throw new Error(`symmetric key must be 64 bytes, got ${bytes.length}`);
   }
   return { encKey: bytes.slice(0, 32), macKey: bytes.slice(32, 64) };
+}
+
+export async function unwrapSymmetricKey(
+  protectedKey: string,
+  wrappingKey: SymmetricKey,
+): Promise<SymmetricKey> {
+  return symmetricKeyFromBytes(await decryptToBytes(protectedKey, wrappingKey));
 }
