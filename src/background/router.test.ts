@@ -1,0 +1,119 @@
+import { describe, it, expect, vi } from 'vitest';
+import type { SessionState } from '../core/session/session-manager.js';
+import { createRouter } from './router.js';
+
+describe('router', () => {
+  it('routes auth.getState', async () => {
+    const router = createRouter({
+      auth: { getState: vi.fn(async (): Promise<SessionState> => 'locked') },
+      vault: {},
+      settings: { getServerUrl: vi.fn(), saveServerUrl: vi.fn() },
+    });
+    await expect(router.handle({ type: 'auth.getState' })).resolves.toEqual({ ok: true, data: { state: 'locked' } });
+  });
+
+  it('turns thrown errors into ok:false responses', async () => {
+    const router = createRouter({
+      auth: { login: vi.fn(async () => { throw new Error('bad password'); }) },
+      vault: {},
+      settings: { getServerUrl: vi.fn(), saveServerUrl: vi.fn() },
+    });
+    await expect(router.handle({ type: 'auth.login', email: 'u', masterPassword: 'p' }))
+      .resolves.toEqual({ ok: false, error: { code: 'error', message: 'bad password' } });
+  });
+
+  it('routes vault.getField', async () => {
+    const router = createRouter({
+      auth: {},
+      vault: { getField: vi.fn(async () => 'secret') },
+      settings: { getServerUrl: vi.fn(), saveServerUrl: vi.fn() },
+    });
+    await expect(router.handle({ type: 'vault.getField', id: '1', field: 'password' }))
+      .resolves.toEqual({ ok: true, data: { value: 'secret' } });
+  });
+
+  it('vault.getField returns { value: undefined } when field is missing', async () => {
+    const router = createRouter({
+      auth: {},
+      vault: { getField: vi.fn(async () => undefined) },
+      settings: { getServerUrl: vi.fn(), saveServerUrl: vi.fn() },
+    });
+    await expect(router.handle({ type: 'vault.getField', id: 'missing', field: 'password' }))
+      .resolves.toEqual({ ok: true, data: {} });
+  });
+
+  it('routes settings.get returning serverUrl', async () => {
+    const router = createRouter({
+      auth: {},
+      vault: {},
+      settings: { getServerUrl: vi.fn(async () => 'https://vault.example.com'), saveServerUrl: vi.fn() },
+    });
+    await expect(router.handle({ type: 'settings.get' }))
+      .resolves.toEqual({ ok: true, data: { serverUrl: 'https://vault.example.com' } });
+  });
+
+  it('routes settings.get when serverUrl is undefined', async () => {
+    const router = createRouter({
+      auth: {},
+      vault: {},
+      settings: { getServerUrl: vi.fn(async () => undefined), saveServerUrl: vi.fn() },
+    });
+    await expect(router.handle({ type: 'settings.get' }))
+      .resolves.toEqual({ ok: true, data: {} });
+  });
+
+  it('routes settings.save', async () => {
+    const save = vi.fn(async () => {});
+    const router = createRouter({
+      auth: {},
+      vault: {},
+      settings: { getServerUrl: vi.fn(), saveServerUrl: save },
+    });
+    await expect(router.handle({ type: 'settings.save', serverUrl: 'https://vault.example.com' }))
+      .resolves.toEqual({ ok: true, data: null });
+    expect(save).toHaveBeenCalledWith('https://vault.example.com');
+  });
+
+  it('routes auth.lock', async () => {
+    const lock = vi.fn(async () => {});
+    const router = createRouter({
+      auth: { lock },
+      vault: {},
+      settings: { getServerUrl: vi.fn(), saveServerUrl: vi.fn() },
+    });
+    await expect(router.handle({ type: 'auth.lock' })).resolves.toEqual({ ok: true, data: null });
+    expect(lock).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes auth.logout', async () => {
+    const logout = vi.fn(async () => {});
+    const router = createRouter({
+      auth: { logout },
+      vault: {},
+      settings: { getServerUrl: vi.fn(), saveServerUrl: vi.fn() },
+    });
+    await expect(router.handle({ type: 'auth.logout' })).resolves.toEqual({ ok: true, data: null });
+    expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes vault.listItems', async () => {
+    const items = [{ id: '1', name: 'item', uris: [], type: 1 as const, favorite: false }];
+    const router = createRouter({
+      auth: {},
+      vault: { listItems: vi.fn(async () => items) },
+      settings: { getServerUrl: vi.fn(), saveServerUrl: vi.fn() },
+    });
+    await expect(router.handle({ type: 'vault.listItems' }))
+      .resolves.toEqual({ ok: true, data: items });
+  });
+
+  it('turns non-Error throws into ok:false with string message', async () => {
+    const router = createRouter({
+      auth: { lock: vi.fn(async () => { throw 'string error'; }) },
+      vault: {},
+      settings: { getServerUrl: vi.fn(), saveServerUrl: vi.fn() },
+    });
+    await expect(router.handle({ type: 'auth.lock' }))
+      .resolves.toEqual({ ok: false, error: { code: 'error', message: 'string error' } });
+  });
+});
