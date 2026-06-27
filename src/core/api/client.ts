@@ -1,5 +1,21 @@
 import type { KeyValueStore } from '../../platform/store.js';
-import type { PreloginResponse } from './types.js';
+import type {
+  LoginSuccessResponse,
+  PreloginResponse,
+  TwoFactorRequiredResponse,
+} from './types.js';
+
+export interface PasswordLoginInput {
+  email: string;
+  masterPasswordHash: string;
+  twoFactorProvider?: number;
+  twoFactorToken?: string;
+  remember?: boolean;
+}
+
+export type PasswordLoginResult =
+  | { kind: 'success'; data: LoginSuccessResponse }
+  | { kind: 'twoFactor'; providers: number[]; token?: string };
 
 export type FetchFn = typeof fetch;
 
@@ -17,6 +33,49 @@ export class ApiClient {
 
   constructor(private readonly deps: ApiClientDeps) {
     this.fetchFn = deps.fetchFn ?? globalThis.fetch.bind(globalThis);
+  }
+
+  async passwordLogin(input: PasswordLoginInput): Promise<PasswordLoginResult> {
+    const form = new URLSearchParams();
+    form.set('grant_type', 'password');
+    form.set('username', input.email.trim().toLowerCase());
+    form.set('password', input.masterPasswordHash);
+    form.set('scope', 'api offline_access');
+    form.set('client_id', 'browser');
+    form.set('device_type', '2');
+    form.set('device_identifier', await this.getDeviceIdentifier());
+    form.set('device_name', 'chrome');
+    if (input.twoFactorProvider !== undefined && input.twoFactorToken) {
+      form.set('two_factor_provider', String(input.twoFactorProvider));
+      form.set('two_factor_token', input.twoFactorToken);
+      form.set('two_factor_remember', input.remember ? '1' : '0');
+    }
+
+    const response = await this.fetchFn(await this.url('/identity/connect/token'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+    });
+    const body = await response.json();
+    if (response.ok) return { kind: 'success', data: body as LoginSuccessResponse };
+
+    if (response.status === 400 && isTwoFactorRequired(body)) {
+      const result: PasswordLoginResult = {
+        kind: 'twoFactor',
+        providers: Object.keys(body.TwoFactorProviders).map(Number).sort((a, b) => a - b),
+        ...(body.TwoFactorToken !== undefined ? { token: body.TwoFactorToken } : {}),
+      };
+      return result;
+    }
+    throw new ApiHttpError(response.status, body);
+  }
+
+  async sendEmailLogin(input: { email: string; twoFactorToken: string }): Promise<void> {
+    await this.jsonRequest('/api/two-factor/send-email-login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: input.email.trim().toLowerCase(), token: input.twoFactorToken }),
+    });
   }
 
   async prelogin(email: string): Promise<PreloginResponse> {
@@ -74,4 +133,14 @@ export class ApiHttpError extends Error {
     super(`Vaultwarden API error ${status}`);
     this.name = 'ApiHttpError';
   }
+}
+
+function isTwoFactorRequired(body: unknown): body is TwoFactorRequiredResponse {
+  if (typeof body !== 'object' || body === null) return false;
+  const candidate = body as Partial<TwoFactorRequiredResponse>;
+  return candidate.error === 'invalid_grant'
+    && typeof candidate.error_description === 'string'
+    && candidate.error_description.toLowerCase().includes('two factor')
+    && typeof candidate.TwoFactorProviders === 'object'
+    && candidate.TwoFactorProviders !== null;
 }

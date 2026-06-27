@@ -130,3 +130,46 @@ describe('ApiClient error handling', () => {
     await expect(api.prelogin('user@example.com')).rejects.toThrow(SyntaxError);
   });
 });
+
+describe('ApiClient password grant', () => {
+  it('POSTs connect/token as form-urlencoded with required browser parameters', async () => {
+    const store = createMemoryStore();
+    await store.set('deviceIdentifier', 'device-123');
+    const fetchFn = vi.fn(async () => jsonResponse({
+      access_token: 'access',
+      expires_in: 3600,
+      refresh_token: 'refresh',
+      token_type: 'Bearer',
+      Key: '2.iv|ct|mac',
+      Kdf: 0,
+      KdfIterations: 600000,
+    }));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: store });
+    const result = await api.passwordLogin({ email: 'user@example.com', masterPasswordHash: 'mph' });
+    expect(result.kind).toBe('success');
+    const call = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    const init = call[1];
+    expect(init.headers).toEqual({ 'content-type': 'application/x-www-form-urlencoded' });
+    const form = new URLSearchParams(init.body as string);
+    expect(form.get('grant_type')).toBe('password');
+    expect(form.get('username')).toBe('user@example.com');
+    expect(form.get('password')).toBe('mph');
+    expect(form.get('scope')).toBe('api offline_access');
+    expect(form.get('client_id')).toBe('browser');
+    expect(form.get('device_type')).toBe('2');
+    expect(form.get('device_identifier')).toBe('device-123');
+    expect(form.get('device_name')).toBe('chrome');
+  });
+
+  it('parses 2FA-required invalid_grant into supported provider ids', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({
+      error: 'invalid_grant',
+      error_description: 'Two factor required',
+      TwoFactorProviders: { '0': {}, '1': {}, '7': {} },
+      TwoFactorToken: 'tf-token',
+    }, 400));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: createMemoryStore() });
+    const result = await api.passwordLogin({ email: 'user@example.com', masterPasswordHash: 'mph' });
+    expect(result).toEqual({ kind: 'twoFactor', providers: [0, 1, 7], token: 'tf-token' });
+  });
+});
