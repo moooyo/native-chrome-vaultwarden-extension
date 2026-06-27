@@ -187,6 +187,36 @@ describe('ApiClient password grant', () => {
   });
 });
 
+describe('ApiClient refresh and sync', () => {
+  it('refreshes using refresh_token grant', async () => {
+    const store = createMemoryStore();
+    await store.set('deviceIdentifier', 'device-123');
+    const fetchFn = vi.fn(async () => jsonResponse({
+      access_token: 'new-access',
+      expires_in: 3600,
+      refresh_token: 'new-refresh',
+      token_type: 'Bearer',
+    }));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: store });
+    await expect(api.refresh('old-refresh')).resolves.toMatchObject({ access_token: 'new-access' });
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    const form = new URLSearchParams(init.body as string);
+    expect(form.get('grant_type')).toBe('refresh_token');
+    expect(form.get('refresh_token')).toBe('old-refresh');
+    expect(form.get('client_id')).toBe('browser');
+  });
+
+  it('syncs with Authorization Bearer token', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ profile: { id: 'u', email: 'u@example.com' }, ciphers: [] }));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: createMemoryStore() });
+    await expect(api.sync('access')).resolves.toEqual({ profile: { id: 'u', email: 'u@example.com' }, ciphers: [] });
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/sync', {
+      method: 'GET',
+      headers: { authorization: 'Bearer access' },
+    });
+  });
+});
+
 describe('ApiClient sendEmailLogin', () => {
   it('POSTs /api/two-factor/send-email-login with trimmed/lowercased email and token body key', async () => {
     const fetchFn = vi.fn(async () => jsonResponse({}));

@@ -2,6 +2,8 @@ import type { KeyValueStore } from '../../platform/store.js';
 import type {
   LoginSuccessResponse,
   PreloginResponse,
+  RefreshTokenResponse,
+  SyncResponse,
   TwoFactorRequiredResponse,
 } from './types.js';
 
@@ -83,6 +85,31 @@ export class ApiClient {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ email: email.trim().toLowerCase() }),
+    });
+  }
+
+  async refresh(refreshToken: string): Promise<RefreshTokenResponse> {
+    const form = new URLSearchParams();
+    form.set('grant_type', 'refresh_token');
+    form.set('refresh_token', refreshToken);
+    form.set('client_id', 'browser');
+    form.set('device_type', '2');
+    form.set('device_identifier', await this.getDeviceIdentifier());
+    form.set('device_name', 'chrome');
+    const response = await this.fetchFn(await this.url('/identity/connect/token'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new ApiHttpError(response.status, body);
+    return body as RefreshTokenResponse;
+  }
+
+  async sync(accessToken: string): Promise<SyncResponse> {
+    return this.jsonRequest<SyncResponse>('/api/sync', {
+      method: 'GET',
+      headers: { authorization: `Bearer ${accessToken}` },
     });
   }
 
