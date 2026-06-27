@@ -41,7 +41,7 @@ export class ApiClient {
     try {
       body = JSON.parse(text);
     } catch {
-      body = text || null;
+      body = text;
     }
     if (!response.ok) {
       throw new ApiHttpError(response.status, body);

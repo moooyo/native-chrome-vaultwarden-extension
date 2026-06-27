@@ -93,5 +93,6 @@ describe('ApiClient error handling', () => {
     await expect(api.prelogin('user@example.com')).rejects.toThrow(ApiHttpError);
     const error = (await api.prelogin('user@example.com').catch(e => e)) as ApiHttpError;
     expect(error.status).toBe(503);
+    expect(error.body).toBe('');
   });
 });
