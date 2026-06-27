@@ -72,5 +72,6 @@ export class ApiClient {
 export class ApiHttpError extends Error {
   constructor(public readonly status: number, public readonly body: unknown) {
     super(`Vaultwarden API error ${status}`);
+    this.name = 'ApiHttpError';
   }
 }

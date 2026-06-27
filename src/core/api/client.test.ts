@@ -58,7 +58,9 @@ describe('ApiClient prelogin', () => {
       body: JSON.stringify({ email: 'user@example.com' }),
     });
   });
+});
 
+describe('ApiClient device identifier', () => {
   it('stores and reuses a stable device identifier', async () => {
     const store = createMemoryStore();
     const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', localStore: store });
@@ -85,6 +87,7 @@ describe('ApiClient error handling', () => {
       localStore: createMemoryStore(),
     });
     const error = await captureApiHttpError(api.prelogin('invalid'));
+    expect(error.name).toBe('ApiHttpError');
     expect(error.status).toBe(400);
     expect(error.body).toEqual({ error: 'Invalid email' });
     expect(fetchFn).toHaveBeenCalledTimes(1);
