@@ -13,7 +13,7 @@ const DEVICE_ID_KEY = 'deviceIdentifier';
 
 export class ApiClient {
   private readonly fetchFn: FetchFn;
-  private deviceIdentifierPromise?: Promise<string>;
+  private deviceIdentifierPromise: Promise<string> | undefined;
 
   constructor(private readonly deps: ApiClientDeps) {
     this.fetchFn = deps.fetchFn ?? globalThis.fetch.bind(globalThis);
