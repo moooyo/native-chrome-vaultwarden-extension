@@ -1,2 +1,16 @@
-body { width: 360px; min-height: 200px; margin: 0; font: 14px system-ui, sans-serif; }
-#app { padding: 12px; }
+body { width: 380px; min-height: 360px; margin: 0; font: 14px system-ui, sans-serif; color: #1f2328; background: #fff; }
+#app { padding: 14px; }
+h1 { font-size: 18px; margin: 0 0 12px; }
+label { display: block; margin: 10px 0 4px; font-weight: 600; }
+input, select, button { box-sizing: border-box; width: 100%; font: inherit; }
+input, select { padding: 8px; border: 1px solid #d0d7de; border-radius: 6px; }
+button { margin-top: 12px; padding: 8px; border: 0; border-radius: 6px; background: #0969da; color: #fff; cursor: pointer; }
+button.secondary { background: #57606a; }
+button.danger { background: #cf222e; }
+.error { color: #cf222e; margin-top: 8px; white-space: pre-wrap; }
+.muted { color: #57606a; }
+.row { display: flex; gap: 8px; align-items: center; }
+.row > * { flex: 1; }
+.item { border-bottom: 1px solid #d8dee4; padding: 8px 0; cursor: pointer; }
+.item strong { display: block; }
+.item span { color: #57606a; font-size: 12px; }
