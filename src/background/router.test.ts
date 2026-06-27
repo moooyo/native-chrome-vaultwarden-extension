@@ -32,7 +32,7 @@ describe('router', () => {
       .resolves.toEqual({ ok: true, data: { value: 'secret' } });
   });
 
-  it('vault.getField returns { value: undefined } when field is missing', async () => {
+  it('vault.getField omits value property when field is undefined', async () => {
     const router = createRouter({
       auth: {},
       vault: { getField: vi.fn(async () => undefined) },
@@ -115,5 +115,31 @@ describe('router', () => {
     });
     await expect(router.handle({ type: 'auth.lock' }))
       .resolves.toEqual({ ok: false, error: { code: 'error', message: 'string error' } });
+  });
+
+  it('auth.submitTwoFactor omits remember property when undefined', async () => {
+    const submitTwoFactor = vi.fn(async () => ({ kind: 'unlocked' as const }));
+    const router = createRouter({
+      auth: { submitTwoFactor },
+      vault: {},
+      settings: { getServerUrl: vi.fn(), saveServerUrl: vi.fn() },
+    });
+    await expect(router.handle({ type: 'auth.submitTwoFactor', provider: 0, code: '123456' }))
+      .resolves.toEqual({ ok: true, data: { kind: 'unlocked' } });
+    expect(submitTwoFactor).toHaveBeenCalledWith({ provider: 0, code: '123456' });
+    expect(submitTwoFactor).toHaveBeenCalledTimes(1);
+  });
+
+  it('auth.submitTwoFactor includes remember property when provided', async () => {
+    const submitTwoFactor = vi.fn(async () => ({ kind: 'unlocked' as const }));
+    const router = createRouter({
+      auth: { submitTwoFactor },
+      vault: {},
+      settings: { getServerUrl: vi.fn(), saveServerUrl: vi.fn() },
+    });
+    await expect(router.handle({ type: 'auth.submitTwoFactor', provider: 0, code: '123456', remember: true }))
+      .resolves.toEqual({ ok: true, data: { kind: 'unlocked' } });
+    expect(submitTwoFactor).toHaveBeenCalledWith({ provider: 0, code: '123456', remember: true });
+    expect(submitTwoFactor).toHaveBeenCalledTimes(1);
   });
 });
