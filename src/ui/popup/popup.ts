@@ -347,8 +347,10 @@ function renderDetail(id: string) {
   document.getElementById('copyPassword')!.addEventListener('click', async () => {
     if (isPending) return;
     isPending = true;
-    const button = document.getElementById('copyPassword') as HTMLButtonElement;
-    button.disabled = true;
+    const passwordBtn = document.getElementById('copyPassword') as HTMLButtonElement;
+    const usernameBtn = document.getElementById('copyUsername') as HTMLButtonElement;
+    passwordBtn.disabled = true;
+    usernameBtn.disabled = true;
     try {
       const response = await sendRequest({ type: 'vault.getField', id, field: 'password' });
       if (!response.ok) return setDetailStatus(response.error.message, true);
@@ -362,15 +364,22 @@ function renderDetail(id: string) {
       }
     } finally {
       isPending = false;
-      const liveButton = document.getElementById('copyPassword') as HTMLButtonElement | null;
-      if (liveButton) liveButton.disabled = false;
+      const detailView = document.getElementById('detailStatus');
+      if (detailView) {
+        const livePasswordBtn = document.getElementById('copyPassword') as HTMLButtonElement | null;
+        const liveUsernameBtn = document.getElementById('copyUsername') as HTMLButtonElement | null;
+        if (livePasswordBtn) livePasswordBtn.disabled = false;
+        if (liveUsernameBtn) liveUsernameBtn.disabled = false;
+      }
     }
   });
   document.getElementById('copyUsername')!.addEventListener('click', async () => {
     if (isPending) return;
     isPending = true;
-    const button = document.getElementById('copyUsername') as HTMLButtonElement;
-    button.disabled = true;
+    const passwordBtn = document.getElementById('copyPassword') as HTMLButtonElement;
+    const usernameBtn = document.getElementById('copyUsername') as HTMLButtonElement;
+    passwordBtn.disabled = true;
+    usernameBtn.disabled = true;
     try {
       if (!item.username) return setDetailStatus('Username is empty', true);
       try {
@@ -381,8 +390,13 @@ function renderDetail(id: string) {
       }
     } finally {
       isPending = false;
-      const liveButton = document.getElementById('copyUsername') as HTMLButtonElement | null;
-      if (liveButton) liveButton.disabled = false;
+      const detailView = document.getElementById('detailStatus');
+      if (detailView) {
+        const livePasswordBtn = document.getElementById('copyPassword') as HTMLButtonElement | null;
+        const liveUsernameBtn = document.getElementById('copyUsername') as HTMLButtonElement | null;
+        if (livePasswordBtn) livePasswordBtn.disabled = false;
+        if (liveUsernameBtn) liveUsernameBtn.disabled = false;
+      }
     }
   });
 }
