@@ -6,6 +6,6 @@
   "background": { "service_worker": "background.js", "type": "module" },
   "action": { "default_popup": "ui/popup/popup.html", "default_title": "Vaultwarden" },
   "options_ui": { "page": "ui/options/options.html", "open_in_tab": true },
-  "permissions": ["storage", "alarms"],
+  "permissions": ["storage", "alarms", "clipboardRead", "clipboardWrite"],
   "optional_host_permissions": ["https://*/*", "http://*/*"]
 }

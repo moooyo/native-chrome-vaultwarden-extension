@@ -62,9 +62,15 @@ export class ApiClient {
     if (response.ok) return { kind: 'success', data: body as LoginSuccessResponse };
 
     if (response.status === 400 && isTwoFactorRequired(body)) {
+      const raw = body.TwoFactorProviders;
+      const providers = (
+        Array.isArray(raw)
+          ? raw.map(Number)
+          : Object.keys(raw).map(Number)
+      ).filter(n => !Number.isNaN(n)).sort((a, b) => a - b);
       const result: PasswordLoginResult = {
         kind: 'twoFactor',
-        providers: Object.keys(body.TwoFactorProviders).map(Number).sort((a, b) => a - b),
+        providers,
         ...(body.TwoFactorToken !== undefined ? { token: body.TwoFactorToken } : {}),
       };
       return result;
@@ -167,7 +173,7 @@ function isTwoFactorRequired(body: unknown): body is TwoFactorRequiredResponse {
   const candidate = body as Partial<TwoFactorRequiredResponse>;
   return candidate.error === 'invalid_grant'
     && typeof candidate.error_description === 'string'
-    && candidate.error_description.toLowerCase().includes('two factor')
-    && typeof candidate.TwoFactorProviders === 'object'
-    && candidate.TwoFactorProviders !== null;
+    && candidate.error_description.toLowerCase().replace('-', ' ').includes('two factor')
+    && (Array.isArray(candidate.TwoFactorProviders)
+      || (typeof candidate.TwoFactorProviders === 'object' && candidate.TwoFactorProviders !== null));
 }

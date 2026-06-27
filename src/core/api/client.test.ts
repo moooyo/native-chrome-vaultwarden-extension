@@ -174,7 +174,7 @@ describe('ApiClient password grant', () => {
     expect(form.get('username')).toBe('user@example.com');
   });
 
-  it('parses 2FA-required invalid_grant into supported provider ids', async () => {
+  it('parses 2FA-required invalid_grant into supported provider ids (object shape)', async () => {
     const fetchFn = vi.fn(async () => jsonResponse({
       error: 'invalid_grant',
       error_description: 'Two factor required',
@@ -184,6 +184,30 @@ describe('ApiClient password grant', () => {
     const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: createMemoryStore() });
     const result = await api.passwordLogin({ email: 'user@example.com', masterPasswordHash: 'mph' });
     expect(result).toEqual({ kind: 'twoFactor', providers: [0, 1, 7], token: 'tf-token' });
+  });
+
+  it('parses 2FA-required response when TwoFactorProviders is an array of provider-id strings (real Vaultwarden shape)', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({
+      error: 'invalid_grant',
+      error_description: 'Two factor required',
+      TwoFactorProviders: ['1'],
+      TwoFactorToken: 'tf-token',
+    }, 400));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: createMemoryStore() });
+    const result = await api.passwordLogin({ email: 'user@example.com', masterPasswordHash: 'mph' });
+    // Array shape: ["1"] means provider id 1 (Email). Must NOT return [0] (Authenticator).
+    expect(result).toEqual({ kind: 'twoFactor', providers: [1], token: 'tf-token' });
+  });
+
+  it('parses 2FA-required response with multiple provider ids in array shape', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({
+      error: 'invalid_grant',
+      error_description: 'Two-factor authentication required.',
+      TwoFactorProviders: ['0', '1'],
+    }, 400));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: createMemoryStore() });
+    const result = await api.passwordLogin({ email: 'user@example.com', masterPasswordHash: 'mph' });
+    expect(result).toEqual({ kind: 'twoFactor', providers: [0, 1] });
   });
 });
 

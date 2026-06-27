@@ -36,6 +36,6 @@ Load `dist/` from Chrome `chrome://extensions` with Developer Mode enabled.
 7. Click Sync and confirm personal login ciphers are listed.
 8. Search by item name, username, and URI.
 9. Open a login item and copy the password.
-10. Wait 60 seconds and confirm the clipboard clears if unchanged.
+10. Keep the popup open for 60 seconds and confirm the clipboard clears if the value is unchanged (best-effort: clearing only occurs while the popup document remains open).
 11. Click Lock, reopen the popup, unlock with the master password, and confirm cached items are available.
 12. Log out and confirm the popup returns to the login form.

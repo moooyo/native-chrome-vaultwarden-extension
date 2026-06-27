@@ -22,7 +22,9 @@ export interface LoginSuccessResponse {
 export interface TwoFactorRequiredResponse {
   error: 'invalid_grant';
   error_description: string;
-  TwoFactorProviders: Record<string, unknown>;
+  /** Real Vaultwarden returns an array of provider-id strings, e.g. ["0","1"].
+   *  The object-map form (TwoFactorProviders2) may also be present; both shapes are handled. */
+  TwoFactorProviders: string[] | Record<string, unknown>;
   TwoFactorProviders2?: Record<string, unknown>;
   TwoFactorToken?: string;
 }

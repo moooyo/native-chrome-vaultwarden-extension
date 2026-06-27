@@ -358,7 +358,7 @@ function renderDetail(id: string) {
       if (!value) return setDetailStatus('Password is empty', true);
       try {
         await copyWithClear(value);
-        setDetailStatus('Password copied. Clipboard clears in 60 seconds if unchanged.', false);
+        setDetailStatus('Password copied. Clipboard clears in 60 s if unchanged and this popup stays open.', false);
       } catch {
         setDetailStatus('Failed to copy password to clipboard', true);
       }
@@ -384,7 +384,7 @@ function renderDetail(id: string) {
       if (!item.username) return setDetailStatus('Username is empty', true);
       try {
         await copyWithClear(item.username);
-        setDetailStatus('Username copied. Clipboard clears in 60 seconds if unchanged.', false);
+        setDetailStatus('Username copied. Clipboard clears in 60 s if unchanged and this popup stays open.', false);
       } catch {
         setDetailStatus('Failed to copy username to clipboard', true);
       }
