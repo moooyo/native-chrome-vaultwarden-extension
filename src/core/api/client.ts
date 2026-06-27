@@ -36,8 +36,16 @@ export class ApiClient {
 
   private async jsonRequest<T>(path: string, init: RequestInit): Promise<T> {
     const response = await this.fetchFn(await this.url(path), init);
-    const body = await response.json();
-    if (!response.ok) throw new ApiHttpError(response.status, body);
+    const text = await response.text();
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = text || null;
+    }
+    if (!response.ok) {
+      throw new ApiHttpError(response.status, body);
+    }
     return body as T;
   }
 
