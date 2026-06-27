@@ -12,6 +12,8 @@ const app = document.getElementById('app')!;
 let twoFactorProviders: Array<0 | 1> = [];
 // Track current view kind so handleAuthResult can route errors correctly.
 let currentViewKind: View['kind'] = 'loading';
+// Track pending operations to prevent double submission.
+let isPending = false;
 
 void init();
 
@@ -46,10 +48,24 @@ function renderLogin(error?: string) {
     </form>`;
   document.getElementById('loginForm')!.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const email = (document.getElementById('email') as HTMLInputElement).value;
-    const masterPassword = (document.getElementById('password') as HTMLInputElement).value;
-    const result = await sendRequest({ type: 'auth.login', email, masterPassword });
-    await handleAuthResult(result);
+    if (isPending) return;
+    isPending = true;
+    const button = document.querySelector('#loginForm button[type="submit"]') as HTMLButtonElement;
+    const form = document.getElementById('loginForm') as HTMLFormElement;
+    button.disabled = true;
+    form.querySelectorAll('input').forEach(input => input.disabled = true);
+    try {
+      const email = (document.getElementById('email') as HTMLInputElement).value;
+      const masterPassword = (document.getElementById('password') as HTMLInputElement).value;
+      const result = await sendRequest({ type: 'auth.login', email, masterPassword });
+      await handleAuthResult(result);
+    } finally {
+      isPending = false;
+      if (currentViewKind === 'loggedOut') {
+        button.disabled = false;
+        form.querySelectorAll('input').forEach(input => input.disabled = false);
+      }
+    }
   });
 }
 
@@ -67,13 +83,41 @@ function renderTwoFactor(providers: Array<0 | 1>, error?: string) {
     </form>`;
   document.getElementById('twoFactorForm')!.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const provider = Number((document.getElementById('provider') as HTMLSelectElement).value) as 0 | 1;
-    const code = (document.getElementById('code') as HTMLInputElement).value;
-    await handleAuthResult(await sendRequest({ type: 'auth.submitTwoFactor', provider, code }));
+    if (isPending) return;
+    isPending = true;
+    const button = document.querySelector('#twoFactorForm button[type="submit"]') as HTMLButtonElement;
+    const form = document.getElementById('twoFactorForm') as HTMLFormElement;
+    button.disabled = true;
+    (form.querySelectorAll('input, select') as NodeListOf<HTMLInputElement | HTMLSelectElement>).forEach(el => el.disabled = true);
+    try {
+      const provider = Number((document.getElementById('provider') as HTMLSelectElement).value) as 0 | 1;
+      const code = (document.getElementById('code') as HTMLInputElement).value;
+      await handleAuthResult(await sendRequest({ type: 'auth.submitTwoFactor', provider, code }));
+    } finally {
+      isPending = false;
+      if (currentViewKind === 'twoFactor') {
+        button.disabled = false;
+        (form.querySelectorAll('input, select') as NodeListOf<HTMLInputElement | HTMLSelectElement>).forEach(el => el.disabled = false);
+      }
+    }
   });
   document.getElementById('sendEmail')?.addEventListener('click', async () => {
-    const response = await sendRequest({ type: 'auth.sendEmailCode' });
-    if (!response.ok) render({ kind: 'twoFactor', providers: twoFactorProviders, error: response.error.message });
+    if (isPending) return;
+    isPending = true;
+    const button = document.getElementById('sendEmail') as HTMLButtonElement;
+    const form = document.getElementById('twoFactorForm') as HTMLFormElement;
+    button.disabled = true;
+    (form.querySelectorAll('input, select, button[type="submit"]') as NodeListOf<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>).forEach(el => el.disabled = true);
+    try {
+      const response = await sendRequest({ type: 'auth.sendEmailCode' });
+      if (!response.ok) render({ kind: 'twoFactor', providers: twoFactorProviders, error: response.error.message });
+    } finally {
+      isPending = false;
+      if (currentViewKind === 'twoFactor') {
+        button.disabled = false;
+        (form.querySelectorAll('input, select, button[type="submit"]') as NodeListOf<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>).forEach(el => el.disabled = false);
+      }
+    }
   });
 }
 
@@ -88,13 +132,42 @@ function renderLocked(error?: string) {
     </form>`;
   document.getElementById('unlockForm')!.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const masterPassword = (document.getElementById('unlockPassword') as HTMLInputElement).value;
-    const response = await sendRequest({ type: 'auth.unlock', masterPassword });
-    render(response.ok ? { kind: 'unlocked' } : { kind: 'locked', error: response.error.message });
+    if (isPending) return;
+    isPending = true;
+    const button = document.querySelector('#unlockForm button[type="submit"]') as HTMLButtonElement;
+    const logoutBtn = document.getElementById('logout') as HTMLButtonElement;
+    const form = document.getElementById('unlockForm') as HTMLFormElement;
+    button.disabled = true;
+    logoutBtn.disabled = true;
+    form.querySelectorAll('input').forEach(input => input.disabled = true);
+    try {
+      const masterPassword = (document.getElementById('unlockPassword') as HTMLInputElement).value;
+      const response = await sendRequest({ type: 'auth.unlock', masterPassword });
+      render(response.ok ? { kind: 'unlocked' } : { kind: 'locked', error: response.error.message });
+    } finally {
+      isPending = false;
+      if (currentViewKind === 'locked') {
+        button.disabled = false;
+        logoutBtn.disabled = false;
+        form.querySelectorAll('input').forEach(input => input.disabled = false);
+      }
+    }
   });
   document.getElementById('logout')!.addEventListener('click', async () => {
-    await sendRequest({ type: 'auth.logout' });
-    render({ kind: 'loggedOut' });
+    if (isPending) return;
+    isPending = true;
+    const logoutBtn = document.getElementById('logout') as HTMLButtonElement;
+    const unlockBtn = document.querySelector('#unlockForm button[type="submit"]') as HTMLButtonElement;
+    const form = document.getElementById('unlockForm') as HTMLFormElement;
+    logoutBtn.disabled = true;
+    unlockBtn.disabled = true;
+    form.querySelectorAll('input').forEach(input => input.disabled = true);
+    try {
+      await sendRequest({ type: 'auth.logout' });
+      render({ kind: 'loggedOut' });
+    } finally {
+      isPending = false;
+    }
   });
 }
 
