@@ -1,5 +1,7 @@
 import { sendRequest } from '../../messaging/protocol.js';
 import type { AuthResult } from '../../core/session/auth-service.js';
+import type { CipherSummary } from '../../core/vault/models.js';
+import { filterSummaries } from '../../core/vault/search.js';
 
 type View =
   | { kind: 'loading' }
@@ -14,6 +16,8 @@ let twoFactorProviders: Array<0 | 1> = [];
 let currentViewKind: View['kind'] = 'loading';
 // Track pending operations to prevent double submission.
 let isPending = false;
+// Cached vault items for the current unlocked session.
+let vaultItems: CipherSummary[] = [];
 
 void init();
 
@@ -198,9 +202,14 @@ function renderUnlockedShell(error?: string) {
       <button id="sync" type="button">Sync</button>
       <button id="logoutUnlocked" class="danger" type="button">Log out</button>
     </div>
-    <div id="vaultList"><p class="muted">Sync to load vault items.</p></div>
+    <input id="search" placeholder="Search vault" />
+    <div id="vaultList"></div>
     ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}`;
+  bindUnlockedControls();
+  void loadCachedList();
+}
 
+function bindUnlockedControls() {
   document.getElementById('lock')!.addEventListener('click', async () => {
     if (isPending) return;
     isPending = true;
@@ -244,6 +253,7 @@ function renderUnlockedShell(error?: string) {
       if (!response.ok) {
         render({ kind: 'unlocked', error: response.error.message });
       } else {
+        vaultItems = [];
         render({ kind: 'loggedOut' });
       }
     } finally {
@@ -273,11 +283,8 @@ function renderUnlockedShell(error?: string) {
       if (!response.ok) {
         render({ kind: 'unlocked', error: response.error.message });
       } else {
-        const items = response.data as unknown[];
-        const vaultList = document.getElementById('vaultList');
-        if (vaultList) {
-          vaultList.innerHTML = `<p class="muted">Loaded ${items.length} items. List rendering arrives in Task 22.</p>`;
-        }
+        vaultItems = response.data as CipherSummary[];
+        renderVaultList();
       }
     } finally {
       isPending = false;
@@ -291,6 +298,74 @@ function renderUnlockedShell(error?: string) {
       }
     }
   });
+
+  document.getElementById('search')!.addEventListener('input', renderVaultList);
+}
+
+async function loadCachedList() {
+  const response = await sendRequest({ type: 'vault.listItems' });
+  if (response.ok) {
+    vaultItems = response.data as CipherSummary[];
+    renderVaultList();
+  }
+}
+
+function renderVaultList() {
+  const list = document.getElementById('vaultList');
+  if (!list) return;
+  const query = (document.getElementById('search') as HTMLInputElement | null)?.value ?? '';
+  const filtered = filterSummaries(vaultItems, query);
+  if (filtered.length === 0) {
+    list.innerHTML = '<p class="muted">No items.</p>';
+    return;
+  }
+  list.innerHTML = filtered.map((item) => `
+    <div class="item" data-id="${escapeHtml(item.id)}">
+      <strong>${escapeHtml(item.name)}</strong>
+      <span>${escapeHtml(item.username ?? item.uris[0] ?? '')}</span>
+      ${item.undecryptable ? '<span class="error">undecryptable</span>' : ''}
+    </div>`).join('');
+  for (const row of list.querySelectorAll<HTMLElement>('.item')) {
+    row.addEventListener('click', () => renderDetail(row.dataset.id!));
+  }
+}
+
+function renderDetail(id: string) {
+  const item = vaultItems.find((i) => i.id === id);
+  if (!item) return;
+  app.innerHTML = `
+    <button id="back" class="secondary" type="button">Back</button>
+    <h1>${escapeHtml(item.name)}</h1>
+    <p class="muted">${escapeHtml(item.username ?? '')}</p>
+    ${item.uris.map((u) => `<p><a href="${safeHref(u)}" target="_blank" rel="noreferrer">${escapeHtml(u)}</a></p>`).join('')}
+    <button id="copyPassword" type="button">Copy password</button>`;
+  document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
+  document.getElementById('copyPassword')!.addEventListener('click', async () => {
+    const response = await sendRequest({ type: 'vault.getField', id, field: 'password' });
+    if (!response.ok) return renderDetailError(item, response.error.message);
+    const { value } = response.data as { value?: string };
+    if (!value) return renderDetailError(item, 'Password is empty');
+    await navigator.clipboard.writeText(value);
+  });
+}
+
+function renderDetailError(item: CipherSummary, message: string) {
+  const existing = app.querySelector('p.error');
+  if (existing) existing.remove();
+  app.insertAdjacentHTML('beforeend', `<p class="error">${escapeHtml(message)}</p>`);
+}
+
+/** Allow only http: and https: URIs; return '#' for anything else. */
+function safeHref(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      return escapeHtml(url);
+    }
+  } catch {
+    // not a valid URL
+  }
+  return '#';
 }
 
 async function handleAuthResult(response: Awaited<ReturnType<typeof sendRequest>>) {
