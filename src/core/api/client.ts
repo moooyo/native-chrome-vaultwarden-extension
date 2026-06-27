@@ -13,6 +13,7 @@ const DEVICE_ID_KEY = 'deviceIdentifier';
 
 export class ApiClient {
   private readonly fetchFn: FetchFn;
+  private deviceIdentifierPromise?: Promise<string>;
 
   constructor(private readonly deps: ApiClientDeps) {
     this.fetchFn = deps.fetchFn ?? globalThis.fetch.bind(globalThis);
@@ -27,6 +28,16 @@ export class ApiClient {
   }
 
   async getDeviceIdentifier(): Promise<string> {
+    if (!this.deviceIdentifierPromise) {
+      this.deviceIdentifierPromise = this.loadOrCreateDeviceIdentifier().catch(error => {
+        this.deviceIdentifierPromise = undefined;
+        throw error;
+      });
+    }
+    return this.deviceIdentifierPromise;
+  }
+
+  private async loadOrCreateDeviceIdentifier(): Promise<string> {
     const existing = await this.deps.localStore.get<string>(DEVICE_ID_KEY);
     if (existing) return existing;
     const id = crypto.randomUUID();
@@ -37,9 +48,8 @@ export class ApiClient {
   private async jsonRequest<T>(path: string, init: RequestInit): Promise<T> {
     const response = await this.fetchFn(await this.url(path), init);
     const text = await response.text();
-    
+
     if (!response.ok) {
-      // For non-OK responses, parse JSON if possible; preserve as text if not
       let body: unknown;
       try {
         body = JSON.parse(text);
@@ -48,8 +58,7 @@ export class ApiClient {
       }
       throw new ApiHttpError(response.status, body);
     }
-    
-    // For OK responses, let JSON parsing errors throw naturally (no fallback)
+
     return JSON.parse(text) as T;
   }
 
