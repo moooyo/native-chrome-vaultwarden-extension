@@ -99,6 +99,9 @@ export class AuthService {
         : { kind: 'twoFactor', providers: supported };
     }
     const data = input.result.data;
+    if (data.Kdf !== undefined && data.Kdf !== 0) {
+      throw new Error('Argon2id accounts are not supported in this MVP');
+    }
     const userKey = await unwrapSymmetricKey(data.Key, input.pending.stretchedMasterKey);
     const saveInput = {
       email: input.pending.email,
