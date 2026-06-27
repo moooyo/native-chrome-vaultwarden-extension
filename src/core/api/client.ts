@@ -37,16 +37,20 @@ export class ApiClient {
   private async jsonRequest<T>(path: string, init: RequestInit): Promise<T> {
     const response = await this.fetchFn(await this.url(path), init);
     const text = await response.text();
-    let body: unknown;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      body = text;
-    }
+    
     if (!response.ok) {
+      // For non-OK responses, parse JSON if possible; preserve as text if not
+      let body: unknown;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = text;
+      }
       throw new ApiHttpError(response.status, body);
     }
-    return body as T;
+    
+    // For OK responses, let JSON parsing errors throw naturally (no fallback)
+    return JSON.parse(text) as T;
   }
 
   private async url(path: string): Promise<string> {

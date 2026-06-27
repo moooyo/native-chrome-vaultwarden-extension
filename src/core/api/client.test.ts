@@ -95,4 +95,14 @@ describe('ApiClient error handling', () => {
     expect(error.status).toBe(503);
     expect(error.body).toBe('');
   });
+
+  it('rejects OK response with non-JSON body (parsing error)', async () => {
+    const fetchFn = vi.fn(async () => textResponse('not valid json', 200));
+    const api = new ApiClient({
+      serverUrlProvider: async () => 'https://vw.example.com/',
+      fetchFn,
+      localStore: createMemoryStore(),
+    });
+    await expect(api.prelogin('user@example.com')).rejects.toThrow(SyntaxError);
+  });
 });
