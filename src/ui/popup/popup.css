@@ -19,3 +19,5 @@ button.danger { background: #cf222e; }
 .header button { width: auto; margin: 0; padding: 6px 8px; }
 .toolbar { display: flex; gap: 8px; margin: 10px 0; }
 .toolbar button { margin: 0; }
+.success { color: #1a7f37; margin-top: 8px; }
+.detail-actions { display: grid; gap: 8px; margin-top: 12px; }

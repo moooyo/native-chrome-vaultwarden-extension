@@ -338,7 +338,11 @@ function renderDetail(id: string) {
     <h1>${escapeHtml(item.name)}</h1>
     <p class="muted">${escapeHtml(item.username ?? '')}</p>
     ${item.uris.map((u) => `<p><a href="${safeHref(u)}" target="_blank" rel="noreferrer">${escapeHtml(u)}</a></p>`).join('')}
-    <button id="copyPassword" type="button">Copy password</button>`;
+    <div class="detail-actions">
+      <button id="copyPassword" type="button">Copy password</button>
+      <button id="copyUsername" class="secondary" type="button">Copy username</button>
+    </div>
+    <div id="detailStatus"></div>`;
   document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
   document.getElementById('copyPassword')!.addEventListener('click', async () => {
     if (isPending) return;
@@ -347,13 +351,14 @@ function renderDetail(id: string) {
     button.disabled = true;
     try {
       const response = await sendRequest({ type: 'vault.getField', id, field: 'password' });
-      if (!response.ok) return renderDetailError(item, response.error.message);
+      if (!response.ok) return setDetailStatus(response.error.message, true);
       const { value } = response.data as { value?: string };
-      if (!value) return renderDetailError(item, 'Password is empty');
+      if (!value) return setDetailStatus('Password is empty', true);
       try {
-        await navigator.clipboard.writeText(value);
+        await copyWithClear(value);
+        setDetailStatus('Password copied. Clipboard clears in 60 seconds if unchanged.', false);
       } catch {
-        renderDetailError(item, 'Failed to copy password to clipboard');
+        setDetailStatus('Failed to copy password to clipboard', true);
       }
     } finally {
       isPending = false;
@@ -361,12 +366,41 @@ function renderDetail(id: string) {
       if (liveButton) liveButton.disabled = false;
     }
   });
+  document.getElementById('copyUsername')!.addEventListener('click', async () => {
+    if (isPending) return;
+    isPending = true;
+    const button = document.getElementById('copyUsername') as HTMLButtonElement;
+    button.disabled = true;
+    try {
+      if (!item.username) return setDetailStatus('Username is empty', true);
+      try {
+        await copyWithClear(item.username);
+        setDetailStatus('Username copied. Clipboard clears in 60 seconds if unchanged.', false);
+      } catch {
+        setDetailStatus('Failed to copy username to clipboard', true);
+      }
+    } finally {
+      isPending = false;
+      const liveButton = document.getElementById('copyUsername') as HTMLButtonElement | null;
+      if (liveButton) liveButton.disabled = false;
+    }
+  });
 }
 
-function renderDetailError(item: CipherSummary, message: string) {
-  const existing = app.querySelector('p.error');
-  if (existing) existing.remove();
-  app.insertAdjacentHTML('beforeend', `<p class="error">${escapeHtml(message)}</p>`);
+async function copyWithClear(value: string): Promise<void> {
+  await navigator.clipboard.writeText(value);
+  window.setTimeout(() => {
+    void (async () => {
+      const current = await navigator.clipboard.readText().catch(() => '');
+      if (current === value) await navigator.clipboard.writeText('').catch(() => {/* no-op */});
+    })();
+  }, 60_000);
+}
+
+function setDetailStatus(message: string, isError: boolean) {
+  const status = document.getElementById('detailStatus');
+  if (!status) return;
+  status.innerHTML = `<p class="${isError ? 'error' : 'success'}">${escapeHtml(message)}</p>`;
 }
 
 /** Allow only http: and https: URIs; return '#' for anything else. */
