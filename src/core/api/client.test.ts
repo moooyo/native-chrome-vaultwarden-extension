@@ -204,6 +204,9 @@ describe('ApiClient refresh and sync', () => {
     expect(form.get('grant_type')).toBe('refresh_token');
     expect(form.get('refresh_token')).toBe('old-refresh');
     expect(form.get('client_id')).toBe('browser');
+    expect(form.get('device_type')).toBe('2');
+    expect(form.get('device_name')).toBe('chrome');
+    expect(form.get('device_identifier')).toBe('device-123');
   });
 
   it('syncs with Authorization Bearer token', async () => {
