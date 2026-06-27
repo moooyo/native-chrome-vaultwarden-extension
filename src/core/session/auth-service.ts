@@ -85,6 +85,18 @@ export class AuthService {
     return this.deps.session.logout();
   }
 
+  async refreshIfNeeded(skewMs = 60_000): Promise<void> {
+    const auth = await this.deps.session.getPersistedAuth();
+    if (!auth) return;
+    if (auth.expiresAt - this.now() > skewMs) return;
+    const refreshed = await this.deps.api.refresh(auth.refreshToken);
+    await this.deps.session.saveTokens({
+      accessToken: refreshed.access_token,
+      refreshToken: refreshed.refresh_token,
+      expiresAt: this.now() + refreshed.expires_in * 1000,
+    });
+  }
+
   private async finishPasswordLogin(input: {
     result: PasswordLoginResult;
     pending: PendingLogin;

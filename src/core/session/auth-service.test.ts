@@ -183,6 +183,31 @@ describe('AuthService', () => {
     expect(secondCall?.remember).toBe(true);
   });
 
+  it('refreshIfNeeded refreshes expiring tokens and persists the replacements', async () => {
+    const api = {
+      refresh: vi.fn(async () => ({
+        access_token: 'new-access',
+        expires_in: 3600,
+        refresh_token: 'new-refresh',
+        token_type: 'Bearer',
+      })),
+    };
+    const { auth, sm } = makeService(api);
+    await sm.saveUnlocked({
+      email: KDF_VECTOR.email,
+      accessToken: 'old-access',
+      refreshToken: 'old-refresh',
+      expiresAt: 1100,
+      protectedKey: USER_KEY_VECTOR.akey,
+      kdf: 0,
+      kdfIterations: KDF_VECTOR.iterations,
+      userKey: { encKey: new Uint8Array(32), macKey: new Uint8Array(32) },
+    });
+    await auth.refreshIfNeeded(5000);
+    expect(api.refresh).toHaveBeenCalledWith('old-refresh');
+    expect((await sm.getPersistedAuth())?.accessToken).toBe('new-access');
+  });
+
   // --- Finding 5: logout clears pending login ---
   it('logout clears pending login so subsequent submitTwoFactor rejects', async () => {
     const api: Partial<ApiClient> = {
