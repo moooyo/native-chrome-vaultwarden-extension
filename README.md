@@ -1,0 +1,1 @@
+# native-chrome-vaultwarden-extension
