@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Vaultwarden Extension",
+  "version": "0.1.0",
+  "description": "Native MV3 client for self-hosted Vaultwarden.",
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "ui/popup/popup.html", "default_title": "Vaultwarden" },
+  "options_ui": { "page": "ui/options/options.html", "open_in_tab": true },
+  "permissions": ["storage", "alarms"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"]
+}
