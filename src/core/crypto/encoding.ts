@@ -32,7 +32,10 @@ export function hexToBytes(h: string): Uint8Array {
   if (h.length % 2 !== 0) throw new Error('invalid hex length');
   const out = new Uint8Array(h.length / 2);
   for (let i = 0; i < out.length; i++) {
-    const byte = Number.parseInt(h.slice(i * 2, i * 2 + 2), 16);
+    const pair = h.slice(i * 2, i * 2 + 2);
+    // Validate that both characters are hex digits (0-9, a-f, A-F)
+    if (!/^[0-9a-fA-F]{2}$/.test(pair)) throw new Error('invalid hex byte');
+    const byte = Number.parseInt(pair, 16);
     if (Number.isNaN(byte)) throw new Error('invalid hex byte');
     out[i] = byte;
   }

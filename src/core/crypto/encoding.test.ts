@@ -21,6 +21,7 @@ describe('encoding', () => {
   it('rejects malformed hex', () => {
     expect(() => hexToBytes('0')).toThrow('invalid hex length');
     expect(() => hexToBytes('zz')).toThrow('invalid hex byte');
+    expect(() => hexToBytes('0z')).toThrow('invalid hex byte');
   });
 
   it('constantTimeEqual compares contents', () => {
