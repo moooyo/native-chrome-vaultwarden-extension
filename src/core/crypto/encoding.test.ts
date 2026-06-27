@@ -14,6 +14,10 @@ describe('encoding', () => {
     expect(bytesToUtf8(base64ToBytes('SGVsbG8sIFZhdWx0IQ=='))).toBe('Hello, Vault!');
   });
 
+  it('rejects malformed base64', () => {
+    expect(() => base64ToBytes('*')).toThrow('invalid base64');
+  });
+
   it('hex round-trips', () => {
     expect(bytesToHex(hexToBytes('00ff10'))).toBe('00ff10');
   });
