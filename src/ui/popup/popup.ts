@@ -3,6 +3,7 @@ import type { AuthResult } from '../../core/session/auth-service.js';
 import type { CipherSummary, DecryptedCipher, FolderSummary } from '../../core/vault/models.js';
 import { filterSummariesByFolderAndQuery, NO_FOLDER } from '../../core/vault/search.js';
 import { generatePassword, DEFAULT_PASSWORD_OPTIONS, type PasswordGenOptions } from '../../core/generator/password.js';
+import { addPasswordToHistory } from '../../core/generator/history.js';
 import { icon } from '../icons.js';
 
 type View =
@@ -27,6 +28,8 @@ let skippedOrgCount = 0;
 let totpTimer: number | undefined;
 // Password generator options, persisted while the popup stays open.
 let genOptions: PasswordGenOptions = { ...DEFAULT_PASSWORD_OPTIONS };
+// Generated-password history for this popup session only (never persisted — see core/generator/history).
+let genHistory: string[] = [];
 
 function clearTotpTimer(): void {
   if (totpTimer !== undefined) {
@@ -362,6 +365,7 @@ function bindUnlockedControls() {
         vaultFolders = [];
         selectedFolderId = null;
         skippedOrgCount = 0;
+        genHistory = [];
         render({ kind: 'loggedOut' });
       }
     } finally {
@@ -445,6 +449,7 @@ function renderGenerator(): void {
         <div class="detail-actions">
           <button id="genCopy" type="button" class="btn btn-block">${icon('copy')}<span>Copy password</span></button>
         </div>
+        <div id="genHistory"></div>
         <div id="detailStatus" class="detail-status"></div>
       </div>
     </div>`;
@@ -464,17 +469,61 @@ function renderGenerator(): void {
       avoidAmbiguous: (document.getElementById('genAmbiguous') as HTMLInputElement).checked,
     };
   };
+  // Update the displayed password (on option changes) without touching history.
   const regenerate = (): void => {
     readOptions();
     current = generatePassword(genOptions);
     out.textContent = current || 'Enable at least one character set';
   };
+  // Generate a fresh password AND record the previous one in history (explicit Regenerate / open).
+  const regenerateAndRecord = (): void => {
+    if (current) genHistory = addPasswordToHistory(genHistory, current);
+    regenerate();
+    renderGenHistory();
+  };
   for (const id of ['genLength', 'genLower', 'genUpper', 'genNumbers', 'genSpecial', 'genAmbiguous']) {
     document.getElementById(id)!.addEventListener('input', regenerate);
   }
-  document.getElementById('genRegen')!.addEventListener('click', regenerate);
-  document.getElementById('genCopy')!.addEventListener('click', () => void withDetailBusy(() => copyValue(current, 'Password')));
+  document.getElementById('genRegen')!.addEventListener('click', regenerateAndRecord);
+  document.getElementById('genCopy')!.addEventListener('click', () => void withDetailBusy(async () => {
+    if (current) {
+      genHistory = addPasswordToHistory(genHistory, current);
+      renderGenHistory();
+    }
+    await copyValue(current, 'Password');
+  }));
   regenerate();
+  renderGenHistory();
+}
+
+/** Render the in-memory generation history with per-entry copy and a clear-all control. */
+function renderGenHistory(): void {
+  const container = document.getElementById('genHistory');
+  if (!container) return;
+  if (genHistory.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+  const rows = genHistory.map((pw) => `
+    <div class="gen-hist-row">
+      <code class="gen-hist-val mono">${escapeHtml(pw)}</code>
+      <button class="icon-btn" type="button" data-copy-hist="${escapeHtml(pw)}" title="Copy" aria-label="Copy password">${icon('copy')}</button>
+    </div>`).join('');
+  container.innerHTML = `
+    <div class="gen-history">
+      <div class="gen-hist-head">
+        <span class="k">${icon('refresh')} History</span>
+        <button id="genHistClear" class="link-btn" type="button">Clear</button>
+      </div>
+      <div class="gen-hist-list">${rows}</div>
+    </div>`;
+  for (const btn of container.querySelectorAll<HTMLButtonElement>('button[data-copy-hist]')) {
+    btn.addEventListener('click', () => void withDetailBusy(() => copyValue(btn.dataset.copyHist, 'Password')));
+  }
+  document.getElementById('genHistClear')!.addEventListener('click', () => {
+    genHistory = [];
+    renderGenHistory();
+  });
 }
 
 async function loadCachedList() {

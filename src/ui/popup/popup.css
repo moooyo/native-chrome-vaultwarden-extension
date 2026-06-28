@@ -116,6 +116,17 @@ body { width: 360px; }
 .gen-check { display: flex; align-items: center; gap: var(--s2); font-size: 0.8125rem; cursor: pointer; }
 .gen-check input { flex: none; }
 
+/* In-memory generation history (this popup session only; never persisted). */
+.gen-history { margin-top: var(--s3); border-top: 1px solid var(--line); padding-top: var(--s2); }
+.gen-hist-head { display: flex; align-items: center; justify-content: space-between; }
+.gen-hist-head .k { display: flex; align-items: center; gap: var(--s1); font-size: 0.6875rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint); }
+.gen-hist-head .k svg { width: 0.85rem; height: 0.85rem; }
+.gen-hist-list { display: grid; gap: var(--s1); margin-top: var(--s2); max-height: 9rem; overflow-y: auto; }
+.gen-hist-row { display: flex; align-items: center; gap: var(--s2); }
+.gen-hist-val { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 0.75rem; color: var(--ink-soft); word-break: break-all; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--accent); font-size: 0.75rem; cursor: pointer; }
+.link-btn:hover { text-decoration: underline; }
+
 /* ----- Footer (destructive actions kept deliberate) ----- */
 .footer { padding: var(--s3) var(--s4); border-top: 1px solid var(--line); background: var(--surface); }
 .footer .note { margin-top: 0; }

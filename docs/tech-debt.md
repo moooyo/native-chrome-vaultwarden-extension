@@ -10,7 +10,9 @@
     数字/特殊字符的最小数量，其余位用 `crypto.getRandomValues`（拒绝采样去偏）填充后洗牌；
     可选「避免易混字符」(Il1O0)。随机源可注入以便确定性单测。
   - popup 工具栏新增生成器面板（长度/字符集开关、重新生成、复制）；纯本地运行，不涉及 vault 密钥。
-  - 仍待：生成历史（history）。
+  - **生成历史**（本次落地）：`core/generator/history.ts` 纯函数维护「最近优先、去重、上限 50」的列表；
+    popup 面板在「重新生成 / 复制」时记录，逐条可复制、可清空。**仅驻内存**（popup 生命周期），
+    绝不持久化——明文生成密码不落 `storage`，符合安全红线；登出即清。
 
 - **TOTP 验证码生成 / 显示 / 自动填充** ✅（原 M6 已完整交付）
   - `src/core/vault/totp.ts`：RFC 6238 TOTP（HMAC-SHA1/256/512、可配 digits/period），
@@ -54,7 +56,7 @@
 
 | 里程碑 | 内容 |
 |---|---|
-| M5 | ciphers/folders **CRUD**；密码生成器 ✅（已交付，剩余：生成历史）|
+| M5 | ciphers/folders **CRUD**；密码生成器 ✅（已交付，含生成历史）|
 | M6 | **TOTP** 验证码生成 / 显示 / **填充** ✅（已完整交付）|
 | M7 | **passkeys**（`fido2Credentials` 私钥，WebAuthn 独立签名）|
 | M8 | **Sends** 分享 CRUD + 加密 |
