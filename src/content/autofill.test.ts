@@ -48,10 +48,10 @@ describe('autofill controller', () => {
     startAutofill('https://example.com/login');
     const popover = document.querySelector<HTMLElement>('[data-vw-popover-for]');
     popover?.shadowRoot?.querySelector<HTMLButtonElement>('#open')?.click();
-    await Promise.resolve();
+    await new Promise(r => setTimeout(r, 0));
 
     const statusText = popover?.shadowRoot?.textContent;
-    expect(statusText).not.toContain('undefined');
+    expect(statusText).toContain('Unexpected autofill response');
   });
 
   it('shows status when getCredentials returns unexpected data shape', async () => {
@@ -72,13 +72,13 @@ describe('autofill controller', () => {
     startAutofill('https://example.com/login');
     const popover = document.querySelector<HTMLElement>('[data-vw-popover-for]');
     popover?.shadowRoot?.querySelector<HTMLButtonElement>('#open')?.click();
-    await Promise.resolve();
+    await new Promise(r => setTimeout(r, 0));
 
     popover?.shadowRoot?.querySelector<HTMLButtonElement>('[data-cipher-id="1"]')?.click();
-    await Promise.resolve();
+    await new Promise(r => setTimeout(r, 0));
 
     const statusText = popover?.shadowRoot?.textContent;
-    expect(statusText).not.toContain('undefined');
+    expect(statusText).toContain('Unexpected autofill response');
   });
 
   it('shows status when getCredentials returns array instead of object', async () => {
@@ -99,24 +99,24 @@ describe('autofill controller', () => {
     startAutofill('https://example.com/login');
     const popover = document.querySelector<HTMLElement>('[data-vw-popover-for]');
     popover?.shadowRoot?.querySelector<HTMLButtonElement>('#open')?.click();
-    await Promise.resolve();
+    await new Promise(r => setTimeout(r, 0));
 
     popover?.shadowRoot?.querySelector<HTMLButtonElement>('[data-cipher-id="1"]')?.click();
-    await Promise.resolve();
+    await new Promise(r => setTimeout(r, 0));
 
     const statusText = popover?.shadowRoot?.textContent;
-    expect(statusText).not.toContain('undefined');
+    expect(statusText).toContain('Unexpected autofill response');
   });
 
   it('shows status when findCandidates returns non-array data', async () => {
-    vi.mocked(sendRequest).mockResolvedValueOnce({ ok: true, data: null });
+    vi.mocked(sendRequest).mockResolvedValueOnce({ ok: true, data: { username: 'foo' } });
 
     startAutofill('https://example.com/login');
     const popover = document.querySelector<HTMLElement>('[data-vw-popover-for]');
     popover?.shadowRoot?.querySelector<HTMLButtonElement>('#open')?.click();
-    await Promise.resolve();
+    await new Promise(r => setTimeout(r, 0));
 
     const statusText = popover?.shadowRoot?.textContent;
-    expect(statusText).not.toContain('undefined');
+    expect(statusText).toContain('Unexpected autofill response');
   });
 });
