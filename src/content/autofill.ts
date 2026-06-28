@@ -13,7 +13,8 @@ export function startAutofill(frameUrl = window.location.href): void {
 
 function attachPopovers(frameUrl: string): void {
   for (const form of detectLoginForms()) {
-    if (document.querySelector(`[data-vw-popover-for="${form.id}"]`)) continue;
+    const selector = `[data-vw-popover-for="${CSS.escape(form.id)}"]`;
+    if (document.querySelector(selector)) continue;
     attachPopover(frameUrl, form);
   }
 }
@@ -37,7 +38,11 @@ async function loadCandidates(frameUrl: string, popover: ReturnType<typeof creat
     popover.showStatus(messageForError(response.error.code, response.error.message));
     return;
   }
-  if (Array.isArray(response.data) && isAutofillCandidates(response.data)) popover.showCandidates(response.data);
+  if (Array.isArray(response.data) && isAutofillCandidates(response.data)) {
+    popover.showCandidates(response.data);
+  } else {
+    popover.showStatus('Unexpected autofill response');
+  }
 }
 
 async function fillSelected(
@@ -58,6 +63,8 @@ async function fillSelected(
   if (isAutofillCredentials(response.data)) {
     const filled = fillLoginForm(form, response.data);
     popover.showStatus(filled ? 'Filled' : 'No fillable fields');
+  } else {
+    popover.showStatus('Unexpected autofill response');
   }
 }
 
