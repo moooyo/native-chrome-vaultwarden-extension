@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { VaultService } from './vault-service.js';
+import { UriMatchStrategy } from './uri-match.js';
 
 // webextension-polyfill is imported transitively by platform/store.ts at module
 // level. Without this mock the import fails in the node (vitest) environment
@@ -14,7 +15,7 @@ import type { ApiClient } from '../api/client.js';
 import type { AuthService } from '../session/auth-service.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import { hexToBytes } from '../crypto/encoding.js';
-import { FIELD_VECTOR, USER_KEY_VECTOR } from '../../../test/vectors.js';
+import { FIELD_VECTOR, URL_VECTOR, USER_KEY_VECTOR } from '../../../test/vectors.js';
 import type { SyncResponse } from '../api/types.js';
 
 function makeSync(): SyncResponse {
@@ -27,6 +28,20 @@ function makeSync(): SyncResponse {
       favorite: false,
       organizationId: null,
       login: { username: FIELD_VECTOR.encString, password: FIELD_VECTOR.encString, uris: [{ uri: FIELD_VECTOR.encString }] },
+    }],
+  };
+}
+
+function makeSyncUrl(): SyncResponse {
+  return {
+    profile: { id: 'u', email: 'u@example.com' },
+    ciphers: [{
+      id: 'cipher-1',
+      type: 1,
+      name: FIELD_VECTOR.encString,
+      favorite: false,
+      organizationId: null,
+      login: { username: FIELD_VECTOR.encString, password: FIELD_VECTOR.encString, uris: [{ uri: URL_VECTOR.encString }] },
     }],
   };
 }
@@ -46,7 +61,7 @@ async function makeService(syncResponse = makeSync()) {
   });
   const api = { sync: vi.fn(async () => syncResponse) } as unknown as ApiClient;
   const auth = { refreshIfNeeded: vi.fn(async () => {}) } as unknown as AuthService;
-  return { service: new VaultService({ api, auth, session: sm, localStore }), api };
+  return { service: new VaultService({ api, auth, session: sm, localStore }), api, session: sm };
 }
 
 describe('VaultService', () => {
@@ -116,5 +131,55 @@ describe('VaultService', () => {
     await service.sync();
     // password is undefined on an undecryptable cipher — should not throw.
     await expect(service.getField('cipher-1', 'password')).resolves.toBeUndefined();
+  });
+
+  it('findAutofillCandidates returns sorted matching summaries without passwords', async () => {
+    const sync = makeSyncUrl();
+    sync.ciphers[0]!.id = 'domain';
+    sync.ciphers[0]!.favorite = false;
+    sync.ciphers[0]!.login = {
+      username: FIELD_VECTOR.encString,
+      password: FIELD_VECTOR.encString,
+      uris: [{ uri: URL_VECTOR.encString, match: UriMatchStrategy.Domain }],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+
+    const candidates = await service.findAutofillCandidates(URL_VECTOR.plaintext, UriMatchStrategy.Domain);
+
+    expect(candidates).toEqual([{
+      id: 'domain',
+      name: FIELD_VECTOR.plaintext,
+      username: FIELD_VECTOR.plaintext,
+      matchedUri: URL_VECTOR.plaintext,
+      matchType: UriMatchStrategy.Domain,
+      favorite: false,
+    }]);
+    expect(JSON.stringify(candidates)).not.toContain('password');
+  });
+
+  it('findAutofillCandidates rejects when vault is locked', async () => {
+    const { service } = await makeService();
+    await expect(service.findAutofillCandidates('https://example.com', UriMatchStrategy.Domain))
+      .rejects.toMatchObject({ code: 'sync_required' });
+  });
+
+  it('findAutofillCandidates rejects locked when summaries exist but user key is unavailable', async () => {
+    const { service, session } = await makeService();
+    await service.sync();
+    await session.lock();
+    await expect(service.findAutofillCandidates(FIELD_VECTOR.plaintext, UriMatchStrategy.Domain))
+      .rejects.toMatchObject({ code: 'locked' });
+  });
+
+  it('getAutofillCredentials re-checks URI match before decrypting credentials', async () => {
+    const { service } = await makeService(makeSyncUrl());
+    await service.sync();
+
+    await expect(service.getAutofillCredentials('cipher-1', URL_VECTOR.plaintext, UriMatchStrategy.Domain))
+      .resolves.toEqual({ username: FIELD_VECTOR.plaintext, password: FIELD_VECTOR.plaintext });
+
+    await expect(service.getAutofillCredentials('cipher-1', 'https://not-matching.example.org', UriMatchStrategy.Domain))
+      .rejects.toMatchObject({ code: 'denied' });
   });
 });

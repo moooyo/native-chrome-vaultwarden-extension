@@ -34,3 +34,10 @@ export const FIELD_VECTOR = {
 
 export const TAMPERED_FIELD_ENCSTRING =
   '2.q1vT7cBqU9RjFUCj5KxSfw==|Njj6Rz3WuZoxIP6/zklx8w==|/1UdG6Q68nXxuAFWjRiAk2ZZwpFpcZ+x1V+9d4baXAo=';
+
+// URL_VECTOR: 'https://example.com' encrypted with USER_KEY_VECTOR (fixed IV 0x01*16)
+export const URL_VECTOR = {
+  encString:
+    '2.AQEBAQEBAQEBAQEBAQEBAQ==|cpKJ58ZKd7YpYLGDexqBQzFMTABy8MpyGJIsYZp1iCI=|WNwvD0GxRF7DZw5+mOFTUoxm2XlC+3Sb7j1VKbRA6AM=',
+  plaintext: 'https://example.com',
+};
