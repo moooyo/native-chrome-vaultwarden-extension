@@ -1,0 +1,141 @@
+name: Release
+
+# Build, package and publish the extension as a GitHub Release.
+#
+# Triggers:
+#   - Pushing a semver tag like v0.1.0  -> publishes a release for that tag.
+#   - Manual "Run workflow" (workflow_dispatch) with a tag input -> creates the
+#     tag at the dispatched commit (github.sha) and publishes a release.
+#
+# The packaged artifact is a Chrome Web Store / "Load unpacked"-ready zip whose
+# manifest.json sits at the archive root.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create (e.g. v0.1.0). Must match the manifest version.'
+        required: true
+        type: string
+      allow_version_mismatch:
+        description: 'Publish even if the tag does not match the manifest version (use with care).'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build & publish extension
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build (production)
+        run: npm run build:prod
+
+      - name: Resolve release metadata
+        id: meta
+        # Untrusted/free-form values (the dispatch input, the ref name) are passed
+        # through the environment and only ever read as shell variables — never
+        # interpolated into the script body — to avoid Actions script injection.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          ALLOW_MISMATCH: ${{ github.event.inputs.allow_version_mismatch }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$REF_NAME"
+          fi
+          # Constrain the tag to a semver shape: rejects anything carrying shell
+          # metacharacters, so downstream use of $TAG is safe.
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::Tag '$TAG' is not a valid semver tag (expected vMAJOR.MINOR.PATCH[-suffix])."
+            exit 1
+          fi
+          MANIFEST_VERSION="$(node -p "require('./dist/manifest.json').version")"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "zip=vaultwarden-extension-$TAG.zip" >> "$GITHUB_OUTPUT"
+          # Pre-release if the tag carries a suffix such as -beta / -rc1.
+          IS_PRERELEASE=false
+          case "$TAG" in
+            *-*) IS_PRERELEASE=true ;;
+          esac
+          echo "prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          # Fail closed on a tag/manifest version mismatch: a Release titled $TAG
+          # whose zip still carries the old manifest version would ship a stale,
+          # mislabeled update that Chrome silently ignores. The comparison uses the
+          # tag's base version (the -rc1/-beta suffix stripped), since a Chrome
+          # manifest version cannot carry a pre-release suffix. An operator can
+          # consciously override via the allow_version_mismatch dispatch input.
+          BASE_TAG="${TAG%%-*}"
+          if [ "$BASE_TAG" != "v$MANIFEST_VERSION" ]; then
+            if [ "$ALLOW_MISMATCH" = "true" ]; then
+              echo "::warning::Release tag '$TAG' does not match manifest version 'v$MANIFEST_VERSION' — proceeding because allow_version_mismatch was set."
+            else
+              echo "::error::Release tag '$TAG' (base '$BASE_TAG') does not match manifest version 'v$MANIFEST_VERSION'. Bump version in src/manifest.json (and package.json), re-tag, or re-run with allow_version_mismatch=true."
+              exit 1
+            fi
+          fi
+
+      - name: Package extension
+        env:
+          ZIP: ${{ steps.meta.outputs.zip }}
+        run: |
+          cd dist
+          zip -r "../$ZIP" . -x '*.map'
+          cd ..
+          echo "Archive contents:"
+          unzip -l "$ZIP"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          ZIP: ${{ steps.meta.outputs.zip }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          # Pin the tag/release to the exact commit that was built and tested.
+          # For a tag-push event this equals the tag's own commit; for a manual
+          # dispatch it creates the tag at the dispatched commit instead of
+          # defaulting to the tip of the default branch.
+          gh release create "$TAG" "$ZIP" \
+            --title "$TAG" \
+            --target "$GITHUB_SHA" \
+            --generate-notes \
+            "${flags[@]}"

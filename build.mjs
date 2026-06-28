@@ -3,6 +3,7 @@ import { cp, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const watch = process.argv.includes('--watch');
+const prod = process.argv.includes('--prod');
 const outdir = 'dist';
 
 async function copyStatic() {
@@ -30,7 +31,7 @@ const options = {
   format: 'esm',
   target: 'es2022',
   outdir,
-  sourcemap: true,
+  sourcemap: !prod,
   logLevel: 'info',
 };
 
