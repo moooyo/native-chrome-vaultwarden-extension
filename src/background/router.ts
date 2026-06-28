@@ -1,5 +1,6 @@
 import type { AuthService } from '../core/session/auth-service.js';
 import type { VaultService } from '../core/vault/vault-service.js';
+import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 import type { RequestMessage, ResponseMessage } from '../messaging/protocol.js';
 
 export interface RouterDeps {
@@ -8,6 +9,8 @@ export interface RouterDeps {
   settings: {
     getServerUrl(): Promise<string | undefined>;
     saveServerUrl(serverUrl: string): Promise<void>;
+    getDefaultUriMatchStrategy(): Promise<UriMatchStrategySetting>;
+    saveDefaultUriMatchStrategy(strategy: UriMatchStrategySetting): Promise<void>;
   };
 }
 
@@ -61,10 +64,14 @@ export function createRouter(deps: RouterDeps) {
           }
           case 'settings.get': {
             const serverUrl = await deps.settings.getServerUrl();
-            return { ok: true, data: serverUrl === undefined ? {} : { serverUrl } };
+            const defaultUriMatchStrategy = await deps.settings.getDefaultUriMatchStrategy();
+            return { ok: true, data: serverUrl === undefined ? { defaultUriMatchStrategy } : { serverUrl, defaultUriMatchStrategy } };
           }
           case 'settings.save':
             await deps.settings.saveServerUrl(request.serverUrl);
+            if (request.defaultUriMatchStrategy !== undefined) {
+              await deps.settings.saveDefaultUriMatchStrategy(request.defaultUriMatchStrategy);
+            }
             return { ok: true, data: null };
         }
       } catch (err) {

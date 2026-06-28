@@ -10,6 +10,15 @@
     <form id="settingsForm">
       <label for="serverUrl">Server URL</label>
       <input id="serverUrl" type="url" placeholder="https://vault.example.com/" required />
+      <label for="defaultUriMatchStrategy">Default URI match strategy</label>
+      <select id="defaultUriMatchStrategy">
+        <option value="0">Base domain / Domain</option>
+        <option value="1">Host</option>
+        <option value="2">Starts with</option>
+        <option value="3">Exact</option>
+        <option value="4">Regular expression</option>
+        <option value="5">Never</option>
+      </select>
       <button type="submit">Save</button>
     </form>
     <div id="status"></div>

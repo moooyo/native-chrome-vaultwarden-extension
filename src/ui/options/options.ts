@@ -1,8 +1,10 @@
 import browser from 'webextension-polyfill';
 import { sendRequest } from '../../messaging/protocol.js';
+import { isUriMatchStrategySetting } from '../../core/vault/uri-match.js';
 
 const form = document.getElementById('settingsForm') as HTMLFormElement;
 const input = document.getElementById('serverUrl') as HTMLInputElement;
+const defaultUriMatchStrategyInput = document.getElementById('defaultUriMatchStrategy') as HTMLSelectElement;
 const status = document.getElementById('status')!;
 
 void init();
@@ -10,8 +12,9 @@ void init();
 async function init() {
   const response = await sendRequest({ type: 'settings.get' });
   if (response.ok) {
-    const { serverUrl } = response.data as { serverUrl?: string };
+    const { serverUrl, defaultUriMatchStrategy } = response.data as { serverUrl?: string; defaultUriMatchStrategy: number };
     if (serverUrl) input.value = serverUrl;
+    defaultUriMatchStrategyInput.value = String(defaultUriMatchStrategy);
   }
 }
 
@@ -25,7 +28,12 @@ form.addEventListener('submit', async (event) => {
       setStatus('Host permission was not granted.', true);
       return;
     }
-    const response = await sendRequest({ type: 'settings.save', serverUrl: normalized });
+    const parsedStrategy = Number(defaultUriMatchStrategyInput.value);
+    if (!isUriMatchStrategySetting(parsedStrategy)) {
+      setStatus('Unsupported URI match strategy.', true);
+      return;
+    }
+    const response = await sendRequest({ type: 'settings.save', serverUrl: normalized, defaultUriMatchStrategy: parsedStrategy });
     if (!response.ok) {
       setStatus(response.error.message, true);
       return;

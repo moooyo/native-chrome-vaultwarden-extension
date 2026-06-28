@@ -2,6 +2,7 @@ import browser from 'webextension-polyfill';
 import type { AuthResult } from '../core/session/auth-service.js';
 import type { SessionState } from '../core/session/session-manager.js';
 import type { CipherSummary, FieldName } from '../core/vault/models.js';
+import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 
 export type RequestMessage =
   | { type: 'auth.getState' }
@@ -15,14 +16,14 @@ export type RequestMessage =
   | { type: 'vault.listItems' }
   | { type: 'vault.getField'; id: string; field: FieldName }
   | { type: 'settings.get' }
-  | { type: 'settings.save'; serverUrl: string };
+  | { type: 'settings.save'; serverUrl: string; defaultUriMatchStrategy?: UriMatchStrategySetting };
 
 export type ResponseMessage =
   | { ok: true; data: { state: SessionState } }
   | { ok: true; data: AuthResult }
   | { ok: true; data: CipherSummary[] }
   | { ok: true; data: { value?: string } }
-  | { ok: true; data: { serverUrl?: string } }
+  | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting } }
   | { ok: true; data: null }
   | { ok: false; error: { code: string; message: string } };
 
