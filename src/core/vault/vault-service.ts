@@ -10,6 +10,7 @@ import { encryptCipher } from './encrypt.js';
 import { getTotp, type TotpResult } from './totp.js';
 import { encryptToText } from '../crypto/encstring.js';
 import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealthInput } from './password-health.js';
+import { buildExportJson, parseImportJson } from './vault-io.js';
 import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
@@ -225,6 +226,39 @@ export class VaultService {
       }
     }
     return buildPasswordHealthReport(inputs).filter((entry) => entry.weak || entry.reuseCount > 1);
+  }
+
+  /**
+   * Serialize the decrypted vault to a Bitwarden-compatible unencrypted JSON export. This deliberately
+   * emits plaintext secrets — an explicit, user-initiated action — so callers must warn the user.
+   */
+  async exportVault(): Promise<string> {
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    if (!cache) throw new AppError('sync_required', 'Sync required');
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) throw new AppError('locked', 'Vault is locked');
+    const orgKeys = await this.buildOrgKeys(cache.profile);
+    const folders = (await this.deps.localStore.get<FolderSummary[]>(FOLDER_CACHE_KEY)) ?? [];
+    const decrypted: DecryptedCipher[] = [];
+    for (const cipher of cache.ciphers) {
+      const d = await decryptCipher(cipher, userKey, orgKeys);
+      if (d && !d.undecryptable) decrypted.push(d);
+    }
+    return buildExportJson(decrypted, folders);
+  }
+
+  /** Import a Bitwarden unencrypted JSON export: create one cipher per parsed item, then re-sync once. */
+  async importVault(json: string): Promise<number> {
+    const inputs = parseImportJson(json);
+    const userKey = await this.requireUserKey();
+    const token = await this.requireToken();
+    let imported = 0;
+    for (const input of inputs) {
+      await this.deps.api.createCipher(token, await encryptCipher(input, userKey));
+      imported++;
+    }
+    if (imported > 0) await this.sync();
+    return imported;
   }
 
   private async decryptCipherById(id: string): Promise<DecryptedCipher | undefined> {

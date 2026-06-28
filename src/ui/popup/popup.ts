@@ -328,6 +328,12 @@ function renderUnlockedShell(error?: string) {
     <div id="orgBanner"></div>
     <div id="vaultList" class="list-wrap"></div>
     <div class="footer">
+      <div class="footer-tools">
+        <button id="exportVault" class="btn btn-secondary btn-sm" type="button">${icon('logout')}<span>Export</span></button>
+        <button id="importVault" class="btn btn-secondary btn-sm" type="button">${icon('plus')}<span>Import</span></button>
+        <input id="importFile" type="file" accept="application/json,.json" hidden />
+      </div>
+      <div id="footerStatus" class="detail-status"></div>
       <button id="logoutUnlocked" class="btn btn-danger btn-block" type="button">${icon('logout')}<span>Log out</span></button>
     </div>
     ${error ? `<div class="footer">${errorNote(error)}</div>` : ''}`;
@@ -607,6 +613,77 @@ function bindUnlockedControls() {
   document.getElementById('generate')!.addEventListener('click', () => renderGenerator());
   document.getElementById('addItem')!.addEventListener('click', () => renderTypePicker());
   document.getElementById('health')!.addEventListener('click', () => void renderHealthReport());
+  bindExportImport();
+}
+
+/** Export downloads decrypted plaintext (two-click confirm); import reads a JSON export file. */
+function bindExportImport(): void {
+  const setFooterStatus = (message: string, isError: boolean): void => {
+    const status = document.getElementById('footerStatus');
+    if (status) status.innerHTML = `<p class="note ${isError ? 'error' : 'success'}">${icon(isError ? 'alert' : 'checkCircle')}<span>${escapeHtml(message)}</span></p>`;
+  };
+
+  const exportBtn = document.getElementById('exportVault') as HTMLButtonElement;
+  let exportArmed = false;
+  let armTimer: number | undefined;
+  exportBtn.addEventListener('click', async () => {
+    if (isPending) return;
+    if (!exportArmed) {
+      exportArmed = true;
+      exportBtn.querySelector('span')!.textContent = 'Confirm plaintext export';
+      if (armTimer) clearTimeout(armTimer);
+      armTimer = window.setTimeout(() => { exportArmed = false; exportBtn.querySelector('span')!.textContent = 'Export'; }, 5000);
+      return;
+    }
+    exportArmed = false;
+    if (armTimer) clearTimeout(armTimer);
+    exportBtn.querySelector('span')!.textContent = 'Export';
+    isPending = true;
+    try {
+      const response = await sendRequest({ type: 'vault.export' });
+      if (!response.ok) return setFooterStatus(response.error.message, true);
+      const json = (response.data as { json: string }).json;
+      downloadTextFile(json, `vaultwarden-export-${new Date().toISOString().slice(0, 10)}.json`);
+      setFooterStatus('Exported decrypted vault. Store the file securely.', false);
+    } finally {
+      isPending = false;
+    }
+  });
+
+  const importBtn = document.getElementById('importVault') as HTMLButtonElement;
+  const importFile = document.getElementById('importFile') as HTMLInputElement;
+  importBtn.addEventListener('click', () => importFile.click());
+  importFile.addEventListener('change', async () => {
+    const file = importFile.files?.[0];
+    importFile.value = '';
+    if (!file || isPending) return;
+    isPending = true;
+    try {
+      const text = await file.text();
+      const response = await sendRequest({ type: 'vault.import', json: text });
+      if (!response.ok) return setFooterStatus(response.error.message, true);
+      const imported = (response.data as { imported: number }).imported;
+      await loadCachedList();
+      setFooterStatus(`Imported ${imported} item${imported === 1 ? '' : 's'}.`, false);
+    } catch {
+      setFooterStatus('Could not read the import file', true);
+    } finally {
+      isPending = false;
+    }
+  });
+}
+
+/** Trigger a client-side download of a text file (used for vault export). */
+function downloadTextFile(content: string, filename: string): void {
+  const blob = new Blob([content], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /** Standalone password generator panel — runs locally; no vault secret involved. */

@@ -508,6 +508,27 @@ describe('VaultService', () => {
     await expect(service.createCipher({ type: 1, name: 'x' })).rejects.toThrow();
   });
 
+  it('exportVault serializes the decrypted vault to Bitwarden JSON', async () => {
+    const { service } = await makeService();
+    await service.sync();
+    const parsed = JSON.parse(await service.exportVault());
+    expect(parsed.encrypted).toBe(false);
+    expect(parsed.items[0]).toMatchObject({ name: FIELD_VECTOR.plaintext, type: 1 });
+  });
+
+  it('importVault creates a cipher per parsed item and re-syncs once', async () => {
+    const { service, api } = await makeService();
+    const json = JSON.stringify({ items: [{ type: 1, name: 'Imported', login: { password: 'p' } }, { type: 2, name: 'Note', notes: 'n' }] });
+    await expect(service.importVault(json)).resolves.toBe(2);
+    expect(api.createCipher).toHaveBeenCalledTimes(2);
+    expect(api.sync).toHaveBeenCalled();
+  });
+
+  it('importVault rejects malformed JSON', async () => {
+    const { service } = await makeService();
+    await expect(service.importVault('nope')).rejects.toThrow();
+  });
+
   it('reports weak and reused passwords without leaking the passwords', async () => {
     const weak = await encUnder('weakpass', testUserKey);
     const sync: SyncResponse = {

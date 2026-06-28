@@ -92,7 +92,10 @@
 
 ## 路线图之外、但属 Bitwarden 客户端标配（建议纳入规划）
 
-- Vault 导出 / 导入。
+- Vault 导出 / 导入 ✅（本次落地）：`vault/vault-io.ts`（Bitwarden 兼容未加密 JSON 的 `buildExportJson`
+  / `parseImportJson`）；`VaultService.exportVault`（worker 内全量解密→明文 JSON，**显式用户操作**）
+  / `importVault`（解析→逐条 createCipher→一次 sync）；popup 页脚「Export（二次确认明文）/ Import（选文件）」。
+  剩余：加密导出（.json with password）、组织条目与文件夹关系的完整保真。
 - PIN 解锁 / 生物识别解锁。
 - 多账户切换。
 - 密码健康报告 ✅（本次落地）：`vault/password-health.ts`（启发式强度评分 + 重复计数）；

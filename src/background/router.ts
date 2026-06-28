@@ -94,6 +94,14 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.vault.getPasswordHealth) throw new Error('vault.getPasswordHealth is not wired');
             return { ok: true, data: { entries: await deps.vault.getPasswordHealth() } };
           }
+          case 'vault.export': {
+            if (!deps.vault.exportVault) throw new Error('vault.exportVault is not wired');
+            return { ok: true, data: { json: await deps.vault.exportVault() } };
+          }
+          case 'vault.import': {
+            if (!deps.vault.importVault) throw new Error('vault.importVault is not wired');
+            return { ok: true, data: { imported: await deps.vault.importVault(request.json) } };
+          }
           case 'vault.createFolder':
             if (!deps.vault.createFolder) throw new Error('vault.createFolder is not wired');
             return { ok: true, data: await deps.vault.createFolder(request.name) };

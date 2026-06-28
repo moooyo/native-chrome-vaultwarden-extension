@@ -40,6 +40,8 @@ export type RequestMessage =
   | { type: 'vault.getTotp'; id: string }
   | { type: 'vault.getSkippedOrgCount' }
   | { type: 'vault.getPasswordHealth' }
+  | { type: 'vault.export' }
+  | { type: 'vault.import'; json: string }
   | { type: 'vault.createFolder'; name: string }
   | { type: 'vault.renameFolder'; id: string; name: string }
   | { type: 'vault.deleteFolder'; id: string }
@@ -62,6 +64,8 @@ export type ResponseMessage =
   | { ok: true; data: { totp: TotpResult | null } }
   | { ok: true; data: { count: number } }
   | { ok: true; data: { entries: PasswordHealthEntry[] } }
+  | { ok: true; data: { json: string } }
+  | { ok: true; data: { imported: number } }
   | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting; lockTimeout: LockTimeoutSetting } }
   | { ok: true; data: null }
   | { ok: true; data: AutofillCandidate[] }

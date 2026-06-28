@@ -160,6 +160,8 @@ body { width: 360px; }
 /* ----- Footer (destructive actions kept deliberate) ----- */
 .footer { padding: var(--s3) var(--s4); border-top: 1px solid var(--line); background: var(--surface); }
 .footer .note { margin-top: 0; }
+.footer-tools { display: flex; gap: var(--s2); margin-bottom: var(--s2); }
+.footer-tools .btn { flex: 1; }
 
 /* Sync affordance spins while a sync is in flight. */
 .icon-btn.is-spinning svg { animation: spin 0.7s linear infinite; }
