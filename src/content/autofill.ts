@@ -1,4 +1,4 @@
-import { sendRequest } from '../messaging/protocol.js';
+import { sendRequest, type AutofillCandidate, type AutofillCredentials } from '../messaging/protocol.js';
 import { fillLoginForm } from './fill.js';
 import { detectLoginForms, type DetectedLoginForm } from './form-detection.js';
 import { createAutofillPopover } from './popover.js';
@@ -68,12 +68,36 @@ async function fillSelected(
   }
 }
 
-function isAutofillCandidates(data: unknown[]): data is import('../messaging/protocol.js').AutofillCandidate[] {
-  return data.length === 0 || (typeof (data[0] as Record<string, unknown>)?.matchedUri === 'string');
+function isAutofillCandidates(data: unknown[]): data is AutofillCandidate[] {
+  return data.every(isAutofillCandidate);
 }
 
-function isAutofillCredentials(data: unknown): data is { username?: string; password?: string } {
-  return typeof data === 'object' && data !== null && !Array.isArray(data);
+function isAutofillCandidate(data: unknown): data is AutofillCandidate {
+  if (!isRecord(data)) return false;
+  return (
+    typeof data.id === 'string'
+    && typeof data.name === 'string'
+    && isOptionalString(data.username)
+    && typeof data.matchedUri === 'string'
+    && isUriMatchStrategySetting(data.matchType)
+    && typeof data.favorite === 'boolean'
+  );
+}
+
+function isAutofillCredentials(data: unknown): data is AutofillCredentials {
+  return isRecord(data) && isOptionalString(data.username) && isOptionalString(data.password);
+}
+
+function isUriMatchStrategySetting(value: unknown): value is AutofillCandidate['matchType'] {
+  return Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 5;
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === 'string';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function messageForError(code: string, fallback: string): string {

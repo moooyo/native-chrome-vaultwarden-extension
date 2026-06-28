@@ -1,6 +1,21 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+interface FakePopover {
+  element: HTMLElement;
+  showStatus: ReturnType<typeof vi.fn>;
+  showCandidates: ReturnType<typeof vi.fn>;
+  remove: ReturnType<typeof vi.fn>;
+  options: {
+    onOpen(): void;
+    onSelect(cipherId: string): void;
+  };
+}
+
+const popoverState = vi.hoisted(() => ({
+  instances: [] as FakePopover[],
+}));
+
 vi.mock('../messaging/protocol.js', () => ({
   sendRequest: vi.fn(),
 }));
@@ -9,7 +24,23 @@ vi.mock('./fill.js', () => ({
   fillLoginForm: vi.fn(),
 }));
 
-import { sendRequest } from '../messaging/protocol.js';
+vi.mock('./popover.js', () => ({
+  createAutofillPopover: vi.fn((options: FakePopover['options']) => {
+    const element = document.createElement('div');
+    document.documentElement.append(element);
+    const popover: FakePopover = {
+      element,
+      showStatus: vi.fn(),
+      showCandidates: vi.fn(),
+      remove: vi.fn(),
+      options,
+    };
+    popoverState.instances.push(popover);
+    return popover;
+  }),
+}));
+
+import { sendRequest, type ResponseMessage } from '../messaging/protocol.js';
 import { fillLoginForm } from './fill.js';
 import { startAutofill } from './autofill.js';
 
@@ -17,6 +48,7 @@ describe('autofill controller', () => {
   beforeEach(() => {
     document.querySelectorAll('[data-vw-popover-for]').forEach((node) => node.remove());
     document.body.innerHTML = '<form><input type="email"><input type="password"></form>';
+    popoverState.instances.length = 0;
     vi.mocked(sendRequest).mockReset();
     vi.mocked(fillLoginForm).mockReset();
   });
@@ -29,7 +61,7 @@ describe('autofill controller', () => {
     vi.mocked(sendRequest).mockResolvedValue({ ok: true, data: [] });
 
     startAutofill('https://example.com/login');
-    document.querySelector<HTMLElement>('[data-vw-popover-for]')?.shadowRoot?.querySelector<HTMLButtonElement>('#open')?.click();
+    popover().options.onOpen();
     await Promise.resolve();
 
     expect(sendRequest).toHaveBeenCalledWith({ type: 'autofill.findCandidates', frameUrl: 'https://example.com/login' });
@@ -39,17 +71,17 @@ describe('autofill controller', () => {
     vi.mocked(sendRequest).mockResolvedValueOnce({ ok: true, data: [] });
 
     startAutofill('https://example.com/login');
-    const popover = document.querySelector<HTMLElement>('[data-vw-popover-for]');
-    popover?.shadowRoot?.querySelector<HTMLButtonElement>('#open')?.click();
+    const current = popover();
+    current.options.onOpen();
     await new Promise(r => setTimeout(r, 0));
 
-    expect(popover?.shadowRoot?.textContent).toContain('No matching logins');
+    expect(current.showCandidates).toHaveBeenCalledWith([]);
+    expect(current.showStatus).not.toHaveBeenCalledWith('Unexpected autofill response');
   });
 
   it('does not throw when form.id contains CSS selector special characters', () => {
     vi.mocked(sendRequest).mockResolvedValue({ ok: true, data: [] });
 
-    // Simulate page content setting data-vw-autofill-id to a value with quotes and CSS syntax
     const formHtml = '<form><input id="pass" type="email"><input type="password" data-vw-autofill-id=\'test"[attr]"></form>';
     document.body.innerHTML = formHtml;
 
@@ -62,12 +94,22 @@ describe('autofill controller', () => {
     vi.mocked(sendRequest).mockResolvedValueOnce({ ok: true, data: null });
 
     startAutofill('https://example.com/login');
-    const popover = document.querySelector<HTMLElement>('[data-vw-popover-for]');
-    popover?.shadowRoot?.querySelector<HTMLButtonElement>('#open')?.click();
+    const current = popover();
+    current.options.onOpen();
     await new Promise(r => setTimeout(r, 0));
 
-    const statusText = popover?.shadowRoot?.textContent;
-    expect(statusText).toContain('Unexpected autofill response');
+    expect(current.showStatus).toHaveBeenCalledWith('Unexpected autofill response');
+  });
+
+  it('shows status when findCandidates returns malformed candidate items', async () => {
+    vi.mocked(sendRequest).mockResolvedValueOnce(malformedOk([{ matchedUri: 'https://example.com' }]));
+
+    startAutofill('https://example.com/login');
+    const current = popover();
+    current.options.onOpen();
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(current.showStatus).toHaveBeenCalledWith('Unexpected autofill response');
   });
 
   it('shows status when getCredentials returns unexpected data shape', async () => {
@@ -86,15 +128,14 @@ describe('autofill controller', () => {
       .mockResolvedValueOnce({ ok: true, data: null });
 
     startAutofill('https://example.com/login');
-    const popover = document.querySelector<HTMLElement>('[data-vw-popover-for]');
-    popover?.shadowRoot?.querySelector<HTMLButtonElement>('#open')?.click();
+    const current = popover();
+    current.options.onOpen();
     await new Promise(r => setTimeout(r, 0));
 
-    popover?.shadowRoot?.querySelector<HTMLButtonElement>('[data-cipher-id="1"]')?.click();
+    current.options.onSelect('1');
     await new Promise(r => setTimeout(r, 0));
 
-    const statusText = popover?.shadowRoot?.textContent;
-    expect(statusText).toContain('Unexpected autofill response');
+    expect(current.showStatus).toHaveBeenCalledWith('Unexpected autofill response');
   });
 
   it('shows status when getCredentials returns array instead of object', async () => {
@@ -113,26 +154,61 @@ describe('autofill controller', () => {
       .mockResolvedValueOnce({ ok: true, data: [] });
 
     startAutofill('https://example.com/login');
-    const popover = document.querySelector<HTMLElement>('[data-vw-popover-for]');
-    popover?.shadowRoot?.querySelector<HTMLButtonElement>('#open')?.click();
+    const current = popover();
+    current.options.onOpen();
     await new Promise(r => setTimeout(r, 0));
 
-    popover?.shadowRoot?.querySelector<HTMLButtonElement>('[data-cipher-id="1"]')?.click();
+    current.options.onSelect('1');
     await new Promise(r => setTimeout(r, 0));
 
-    const statusText = popover?.shadowRoot?.textContent;
-    expect(statusText).toContain('Unexpected autofill response');
+    expect(current.showStatus).toHaveBeenCalledWith('Unexpected autofill response');
+  });
+
+  it('shows status when getCredentials returns malformed credential fields', async () => {
+    vi.mocked(sendRequest)
+      .mockResolvedValueOnce({
+        ok: true,
+        data: [{
+          id: '1',
+          name: 'Test',
+          username: 'user',
+          matchedUri: 'https://example.com',
+          matchType: 0,
+          favorite: false,
+        }],
+      })
+      .mockResolvedValueOnce(malformedOk({ username: 42, password: 'secret' }));
+
+    startAutofill('https://example.com/login');
+    const current = popover();
+    current.options.onOpen();
+    await new Promise(r => setTimeout(r, 0));
+
+    current.options.onSelect('1');
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(current.showStatus).toHaveBeenCalledWith('Unexpected autofill response');
+    expect(fillLoginForm).not.toHaveBeenCalled();
   });
 
   it('shows status when findCandidates returns non-array data', async () => {
     vi.mocked(sendRequest).mockResolvedValueOnce({ ok: true, data: { username: 'foo' } });
 
     startAutofill('https://example.com/login');
-    const popover = document.querySelector<HTMLElement>('[data-vw-popover-for]');
-    popover?.shadowRoot?.querySelector<HTMLButtonElement>('#open')?.click();
+    const current = popover();
+    current.options.onOpen();
     await new Promise(r => setTimeout(r, 0));
 
-    const statusText = popover?.shadowRoot?.textContent;
-    expect(statusText).toContain('Unexpected autofill response');
+    expect(current.showStatus).toHaveBeenCalledWith('Unexpected autofill response');
   });
 });
+
+function popover(): FakePopover {
+  const current = popoverState.instances.at(-1);
+  if (!current) throw new Error('Expected popover to exist');
+  return current;
+}
+
+function malformedOk(data: unknown): ResponseMessage {
+  return { ok: true, data } as ResponseMessage;
+}

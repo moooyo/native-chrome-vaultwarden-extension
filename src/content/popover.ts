@@ -2,6 +2,7 @@ import type { AutofillCandidate } from '../messaging/protocol.js';
 
 export interface AutofillPopover {
   element: HTMLElement;
+  root: ShadowRoot;
   showStatus(message: string): void;
   showCandidates(candidates: AutofillCandidate[]): void;
   remove(): void;
@@ -17,7 +18,7 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
   const host = document.createElement('div');
   host.style.position = 'absolute';
   host.style.zIndex = '2147483647';
-  const shadow = host.attachShadow({ mode: 'open' });
+  const shadow = host.attachShadow({ mode: 'closed' });
   document.documentElement.append(host);
   positionNearAnchor(host, options.anchor);
 
@@ -35,10 +36,14 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
   };
 
   render('<button id="open" type="button">Vaultwarden</button>');
-  shadow.getElementById('open')?.addEventListener('click', options.onOpen);
+  shadow.getElementById('open')?.addEventListener('click', (event) => {
+    if (!event.isTrusted) return;
+    options.onOpen();
+  });
 
   return {
     element: host,
+    root: shadow,
     showStatus(message: string) {
       render(`<div>${escapeHtml(message)}</div>`);
     },
@@ -48,14 +53,17 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
         return;
       }
       render(candidates.map((candidate) => `
-        <button type="button" data-cipher-id="${escapeHtml(candidate.id)}">
+        <button type="button" class="candidate">
           <strong>${escapeHtml(candidate.name)}</strong>
           <div class="muted">${escapeHtml(candidate.username ?? '')}</div>
           <div class="muted">${escapeHtml(candidate.matchedUri)}</div>
         </button>
       `).join(''));
-      shadow.querySelectorAll<HTMLButtonElement>('button[data-cipher-id]').forEach((button) => {
-        button.addEventListener('click', () => options.onSelect(button.dataset.cipherId!));
+      shadow.querySelectorAll<HTMLButtonElement>('button.candidate').forEach((button, index) => {
+        button.addEventListener('click', (event) => {
+          if (!event.isTrusted) return;
+          options.onSelect(candidates[index]!.id);
+        });
       });
     },
     remove() {
