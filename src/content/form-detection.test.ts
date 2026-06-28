@@ -74,4 +74,18 @@ describe('form detection', () => {
 
     expect(detectLoginForms()).toEqual([]);
   });
+
+  it('ignores inputs hidden by visibility:hidden even when they have layout', () => {
+    document.body.innerHTML = `
+      <form style="visibility:hidden">
+        <input type="email">
+        <input type="password">
+      </form>
+    `;
+    for (const input of document.querySelectorAll('input')) {
+      Object.defineProperty(input, 'offsetParent', { configurable: true, value: document.body });
+    }
+
+    expect(detectLoginForms()).toEqual([]);
+  });
 });

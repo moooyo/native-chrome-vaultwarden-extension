@@ -30,8 +30,9 @@ export function detectLoginForms(root: ParentNode = document): DetectedLoginForm
 export function isFillableInput(input: HTMLInputElement): boolean {
   const editable = input.type !== 'hidden' && !input.hidden && !input.disabled && !input.readOnly;
   if (!editable) return false;
+  if (!isVisibleInTree(input)) return false;
   if (input.offsetParent != null) return true;
-  return isHappyDomVisible(input);
+  return input.isConnected;
 }
 
 function assignFormId(input: HTMLInputElement): string {
@@ -56,7 +57,7 @@ function findUsernameInput(container: ParentNode, passwordInput: HTMLInputElemen
   return candidates.at(-1);
 }
 
-function isHappyDomVisible(input: HTMLInputElement): boolean {
+function isVisibleInTree(input: HTMLInputElement): boolean {
   if (!input.isConnected) return false;
   const view = input.ownerDocument.defaultView;
   if (!view) return false;
