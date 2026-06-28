@@ -96,6 +96,42 @@ describe('autofill controller', () => {
     expect(sendRequest).toHaveBeenNthCalledWith(2, { type: 'autofill.getCredentials', cipherId: '1', frameUrl: `${window.location.origin}/other` });
   });
 
+  it('does not fill if the frame URL changes before credentials return', async () => {
+    window.history.replaceState({}, '', '/login');
+    let resolveCredentials: (value: ResponseMessage) => void = () => {};
+    const credentialsResponse = new Promise<ResponseMessage>((resolve) => {
+      resolveCredentials = resolve;
+    });
+    vi.mocked(sendRequest)
+      .mockResolvedValueOnce({
+        ok: true,
+        data: [{
+          id: '1',
+          name: 'Test',
+          username: 'user',
+          matchedUri: `${window.location.origin}/login`,
+          matchType: 3,
+          favorite: false,
+        }],
+      })
+      .mockReturnValueOnce(credentialsResponse);
+
+    startAutofill();
+    const current = popover();
+    current.options.onOpen();
+    await new Promise(r => setTimeout(r, 0));
+
+    current.options.onSelect('1');
+    await Promise.resolve();
+    window.history.pushState({}, '', '/other');
+    resolveCredentials({ ok: true, data: { username: 'user', password: 'secret' } });
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(sendRequest).toHaveBeenNthCalledWith(2, { type: 'autofill.getCredentials', cipherId: '1', frameUrl: `${window.location.origin}/login` });
+    expect(fillLoginForm).not.toHaveBeenCalled();
+    expect(current.showStatus).toHaveBeenCalledWith('Page changed before autofill');
+  });
+
   it('shows no matches when findCandidates returns an empty array', async () => {
     vi.mocked(sendRequest).mockResolvedValueOnce({ ok: true, data: [] });
 

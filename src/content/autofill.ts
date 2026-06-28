@@ -30,7 +30,7 @@ function attachPopover(getFrameUrl: FrameUrlProvider, form: DetectedLoginForm): 
       void loadCandidates(getFrameUrl(), popover);
     },
     onSelect: (cipherId) => {
-      void fillSelected(getFrameUrl(), form, cipherId, popover);
+      void fillSelected(getFrameUrl, form, cipherId, popover);
     },
   });
   popover.element.dataset.vwPopoverFor = form.id;
@@ -50,7 +50,7 @@ async function loadCandidates(frameUrl: string, popover: ReturnType<typeof creat
 }
 
 async function fillSelected(
-  frameUrl: string,
+  getFrameUrl: FrameUrlProvider,
   form: DetectedLoginForm,
   cipherId: string,
   popover: ReturnType<typeof createAutofillPopover>,
@@ -59,9 +59,14 @@ async function fillSelected(
     popover.showStatus('Form is no longer available');
     return;
   }
+  const frameUrl = getFrameUrl();
   const response = await sendRequest({ type: 'autofill.getCredentials', cipherId, frameUrl });
   if (!response.ok) {
     popover.showStatus(messageForError(response.error.code, response.error.message));
+    return;
+  }
+  if (getFrameUrl() !== frameUrl) {
+    popover.showStatus('Page changed before autofill');
     return;
   }
   if (isAutofillCredentials(response.data)) {
