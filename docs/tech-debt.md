@@ -5,6 +5,13 @@
 
 ## 已交付
 
+- **密码生成器（Password generator）** ✅（本次落地，原 M5 的一部分）
+  - `src/core/generator/password.ts`：Bitwarden 风格生成——保证每个启用字符集至少一个、满足
+    数字/特殊字符的最小数量，其余位用 `crypto.getRandomValues`（拒绝采样去偏）填充后洗牌；
+    可选「避免易混字符」(Il1O0)。随机源可注入以便确定性单测。
+  - popup 工具栏新增生成器面板（长度/字符集开关、重新生成、复制）；纯本地运行，不涉及 vault 密钥。
+  - 仍待：生成历史（history）。
+
 - **TOTP 验证码生成 / 显示** ✅（本次落地，原 M6 的一部分）
   - `src/core/vault/totp.ts`：RFC 6238 TOTP（HMAC-SHA1/256/512、可配 digits/period），
     支持裸 base32 密钥与 `otpauth://` URI；用 RFC 6238 Appendix B 标准向量做单测。
@@ -39,7 +46,7 @@
 
 | 里程碑 | 内容 |
 |---|---|
-| M5 | ciphers/folders **CRUD** + 密码生成器（含生成历史）|
+| M5 | ciphers/folders **CRUD**；密码生成器 ✅（已交付，剩余：生成历史）|
 | M6 | **TOTP** 验证码生成 / 显示 ✅（已交付）；剩余：**填充**进表单 |
 | M7 | **passkeys**（`fido2Credentials` 私钥，WebAuthn 独立签名）|
 | M8 | **Sends** 分享 CRUD + 加密 |

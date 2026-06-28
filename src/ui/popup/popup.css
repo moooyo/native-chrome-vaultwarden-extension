@@ -109,6 +109,13 @@ body { width: 360px; }
 .detail-actions { display: grid; gap: var(--s2); margin-top: var(--s1); }
 .detail-status { min-height: 1rem; }
 
+/* ----- Password generator ----- */
+.gen-options { display: grid; gap: var(--s2); margin-top: var(--s2); }
+.gen-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); font-size: 0.8125rem; }
+.gen-row .input { max-width: 5rem; text-align: right; }
+.gen-check { display: flex; align-items: center; gap: var(--s2); font-size: 0.8125rem; cursor: pointer; }
+.gen-check input { flex: none; }
+
 /* ----- Footer (destructive actions kept deliberate) ----- */
 .footer { padding: var(--s3) var(--s4); border-top: 1px solid var(--line); background: var(--surface); }
 .footer .note { margin-top: 0; }

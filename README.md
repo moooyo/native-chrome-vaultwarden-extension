@@ -21,6 +21,7 @@ Beyond the milestones, the extension now also:
 
 - Decrypts organization-owned ciphers by unwrapping each organization key (RSA-OAEP-SHA1, encType=4) with the account private key, so org logins appear in the list and participate in autofill.
 - Generates RFC 6238 TOTP codes for logins that store a TOTP secret (base32 or `otpauth://`), shown with a live countdown in the login detail. The secret is decrypted only in the service worker; only the current code crosses to the popup.
+- Includes a password generator (configurable length, character sets, and ambiguous-character avoidance) reachable from the vault toolbar, using `crypto.getRandomValues` with rejection sampling.
 
 Collections grouping, Argon2id accounts, and account registration are not implemented in this milestone.
 
@@ -71,3 +72,4 @@ Load `dist/` from Chrome `chrome://extensions` with Developer Mode enabled.
 22. Set the display to a HiDPI scale (e.g. 150% / 200%) and confirm icons and text stay crisp in all surfaces.
 23. Narrow the options tab and confirm the layout reflows without horizontal scrolling.
 24. Open a login that stores a TOTP secret and confirm the verification code shows with a countdown, rolls over at the end of its window, and copies on demand.
+25. Open the password generator from the vault toolbar, adjust length and character sets, and confirm a matching password generates, regenerates, and copies.

@@ -2,6 +2,7 @@ import { sendRequest } from '../../messaging/protocol.js';
 import type { AuthResult } from '../../core/session/auth-service.js';
 import type { CipherSummary, DecryptedCipher, FolderSummary } from '../../core/vault/models.js';
 import { filterSummariesByFolderAndQuery, NO_FOLDER } from '../../core/vault/search.js';
+import { generatePassword, DEFAULT_PASSWORD_OPTIONS, type PasswordGenOptions } from '../../core/generator/password.js';
 import { icon } from '../icons.js';
 
 type View =
@@ -24,6 +25,8 @@ let selectedFolderId: string | null = null;
 let skippedOrgCount = 0;
 // Active TOTP countdown interval for the open login detail (cleared on any navigation).
 let totpTimer: number | undefined;
+// Password generator options, persisted while the popup stays open.
+let genOptions: PasswordGenOptions = { ...DEFAULT_PASSWORD_OPTIONS };
 
 function clearTotpTimer(): void {
   if (totpTimer !== undefined) {
@@ -251,6 +254,7 @@ function renderUnlockedShell(error?: string) {
     </div>
     <div class="toolbar">
       <div class="search">${icon('search')}<input id="search" class="input" placeholder="Search vault" autocomplete="off" /></div>
+      <button id="generate" class="icon-btn" type="button" title="Password generator" aria-label="Password generator">${icon('key')}</button>
       <button id="sync" class="icon-btn" type="button" title="Sync vault" aria-label="Sync vault">${icon('refresh')}</button>
       <button id="lock" class="icon-btn" type="button" title="Lock vault" aria-label="Lock vault">${icon('lock')}</button>
     </div>
@@ -410,6 +414,67 @@ function bindUnlockedControls() {
   });
 
   document.getElementById('search')!.addEventListener('input', renderVaultList);
+  document.getElementById('generate')!.addEventListener('click', () => renderGenerator());
+}
+
+/** Standalone password generator panel — runs locally; no vault secret involved. */
+function renderGenerator(): void {
+  clearTotpTimer();
+  app.innerHTML = `
+    <div class="detail">
+      <div class="detail-head">
+        <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
+        <div class="titles"><h1>Password generator</h1></div>
+      </div>
+      <div class="detail-body">
+        <div class="readout">
+          <div class="k">${icon('key')} Generated password</div>
+          <div class="v-row">
+            <code id="genOut" class="v mono"></code>
+            <button id="genRegen" class="icon-btn" type="button" title="Regenerate" aria-label="Regenerate">${icon('refresh')}</button>
+          </div>
+        </div>
+        <div class="gen-options">
+          <label class="gen-row"><span>Length</span><input id="genLength" class="input" type="number" min="4" max="128" value="${genOptions.length}" /></label>
+          <label class="gen-check"><input id="genLower" type="checkbox" ${genOptions.lowercase ? 'checked' : ''} /><span>Lowercase (a-z)</span></label>
+          <label class="gen-check"><input id="genUpper" type="checkbox" ${genOptions.uppercase ? 'checked' : ''} /><span>Uppercase (A-Z)</span></label>
+          <label class="gen-check"><input id="genNumbers" type="checkbox" ${genOptions.numbers ? 'checked' : ''} /><span>Numbers (0-9)</span></label>
+          <label class="gen-check"><input id="genSpecial" type="checkbox" ${genOptions.special ? 'checked' : ''} /><span>Special (!@#$%^&amp;*)</span></label>
+          <label class="gen-check"><input id="genAmbiguous" type="checkbox" ${genOptions.avoidAmbiguous ? 'checked' : ''} /><span>Avoid ambiguous (Il1O0)</span></label>
+        </div>
+        <div class="detail-actions">
+          <button id="genCopy" type="button" class="btn btn-block">${icon('copy')}<span>Copy password</span></button>
+        </div>
+        <div id="detailStatus" class="detail-status"></div>
+      </div>
+    </div>`;
+  document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
+
+  const out = document.getElementById('genOut')!;
+  let current = '';
+  const readOptions = (): void => {
+    const length = Number((document.getElementById('genLength') as HTMLInputElement).value);
+    genOptions = {
+      ...genOptions,
+      length: Number.isFinite(length) ? Math.min(Math.max(Math.trunc(length), 4), 128) : genOptions.length,
+      lowercase: (document.getElementById('genLower') as HTMLInputElement).checked,
+      uppercase: (document.getElementById('genUpper') as HTMLInputElement).checked,
+      numbers: (document.getElementById('genNumbers') as HTMLInputElement).checked,
+      special: (document.getElementById('genSpecial') as HTMLInputElement).checked,
+      avoidAmbiguous: (document.getElementById('genAmbiguous') as HTMLInputElement).checked,
+    };
+  };
+  const regenerate = (): void => {
+    readOptions();
+    current = generatePassword(genOptions);
+    out.textContent = current || 'Enable at least one character set';
+  };
+  for (const id of ['genLength', 'genLower', 'genUpper', 'genNumbers', 'genSpecial', 'genAmbiguous']) {
+    document.getElementById(id)!.addEventListener('input', regenerate);
+  }
+  document.getElementById('genRegen')!.addEventListener('click', regenerate);
+  document.getElementById('genCopy')!.addEventListener('click', () => void withDetailBusy(() => copyValue(current, 'Password')));
+  regenerate();
 }
 
 async function loadCachedList() {
