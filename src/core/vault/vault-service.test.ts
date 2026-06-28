@@ -108,6 +108,7 @@ async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8
     deleteFolder: vi.fn(async () => {}),
     createCipher: vi.fn(async () => ({ id: 'new-cipher', type: 1, name: '2.enc' })),
     updateCipher: vi.fn(async () => ({ id: 'cipher-1', type: 1, name: '2.enc' })),
+    shareCipher: vi.fn(async () => ({ id: 'mine', type: 1, name: '2.enc' })),
     deleteCipher: vi.fn(async () => {}),
     softDeleteCipher: vi.fn(async () => {}),
     restoreCipher: vi.fn(async () => {}),
@@ -637,6 +638,55 @@ describe('VaultService', () => {
       .resolves.toEqual({ username: 'alice@org.example', password: 'org-s3cret' });
   });
 
+  it('updateCipher re-encrypts an org cipher under the ORG key and keeps it org-owned (not corrupted)', async () => {
+    const { service, api } = await makeService(await makeOrgSync(), { privateKey: privateKeyBytes });
+    await service.sync();
+    await service.updateCipher('org-login', { type: 1, name: 'Renamed Org Item', login: { username: 'alice@org.example', password: 'rotated-org-pass' } });
+    const [, id, req] = (api.updateCipher as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(id).toBe('org-login');
+    const r = req as { name: string; organizationId?: string; login?: { password?: string } };
+    expect(r.organizationId).toBe('org-1');
+    // The fields decrypt under the ORG key — proving they were NOT re-encrypted under the account key.
+    await expect(decryptToText(r.name, orgKey)).resolves.toBe('Renamed Org Item');
+    await expect(decryptToText(r.login!.password!, orgKey)).resolves.toBe('rotated-org-pass');
+    await expect(decryptToText(r.name, testUserKey)).rejects.toBeTruthy(); // wrong key cannot read it
+  });
+
+  it('shareCipher moves a personal cipher under the org key and assigns collections', async () => {
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com', organizations: [{ id: 'org-1', key: ORG_KEY_VECTOR.encOrgKey }] },
+      ciphers: [{
+        id: 'mine', type: 1, favorite: false, organizationId: null,
+        name: await encUnder('My Login', testUserKey),
+        login: { username: await encUnder('me@example.com', testUserKey), password: await encUnder('p@ss', testUserKey) },
+      }],
+    };
+    const { service, api } = await makeService(sync, { privateKey: privateKeyBytes });
+    await service.sync();
+    await service.shareCipher('mine', 'org-1', ['col-9']);
+    const [, id, body] = (api.shareCipher as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(id).toBe('mine');
+    const b = body as { cipher: { name: string; organizationId?: string }; collectionIds: string[] };
+    expect(b.collectionIds).toEqual(['col-9']);
+    expect(b.cipher.organizationId).toBe('org-1');
+    await expect(decryptToText(b.cipher.name, orgKey)).resolves.toBe('My Login'); // re-encrypted under org key
+  });
+
+  it('shareCipher refuses items with a passkey or password history to avoid data loss', async () => {
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com', organizations: [{ id: 'org-1', key: ORG_KEY_VECTOR.encOrgKey }] },
+      ciphers: [{
+        id: 'mine', type: 1, favorite: false, organizationId: null,
+        name: await encUnder('My Login', testUserKey),
+        login: { password: await encUnder('p', testUserKey), fido2Credentials: [{ credentialId: '2.c==', keyValue: '2.k==', rpId: '2.r==' }] },
+      }],
+    };
+    const { service, api } = await makeService(sync, { privateKey: privateKeyBytes });
+    await service.sync();
+    await expect(service.shareCipher('mine', 'org-1', ['col-9'])).rejects.toMatchObject({ code: 'error' });
+    expect(api.shareCipher).not.toHaveBeenCalled();
+  });
+
   it('marks a login summary with hasTotp without leaking the secret', async () => {
     const sync = makeSync();
     sync.ciphers[0]!.login = { username: FIELD_VECTOR.encString, totp: await encUnder(TOTP_SECRET_B32, testUserKey) };
@@ -713,14 +763,13 @@ describe('VaultService', () => {
     expect((req as { name: string }).name.startsWith('2.')).toBe(true);
   });
 
-  it('updateCipher preserves the passkey and cipher key the editor does not model, and writes editor-controlled reprompt/fields', async () => {
+  it('updateCipher preserves the passkey the editor does not model, and writes editor-controlled reprompt/fields', async () => {
     const sync = makeSync();
     sync.ciphers[0]!.login = {
       username: FIELD_VECTOR.encString,
       password: FIELD_VECTOR.encString,
       fido2Credentials: [{ credentialId: '2.cid==', keyValue: '2.kv==', rpId: '2.rp==', counter: '2.ct==' }],
     };
-    sync.ciphers[0]!.key = '2.cipherkey==';
     const { service, api } = await makeService(sync);
     await service.sync(); // populate the raw cache the merge reads from
     // reprompt + custom fields are now editor-controlled, so the editor round-trips them in the input.
@@ -731,10 +780,9 @@ describe('VaultService', () => {
     });
     const [, id, req] = (api.updateCipher as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(id).toBe('cipher-1');
-    const r = req as { login?: { fido2Credentials?: unknown }; fields?: { type: number }[]; reprompt?: number; key?: string };
-    // Passkey + per-cipher key still ride along (the editor doesn't model them).
+    const r = req as { login?: { fido2Credentials?: unknown }; fields?: { type: number }[]; reprompt?: number };
+    // Passkey still rides along (the editor doesn't model it).
     expect(r.login?.fido2Credentials).toEqual(sync.ciphers[0]!.login!.fido2Credentials);
-    expect(r.key).toBe('2.cipherkey==');
     // Editor-modeled fields/reprompt come from the input, encrypted (never plaintext).
     expect(r.reprompt).toBe(1);
     expect(r.fields?.length).toBe(1);

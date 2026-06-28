@@ -183,6 +183,9 @@ export function createRouter(deps: RouterDeps) {
           case 'vault.restoreCipher':
             if (!deps.vault.restoreCipher) throw new Error('vault.restoreCipher is not wired');
             return { ok: true, data: await deps.vault.restoreCipher(request.id) };
+          case 'vault.shareCipher':
+            if (!deps.vault.shareCipher) throw new Error('vault.shareCipher is not wired');
+            return { ok: true, data: await deps.vault.shareCipher(request.id, request.organizationId, request.collectionIds, request.masterPassword) };
           case 'vault.getCipherInput': {
             if (!deps.vault.getCipherInput) throw new Error('vault.getCipherInput is not wired');
             const input = await deps.vault.getCipherInput(request.id, request.masterPassword);

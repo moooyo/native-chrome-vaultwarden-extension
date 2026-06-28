@@ -1179,6 +1179,7 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
         </div>
         <div class="detail-actions">
           <button id="ed_save" type="button" class="btn btn-block">${icon('check')}<span>Save</span></button>
+          ${mode === 'edit' && id && canMoveToOrg(id) ? `<button id="ed_move" type="button" class="btn btn-secondary btn-block">${icon('folder')}<span>Move to organization</span></button>` : ''}
           ${mode === 'edit' ? `<button id="ed_delete" type="button" class="btn btn-danger btn-block">${icon('trash')}<span>Delete</span></button>` : ''}
         </div>
         <div id="detailStatus" class="detail-status"></div>
@@ -1204,7 +1205,50 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
   document.getElementById('ed_save')!.addEventListener('click', () => void saveEditor(mode, type, id));
   if (mode === 'edit' && id) {
     document.getElementById('ed_delete')!.addEventListener('click', () => confirmDeleteCipher(id, v.name));
+    document.getElementById('ed_move')?.addEventListener('click', () => renderMoveToOrg(id, v.name));
   }
+}
+
+/** A personal (non-org) item can be moved into an organization when collections are available. */
+function canMoveToOrg(id: string): boolean {
+  const item = vaultItems.find((i) => i.id === id);
+  return Boolean(item && !item.organizationId && vaultCollections.length > 0);
+}
+
+/** Screen to move a personal cipher into an organization by selecting one or more collections. */
+function renderMoveToOrg(id: string, name: string): void {
+  clearTotpTimer();
+  const collections = vaultCollections;
+  app.innerHTML = `
+    <div class="detail">
+      <div class="detail-head">
+        <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
+        <div class="titles"><h1>Move to organization</h1></div>
+      </div>
+      <div class="detail-body">
+        <p class="muted">Choose the collection(s) to move “${escapeHtml(name)}” into. All selected collections must belong to the same organization.</p>
+        ${collections.length
+          ? `<div class="ed-cfields">${collections.map((c) => `<label class="gen-check"><input type="checkbox" class="move-col" value="${escapeHtml(c.id)}" data-org="${escapeHtml(c.organizationId)}" /><span>${escapeHtml(c.name)}</span></label>`).join('')}</div>`
+          : `<div class="muted center">No organization collections available</div>`}
+        <div class="detail-actions">
+          <button id="moveConfirm" type="button" class="btn btn-block"${collections.length ? '' : ' disabled'}>${icon('check')}<span>Move</span></button>
+        </div>
+        <div id="detailStatus" class="detail-status"></div>
+      </div>
+    </div>`;
+  document.getElementById('back')!.addEventListener('click', () => void openEditorForEdit(id));
+  document.getElementById('moveConfirm')?.addEventListener('click', () => void withDetailBusy(async () => {
+    const checked = [...document.querySelectorAll<HTMLInputElement>('.move-col:checked')];
+    if (!checked.length) return setDetailStatus('Select at least one collection', true);
+    if (new Set(checked.map((c) => c.dataset.org)).size > 1) {
+      return setDetailStatus('All collections must be in the same organization', true);
+    }
+    const organizationId = checked[0]!.dataset.org!;
+    const collectionIds = checked.map((c) => c.value);
+    const response = await sendRequest({ type: 'vault.shareCipher', id, organizationId, collectionIds, ...mpArg(id) });
+    if (!response.ok) return setDetailStatus(response.error.message, true);
+    render({ kind: 'unlocked' });
+  }));
 }
 
 function collectEditorInput(type: 1 | 2 | 3 | 4): CipherInput {

@@ -138,20 +138,44 @@ export class VaultService {
   }
 
   async updateCipher(id: string, input: CipherInput): Promise<VaultListing> {
-    const userKey = await this.requireUserKey();
     const token = await this.requireToken();
     const original = await this.findCachedCipher(id);
     // Old plaintext for the password-history diff; only meaningful when the cipher is cached.
     const previous = original ? await this.decryptCipherById(id) : undefined;
-    const request = await encryptCipher(input, userKey);
+    // Encrypt under the SAME key the cipher already uses — the org key (or its per-cipher key) for an
+    // org-owned item, the account key otherwise. Previously this always used the account UserKey, which
+    // corrupted org ciphers (re-encrypting their fields under the wrong key while the server kept them
+    // org-owned).
+    const fieldKey = await this.cipherFieldKey(original);
+    const request = await encryptCipher(input, fieldKey);
     // Carry forward server-managed fields the editor cannot represent (passkeys, the per-cipher key,
     // password history) so the wholesale PUT does not wipe them.
     mergeServerManagedFields(request, original);
+    // Keep org ownership so the server keeps treating the item as org-owned under the org key.
+    if (original?.organizationId) request.organizationId = original.organizationId;
     // When the password actually changed, archive the prior one and bump the revision date so the
     // security audit trail stays current (previously the history went stale on every edit here).
     this.appendPasswordHistory(request, original, input, previous);
     await this.deps.api.updateCipher(token, id, request);
     return this.sync();
+  }
+
+  /** The key a cipher's fields are encrypted under: its per-cipher key when present (unwrapped with the
+   *  owning key), otherwise the owning key itself — the org key for org-owned items, else the account key. */
+  private async cipherFieldKey(original: CipherResponse | undefined): Promise<SymmetricKey> {
+    const owningKey = await this.cipherOwningKey(original);
+    return original?.key ? unwrapSymmetricKey(original.key, owningKey) : owningKey;
+  }
+
+  /** The owning key for a cipher: the organization key for org-owned items, else the account UserKey. */
+  private async cipherOwningKey(original: CipherResponse | undefined): Promise<SymmetricKey> {
+    const userKey = await this.requireUserKey();
+    if (!original?.organizationId) return userKey;
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    const orgKeys = await this.buildOrgKeys(cache?.profile);
+    const orgKey = orgKeys.get(original.organizationId);
+    if (!orgKey) throw new AppError('error', 'Organization key is unavailable; cannot edit this item');
+    return orgKey;
   }
 
   /** Prepend the previous (still-encrypted) password to history and stamp passwordRevisionDate when the
@@ -178,6 +202,31 @@ export class VaultService {
   private async findCachedCipher(id: string): Promise<CipherResponse | undefined> {
     const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
     return cache?.ciphers.find((c) => c.id === id);
+  }
+
+  /**
+   * Move a personal cipher into an organization (Bitwarden "share"): re-encrypt its fields under the
+   * organization key and assign it to collections. Refuses items carrying a passkey or password history
+   * (those secrets aren't in the editable input and would be dropped) so a move never loses data.
+   */
+  async shareCipher(id: string, organizationId: string, collectionIds: string[], masterPassword?: string): Promise<VaultListing> {
+    if (!collectionIds.length) throw new AppError('error', 'Select at least one collection');
+    const token = await this.requireToken();
+    const original = await this.findCachedCipher(id);
+    if (!original) throw new AppError('error', 'Item is not available');
+    if (original.organizationId) throw new AppError('error', 'This item already belongs to an organization');
+    if (original.login?.fido2Credentials?.length || original.passwordHistory?.length) {
+      throw new AppError('error', 'Move items with passkeys or password history from the web vault to avoid data loss');
+    }
+    const orgKeys = await this.buildOrgKeys((await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY))?.profile);
+    const orgKey = orgKeys.get(organizationId);
+    if (!orgKey) throw new AppError('error', 'Organization key is unavailable');
+    const input = await this.getCipherInput(id, masterPassword); // reprompt-gated; full editable plaintext
+    if (!input) throw new AppError('error', 'This item type cannot be moved');
+    const request = await encryptCipher(input, orgKey); // fresh encryption directly under the org key
+    request.organizationId = organizationId;
+    await this.deps.api.shareCipher(token, id, { cipher: request, collectionIds });
+    return this.sync();
   }
 
   /** Permanently delete a cipher (no recovery), then re-sync. Used for "delete forever" from the trash. */

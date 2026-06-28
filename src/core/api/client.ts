@@ -174,6 +174,15 @@ export class ApiClient {
     });
   }
 
+  /** Move a personal cipher into an organization (share): re-encrypted under the org key + collections. */
+  async shareCipher(accessToken: string, id: string, body: { cipher: CipherRequest; collectionIds: string[] }): Promise<CipherResponse> {
+    return this.jsonRequest<CipherResponse>(`/api/ciphers/${encodeURIComponent(id)}/share`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(body),
+    });
+  }
+
   /** Hard-delete a cipher. */
   async deleteCipher(accessToken: string, id: string): Promise<void> {
     await this.noBodyRequest(`/api/ciphers/${encodeURIComponent(id)}`, {

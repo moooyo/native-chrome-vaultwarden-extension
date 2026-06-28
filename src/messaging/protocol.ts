@@ -66,6 +66,7 @@ export type RequestMessage =
   | { type: 'vault.deleteCipher'; id: string }
   | { type: 'vault.softDeleteCipher'; id: string }
   | { type: 'vault.restoreCipher'; id: string }
+  | { type: 'vault.shareCipher'; id: string; organizationId: string; collectionIds: string[]; masterPassword?: string }
   | { type: 'vault.getCipherInput'; id: string; masterPassword?: string }
   | { type: 'settings.get' }
   | { type: 'settings.save'; serverUrl: string; defaultUriMatchStrategy?: UriMatchStrategySetting; lockTimeout?: LockTimeoutSetting }
