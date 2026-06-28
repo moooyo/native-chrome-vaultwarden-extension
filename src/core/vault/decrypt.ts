@@ -1,7 +1,7 @@
-import type { CardCipherData, CipherResponse, FolderResponse, IdentityCipherData } from '../api/types.js';
+import type { CardCipherData, CipherResponse, FolderResponse, IdentityCipherData, OrganizationResponse } from '../api/types.js';
 import { decryptToText, EncStringMacError, UnsupportedEncTypeError } from '../crypto/encstring.js';
 import type { SymmetricKey } from '../crypto/keys.js';
-import { unwrapSymmetricKey } from '../crypto/keys.js';
+import { unwrapSymmetricKey, unwrapRsaWrappedKey } from '../crypto/keys.js';
 import type { CipherSummary, DecryptedCard, DecryptedCipher, DecryptedIdentity, FolderSummary } from './models.js';
 import type { LoginUri } from './uri-match.js';
 
@@ -18,10 +18,14 @@ const CARD_FIELDS: Array<keyof CardCipherData> = [
 export async function decryptCipher(
   cipher: CipherResponse,
   userKey: SymmetricKey,
+  orgKeys?: Map<string, SymmetricKey>,
 ): Promise<DecryptedCipher | undefined> {
-  if (cipher.organizationId) return undefined;
+  // Organization ciphers are decrypted with that organization's key, not the account UserKey.
+  // When the org key is unavailable (e.g. the account private key is locked) the cipher is skipped.
+  const baseKey = cipher.organizationId ? orgKeys?.get(cipher.organizationId) : userKey;
+  if (!baseKey) return undefined;
   try {
-    const key = cipher.key ? await unwrapSymmetricKey(cipher.key, userKey) : userKey;
+    const key = cipher.key ? await unwrapSymmetricKey(cipher.key, baseKey) : baseKey;
     const name = await decryptRequired(cipher.name, key, '(no name)');
     const loginUris: LoginUri[] = [];
     for (const u of cipher.login?.uris ?? []) {
@@ -41,6 +45,7 @@ export async function decryptCipher(
       uris: loginUris.map((u) => u.uri),
       loginUris,
     };
+    if (cipher.organizationId) out.organizationId = cipher.organizationId;
     if (cipher.folderId) out.folderId = cipher.folderId;
     const username = await decryptOptional(cipher.login?.username, key);
     const password = await decryptOptional(cipher.login?.password, key);
@@ -64,11 +69,34 @@ export async function decryptCipher(
         loginUris: [],
         undecryptable: true,
       };
+      if (cipher.organizationId) undecryptable.organizationId = cipher.organizationId;
       if (cipher.folderId) undecryptable.folderId = cipher.folderId;
       return undecryptable;
     }
     throw err;
   }
+}
+
+/**
+ * Unwrap each organization's RSA-wrapped symmetric key into a map keyed by organization id.
+ * Requires the decrypted account private key (PKCS8). Organizations whose key cannot be unwrapped
+ * are skipped so a single bad key never blocks the rest of the vault.
+ */
+export async function buildOrgKeyMap(
+  organizations: OrganizationResponse[] | null | undefined,
+  privateKey: Uint8Array | undefined,
+): Promise<Map<string, SymmetricKey>> {
+  const map = new Map<string, SymmetricKey>();
+  if (!privateKey || !organizations) return map;
+  for (const org of organizations) {
+    if (!org.id || !org.key) continue;
+    try {
+      map.set(org.id, await unwrapRsaWrappedKey(org.key, privateKey));
+    } catch {
+      // Skip organizations we cannot unwrap; their ciphers are counted as unsupported.
+    }
+  }
+  return map;
 }
 
 /** Decrypt folder names (no per-folder key). Each failure degrades to a label, never aborts. */

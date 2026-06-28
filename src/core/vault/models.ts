@@ -14,6 +14,8 @@ export interface CipherSummary {
   type: 1 | 2 | 3 | 4 | 5;
   favorite: boolean;
   folderId?: string;
+  /** Present for ciphers owned by an organization (decrypted with that organization's key). */
+  organizationId?: string;
   /** Non-sensitive list subtitle (e.g. card brand or identity full name). Never holds secrets. */
   subtitle?: string;
   undecryptable?: boolean;

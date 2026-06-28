@@ -36,10 +36,18 @@ export interface RefreshTokenResponse {
   token_type: string;
 }
 
+export interface OrganizationResponse {
+  id: string;
+  /** RSA-OAEP wrapped organization symmetric key (encType=4), unwrapped with the account private key. */
+  key: string;
+  name?: string | null;
+}
+
 export interface SyncProfile {
   id: string;
   email: string;
   name?: string | null;
+  organizations?: OrganizationResponse[] | null;
 }
 
 export interface LoginUriResponse {

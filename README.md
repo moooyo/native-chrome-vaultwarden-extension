@@ -17,7 +17,11 @@ M4 adds:
 - Bitwarden-like URI match strategies: Domain, Host, Starts With, Exact, Regular Expression, and Never.
 - Semi-automatic form-side popover: credentials are filled only after user selection and forms are never auto-submitted.
 
-Organization ciphers and Argon2id accounts are not decrypted in this milestone.
+Beyond the milestones, the extension now also:
+
+- Decrypts organization-owned ciphers by unwrapping each organization key (RSA-OAEP-SHA1, encType=4) with the account private key, so org logins appear in the list and participate in autofill.
+
+Collections grouping, Argon2id accounts, and account registration are not implemented in this milestone.
 
 ## User interface
 

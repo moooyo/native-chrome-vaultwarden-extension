@@ -1,4 +1,5 @@
-import { decryptToBytes } from './encstring.js';
+import { decryptToBytes, parseRsaEncString } from './encstring.js';
+import { rsaOaepDecrypt } from './primitives.js';
 
 export type SymmetricKey = { encKey: Uint8Array; macKey: Uint8Array };
 
@@ -25,4 +26,17 @@ export async function decryptPrivateKey(
   userKey: SymmetricKey,
 ): Promise<Uint8Array> {
   return decryptToBytes(encPrivateKey, userKey);
+}
+
+/**
+ * Unwrap an RSA-OAEP wrapped symmetric key (e.g. an organization key from
+ * `Profile.organizations[].key`, an encType=4 EncString) into a 64-byte SymmetricKey using the
+ * account RSA PrivateKey (PKCS8 DER, decrypted via decryptPrivateKey).
+ */
+export async function unwrapRsaWrappedKey(
+  protectedKey: string,
+  privateKeyPkcs8: Uint8Array,
+): Promise<SymmetricKey> {
+  const { data } = parseRsaEncString(protectedKey);
+  return symmetricKeyFromBytes(await rsaOaepDecrypt(privateKeyPkcs8, data));
 }

@@ -72,3 +72,23 @@ const symKey = { encKey: userKeyBytes.slice(0, 32), macKey: userKeyBytes.slice(3
 const fixedIvB = Uint8Array.from({ length: 16 }, (_, i) => 16 - i); // 0x10..0x01
 const encPrivateKey = await encEncString(pkcs8, symKey, fixedIvB);
 console.log('encPrivateKey =', encPrivateKey);
+
+// 4) ORG_KEY_VECTOR — a fixed 64-byte organization symmetric key wrapped under the EXISTING
+//    RSA_VECTOR public key (encType=4 Rsa2048_OaepSha1_B64), reproducing the org-key unwrap chain:
+//      Profile.organizations[].key -> rsaOaepDecrypt(privateKey) -> 64-byte org SymmetricKey.
+//    The public key is reconstructed from the committed RSA_VECTOR private key so existing RSA
+//    vectors stay stable. RSA-OAEP is randomized, so encOrgKey differs each run but always decrypts
+//    back to orgKeyHex with RSA_VECTOR.privateKeyPkcs8B64.
+const RSA_VECTOR_PKCS8_B64 =
+  'MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDQRrnISMNatq9liE6u1Tn9rJWLZ2+9qjwFIbjQ0stznUFaA2R3w5/wQJu4mJDFOdDSLrWRZm8gC4khqekMzX6rSPNy+MALcXP4eBWYOD0CtSAGr1n5YydYl71J5bh47V67xEanZy8pkohPJXfkEAfrHzR/EboOTn8otGK/AT0a5NtQdMfPRuqEqRGOZjnGpsVKsh1wY0SbqqPjX9sT9eb7WtQ6FvAdoL9HJ7DBUrnqRUXO/d3LqmPiqIZm5Zw8LGb7EgLg/Hs6h3hws5+M/Qjb1WpPTZaKCcWQf3e3FqSvlq2mGbNbXlMlKkP1P6iWrKK6ILKpOnocekznhhlkAvihAgMBAAECggEAAtkVPDTJwlJDQCuExStwcNh61eRx6s9epUyxh246+sl1q9eWGJTG0ZMOGBBSwjYm9cFOkXqzwj3DJAAb8h1HHiwr60yFSoDEXttkQvPhqnFX6wx7udMwLgQK6i1NZD6tcfqKU2qf4pD8yv2Eg/RvychgLDzFqTF7x9aN3z4S7/y24iUqvWdYwXa6gHEqgceOqltFGMtRrFAoEJQGUrsEif5we00MZ3e4Kl/XcsXB/NOmktwCuMFAw5IDaF+xoGK0GOdYzozpTQhrDIIlchp+Ure3PSspaTv8Gb79hloXrIgncqgtTKTsv77/B1283vlcUWPC/pLto/apPWo0UMYBwQKBgQD3a/JFiF5wmIlr8lfsgmmY32luGTsqXPkptro0c1Sv7pYuRvRM1iaDMHesXtqAGTSzGoEO9EjF8ERJugy25pc6Mw6ElWBsyUPlIZXqtCSR7IEoUfJE4ApDODPsaxchrQhQ9LCedBrjFnVl603a8RrRGBb0QhA3iC3/fQ0oUjHaYQKBgQDXf1WhQqSfAXj9SWEmcM+gw0BXsc7HewIa77r4USvUAFbIElFUedE8LYnnn/r6GSfPzrxTyXQXLC+pxM4cpnKR3fIGiHcYrgeySfaFYdbMYKV/QMr//mNcP/hEWGrzLZkEjphc1/zdTVS1FdbrNwpiUmnCl5JS0lgLuiKa7iRGQQKBgQDhhWsXJe2vA9p+oi6yTUyjI0CeMjFTs9sIwp2HIXiXxAjvtY0IXEpOWec7HlpbWJ5IgmgQkWmjwhT8frEIJbbCPbeF8gIqJmnUeICFph2PRNuVPNxvGyc/jgMGA7bZ4zYpVF+IjpvTUa1AcPJOFmYzIJoLmgveEiqbLgjIL+NxAQKBgBNsW7h8PEBErrYNrh773gr8bkk5Mo0STj9FSlHlZxDlsuy3kfMOQ8irxhlFdyahq8/0L09SAg+woN8paPZ2Hi99lLn4BNwJm5H7Tqf5CJZFQ8VzfpiSQjxnW6Y1XfZrLraVb7A2m4kK1k64GDX9MQdprDSo2rxyTxNHhKT4P/bBAoGBAMzqclD2tXf9cCGNa5YoVsr0EFp4nH8OD3EfCuHQjTqYYH50VOiaLoD0QiKK9gq7QvOuvEviE3TxUPitjoB4QoBJe6b/xj61tbN+9C/Tz3BvA+orKXCsCFfVkYLXKgdWTDOcioLp4zAwf6FkYDfg/CGZKbUusoySIa1F0lE0ExNU';
+const orgPkcs8 = Uint8Array.from(Buffer.from(RSA_VECTOR_PKCS8_B64, 'base64'));
+const orgPriv = await subtle.importKey('pkcs8', orgPkcs8, { name: 'RSA-OAEP', hash: 'SHA-1' }, true, ['decrypt']);
+const orgJwk = await subtle.exportKey('jwk', orgPriv);
+const orgPub = await subtle.importKey('jwk', { kty: orgJwk.kty, n: orgJwk.n, e: orgJwk.e, ext: true }, { name: 'RSA-OAEP', hash: 'SHA-1' }, true, ['encrypt']);
+const orgKeyBytes = Uint8Array.from({ length: 64 }, (_, i) => (i + 1) & 0xff); // 0x01..0x40
+const orgKeyCt = new Uint8Array(await subtle.encrypt({ name: 'RSA-OAEP' }, orgPub, orgKeyBytes));
+console.log('orgKeyHex =', Buffer.from(orgKeyBytes).toString('hex'));
+console.log('encOrgKey =', `4.${b64(orgKeyCt)}`);
+// Sanity round-trip: decrypt back with the private key and confirm it matches orgKeyBytes.
+const orgKeyRound = new Uint8Array(await subtle.decrypt({ name: 'RSA-OAEP' }, orgPriv, orgKeyCt));
+console.log('orgKey round-trip OK =', Buffer.from(orgKeyRound).toString('hex') === Buffer.from(orgKeyBytes).toString('hex'));

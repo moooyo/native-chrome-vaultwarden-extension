@@ -1,11 +1,11 @@
 import type { ApiClient } from '../api/client.js';
-import type { CipherResponse, SyncResponse } from '../api/types.js';
+import type { CipherResponse, SyncProfile, SyncResponse } from '../api/types.js';
 import type { SessionManager } from '../session/session-manager.js';
 import type { AuthService } from '../session/auth-service.js';
 import type { KeyValueStore } from '../../platform/store.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import type { CipherSummary, DecryptedCipher, FieldName, FolderSummary } from './models.js';
-import { decryptCipher, decryptFolders } from './decrypt.js';
+import { decryptCipher, decryptFolders, buildOrgKeyMap } from './decrypt.js';
 import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
@@ -38,13 +38,21 @@ export class VaultService {
     await this.deps.localStore.set(VAULT_CACHE_KEY, response);
     const userKey = await this.deps.session.loadUserKey();
     if (!userKey) throw new Error('vault is locked');
-    const items = await this.decryptSummaries(response.ciphers, userKey);
+    const orgKeys = await this.buildOrgKeys(response.profile);
+    const items = await this.decryptSummaries(response.ciphers, userKey, orgKeys);
     const folders = await decryptFolders(response.folders, userKey);
-    const skippedOrgCount = response.ciphers.filter((c) => c.organizationId).length;
+    // Org ciphers whose key could not be unwrapped (e.g. locked private key) are surfaced to the UI.
+    const skippedOrgCount = response.ciphers.filter((c) => c.organizationId && !orgKeys.has(c.organizationId)).length;
     await this.deps.localStore.set(SUMMARY_CACHE_KEY, items);
     await this.deps.localStore.set(FOLDER_CACHE_KEY, folders);
     await this.deps.localStore.set(SKIPPED_ORG_KEY, skippedOrgCount);
     return { items, folders };
+  }
+
+  /** Unwrap each organization key from the synced profile using the decrypted account private key. */
+  private async buildOrgKeys(profile: SyncProfile | undefined): Promise<Map<string, SymmetricKey>> {
+    const privateKey = await this.deps.session.loadPrivateKey();
+    return buildOrgKeyMap(profile?.organizations, privateKey);
   }
 
   async listItems(): Promise<VaultListing> {
@@ -97,7 +105,8 @@ export class VaultService {
     if (!cipher) return undefined;
     const userKey = await this.deps.session.loadUserKey();
     if (!userKey) throw new Error('vault is locked');
-    return decryptCipher(cipher, userKey);
+    const orgKeys = await this.buildOrgKeys(cache.profile);
+    return decryptCipher(cipher, userKey, orgKeys);
   }
 
   async clearCache(): Promise<void> {
@@ -154,7 +163,8 @@ export class VaultService {
     if (!userKey) throw new AppError('locked', 'Vault is locked');
     const cipher = cache.ciphers.find((c) => c.id === cipherId);
     if (!cipher) throw new AppError('denied', 'Autofill item is not allowed for this page');
-    const decrypted = await decryptCipher(cipher, userKey);
+    const orgKeys = await this.buildOrgKeys(cache.profile);
+    const decrypted = await decryptCipher(cipher, userKey, orgKeys);
     if (!decrypted || decrypted.undecryptable || !bestMatch(decrypted.loginUris, frameUrl, defaultStrategy)) {
       throw new AppError('denied', 'Autofill item is not allowed for this page');
     }
@@ -164,11 +174,11 @@ export class VaultService {
     return out;
   }
 
-  private async decryptSummaries(ciphers: CipherResponse[], userKey: SymmetricKey): Promise<CipherSummary[]> {
+  private async decryptSummaries(ciphers: CipherResponse[], userKey: SymmetricKey, orgKeys: Map<string, SymmetricKey>): Promise<CipherSummary[]> {
     const out: CipherSummary[] = [];
     for (const cipher of ciphers) {
       try {
-        const decrypted = await decryptCipher(cipher, userKey);
+        const decrypted = await decryptCipher(cipher, userKey, orgKeys);
         if (decrypted) {
           if (decrypted.undecryptable) {
             const summary: CipherSummary = {
@@ -180,6 +190,7 @@ export class VaultService {
               loginUris: [],
               undecryptable: true,
             };
+            if (decrypted.organizationId) summary.organizationId = decrypted.organizationId;
             if (decrypted.folderId) summary.folderId = decrypted.folderId;
             out.push(summary);
           } else {
@@ -192,6 +203,7 @@ export class VaultService {
               loginUris: decrypted.loginUris,
             };
             if (decrypted.username) summary.username = decrypted.username;
+            if (decrypted.organizationId) summary.organizationId = decrypted.organizationId;
             if (decrypted.folderId) summary.folderId = decrypted.folderId;
             const subtitle = summarySubtitle(decrypted);
             if (subtitle) summary.subtitle = subtitle;
@@ -208,6 +220,7 @@ export class VaultService {
           loginUris: [],
           undecryptable: true,
         };
+        if (cipher.organizationId) summary.organizationId = cipher.organizationId;
         if (cipher.folderId) summary.folderId = cipher.folderId;
         out.push(summary);
       }

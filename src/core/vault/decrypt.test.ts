@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { decryptCipher, decryptFolders } from './decrypt.js';
+import { decryptCipher, decryptFolders, buildOrgKeyMap } from './decrypt.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import type { SymmetricKey } from '../crypto/keys.js';
-import { hexToBytes, bytesToBase64 } from '../crypto/encoding.js';
+import { hexToBytes, bytesToBase64, base64ToBytes } from '../crypto/encoding.js';
 import { hmacSha256 } from '../crypto/primitives.js';
-import { FIELD_VECTOR, USER_KEY_VECTOR, TAMPERED_FIELD_ENCSTRING } from '../../../test/vectors.js';
-import type { CipherResponse, FolderResponse } from '../api/types.js';
+import { FIELD_VECTOR, USER_KEY_VECTOR, TAMPERED_FIELD_ENCSTRING, RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
+import type { CipherResponse, FolderResponse, OrganizationResponse } from '../api/types.js';
 
 const userKey = symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex));
+const orgKey = symmetricKeyFromBytes(hexToBytes(ORG_KEY_VECTOR.orgKeyHex));
 
 // Test-only AES-CBC encrypt helper that builds a Bitwarden EncString type 2.
 async function encryptBytes(plainBytes: Uint8Array, key: SymmetricKey, iv: Uint8Array): Promise<string> {
@@ -63,7 +64,7 @@ describe('decryptCipher', () => {
     });
   });
 
-  it('skips organization ciphers in M3', async () => {
+  it('skips organization ciphers when no organization key is available', async () => {
     const cipher: CipherResponse = {
       id: 'org-1',
       type: 1,
@@ -73,6 +74,52 @@ describe('decryptCipher', () => {
       login: { username: FIELD_VECTOR.encString },
     };
     await expect(decryptCipher(cipher, userKey)).resolves.toBeUndefined();
+    await expect(decryptCipher(cipher, userKey, new Map())).resolves.toBeUndefined();
+  });
+
+  it('decrypts an organization cipher with the matching organization key', async () => {
+    const cipher: CipherResponse = {
+      id: 'org-login',
+      type: 1,
+      name: await encryptString('Org Login', orgKey),
+      favorite: true,
+      organizationId: 'org-1',
+      login: {
+        username: await encryptString('alice@org.example', orgKey),
+        password: await encryptString('org-s3cret', orgKey),
+        uris: [{ uri: await encryptString('https://org.example', orgKey), match: 0 }],
+      },
+    };
+    const out = await decryptCipher(cipher, userKey, new Map([['org-1', orgKey]]));
+    expect(out).toEqual({
+      id: 'org-login',
+      type: 1,
+      favorite: true,
+      organizationId: 'org-1',
+      name: 'Org Login',
+      username: 'alice@org.example',
+      password: 'org-s3cret',
+      uris: ['https://org.example'],
+      loginUris: [{ uri: 'https://org.example', match: 0 }],
+    });
+  });
+
+  it('decrypts an organization cipher that carries its own per-item key wrapped by the org key', async () => {
+    const itemKeyBytes = new Uint8Array(64);
+    itemKeyBytes.set(new Uint8Array(32).fill(0x05), 0);
+    itemKeyBytes.set(new Uint8Array(32).fill(0x06), 32);
+    const itemKey = symmetricKeyFromBytes(itemKeyBytes);
+    const cipher: CipherResponse = {
+      id: 'org-item-key',
+      type: 1,
+      name: await encryptString('Org Secure', itemKey),
+      favorite: false,
+      organizationId: 'org-1',
+      key: await wrapKey(itemKey, orgKey),
+      login: { username: await encryptString('bob@org.example', itemKey) },
+    };
+    const out = await decryptCipher(cipher, userKey, new Map([['org-1', orgKey]]));
+    expect(out).toMatchObject({ id: 'org-item-key', name: 'Org Secure', username: 'bob@org.example' });
   });
 
   it('resolves to undecryptable for a corrupted personal cipher', async () => {
@@ -251,5 +298,34 @@ describe('decryptFolders', () => {
   it('returns [] for empty or undefined input', async () => {
     await expect(decryptFolders(undefined, userKey)).resolves.toEqual([]);
     await expect(decryptFolders([], userKey)).resolves.toEqual([]);
+  });
+});
+
+describe('buildOrgKeyMap', () => {
+  const privateKey = base64ToBytes(RSA_VECTOR.privateKeyPkcs8B64);
+
+  it('unwraps each organization key into a map keyed by organization id', async () => {
+    const orgs: OrganizationResponse[] = [{ id: 'org-1', key: ORG_KEY_VECTOR.encOrgKey }];
+    const map = await buildOrgKeyMap(orgs, privateKey);
+    expect(map.has('org-1')).toBe(true);
+    const expected = symmetricKeyFromBytes(hexToBytes(ORG_KEY_VECTOR.orgKeyHex));
+    expect(bytesToBase64(map.get('org-1')!.encKey)).toBe(bytesToBase64(expected.encKey));
+    expect(bytesToBase64(map.get('org-1')!.macKey)).toBe(bytesToBase64(expected.macKey));
+  });
+
+  it('returns an empty map when the private key is unavailable', async () => {
+    const orgs: OrganizationResponse[] = [{ id: 'org-1', key: ORG_KEY_VECTOR.encOrgKey }];
+    await expect(buildOrgKeyMap(orgs, undefined)).resolves.toEqual(new Map());
+    await expect(buildOrgKeyMap(undefined, privateKey)).resolves.toEqual(new Map());
+  });
+
+  it('skips organizations whose key cannot be unwrapped without aborting the rest', async () => {
+    const orgs: OrganizationResponse[] = [
+      { id: 'bad', key: '4.not-valid-base64-or-rsa' },
+      { id: 'org-1', key: ORG_KEY_VECTOR.encOrgKey },
+    ];
+    const map = await buildOrgKeyMap(orgs, privateKey);
+    expect(map.has('bad')).toBe(false);
+    expect(map.has('org-1')).toBe(true);
   });
 });

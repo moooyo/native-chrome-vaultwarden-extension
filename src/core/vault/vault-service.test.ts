@@ -14,9 +14,45 @@ import { SessionManager } from '../session/session-manager.js';
 import type { ApiClient } from '../api/client.js';
 import type { AuthService } from '../session/auth-service.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
-import { hexToBytes } from '../crypto/encoding.js';
-import { FIELD_VECTOR, URL_VECTOR, USER_KEY_VECTOR } from '../../../test/vectors.js';
+import type { SymmetricKey } from '../crypto/keys.js';
+import { hexToBytes, base64ToBytes, bytesToBase64 } from '../crypto/encoding.js';
+import { hmacSha256 } from '../crypto/primitives.js';
+import { FIELD_VECTOR, URL_VECTOR, USER_KEY_VECTOR, RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
 import type { SyncResponse } from '../api/types.js';
+
+const orgKey = symmetricKeyFromBytes(hexToBytes(ORG_KEY_VECTOR.orgKeyHex));
+const privateKeyBytes = base64ToBytes(RSA_VECTOR.privateKeyPkcs8B64);
+
+// Test-only encType=2 EncString encryptor (fixed IV) for building org-key-protected fixtures.
+async function encUnder(plaintext: string, key: SymmetricKey): Promise<string> {
+  const subtle = globalThis.crypto.subtle;
+  const iv = new Uint8Array(16).fill(0x07);
+  const cryptoKey = await subtle.importKey('raw', key.encKey as BufferSource, { name: 'AES-CBC' }, false, ['encrypt']);
+  const ct = new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv: iv as BufferSource }, cryptoKey, new TextEncoder().encode(plaintext) as BufferSource));
+  const macData = new Uint8Array(iv.length + ct.length);
+  macData.set(iv, 0);
+  macData.set(ct, iv.length);
+  const mac = await hmacSha256(key.macKey, macData);
+  return `2.${bytesToBase64(iv)}|${bytesToBase64(ct)}|${bytesToBase64(mac)}`;
+}
+
+async function makeOrgSync(): Promise<SyncResponse> {
+  return {
+    profile: { id: 'u', email: 'u@example.com', organizations: [{ id: 'org-1', key: ORG_KEY_VECTOR.encOrgKey }] },
+    ciphers: [{
+      id: 'org-login',
+      type: 1,
+      name: await encUnder('Org Login', orgKey),
+      favorite: false,
+      organizationId: 'org-1',
+      login: {
+        username: await encUnder('alice@org.example', orgKey),
+        password: await encUnder('org-s3cret', orgKey),
+        uris: [{ uri: await encUnder('https://org.example', orgKey), match: 0 }],
+      },
+    }],
+  };
+}
 
 function makeSync(): SyncResponse {
   return {
@@ -46,7 +82,7 @@ function makeSyncUrl(): SyncResponse {
   };
 }
 
-async function makeService(syncResponse = makeSync()) {
+async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8Array } = {}) {
   const localStore = createMemoryStore();
   const sm = new SessionManager({ localStore, sessionStore: createMemoryStore() });
   await sm.saveUnlocked({
@@ -58,6 +94,7 @@ async function makeService(syncResponse = makeSync()) {
     kdf: 0,
     kdfIterations: 1000,
     userKey: symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex)),
+    ...(opts.privateKey ? { privateKey: opts.privateKey } : {}),
   });
   const api = { sync: vi.fn(async () => syncResponse) } as unknown as ApiClient;
   const auth = { refreshIfNeeded: vi.fn(async () => {}) } as unknown as AuthService;
@@ -279,5 +316,45 @@ describe('VaultService', () => {
   it('getSkippedOrgCount defaults to 0 before any sync', async () => {
     const { service } = await makeService();
     await expect(service.getSkippedOrgCount()).resolves.toBe(0);
+  });
+
+  it('decrypts organization ciphers with the account private key and counts none as skipped', async () => {
+    const { service } = await makeService(await makeOrgSync(), { privateKey: privateKeyBytes });
+    const { items } = await service.sync();
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: 'org-login',
+      type: 1,
+      organizationId: 'org-1',
+      name: 'Org Login',
+      username: 'alice@org.example',
+      uris: ['https://org.example'],
+    });
+    expect(JSON.stringify(items)).not.toContain('org-s3cret');
+    await expect(service.getSkippedOrgCount()).resolves.toBe(0);
+  });
+
+  it('counts organization ciphers as skipped when the private key is unavailable', async () => {
+    const { service } = await makeService(await makeOrgSync());
+    const { items } = await service.sync();
+    expect(items).toEqual([]);
+    await expect(service.getSkippedOrgCount()).resolves.toBe(1);
+  });
+
+  it('getField decrypts an organization cipher password on demand', async () => {
+    const { service } = await makeService(await makeOrgSync(), { privateKey: privateKeyBytes });
+    await service.sync();
+    await expect(service.getField('org-login', 'password')).resolves.toBe('org-s3cret');
+  });
+
+  it('autofills organization login credentials after re-checking the URI match', async () => {
+    const { service } = await makeService(await makeOrgSync(), { privateKey: privateKeyBytes });
+    await service.sync();
+
+    const candidates = await service.findAutofillCandidates('https://org.example/login', UriMatchStrategy.Domain);
+    expect(candidates).toMatchObject([{ id: 'org-login', username: 'alice@org.example' }]);
+
+    await expect(service.getAutofillCredentials('org-login', 'https://org.example/login', UriMatchStrategy.Domain))
+      .resolves.toEqual({ username: 'alice@org.example', password: 'org-s3cret' });
   });
 });

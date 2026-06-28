@@ -290,12 +290,13 @@ function renderFolderFilter() {
   }
 }
 
-/** Show a muted notice when some ciphers were skipped because org decryption is unsupported. */
+/** Show a muted notice when some organization ciphers could not be decrypted (e.g. an org key the
+ *  account private key cannot unwrap). Decryptable org items appear inline in the list. */
 function renderOrgBanner() {
   const banner = document.getElementById('orgBanner');
   if (!banner) return;
   banner.innerHTML = skippedOrgCount > 0
-    ? `<p class="note muted org-note">${icon('shield')}<span>${skippedOrgCount} organization item${skippedOrgCount === 1 ? '' : 's'} not yet supported</span></p>`
+    ? `<p class="note muted org-note">${icon('shield')}<span>${skippedOrgCount} organization item${skippedOrgCount === 1 ? '' : 's'} could not be decrypted</span></p>`
     : '';
 }
 
