@@ -1,4 +1,5 @@
 import { getBaseDomain, getHostAndPort, isHttpUrl } from './domain.js';
+import safeRegex from 'safe-regex2';
 
 export const UriMatchStrategy = {
   Domain: 0,
@@ -95,6 +96,7 @@ function hostMatches(savedUri: string, frameUrl: string): boolean {
 
 function regexMatches(pattern: string, frameUrl: string): boolean {
   if (pattern.length > MAX_REGEX_PATTERN_LENGTH) return false;
+  if (!safeRegex(pattern)) return false;
   try {
     return new RegExp(pattern).test(frameUrl);
   } catch {

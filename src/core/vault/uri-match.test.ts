@@ -34,12 +34,14 @@ describe('uri matching', () => {
       .toMatchObject({ matchType: UriMatchStrategy.Exact });
   });
 
-  it('matches safe regular expressions and rejects invalid or overlong regular expressions', () => {
+  it('matches safe regular expressions and rejects invalid, overlong, or unsafe regular expressions', () => {
     expect(matchLoginUri({ uri: '^https://app\\.example\\.com/[a-z]+$', match: UriMatchStrategy.RegularExpression }, 'https://app.example.com/login', UriMatchStrategy.Domain))
       .toMatchObject({ matchType: UriMatchStrategy.RegularExpression });
     expect(matchLoginUri({ uri: '[', match: UriMatchStrategy.RegularExpression }, 'https://app.example.com/login', UriMatchStrategy.Domain))
       .toBeUndefined();
     expect(matchLoginUri({ uri: 'a'.repeat(513), match: UriMatchStrategy.RegularExpression }, 'https://app.example.com/login', UriMatchStrategy.Domain))
+      .toBeUndefined();
+    expect(matchLoginUri({ uri: '(a+)+$', match: UriMatchStrategy.RegularExpression }, 'https://app.example.com/login', UriMatchStrategy.Domain))
       .toBeUndefined();
   });
 
