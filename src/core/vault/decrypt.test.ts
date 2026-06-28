@@ -64,6 +64,27 @@ describe('decryptCipher', () => {
     });
   });
 
+  it('decrypts custom fields (Text/Hidden/Boolean) and preserves Linked metadata', async () => {
+    const cipher: CipherResponse = {
+      id: 'c', type: 1, favorite: false, organizationId: null,
+      name: FIELD_VECTOR.encString,
+      login: { username: FIELD_VECTOR.encString },
+      fields: [
+        { type: 0, name: await encryptString('Note', userKey), value: await encryptString('plain text', userKey) },
+        { type: 1, name: await encryptString('PIN', userKey), value: await encryptString('1234', userKey) },
+        { type: 2, name: await encryptString('Subscribed', userKey), value: await encryptString('true', userKey) },
+        { type: 3, name: await encryptString('User', userKey), value: null, linkedId: 100 },
+      ],
+    };
+    const out = await decryptCipher(cipher, userKey);
+    expect(out?.fields).toEqual([
+      { type: 0, name: 'Note', value: 'plain text' },
+      { type: 1, name: 'PIN', value: '1234' },
+      { type: 2, name: 'Subscribed', value: 'true' },
+      { type: 3, name: 'User', linkedId: 100 },
+    ]);
+  });
+
   it('skips organization ciphers when no organization key is available', async () => {
     const cipher: CipherResponse = {
       id: 'org-1',

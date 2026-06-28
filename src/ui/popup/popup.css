@@ -111,6 +111,16 @@ body { width: 360px; }
 .detail-head .titles .sub { display: block; font-family: var(--font-mono); font-size: 0.75rem; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detail-body { flex: 1; overflow-y: auto; padding: var(--s4); display: flex; flex-direction: column; gap: var(--s3); }
 
+.custom-fields { display: flex; flex-direction: column; gap: var(--s3); }
+.custom-fields:empty { display: none; }
+.custom-fields .cf-head { font-size: 0.6875rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint); }
+.ed-cfields { display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s2); }
+.ed-cfield { display: flex; align-items: center; gap: var(--s1); }
+.ed-cfield .ed-cf-name, .ed-cfield .ed-cf-value { flex: 1; min-width: 0; }
+.ed-cfield .ed-cf-typesel { flex: 0 0 5.5rem; }
+.ed-cfield .ed-cf-linked { flex: 1; font-size: 0.8125rem; }
+.ed-cfield .ed-cf-bool { flex: 1; display: flex; align-items: center; }
+
 .readout { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--s3); }
 .readout .k { display: flex; align-items: center; gap: var(--s1); font-size: 0.6875rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint); }
 .readout .k svg { width: 0.85rem; height: 0.85rem; }

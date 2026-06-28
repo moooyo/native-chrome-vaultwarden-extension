@@ -48,6 +48,7 @@ export type RequestMessage =
   | { type: 'vault.sync' }
   | { type: 'vault.listItems' }
   | { type: 'vault.getField'; id: string; field: FieldName; masterPassword?: string }
+  | { type: 'vault.getCustomField'; id: string; index: number; masterPassword?: string }
   | { type: 'vault.getCipherDetail'; id: string }
   | { type: 'vault.getTotp'; id: string; masterPassword?: string }
   | { type: 'vault.getSkippedOrgCount' }

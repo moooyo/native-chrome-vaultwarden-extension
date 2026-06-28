@@ -80,6 +80,32 @@ describe('encryptCipher', () => {
     expect(req.login?.uris == null).toBe(true);
   });
 
+  it('encrypts custom fields so they round-trip (and never leak plaintext values)', async () => {
+    const input: CipherInput = {
+      type: 1, name: 'Acct', login: { password: 'p' },
+      fields: [
+        { type: 0, name: 'Recovery', value: 'visible-text' },
+        { type: 1, name: 'PIN', value: '9999' },
+        { type: 2, name: 'Enrolled', value: 'true' },
+        { type: 3, name: 'User', linkedId: 100 },
+      ],
+    };
+    const { req, decrypted } = await roundTrip(input);
+    expect(JSON.stringify(req)).not.toContain('9999');       // Hidden value encrypted
+    expect(JSON.stringify(req)).not.toContain('visible-text'); // Text value encrypted too
+    expect(decrypted?.fields).toEqual([
+      { type: 0, name: 'Recovery', value: 'visible-text' },
+      { type: 1, name: 'PIN', value: '9999' },
+      { type: 2, name: 'Enrolled', value: 'true' },
+      { type: 3, name: 'User', linkedId: 100 },
+    ]);
+  });
+
+  it('writes an empty fields array to clear custom fields server-side', async () => {
+    const req = await encryptCipher({ type: 1, name: 'X', fields: [], login: { password: 'p' } }, userKey);
+    expect(req.fields).toEqual([]);
+  });
+
   it('writes the master-password reprompt flag from the editor input (1 when set, 0 when not)', async () => {
     const on = await encryptCipher({ type: 1, name: 'Protected', reprompt: true, login: { password: 'x' } }, userKey);
     expect(on.reprompt).toBe(1);
@@ -89,7 +115,7 @@ describe('encryptCipher', () => {
 });
 
 describe('mergeServerManagedFields', () => {
-  it('preserves a passkey, custom fields, passwordHistory and cipher key from the original on update', async () => {
+  it('preserves a passkey, passwordHistory and cipher key from the original on update', async () => {
     const req = await encryptCipher({ type: 1, name: 'GitHub', login: { username: 'octo', password: 's3cret' } }, userKey);
     const original: CipherResponse = {
       id: 'c1', type: 1,
@@ -110,11 +136,10 @@ describe('mergeServerManagedFields', () => {
     expect(merged.login?.username).toBe(req.login!.username);
     expect(merged.login?.password).toBe(req.login!.password);
     expect(merged.login?.passwordRevisionDate).toBe('2020-01-01T00:00:00.000Z');
-    // Non-login server-managed metadata is carried forward verbatim.
-    expect(merged.fields).toEqual(original.fields);
     expect(merged.passwordHistory).toEqual(original.passwordHistory);
-    // reprompt is now editor-controlled (encryptCipher writes it from the input); the merge must NOT
-    // pull it from the original, so this update (input has no reprompt) clears the original's flag.
+    // custom fields and reprompt are now editor-controlled (encryptCipher writes them); the merge must
+    // NOT pull them from the original, so this update (input has neither) clears the original's values.
+    expect(merged.fields).toBeUndefined();
     expect(merged.reprompt).toBe(0);
     expect(merged.key).toBe('2.cipherkey==');
   });
@@ -130,7 +155,7 @@ describe('mergeServerManagedFields', () => {
     expect(merged.key == null).toBe(true);
   });
 
-  it('does not fabricate a login on non-login ciphers but still carries metadata', async () => {
+  it('does not fabricate a login on non-login ciphers and no longer carries editor-modeled fields', async () => {
     const req = await encryptCipher({ type: 2, name: 'Note' }, userKey);
     const original: CipherResponse = {
       id: 'c1', type: 2, reprompt: 1,
@@ -138,8 +163,8 @@ describe('mergeServerManagedFields', () => {
     };
     const merged = mergeServerManagedFields(req, original);
     expect(merged.login == null).toBe(true);
-    expect(merged.fields).toEqual(original.fields);
-    // reprompt is editor-controlled now and not carried from the original.
+    // custom fields and reprompt are editor-controlled now and not carried from the original.
+    expect(merged.fields).toBeUndefined();
     expect(merged.reprompt).toBe(0);
   });
 });

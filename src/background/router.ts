@@ -105,6 +105,11 @@ export function createRouter(deps: RouterDeps) {
             const value = await deps.vault.getField(request.id, request.field, request.masterPassword);
             return { ok: true, data: value === undefined ? {} : { value } };
           }
+          case 'vault.getCustomField': {
+            if (!deps.vault.getCustomField) throw new Error('vault.getCustomField is not wired');
+            const value = await deps.vault.getCustomField(request.id, request.index, request.masterPassword);
+            return { ok: true, data: value === undefined ? {} : { value } };
+          }
           case 'vault.getCipherDetail': {
             if (!deps.vault.getCipherDetail) throw new Error('vault.getCipherDetail is not wired');
             const cipher = await deps.vault.getCipherDetail(request.id);

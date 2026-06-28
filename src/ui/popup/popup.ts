@@ -1,6 +1,6 @@
 import { sendRequest } from '../../messaging/protocol.js';
 import type { AuthResult } from '../../core/session/auth-service.js';
-import type { CipherInput, CipherSummary, CollectionSummary, DecryptedCipher, FolderSummary } from '../../core/vault/models.js';
+import type { CipherInput, CipherSummary, CollectionSummary, CustomFieldType, DecryptedCipher, DecryptedField, FolderSummary } from '../../core/vault/models.js';
 import { filterSummariesByFolderCollectionAndQuery, NO_FOLDER } from '../../core/vault/search.js';
 import { generatePassword, DEFAULT_PASSWORD_OPTIONS, type PasswordGenOptions } from '../../core/generator/password.js';
 import { addPasswordToHistory } from '../../core/generator/history.js';
@@ -1012,6 +1012,79 @@ function uriEditorRow(uri: string, match?: number | null): string {
   return `<input class="input mono ed-uri-input" value="${escapeHtml(uri)}" placeholder="https://example.com"${matchAttr} />`;
 }
 
+const CF_EDITOR_TYPES: ReadonlyArray<readonly [CustomFieldType, string]> = [[0, 'Text'], [1, 'Hidden'], [2, 'Boolean']];
+
+/** One custom-field editor row. Linked fields (type 3) are read-only so a round-trip never drops them. */
+function customFieldEditorRow(f?: DecryptedField): string {
+  const type = f?.type ?? 0;
+  const name = escapeHtml(f?.name ?? '');
+  if (type === 3) {
+    return `<div class="ed-cfield" data-cf-type="3" data-cf-linked="${escapeHtml(String(f?.linkedId ?? ''))}">
+      <input class="input ed-cf-name" value="${name}" readonly />
+      <span class="ed-cf-linked muted">${escapeHtml(linkedLabel(f?.linkedId))}</span>
+      <button class="icon-btn ed-cf-remove" type="button" title="Remove field" aria-label="Remove field">${icon('trash')}</button>
+    </div>`;
+  }
+  const opts = CF_EDITOR_TYPES.map(([t, l]) => `<option value="${t}"${t === type ? ' selected' : ''}>${l}</option>`).join('');
+  const valueControl = type === 2
+    ? `<label class="ed-cf-bool"><input class="ed-cf-value" type="checkbox"${f?.value === 'true' ? ' checked' : ''} /></label>`
+    : `<input class="input ed-cf-value" type="${type === 1 ? 'password' : 'text'}" value="${escapeHtml(f?.value ?? '')}" placeholder="Value" />`;
+  return `<div class="ed-cfield" data-cf-type="${type}">
+    <select class="select ed-cf-typesel" aria-label="Field type">${opts}</select>
+    <input class="input ed-cf-name" value="${name}" placeholder="Name" />
+    ${valueControl}
+    <button class="icon-btn ed-cf-remove" type="button" title="Remove field" aria-label="Remove field">${icon('trash')}</button>
+  </div>`;
+}
+
+/** Wire the custom-field editor: add button, plus per-row remove and type switching. */
+function bindCustomFieldEditor(): void {
+  const list = document.getElementById('ed_fields');
+  const add = document.getElementById('ed_addField');
+  if (!list || !add) return;
+  add.addEventListener('click', () => {
+    list.insertAdjacentHTML('beforeend', customFieldEditorRow());
+    bindCustomFieldRow(list.lastElementChild as HTMLElement);
+  });
+  list.querySelectorAll<HTMLElement>('.ed-cfield').forEach((row) => bindCustomFieldRow(row));
+}
+
+function bindCustomFieldRow(row: HTMLElement): void {
+  row.querySelector('.ed-cf-remove')?.addEventListener('click', () => row.remove());
+  const typeSel = row.querySelector<HTMLSelectElement>('.ed-cf-typesel');
+  typeSel?.addEventListener('change', () => {
+    const name = (row.querySelector('.ed-cf-name') as HTMLInputElement).value;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = customFieldEditorRow({ type: Number(typeSel.value) as CustomFieldType, name });
+    const next = tmp.firstElementChild as HTMLElement;
+    row.replaceWith(next);
+    bindCustomFieldRow(next); // switching type drops the old value control, so re-wire
+  });
+}
+
+/** Collect editor custom fields. Nameless Text/Hidden/Boolean rows are dropped; Linked rows preserved. */
+function collectEditorFields(): DecryptedField[] {
+  const out: DecryptedField[] = [];
+  for (const row of document.querySelectorAll<HTMLElement>('#ed_fields .ed-cfield')) {
+    const type = Number(row.dataset.cfType) as CustomFieldType;
+    const name = (row.querySelector('.ed-cf-name') as HTMLInputElement).value.trim();
+    if (type === 3) {
+      const field: DecryptedField = { type, name };
+      const linkedId = row.dataset.cfLinked ? Number(row.dataset.cfLinked) : NaN;
+      if (!Number.isNaN(linkedId)) field.linkedId = linkedId;
+      out.push(field);
+      continue;
+    }
+    if (!name) continue; // a Text/Hidden/Boolean field needs a name to be meaningful
+    const valueEl = row.querySelector<HTMLInputElement>('.ed-cf-value');
+    const value = type === 2 ? (valueEl?.checked ? 'true' : 'false') : (valueEl?.value ?? '');
+    const field: DecryptedField = { type, name };
+    if (value) field.value = value;
+    out.push(field);
+  }
+  return out;
+}
+
 /** Render the create/edit form for a cipher type. */
 function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: CipherInput, id?: string): void {
   clearTotpTimer();
@@ -1059,6 +1132,10 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
         <label class="ed-field"><span class="ed-label">Folder</span><select id="ed_folder" class="select">${folderOptions}</select></label>
         <label class="gen-check"><input id="ed_favorite" type="checkbox" ${v.favorite ? 'checked' : ''} /><span>Favorite</span></label>
         <label class="gen-check"><input id="ed_reprompt" type="checkbox" ${v.reprompt ? 'checked' : ''} /><span>Require master password to view</span></label>
+        <div class="ed-field"><span class="ed-label">Custom fields</span>
+          <div id="ed_fields" class="ed-cfields">${(v.fields ?? []).map((f) => customFieldEditorRow(f)).join('')}</div>
+          <button id="ed_addField" class="btn btn-secondary btn-sm" type="button">${icon('plus')}<span>Add field</span></button>
+        </div>
         <div class="detail-actions">
           <button id="ed_save" type="button" class="btn btn-block">${icon('check')}<span>Save</span></button>
           ${mode === 'edit' ? `<button id="ed_delete" type="button" class="btn btn-danger btn-block">${icon('trash')}<span>Delete</span></button>` : ''}
@@ -1082,6 +1159,7 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
       document.getElementById('ed_uris')!.insertAdjacentHTML('beforeend', uriEditorRow(''));
     });
   }
+  bindCustomFieldEditor();
   document.getElementById('ed_save')!.addEventListener('click', () => void saveEditor(mode, type, id));
   if (mode === 'edit' && id) {
     document.getElementById('ed_delete')!.addEventListener('click', () => confirmDeleteCipher(id, v.name));
@@ -1121,6 +1199,7 @@ function collectEditorInput(type: 1 | 2 | 3 | 4): CipherInput {
     for (const f of IDENTITY_FORM) { const x = val(`ed_${f.key}`); if (x) identity[f.key] = x; }
     input.identity = identity;
   }
+  input.fields = collectEditorFields(); // always present so removing all fields clears them server-side
   return input;
 }
 
@@ -1437,6 +1516,7 @@ function renderLoginDetail(id: string, item: CipherSummary) {
           <div class="k">${icon('shield')} Passkey</div>
           <div class="v-row"><span class="v">Passkey saved — sign in with it on this site.</span></div>
         </div>` : ''}
+        <div id="customFields" class="custom-fields"></div>
         <div class="detail-actions">
           <button id="copyPassword" type="button" class="btn btn-block">${icon('copy')}<span>Copy password</span></button>
           <button id="copyUsername" type="button" class="btn btn-secondary btn-block">${icon('user')}<span>Copy username</span></button>
@@ -1446,6 +1526,7 @@ function renderLoginDetail(id: string, item: CipherSummary) {
     </div>`;
   bindBack();
   bindDetailActions(item);
+  void loadCustomFields(id);
   document.getElementById('togglePassword')!.addEventListener('click', () => void withDetailBusy(async () => {
     const codeEl = document.getElementById('passwordReveal')!;
     const btn = document.getElementById('togglePassword') as HTMLButtonElement;
@@ -1522,12 +1603,14 @@ function renderSecureNoteDetail(id: string, item: CipherSummary) {
       ${detailHead(item)}
       <div class="detail-body">
         <div class="readout"><div class="k">${icon('note')} Note</div><pre id="noteBody" class="note-body">Loading…</pre></div>
+        <div id="customFields" class="custom-fields"></div>
         <div class="detail-actions"><button id="copyNote" type="button" class="btn btn-block">${icon('copy')}<span>Copy note</span></button></div>
         <div id="detailStatus" class="detail-status"></div>
       </div>
     </div>`;
   bindBack();
   bindDetailActions(item);
+  void loadCustomFields(id);
   void (async () => {
     const response = await sendRequest({ type: 'vault.getField', id, field: 'notes', ...mpArg(id) });
     const body = document.getElementById('noteBody');
@@ -1548,6 +1631,7 @@ function renderStructuredDetail(id: string, item: CipherSummary, kind: 'card' | 
       ${detailHead(item)}
       <div class="detail-body">
         <div id="structuredFields"><div class="muted center">Loading…</div></div>
+        <div id="customFields" class="custom-fields"></div>
         <div id="detailStatus" class="detail-status"></div>
       </div>
     </div>`;
@@ -1568,6 +1652,9 @@ function renderStructuredDetail(id: string, item: CipherSummary, kind: 'card' | 
     }
     if (kind === 'card') renderCardFields(id, container, cipher);
     else renderIdentityFields(id, container, cipher);
+    // Custom fields ride along on the same detail fetch (no second round-trip).
+    const fieldsEl = document.getElementById('customFields');
+    if (fieldsEl && cipher.fields?.length) renderCustomFieldRows(id, fieldsEl, cipher.fields);
   })();
 }
 
@@ -1613,6 +1700,79 @@ function bindStructuredHandlers(id: string, container: HTMLElement): void {
       const value = (response.data as { value?: string }).value;
       if (!value) return setDetailStatus('Field is empty', true);
       revealed.set(field, value);
+      codeEl.textContent = value;
+      btn.innerHTML = icon('eyeOff');
+      btn.setAttribute('aria-pressed', 'true');
+    }));
+  });
+}
+
+/** Bitwarden LinkedId labels (login: 100 username, 101 password). */
+function linkedLabel(linkedId?: number): string {
+  if (linkedId === 100) return 'Linked → Username';
+  if (linkedId === 101) return 'Linked → Password';
+  return 'Linked field';
+}
+
+/** Fetch a cipher's custom fields (Hidden values masked by the worker) and render them. */
+async function loadCustomFields(id: string): Promise<void> {
+  const container = document.getElementById('customFields');
+  if (!container) return;
+  const response = await sendRequest({ type: 'vault.getCipherDetail', id });
+  if (!response.ok) return;
+  const cipher = (response.data as { cipher: DecryptedCipher | null }).cipher;
+  if (cipher?.fields?.length) renderCustomFieldRows(id, container, cipher.fields);
+}
+
+/** Render custom-field readout rows: Text/Boolean/Linked inline, Hidden masked with reveal + copy. */
+function renderCustomFieldRows(id: string, container: HTMLElement, fields: DecryptedField[]): void {
+  const rows = fields.map((f, index) => {
+    const label = f.name || 'Field';
+    if (f.type === 1) {
+      return `<div class="readout"><div class="k">${escapeHtml(label)}</div>
+        <div class="v-row"><code class="v mono" data-cf-secret="${index}">••••••••</code>
+          <button class="icon-btn" type="button" data-cf-reveal="${index}" aria-pressed="false" title="Show ${escapeHtml(label)}" aria-label="Show ${escapeHtml(label)}">${icon('eye')}</button>
+          <button class="icon-btn" type="button" data-cf-copy="${index}" data-label="${escapeHtml(label)}" title="Copy ${escapeHtml(label)}" aria-label="Copy ${escapeHtml(label)}">${icon('copy')}</button>
+        </div></div>`;
+    }
+    const value = f.type === 2 ? (f.value === 'true' ? 'Yes' : 'No') : f.type === 3 ? linkedLabel(f.linkedId) : (f.value ?? '');
+    return plainRow(label, value);
+  });
+  container.innerHTML = `<div class="cf-head">Custom fields</div>${rows.join('')}`;
+  // Inline copy for non-hidden fields (value already present in the data-copy attribute).
+  container.querySelectorAll<HTMLButtonElement>('button[data-copy]').forEach((btn) => {
+    btn.addEventListener('click', () => void withDetailBusy(() => copyValue(btn.dataset.copy, btn.dataset.label ?? 'Value')));
+  });
+  bindHiddenCustomFields(id, container);
+}
+
+/** Reveal/copy handlers for Hidden custom fields, fetched on demand by index (reprompt-aware). */
+function bindHiddenCustomFields(id: string, container: HTMLElement): void {
+  const revealed = new Map<number, string>();
+  container.querySelectorAll<HTMLButtonElement>('button[data-cf-copy]').forEach((btn) => {
+    const index = Number(btn.dataset.cfCopy);
+    btn.addEventListener('click', () => void withDetailBusy(async () => {
+      const response = await sendRequest({ type: 'vault.getCustomField', id, index, ...mpArg(id) });
+      if (!response.ok) return setDetailStatus(response.error.message, true);
+      await copyValue((response.data as { value?: string }).value, btn.dataset.label ?? 'Field');
+    }));
+  });
+  container.querySelectorAll<HTMLButtonElement>('button[data-cf-reveal]').forEach((btn) => {
+    const index = Number(btn.dataset.cfReveal);
+    const codeEl = container.querySelector<HTMLElement>(`[data-cf-secret="${index}"]`)!;
+    btn.addEventListener('click', () => void withDetailBusy(async () => {
+      if (revealed.has(index)) {
+        revealed.delete(index);
+        codeEl.textContent = '••••••••';
+        btn.innerHTML = icon('eye');
+        btn.setAttribute('aria-pressed', 'false');
+        return;
+      }
+      const response = await sendRequest({ type: 'vault.getCustomField', id, index, ...mpArg(id) });
+      if (!response.ok) return setDetailStatus(response.error.message, true);
+      const value = (response.data as { value?: string }).value;
+      if (value === undefined) return setDetailStatus('Field is empty', true);
+      revealed.set(index, value);
       codeEl.textContent = value;
       btn.innerHTML = icon('eyeOff');
       btn.setAttribute('aria-pressed', 'true');

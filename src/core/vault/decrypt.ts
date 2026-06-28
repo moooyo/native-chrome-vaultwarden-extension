@@ -1,8 +1,8 @@
-import type { CardCipherData, CipherResponse, CollectionResponse, Fido2CredentialData, FolderResponse, IdentityCipherData, OrganizationResponse } from '../api/types.js';
+import type { CardCipherData, CipherFieldData, CipherResponse, CollectionResponse, Fido2CredentialData, FolderResponse, IdentityCipherData, OrganizationResponse } from '../api/types.js';
 import { decryptToText, EncStringMacError, UnsupportedEncTypeError } from '../crypto/encstring.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import { unwrapSymmetricKey, unwrapRsaWrappedKey } from '../crypto/keys.js';
-import type { CipherSummary, CollectionSummary, DecryptedCard, DecryptedCipher, DecryptedFido2Credential, DecryptedIdentity, FolderSummary } from './models.js';
+import type { CipherSummary, CollectionSummary, CustomFieldType, DecryptedCard, DecryptedCipher, DecryptedField, DecryptedFido2Credential, DecryptedIdentity, FolderSummary } from './models.js';
 import type { LoginUri } from './uri-match.js';
 
 const IDENTITY_FIELDS: Array<keyof IdentityCipherData> = [
@@ -63,6 +63,10 @@ export async function decryptCipher(
     }
     if (cipher.card) out.card = await decryptCard(cipher.card, key);
     if (cipher.identity) out.identity = await decryptIdentity(cipher.identity, key);
+    if (cipher.fields?.length) {
+      const fields = await decryptCustomFields(cipher.fields, key);
+      if (fields.length) out.fields = fields;
+    }
     return out;
   } catch (err) {
     if (err instanceof EncStringMacError || err instanceof UnsupportedEncTypeError) {
@@ -167,6 +171,24 @@ async function decryptFido2Credentials(src: Fido2CredentialData[], key: Symmetri
     const rpName = await decryptOptional(fc.rpName, key);
     if (rpName) cred.rpName = rpName;
     out.push(cred);
+  }
+  return out;
+}
+
+/** Decrypt custom fields. Text/Hidden/Boolean carry a decrypted value; Linked (type 3) carries only
+ *  its linkedId. A field whose name fails to decrypt keeps an empty name rather than dropping. */
+async function decryptCustomFields(src: CipherFieldData[], key: SymmetricKey): Promise<DecryptedField[]> {
+  const out: DecryptedField[] = [];
+  for (const f of src) {
+    const type = ((f.type ?? 0) as CustomFieldType);
+    const field: DecryptedField = { type, name: (await decryptOptional(f.name, key)) ?? '' };
+    if (type === 3) {
+      if (f.linkedId != null) field.linkedId = f.linkedId;
+    } else {
+      const value = await decryptOptional(f.value, key);
+      if (value !== undefined) field.value = value;
+    }
+    out.push(field);
   }
   return out;
 }

@@ -69,6 +69,19 @@ export interface DecryptedCipher extends CipherSummary {
   card?: DecryptedCard;
   identity?: DecryptedIdentity;
   fido2Credentials?: DecryptedFido2Credential[];
+  fields?: DecryptedField[];
+}
+
+/** Custom field types (Bitwarden FieldType): 0 Text, 1 Hidden, 2 Boolean, 3 Linked. */
+export type CustomFieldType = 0 | 1 | 2 | 3;
+
+/** A decrypted custom field. `value` holds plaintext for Text/Hidden and 'true'/'false' for Boolean;
+ *  Linked fields carry no value, only a `linkedId` referencing a built-in field. */
+export interface DecryptedField {
+  type: CustomFieldType;
+  name: string;
+  value?: string;
+  linkedId?: number;
 }
 
 /** A decrypted passkey. keyValue (PKCS#8 base64url private key) is sensitive — never send it to the UI. */
@@ -99,6 +112,8 @@ export interface CipherInput {
   };
   card?: DecryptedCard;
   identity?: DecryptedIdentity;
+  /** Custom fields, round-tripped by the editor (Linked fields are preserved read-only). */
+  fields?: DecryptedField[];
 }
 
 export interface FolderSummary {

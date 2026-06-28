@@ -196,6 +196,7 @@ export class VaultService {
     } else if (decrypted.type === 4 && decrypted.identity) {
       input.identity = decrypted.identity;
     }
+    if (decrypted.fields?.length) input.fields = decrypted.fields;
     return input;
   }
 
@@ -258,7 +259,25 @@ export class VaultService {
     if (safe.fido2Credentials) {
       safe.fido2Credentials = safe.fido2Credentials.map((c) => ({ ...c, keyValue: '' }));
     }
+    // Hidden custom-field values are secrets: mask them in the detail view (revealed on demand via
+    // getCustomField). Text/Boolean/Linked fields are non-secret and ride along for display.
+    if (safe.fields) {
+      safe.fields = safe.fields.map((f) => {
+        if (f.type !== 1) return f;
+        const { value: _hidden, ...masked } = f; // drop the Hidden value entirely (not even undefined)
+        void _hidden;
+        return masked;
+      });
+    }
     return safe;
+  }
+
+  /** Reveal one Hidden custom field's value on demand (reprompt-gated like other secret fields). */
+  async getCustomField(id: string, index: number, masterPassword?: string): Promise<string | undefined> {
+    const decrypted = await this.decryptCipherById(id);
+    if (!decrypted) return undefined;
+    await this.assertRepromptCleared(decrypted, masterPassword);
+    return decrypted.fields?.[index]?.value;
   }
 
   /** Generate the current TOTP code for a login, decrypting the secret only inside the worker. */

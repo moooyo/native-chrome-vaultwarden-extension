@@ -1,7 +1,7 @@
-import type { CardCipherData, CipherRequest, CipherResponse, IdentityCipherData, LoginCipherData } from '../api/types.js';
+import type { CardCipherData, CipherFieldData, CipherRequest, CipherResponse, IdentityCipherData, LoginCipherData } from '../api/types.js';
 import { encryptToText } from '../crypto/encstring.js';
 import type { SymmetricKey } from '../crypto/keys.js';
-import type { CipherInput, DecryptedCard, DecryptedIdentity } from './models.js';
+import type { CipherInput, DecryptedCard, DecryptedField, DecryptedIdentity } from './models.js';
 
 const CARD_FIELDS: Array<keyof DecryptedCard> = ['cardholderName', 'brand', 'number', 'expMonth', 'expYear', 'code'];
 const IDENTITY_FIELDS: Array<keyof DecryptedIdentity> = [
@@ -33,7 +33,26 @@ export async function encryptCipher(input: CipherInput, key: SymmetricKey): Prom
   } else if (input.type === 4) {
     req.identity = (await encryptFields(input.identity ?? {}, IDENTITY_FIELDS, key)) as IdentityCipherData;
   }
+  // Present (even empty) means the editor owns custom fields: an empty array explicitly clears them.
+  if (input.fields) req.fields = await encryptCustomFields(input.fields, key);
   return req;
+}
+
+/** Encrypt custom fields back into a request. Linked (type 3) fields carry only linkedId (no value);
+ *  Text/Hidden/Boolean carry an encrypted value (Boolean stored as 'true'/'false'). */
+async function encryptCustomFields(fields: DecryptedField[], key: SymmetricKey): Promise<CipherFieldData[]> {
+  const out: CipherFieldData[] = [];
+  for (const f of fields) {
+    const field: CipherFieldData = { type: f.type, name: f.name ? await encryptToText(f.name, key) : null };
+    if (f.type === 3) {
+      field.value = null;
+      field.linkedId = f.linkedId ?? null;
+    } else {
+      field.value = f.value != null && f.value !== '' ? await encryptToText(f.value, key) : null;
+    }
+    out.push(field);
+  }
+  return out;
 }
 
 /**
@@ -44,10 +63,10 @@ export async function encryptCipher(input: CipherInput, key: SymmetricKey): Prom
 export function mergeServerManagedFields(request: CipherRequest, original: CipherResponse | undefined): CipherRequest {
   if (!original) return request;
   if (original.key != null) request.key = original.key;
-  if (original.fields != null) request.fields = original.fields;
   if (original.passwordHistory != null) request.passwordHistory = original.passwordHistory;
-  // NOTE: `reprompt` is intentionally NOT carried forward here — the editor now models it explicitly
-  // (encryptCipher writes it from the input), so the user can toggle the master-password reprompt flag.
+  // NOTE: `fields` and `reprompt` are intentionally NOT carried forward here — the editor now models
+  // them explicitly (encryptCipher writes them from the input), so the user can edit custom fields and
+  // toggle the master-password reprompt flag. The editor round-trips Linked fields it cannot edit.
   // Login sub-fields the editor cannot represent (a stored passkey, the password-revision timestamp)
   // must ride along, or the wholesale PUT drops them. Only touch login on login ciphers.
   if (request.type === 1) {

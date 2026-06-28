@@ -357,6 +357,60 @@ describe('VaultService', () => {
     });
   });
 
+  describe('custom fields', () => {
+    it('getCipherDetail masks Hidden values but keeps Text inline; getCustomField reveals on demand', async () => {
+      const sync: SyncResponse = {
+        profile: { id: 'u', email: 'u@example.com' },
+        ciphers: [{
+          id: 'cf', type: 1, favorite: false, organizationId: null,
+          name: await encUnder('Item', testUserKey),
+          fields: [
+            { type: 0, name: await encUnder('Text', testUserKey), value: await encUnder('shown', testUserKey) },
+            { type: 1, name: await encUnder('Secret', testUserKey), value: await encUnder('hidden-val', testUserKey) },
+          ],
+        }],
+      };
+      const { service } = await makeService(sync);
+      await service.sync();
+      const detail = await service.getCipherDetail('cf');
+      expect(detail?.fields).toEqual([
+        { type: 0, name: 'Text', value: 'shown' },
+        { type: 1, name: 'Secret' }, // Hidden value omitted from the detail payload
+      ]);
+      await expect(service.getCustomField('cf', 1)).resolves.toBe('hidden-val');
+    });
+
+    it('getCustomField on a reprompt item requires the master password', async () => {
+      const sync: SyncResponse = {
+        profile: { id: 'u', email: 'u@example.com' },
+        ciphers: [{
+          id: 'cf', type: 1, favorite: false, organizationId: null, reprompt: 1,
+          name: await encUnder('Item', testUserKey),
+          fields: [{ type: 1, name: await encUnder('Secret', testUserKey), value: await encUnder('hidden-val', testUserKey) }],
+        }],
+      };
+      const { service } = await makeService(sync);
+      await service.sync();
+      await expect(service.getCustomField('cf', 0)).rejects.toMatchObject({ code: 'reprompt_required' });
+      await expect(service.getCustomField('cf', 0, 'correct-master')).resolves.toBe('hidden-val');
+    });
+
+    it('getCipherInput round-trips custom fields for the editor', async () => {
+      const sync: SyncResponse = {
+        profile: { id: 'u', email: 'u@example.com' },
+        ciphers: [{
+          id: 'cf', type: 1, favorite: false, organizationId: null,
+          name: await encUnder('Item', testUserKey),
+          fields: [{ type: 0, name: await encUnder('Text', testUserKey), value: await encUnder('shown', testUserKey) }],
+        }],
+      };
+      const { service } = await makeService(sync);
+      await service.sync();
+      const input = await service.getCipherInput('cf');
+      expect(input?.fields).toEqual([{ type: 0, name: 'Text', value: 'shown' }]);
+    });
+  });
+
   describe('save / update login capture', () => {
     const SITE = URL_VECTOR.plaintext;                 // https://example.com
     const USER = FIELD_VECTOR.plaintext;               // matches the cached cipher's username
@@ -659,28 +713,33 @@ describe('VaultService', () => {
     expect((req as { name: string }).name.startsWith('2.')).toBe(true);
   });
 
-  it('updateCipher preserves the passkey, custom fields and cipher key the editor does not model, and writes the editor reprompt flag', async () => {
+  it('updateCipher preserves the passkey and cipher key the editor does not model, and writes editor-controlled reprompt/fields', async () => {
     const sync = makeSync();
     sync.ciphers[0]!.login = {
       username: FIELD_VECTOR.encString,
       password: FIELD_VECTOR.encString,
       fido2Credentials: [{ credentialId: '2.cid==', keyValue: '2.kv==', rpId: '2.rp==', counter: '2.ct==' }],
     };
-    sync.ciphers[0]!.fields = [{ type: 0, name: '2.fn==', value: '2.fv==' }];
     sync.ciphers[0]!.key = '2.cipherkey==';
     const { service, api } = await makeService(sync);
     await service.sync(); // populate the raw cache the merge reads from
-    // reprompt is now editor-controlled, so the editor round-trips it explicitly in the input.
-    await service.updateCipher('cipher-1', { type: 1, name: 'Renamed', reprompt: true, login: { password: 'newpass' } });
+    // reprompt + custom fields are now editor-controlled, so the editor round-trips them in the input.
+    await service.updateCipher('cipher-1', {
+      type: 1, name: 'Renamed', reprompt: true,
+      fields: [{ type: 0, name: 'Note', value: 'kept' }],
+      login: { password: 'newpass' },
+    });
     const [, id, req] = (api.updateCipher as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(id).toBe('cipher-1');
-    const r = req as { login?: { fido2Credentials?: unknown }; fields?: unknown; reprompt?: number; key?: string };
+    const r = req as { login?: { fido2Credentials?: unknown }; fields?: { type: number }[]; reprompt?: number; key?: string };
+    // Passkey + per-cipher key still ride along (the editor doesn't model them).
     expect(r.login?.fido2Credentials).toEqual(sync.ciphers[0]!.login!.fido2Credentials);
-    expect(r.fields).toEqual(sync.ciphers[0]!.fields);
-    expect(r.reprompt).toBe(1);
     expect(r.key).toBe('2.cipherkey==');
-    // The editor's new secret is still encrypted, never sent as plaintext.
+    // Editor-modeled fields/reprompt come from the input, encrypted (never plaintext).
+    expect(r.reprompt).toBe(1);
+    expect(r.fields?.length).toBe(1);
     expect(JSON.stringify(r)).not.toContain('newpass');
+    expect(JSON.stringify(r)).not.toContain('"kept"');
   });
 
   it('deleteCipher calls the API by id and re-syncs', async () => {
