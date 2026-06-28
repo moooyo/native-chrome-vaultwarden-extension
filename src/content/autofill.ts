@@ -3,30 +3,34 @@ import { fillLoginForm } from './fill.js';
 import { detectLoginForms, type DetectedLoginForm } from './form-detection.js';
 import { createAutofillPopover } from './popover.js';
 
-export function startAutofill(frameUrl = window.location.href): void {
-  if (!frameUrl.startsWith('http://') && !frameUrl.startsWith('https://')) return;
-  const attach = () => attachPopovers(frameUrl);
+type FrameUrlProvider = () => string;
+
+export function startAutofill(frameUrlOrProvider: string | FrameUrlProvider = () => window.location.href): void {
+  const getFrameUrl = typeof frameUrlOrProvider === 'function' ? frameUrlOrProvider : () => frameUrlOrProvider;
+  if (!isHttpUrl(getFrameUrl())) return;
+  const attach = () => attachPopovers(getFrameUrl);
   attach();
   const observer = new MutationObserver(debounce(attach, 250));
   observer.observe(document.documentElement, { childList: true, subtree: true });
 }
 
-function attachPopovers(frameUrl: string): void {
+function attachPopovers(getFrameUrl: FrameUrlProvider): void {
+  if (!isHttpUrl(getFrameUrl())) return;
   for (const form of detectLoginForms()) {
     const selector = `[data-vw-popover-for="${CSS.escape(form.id)}"]`;
     if (document.querySelector(selector)) continue;
-    attachPopover(frameUrl, form);
+    attachPopover(getFrameUrl, form);
   }
 }
 
-function attachPopover(frameUrl: string, form: DetectedLoginForm): void {
+function attachPopover(getFrameUrl: FrameUrlProvider, form: DetectedLoginForm): void {
   const popover = createAutofillPopover({
     anchor: form.anchor,
     onOpen: () => {
-      void loadCandidates(frameUrl, popover);
+      void loadCandidates(getFrameUrl(), popover);
     },
     onSelect: (cipherId) => {
-      void fillSelected(frameUrl, form, cipherId, popover);
+      void fillSelected(getFrameUrl(), form, cipherId, popover);
     },
   });
   popover.element.dataset.vwPopoverFor = form.id;
@@ -98,6 +102,10 @@ function isOptionalString(value: unknown): value is string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isHttpUrl(value: string): boolean {
+  return value.startsWith('http://') || value.startsWith('https://');
 }
 
 function messageForError(code: string, fallback: string): string {

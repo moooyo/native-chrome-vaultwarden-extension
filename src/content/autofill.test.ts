@@ -67,6 +67,35 @@ describe('autofill controller', () => {
     expect(sendRequest).toHaveBeenCalledWith({ type: 'autofill.findCandidates', frameUrl: 'https://example.com/login' });
   });
 
+  it('uses the current frame URL after same-document navigation', async () => {
+    window.history.replaceState({}, '', '/login');
+    vi.mocked(sendRequest)
+      .mockResolvedValueOnce({
+        ok: true,
+        data: [{
+          id: '1',
+          name: 'Test',
+          username: 'user',
+          matchedUri: `${window.location.origin}/other`,
+          matchType: 3,
+          favorite: false,
+        }],
+      })
+      .mockResolvedValueOnce({ ok: true, data: { username: 'user', password: 'secret' } });
+
+    startAutofill();
+    const current = popover();
+    window.history.pushState({}, '', '/other');
+
+    current.options.onOpen();
+    await new Promise(r => setTimeout(r, 0));
+    current.options.onSelect('1');
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(sendRequest).toHaveBeenNthCalledWith(1, { type: 'autofill.findCandidates', frameUrl: `${window.location.origin}/other` });
+    expect(sendRequest).toHaveBeenNthCalledWith(2, { type: 'autofill.getCredentials', cipherId: '1', frameUrl: `${window.location.origin}/other` });
+  });
+
   it('shows no matches when findCandidates returns an empty array', async () => {
     vi.mocked(sendRequest).mockResolvedValueOnce({ ok: true, data: [] });
 
