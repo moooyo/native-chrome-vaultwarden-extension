@@ -260,3 +260,47 @@ describe('ApiClient sendEmailLogin', () => {
     expect(JSON.parse(init.body as string)).toEqual({ email: 'user@example.com', token: 'mytoken' });
   });
 });
+
+describe('ApiClient folders', () => {
+  const makeApi = (fetchFn: typeof fetch) => new ApiClient({
+    serverUrlProvider: async () => 'https://vw.example.com/',
+    fetchFn,
+    localStore: createMemoryStore(),
+  });
+
+  it('POSTs /api/folders with the encrypted name and Bearer token', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ id: 'f1', name: '2.enc', revisionDate: 'd', object: 'folder' }));
+    const res = await makeApi(fetchFn).createFolder('token', '2.enc');
+    expect(res).toMatchObject({ id: 'f1', name: '2.enc' });
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/folders', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer token' },
+      body: JSON.stringify({ name: '2.enc' }),
+    });
+  });
+
+  it('PUTs /api/folders/<id> to rename', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ id: 'f1', name: '2.new' }));
+    await makeApi(fetchFn).updateFolder('token', 'f1', '2.new');
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/folders/f1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer token' },
+      body: JSON.stringify({ name: '2.new' }),
+    });
+  });
+
+  it('DELETEs /api/folders/<id> and tolerates an empty response body', async () => {
+    const fetchFn = vi.fn(async () => textResponse('', 200));
+    await expect(makeApi(fetchFn).deleteFolder('token', 'f1')).resolves.toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/folders/f1', {
+      method: 'DELETE',
+      headers: { authorization: 'Bearer token' },
+    });
+  });
+
+  it('throws ApiHttpError on a failed folder request', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ message: 'bad' }, 400));
+    const err = await captureApiHttpError(makeApi(fetchFn).createFolder('token', '2.enc'));
+    expect(err.status).toBe(400);
+  });
+});

@@ -7,6 +7,7 @@ import type { SymmetricKey } from '../crypto/keys.js';
 import type { CipherSummary, CollectionSummary, DecryptedCipher, FieldName, FolderSummary } from './models.js';
 import { decryptCipher, decryptFolders, decryptCollections, buildOrgKeyMap } from './decrypt.js';
 import { getTotp, type TotpResult } from './totp.js';
+import { encryptToText } from '../crypto/encstring.js';
 import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
@@ -71,6 +72,42 @@ export class VaultService {
 
   async getSkippedOrgCount(): Promise<number> {
     return (await this.deps.localStore.get<number>(SKIPPED_ORG_KEY)) ?? 0;
+  }
+
+  /** Create a folder: encrypt the name under the user key, POST it, then re-sync the listing. */
+  async createFolder(name: string): Promise<VaultListing> {
+    const userKey = await this.requireUserKey();
+    const token = await this.requireToken();
+    await this.deps.api.createFolder(token, await encryptToText(name, userKey));
+    return this.sync();
+  }
+
+  /** Rename a folder: encrypt the new name under the user key, PUT it, then re-sync the listing. */
+  async renameFolder(id: string, name: string): Promise<VaultListing> {
+    const userKey = await this.requireUserKey();
+    const token = await this.requireToken();
+    await this.deps.api.updateFolder(token, id, await encryptToText(name, userKey));
+    return this.sync();
+  }
+
+  /** Delete a folder, then re-sync the listing (its ciphers fall back to No Folder server-side). */
+  async deleteFolder(id: string): Promise<VaultListing> {
+    const token = await this.requireToken();
+    await this.deps.api.deleteFolder(token, id);
+    return this.sync();
+  }
+
+  private async requireUserKey(): Promise<SymmetricKey> {
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) throw new AppError('locked', 'Vault is locked');
+    return userKey;
+  }
+
+  private async requireToken(): Promise<string> {
+    await this.deps.auth.refreshIfNeeded();
+    const auth = await this.deps.session.getPersistedAuth();
+    if (!auth) throw new AppError('locked', 'Not logged in');
+    return auth.accessToken;
   }
 
   async getField(id: string, field: FieldName): Promise<string | undefined> {

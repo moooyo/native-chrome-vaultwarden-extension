@@ -37,6 +37,9 @@ export type RequestMessage =
   | { type: 'vault.getCipherDetail'; id: string }
   | { type: 'vault.getTotp'; id: string }
   | { type: 'vault.getSkippedOrgCount' }
+  | { type: 'vault.createFolder'; name: string }
+  | { type: 'vault.renameFolder'; id: string; name: string }
+  | { type: 'vault.deleteFolder'; id: string }
   | { type: 'settings.get' }
   | { type: 'settings.save'; serverUrl: string; defaultUriMatchStrategy?: UriMatchStrategySetting; lockTimeout?: LockTimeoutSetting }
   | { type: 'autofill.findCandidates'; frameUrl: string; formSignature?: string }

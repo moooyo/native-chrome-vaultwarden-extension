@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pbkdf2Sha256, hkdfExpandSha256, hmacSha256, aesCbc256Decrypt, rsaOaepDecrypt } from './primitives.js';
+import { pbkdf2Sha256, hkdfExpandSha256, hmacSha256, aesCbc256Decrypt, aesCbc256Encrypt, rsaOaepDecrypt } from './primitives.js';
 import { utf8ToBytes, bytesToHex, hexToBytes, base64ToBytes, bytesToUtf8 } from './encoding.js';
 import { RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
 
@@ -35,6 +35,14 @@ describe('primitives', () => {
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv: iv as BufferSource }, subtleKey, plaintext as BufferSource));
     const out = await aesCbc256Decrypt(key, iv, ct);
     expect(bytesToHex(out)).toBe(bytesToHex(plaintext));
+  });
+
+  it('aesCbc256Encrypt round-trips through aesCbc256Decrypt', async () => {
+    const key = hexToBytes('00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff');
+    const iv = hexToBytes('0102030405060708090a0b0c0d0e0f10');
+    const plaintext = utf8ToBytes('round-trip me');
+    const ct = await aesCbc256Encrypt(key, iv, plaintext);
+    expect(bytesToHex(await aesCbc256Decrypt(key, iv, ct))).toBe(bytesToHex(plaintext));
   });
 
   it('RSA-OAEP-SHA1 decrypts what WebCrypto encrypted (round-trip vector)', async () => {

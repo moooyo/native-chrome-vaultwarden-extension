@@ -17,6 +17,7 @@ import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import { hexToBytes, base64ToBytes, bytesToBase64 } from '../crypto/encoding.js';
 import { hmacSha256 } from '../crypto/primitives.js';
+import { decryptToText } from '../crypto/encstring.js';
 import { FIELD_VECTOR, URL_VECTOR, USER_KEY_VECTOR, RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
 import type { SyncResponse } from '../api/types.js';
 
@@ -99,7 +100,12 @@ async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8
     userKey: symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex)),
     ...(opts.privateKey ? { privateKey: opts.privateKey } : {}),
   });
-  const api = { sync: vi.fn(async () => syncResponse) } as unknown as ApiClient;
+  const api = {
+    sync: vi.fn(async () => syncResponse),
+    createFolder: vi.fn(async () => ({ id: 'new-folder', name: '2.enc' })),
+    updateFolder: vi.fn(async () => ({ id: 'f1', name: '2.enc' })),
+    deleteFolder: vi.fn(async () => {}),
+  } as unknown as ApiClient;
   const auth = { refreshIfNeeded: vi.fn(async () => {}) } as unknown as AuthService;
   const deps = { api, auth, session: sm, localStore, ...(opts.now ? { now: opts.now } : {}) };
   return { service: new VaultService(deps), api, session: sm };
@@ -411,5 +417,37 @@ describe('VaultService', () => {
     await service.sync();
     await expect(service.getTotpCode('cipher-1')).resolves.toBeUndefined();
     await expect(service.getTotpCode('nope')).resolves.toBeUndefined();
+  });
+
+  it('createFolder encrypts the name under the user key, calls the API, and re-syncs', async () => {
+    const { service, api } = await makeService();
+    await service.createFolder('Work');
+    expect(api.createFolder).toHaveBeenCalledTimes(1);
+    const [token, enc] = (api.createFolder as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(token).toBe('access');
+    expect((enc as string).startsWith('2.')).toBe(true);
+    await expect(decryptToText(enc as string, testUserKey)).resolves.toBe('Work');
+    expect(api.sync).toHaveBeenCalled();
+  });
+
+  it('renameFolder encrypts the new name and updates the folder by id', async () => {
+    const { service, api } = await makeService();
+    await service.renameFolder('f1', 'Personal');
+    const [token, id, enc] = (api.updateFolder as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect([token, id]).toEqual(['access', 'f1']);
+    await expect(decryptToText(enc as string, testUserKey)).resolves.toBe('Personal');
+  });
+
+  it('deleteFolder calls the API by id and re-syncs', async () => {
+    const { service, api } = await makeService();
+    await service.deleteFolder('f1');
+    expect(api.deleteFolder).toHaveBeenCalledWith('access', 'f1');
+    expect(api.sync).toHaveBeenCalled();
+  });
+
+  it('createFolder rejects when the vault is locked', async () => {
+    const { service, session } = await makeService();
+    await session.lock();
+    await expect(service.createFolder('X')).rejects.toThrow();
   });
 });

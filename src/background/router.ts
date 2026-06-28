@@ -80,6 +80,15 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.vault.getSkippedOrgCount) throw new Error('vault.getSkippedOrgCount is not wired');
             return { ok: true, data: { count: await deps.vault.getSkippedOrgCount() } };
           }
+          case 'vault.createFolder':
+            if (!deps.vault.createFolder) throw new Error('vault.createFolder is not wired');
+            return { ok: true, data: await deps.vault.createFolder(request.name) };
+          case 'vault.renameFolder':
+            if (!deps.vault.renameFolder) throw new Error('vault.renameFolder is not wired');
+            return { ok: true, data: await deps.vault.renameFolder(request.id, request.name) };
+          case 'vault.deleteFolder':
+            if (!deps.vault.deleteFolder) throw new Error('vault.deleteFolder is not wired');
+            return { ok: true, data: await deps.vault.deleteFolder(request.id) };
           case 'settings.get': {
             const serverUrl = await deps.settings.getServerUrl();
             const defaultUriMatchStrategy = await deps.settings.getDefaultUriMatchStrategy();

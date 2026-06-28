@@ -44,6 +44,15 @@ export async function aesCbc256Decrypt(
   return new Uint8Array(await subtle.decrypt({ name: 'AES-CBC', iv: iv as BufferSource }, k, data as BufferSource));
 }
 
+export async function aesCbc256Encrypt(
+  key: Uint8Array,
+  iv: Uint8Array,
+  data: Uint8Array,
+): Promise<Uint8Array> {
+  const k = await subtle.importKey('raw', key as BufferSource, { name: 'AES-CBC' }, false, ['encrypt']);
+  return new Uint8Array(await subtle.encrypt({ name: 'AES-CBC', iv: iv as BufferSource }, k, data as BufferSource));
+}
+
 /**
  * RSA-OAEP decrypt. `hash` selects the OAEP hash: SHA-1 for Bitwarden encType 4/6
  * (Rsa2048_OaepSha1*) and SHA-256 for encType 3/5 (Rsa2048_OaepSha256*). privateKey is PKCS8 DER.

@@ -264,6 +264,7 @@ function renderUnlockedShell(error?: string) {
       <button id="lock" class="icon-btn" type="button" title="Lock vault" aria-label="Lock vault">${icon('lock')}</button>
     </div>
     <div id="folderBar" class="folderbar"></div>
+    <div id="folderEditor" class="folder-editor"></div>
     <div id="collectionBar" class="folderbar"></div>
     <div id="orgBanner"></div>
     <div id="vaultList" class="list-wrap"></div>
@@ -278,14 +279,10 @@ function renderUnlockedShell(error?: string) {
   void loadCachedList();
 }
 
-/** Rebuild the folder <select>, preserving the current selection when the folder still exists. */
+/** Rebuild the folder filter + management controls, preserving a valid selection. */
 function renderFolderFilter() {
   const bar = document.getElementById('folderBar');
   if (!bar) return;
-  if (vaultFolders.length === 0 && !vaultItems.some((i) => !i.folderId)) {
-    bar.innerHTML = '';
-    return;
-  }
   const hasNoFolderItems = vaultItems.some((i) => !i.folderId);
   // Reset a stale selection so the dropdown and the filtered list never desync: a chosen folder
   // that no longer exists, or "No Folder" when every item now has a folder.
@@ -295,19 +292,114 @@ function renderFolderFilter() {
   if (selectedFolderId === NO_FOLDER && !hasNoFolderItems) {
     selectedFolderId = null;
   }
+  const showSelect = vaultFolders.length > 0 || hasNoFolderItems;
   const options = [
     `<option value="">All folders</option>`,
     ...vaultFolders.map((f) => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.name)}</option>`),
     hasNoFolderItems ? `<option value="${NO_FOLDER}">No Folder</option>` : '',
   ].join('');
-  bar.innerHTML = `<div class="folder-select">${icon('folder')}<select id="folderFilter" class="select" aria-label="Filter by folder">${options}</select></div>`;
+  // Rename/Delete apply only to a concrete folder (not "All folders" or "No Folder").
+  const concrete = selectedFolderId !== null && selectedFolderId !== NO_FOLDER;
+  bar.innerHTML = `
+    ${showSelect
+      ? `<div class="folder-select">${icon('folder')}<select id="folderFilter" class="select" aria-label="Filter by folder">${options}</select></div>`
+      : `<span class="folder-empty muted">${icon('folder')} No folders</span>`}
+    <div class="folder-actions">
+      <button id="folderNew" class="icon-btn" type="button" title="New folder" aria-label="New folder">${icon('plus')}</button>
+      ${concrete ? `<button id="folderRename" class="icon-btn" type="button" title="Rename folder" aria-label="Rename folder">${icon('edit')}</button><button id="folderDelete" class="icon-btn" type="button" title="Delete folder" aria-label="Delete folder">${icon('trash')}</button>` : ''}
+    </div>`;
   const select = document.getElementById('folderFilter') as HTMLSelectElement | null;
   if (select) {
     select.value = selectedFolderId ?? '';
     select.addEventListener('change', () => {
       selectedFolderId = select.value || null;
+      closeFolderEditor();
+      renderFolderFilter(); // refresh Rename/Delete affordances for the new selection
       renderVaultList();
     });
+  }
+  document.getElementById('folderNew')!.addEventListener('click', () => openFolderEditor('create'));
+  if (concrete) {
+    const folder = vaultFolders.find((f) => f.id === selectedFolderId);
+    document.getElementById('folderRename')!.addEventListener('click', () => openFolderEditor('rename', folder));
+    document.getElementById('folderDelete')!.addEventListener('click', () => openFolderEditor('delete', folder));
+  }
+}
+
+/** Apply a fresh listing returned by a folder mutation, then re-render the filtered views. */
+function applyListing(data: { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[] }): void {
+  vaultItems = data.items;
+  vaultFolders = data.folders;
+  vaultCollections = data.collections;
+  closeFolderEditor();
+  renderFolderFilter();
+  renderCollectionFilter();
+  renderVaultList();
+}
+
+function closeFolderEditor(): void {
+  const host = document.getElementById('folderEditor');
+  if (host) host.innerHTML = '';
+}
+
+/** Inline create/rename/delete editor for folders, rendered under the folder bar. */
+function openFolderEditor(mode: 'create' | 'rename' | 'delete', folder?: FolderSummary): void {
+  const host = document.getElementById('folderEditor');
+  if (!host) return;
+  if (mode === 'delete' && folder) {
+    host.innerHTML = `
+      <div class="folder-edit-row">
+        <span class="muted">Delete “${escapeHtml(folder.name)}”? Its items move to No Folder.</span>
+        <button id="folderConfirm" class="btn btn-danger btn-sm" type="button">Delete</button>
+        <button id="folderCancel" class="btn btn-secondary btn-sm" type="button">Cancel</button>
+      </div>
+      <div id="folderEditStatus" class="folder-edit-status"></div>`;
+    document.getElementById('folderConfirm')!.addEventListener('click', () => void submitFolderMutation({ type: 'vault.deleteFolder', id: folder.id }));
+    document.getElementById('folderCancel')!.addEventListener('click', closeFolderEditor);
+    return;
+  }
+  const initial = mode === 'rename' && folder ? folder.name : '';
+  host.innerHTML = `
+    <div class="folder-edit-row">
+      <input id="folderNameInput" class="input" placeholder="Folder name" value="${escapeHtml(initial)}" />
+      <button id="folderConfirm" class="btn btn-sm" type="button">Save</button>
+      <button id="folderCancel" class="btn btn-secondary btn-sm" type="button">Cancel</button>
+    </div>
+    <div id="folderEditStatus" class="folder-edit-status"></div>`;
+  const input = document.getElementById('folderNameInput') as HTMLInputElement;
+  input.focus();
+  input.select();
+  const submit = () => {
+    const name = input.value.trim();
+    if (!name) return setFolderEditStatus('Enter a folder name');
+    if (mode === 'rename' && folder) void submitFolderMutation({ type: 'vault.renameFolder', id: folder.id, name });
+    else void submitFolderMutation({ type: 'vault.createFolder', name });
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    if (e.key === 'Escape') closeFolderEditor();
+  });
+  document.getElementById('folderConfirm')!.addEventListener('click', submit);
+  document.getElementById('folderCancel')!.addEventListener('click', closeFolderEditor);
+}
+
+function setFolderEditStatus(message: string): void {
+  const status = document.getElementById('folderEditStatus');
+  if (status) status.innerHTML = `<span class="error">${escapeHtml(message)}</span>`;
+}
+
+async function submitFolderMutation(
+  request: { type: 'vault.createFolder'; name: string } | { type: 'vault.renameFolder'; id: string; name: string } | { type: 'vault.deleteFolder'; id: string },
+): Promise<void> {
+  if (isPending) return;
+  isPending = true;
+  document.querySelectorAll<HTMLButtonElement>('#folderEditor button').forEach((b) => (b.disabled = true));
+  try {
+    const response = await sendRequest(request);
+    if (!response.ok) return setFolderEditStatus(response.error.message);
+    applyListing(response.data as { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[] });
+  } finally {
+    isPending = false;
   }
 }
 

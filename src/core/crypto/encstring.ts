@@ -1,5 +1,5 @@
-import { hmacSha256, aesCbc256Decrypt } from './primitives.js';
-import { base64ToBytes, bytesToUtf8, constantTimeEqual } from './encoding.js';
+import { hmacSha256, aesCbc256Decrypt, aesCbc256Encrypt } from './primitives.js';
+import { base64ToBytes, bytesToBase64, bytesToUtf8, utf8ToBytes, constantTimeEqual } from './encoding.js';
 import type { SymmetricKey } from './keys.js';
 
 export interface ParsedEncString {
@@ -79,4 +79,32 @@ export async function decryptToBytes(value: string, key: SymmetricKey): Promise<
 
 export async function decryptToText(value: string, key: SymmetricKey): Promise<string> {
   return bytesToUtf8(await decryptToBytes(value, key));
+}
+
+/**
+ * Build an encType=2 (AesCbc256_HmacSha256_B64) EncString: AES-256-CBC encrypt with a fresh random
+ * IV, then HMAC-SHA256 over `iv ‖ ct` (Encrypt-then-MAC). The IV is injectable for deterministic
+ * tests; production always uses a fresh `crypto.getRandomValues` IV.
+ */
+export async function encryptToBytes(
+  plaintext: Uint8Array,
+  key: SymmetricKey,
+  iv: Uint8Array = randomIv(),
+): Promise<string> {
+  const ct = await aesCbc256Encrypt(key.encKey, iv, plaintext);
+  const macData = new Uint8Array(iv.length + ct.length);
+  macData.set(iv, 0);
+  macData.set(ct, iv.length);
+  const mac = await hmacSha256(key.macKey, macData);
+  return `2.${bytesToBase64(iv)}|${bytesToBase64(ct)}|${bytesToBase64(mac)}`;
+}
+
+export async function encryptToText(plaintext: string, key: SymmetricKey, iv?: Uint8Array): Promise<string> {
+  return iv ? encryptToBytes(utf8ToBytes(plaintext), key, iv) : encryptToBytes(utf8ToBytes(plaintext), key);
+}
+
+function randomIv(): Uint8Array {
+  const iv = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(iv);
+  return iv;
 }

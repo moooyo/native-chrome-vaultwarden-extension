@@ -301,6 +301,31 @@ describe('router', () => {
     expect(getTotpCode).toHaveBeenCalledWith('has');
   });
 
+  it('routes vault folder mutations to the matching VaultService methods', async () => {
+    const listing = { items: [], folders: [{ id: 'f1', name: 'Work' }], collections: [] };
+    const createFolder = vi.fn(async () => listing);
+    const renameFolder = vi.fn(async () => listing);
+    const deleteFolder = vi.fn(async () => listing);
+    const router = createRouter({
+      auth: {},
+      vault: { createFolder, renameFolder, deleteFolder },
+      settings: {
+        getServerUrl: vi.fn(),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
+      },
+    });
+    await expect(router.handle({ type: 'vault.createFolder', name: 'Work' })).resolves.toEqual({ ok: true, data: listing });
+    expect(createFolder).toHaveBeenCalledWith('Work');
+    await expect(router.handle({ type: 'vault.renameFolder', id: 'f1', name: 'Home' })).resolves.toEqual({ ok: true, data: listing });
+    expect(renameFolder).toHaveBeenCalledWith('f1', 'Home');
+    await expect(router.handle({ type: 'vault.deleteFolder', id: 'f1' })).resolves.toEqual({ ok: true, data: listing });
+    expect(deleteFolder).toHaveBeenCalledWith('f1');
+  });
+
   it('turns non-Error throws into ok:false with string message', async () => {
     const router = createRouter({
       auth: { lock: vi.fn(async () => { throw 'string error'; }) },

@@ -1,5 +1,6 @@
 import type { KeyValueStore } from '../../platform/store.js';
 import type {
+  FolderResponse,
   LoginSuccessResponse,
   PreloginResponse,
   RefreshTokenResponse,
@@ -117,6 +118,37 @@ export class ApiClient {
       method: 'GET',
       headers: { authorization: `Bearer ${accessToken}` },
     });
+  }
+
+  /** Create a folder. `encryptedName` is an encType=2 EncString of the folder name. */
+  async createFolder(accessToken: string, encryptedName: string): Promise<FolderResponse> {
+    return this.jsonRequest<FolderResponse>('/api/folders', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ name: encryptedName }),
+    });
+  }
+
+  /** Rename a folder. `encryptedName` is an encType=2 EncString of the new name. */
+  async updateFolder(accessToken: string, id: string, encryptedName: string): Promise<FolderResponse> {
+    return this.jsonRequest<FolderResponse>(`/api/folders/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ name: encryptedName }),
+    });
+  }
+
+  async deleteFolder(accessToken: string, id: string): Promise<void> {
+    const response = await this.fetchFn(await this.url(`/api/folders/${encodeURIComponent(id)}`), {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let body: unknown;
+      try { body = JSON.parse(text); } catch { body = text; }
+      throw new ApiHttpError(response.status, body);
+    }
   }
 
   async getDeviceIdentifier(): Promise<string> {
