@@ -57,6 +57,12 @@ function findUsernameInput(container: ParentNode, passwordInput: HTMLInputElemen
 }
 
 function isHappyDomVisible(input: HTMLInputElement): boolean {
-  const style = input.ownerDocument.defaultView?.getComputedStyle(input);
-  return input.isConnected && style?.display !== 'none' && style?.visibility !== 'hidden';
+  if (!input.isConnected) return false;
+  const view = input.ownerDocument.defaultView;
+  if (!view) return false;
+  for (let element: HTMLElement | null = input; element; element = element.parentElement) {
+    const style = view.getComputedStyle(element);
+    if (element.hidden || style.display === 'none' || style.visibility === 'hidden') return false;
+  }
+  return true;
 }

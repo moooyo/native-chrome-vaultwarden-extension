@@ -63,4 +63,15 @@ describe('form detection', () => {
 
     expect(detectLoginForms()).toEqual([]);
   });
+
+  it('ignores inputs hidden by a CSS-hidden ancestor', () => {
+    document.body.innerHTML = `
+      <form style="display:none">
+        <input type="email">
+        <input type="password">
+      </form>
+    `;
+
+    expect(detectLoginForms()).toEqual([]);
+  });
 });

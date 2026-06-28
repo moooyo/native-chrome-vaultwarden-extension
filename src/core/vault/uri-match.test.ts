@@ -25,6 +25,15 @@ describe('uri matching', () => {
       .toMatchObject({ matchType: UriMatchStrategy.Host });
   });
 
+  it('does not match HTTPS saved URIs into HTTP frames for domain or host strategies', () => {
+    expect(matchLoginUri({ uri: 'https://example.com', match: UriMatchStrategy.Domain }, 'http://login.example.com/auth', UriMatchStrategy.Domain))
+      .toBeUndefined();
+    expect(matchLoginUri({ uri: 'https://vault.example.com', match: UriMatchStrategy.Host }, 'http://vault.example.com/login', UriMatchStrategy.Domain))
+      .toBeUndefined();
+    expect(matchLoginUri({ uri: 'http://example.com', match: UriMatchStrategy.Domain }, 'http://login.example.com/auth', UriMatchStrategy.Domain))
+      .toMatchObject({ matchType: UriMatchStrategy.Domain });
+  });
+
   it('matches starts-with and exact against full URLs', () => {
     expect(matchLoginUri({ uri: 'https://example.com/login', match: UriMatchStrategy.StartsWith }, 'https://example.com/login?next=%2F', UriMatchStrategy.Domain))
       .toMatchObject({ matchType: UriMatchStrategy.StartsWith });

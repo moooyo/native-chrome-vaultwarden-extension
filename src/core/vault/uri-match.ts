@@ -81,17 +81,31 @@ function matchesStrategy(savedUri: string, frameUrl: string, strategy: UriMatchS
 }
 
 function domainMatches(savedUri: string, frameUrl: string): boolean {
+  if (isHttpsDowngrade(savedUri, frameUrl)) return false;
   const savedDomain = getBaseDomain(savedUri);
   const frameDomain = getBaseDomain(frameUrl);
   return Boolean(savedDomain && frameDomain && savedDomain === frameDomain);
 }
 
 function hostMatches(savedUri: string, frameUrl: string): boolean {
+  if (isHttpsDowngrade(savedUri, frameUrl)) return false;
   const saved = getHostAndPort(savedUri);
   const frame = getHostAndPort(frameUrl);
   if (!saved || !frame) return false;
   if (saved.host !== frame.host) return false;
   return saved.port === undefined || saved.port === frame.port;
+}
+
+function isHttpsDowngrade(savedUri: string, frameUrl: string): boolean {
+  return protocolOf(savedUri) === 'https:' && protocolOf(frameUrl) === 'http:';
+}
+
+function protocolOf(value: string): string | undefined {
+  try {
+    return new URL(value).protocol;
+  } catch {
+    return undefined;
+  }
 }
 
 function regexMatches(pattern: string, frameUrl: string): boolean {
