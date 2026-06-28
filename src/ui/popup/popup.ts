@@ -2,6 +2,7 @@ import { sendRequest } from '../../messaging/protocol.js';
 import type { AuthResult } from '../../core/session/auth-service.js';
 import type { CipherSummary } from '../../core/vault/models.js';
 import { filterSummaries } from '../../core/vault/search.js';
+import { icon } from '../icons.js';
 
 type View =
   | { kind: 'loading' }
@@ -32,7 +33,7 @@ async function init() {
 function render(view: View) {
   currentViewKind = view.kind;
   if (view.kind === 'loading') {
-    app.innerHTML = '<p class="muted">Loading...</p>';
+    app.innerHTML = `<div class="center"><span class="spinner"></span><span class="muted">Loading vault…</span></div>`;
     return;
   }
   if (view.kind === 'loggedOut') return renderLogin(view.error);
@@ -41,15 +42,37 @@ function render(view: View) {
   return renderUnlockedShell(view.error);
 }
 
+/** Centered brand head shared by the auth screens. */
+function authHead(title: string, subtitle: string): string {
+  return `
+    <div class="auth-head">
+      <span class="brand-mark">${icon('shield')}</span>
+      <h1>${escapeHtml(title)}</h1>
+      <p>${escapeHtml(subtitle)}</p>
+    </div>`;
+}
+
+function errorNote(error?: string): string {
+  return error ? `<p class="note error">${icon('alert')}<span>${escapeHtml(error)}</span></p>` : '';
+}
+
 function renderLogin(error?: string) {
   app.innerHTML = `
-    <h1>Vaultwarden</h1>
-    <form id="loginForm">
-      <label>Email</label><input id="email" type="email" autocomplete="username" required />
-      <label>Master password</label><input id="password" type="password" autocomplete="current-password" required />
-      <button type="submit">Log in</button>
-      ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
-    </form>`;
+    <div class="auth">
+      ${authHead('Vaultwarden', 'Sign in to your self-hosted vault')}
+      <form id="loginForm">
+        <label class="field">
+          <span class="field-label">Email</span>
+          <input id="email" class="input" type="email" autocomplete="username" required />
+        </label>
+        <label class="field">
+          <span class="field-label">Master password</span>
+          <input id="password" class="input" type="password" autocomplete="current-password" required />
+        </label>
+        <button type="submit" class="btn btn-block">${icon('unlock')}<span>Log in</span></button>
+        ${errorNote(error)}
+      </form>
+    </div>`;
   document.getElementById('loginForm')!.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (isPending) return;
@@ -80,15 +103,22 @@ function renderLogin(error?: string) {
 function renderTwoFactor(providers: Array<0 | 1>, error?: string) {
   twoFactorProviders = providers;
   app.innerHTML = `
-    <h1>Two-step login</h1>
-    <form id="twoFactorForm">
-      <label>Provider</label>
-      <select id="provider">${providers.map((p) => `<option value="${p}">${p === 0 ? 'Authenticator app' : 'Email'}</option>`).join('')}</select>
-      <label>Code</label><input id="code" inputmode="numeric" autocomplete="one-time-code" required />
-      <button type="submit">Continue</button>
-      ${providers.includes(1) ? '<button id="sendEmail" class="secondary" type="button">Send email code</button>' : ''}
-      ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
-    </form>`;
+    <div class="auth">
+      ${authHead('Two-step login', 'Enter your verification code to continue')}
+      <form id="twoFactorForm">
+        <label class="field">
+          <span class="field-label">Provider</span>
+          <select id="provider" class="select">${providers.map((p) => `<option value="${p}">${p === 0 ? 'Authenticator app' : 'Email'}</option>`).join('')}</select>
+        </label>
+        <label class="field">
+          <span class="field-label">Code</span>
+          <input id="code" class="input mono" inputmode="numeric" autocomplete="one-time-code" required />
+        </label>
+        <button type="submit" class="btn btn-block">${icon('key')}<span>Continue</span></button>
+        ${providers.includes(1) ? `<button id="sendEmail" class="btn btn-secondary btn-block" type="button">${icon('mail')}<span>Send email code</span></button>` : ''}
+        ${errorNote(error)}
+      </form>
+    </div>`;
   document.getElementById('twoFactorForm')!.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (isPending) return;
@@ -139,13 +169,18 @@ function renderTwoFactor(providers: Array<0 | 1>, error?: string) {
 
 function renderLocked(error?: string) {
   app.innerHTML = `
-    <h1>Unlock</h1>
-    <form id="unlockForm">
-      <label>Master password</label><input id="unlockPassword" type="password" autocomplete="current-password" required />
-      <button type="submit">Unlock</button>
-      <button id="logout" type="button" class="danger">Log out</button>
-      ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
-    </form>`;
+    <div class="auth">
+      ${authHead('Vault locked', 'Enter your master password to unlock')}
+      <form id="unlockForm">
+        <label class="field">
+          <span class="field-label">Master password</span>
+          <input id="unlockPassword" class="input" type="password" autocomplete="current-password" required />
+        </label>
+        <button type="submit" class="btn btn-block">${icon('unlock')}<span>Unlock</span></button>
+        <button id="logout" type="button" class="btn btn-danger btn-block">${icon('logout')}<span>Log out</span></button>
+        ${errorNote(error)}
+      </form>
+    </div>`;
   document.getElementById('unlockForm')!.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (isPending) return;
@@ -194,17 +229,23 @@ function renderLocked(error?: string) {
 
 function renderUnlockedShell(error?: string) {
   app.innerHTML = `
-    <div class="header">
-      <h1>Vault</h1>
-      <button id="lock" class="secondary" type="button">Lock</button>
+    <div class="appbar">
+      <div class="brand">
+        <span class="brand-mark">${icon('shield')}</span>
+        <span class="wordmark">Vaultwarden</span>
+      </div>
+      <span class="statechip" data-state="unlocked">${icon('unlock')}<span>Unlocked</span></span>
     </div>
     <div class="toolbar">
-      <button id="sync" type="button">Sync</button>
-      <button id="logoutUnlocked" class="danger" type="button">Log out</button>
+      <div class="search">${icon('search')}<input id="search" class="input" placeholder="Search vault" autocomplete="off" /></div>
+      <button id="sync" class="icon-btn" type="button" title="Sync vault" aria-label="Sync vault">${icon('refresh')}</button>
+      <button id="lock" class="icon-btn" type="button" title="Lock vault" aria-label="Lock vault">${icon('lock')}</button>
     </div>
-    <input id="search" placeholder="Search vault" />
-    <div id="vaultList"></div>
-    ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}`;
+    <div id="vaultList" class="list-wrap"></div>
+    <div class="footer">
+      <button id="logoutUnlocked" class="btn btn-danger btn-block" type="button">${icon('logout')}<span>Log out</span></button>
+    </div>
+    ${error ? `<div class="footer">${errorNote(error)}</div>` : ''}`;
   bindUnlockedControls();
   void loadCachedList();
 }
@@ -278,6 +319,7 @@ function bindUnlockedControls() {
     lockBtn.disabled = true;
     syncBtn.disabled = true;
     logoutBtn.disabled = true;
+    syncBtn.classList.add('is-spinning');
     try {
       const response = await sendRequest({ type: 'vault.sync' });
       if (!response.ok) {
@@ -293,7 +335,7 @@ function bindUnlockedControls() {
         const liveSyncBtn = document.getElementById('sync') as HTMLButtonElement | null;
         const liveLogoutBtn = document.getElementById('logoutUnlocked') as HTMLButtonElement | null;
         if (liveLockBtn) liveLockBtn.disabled = false;
-        if (liveSyncBtn) liveSyncBtn.disabled = false;
+        if (liveSyncBtn) { liveSyncBtn.disabled = false; liveSyncBtn.classList.remove('is-spinning'); }
         if (liveLogoutBtn) liveLogoutBtn.disabled = false;
       }
     }
@@ -316,15 +358,30 @@ function renderVaultList() {
   const query = (document.getElementById('search') as HTMLInputElement | null)?.value ?? '';
   const filtered = filterSummaries(vaultItems, query);
   if (filtered.length === 0) {
-    list.innerHTML = '<p class="muted">No items.</p>';
+    const isSearch = query.trim().length > 0;
+    list.innerHTML = `
+      <div class="empty">
+        <span class="glyph">${icon(isSearch ? 'search' : 'shield')}</span>
+        <span>${isSearch ? 'No items match your search.' : 'Your vault is empty. Sync to load items.'}</span>
+      </div>`;
     return;
   }
-  list.innerHTML = filtered.map((item) => `
-    <div class="item" data-id="${escapeHtml(item.id)}">
-      <strong>${escapeHtml(item.name)}</strong>
-      <span>${escapeHtml(item.username ?? item.uris[0] ?? '')}</span>
-      ${item.undecryptable ? '<span class="error">undecryptable</span>' : ''}
-    </div>`).join('');
+  list.innerHTML = filtered.map((item) => {
+    const sub = item.username ?? item.uris[0] ?? '';
+    return `
+    <button class="item" type="button" data-id="${escapeHtml(item.id)}">
+      <span class="monogram" style="--mono-h:${hueFor(item.name)}">${escapeHtml(monogramLetter(item.name))}</span>
+      <span class="item-body">
+        <span class="item-name">
+          ${item.favorite ? `<span class="fav" title="Favorite">${icon('star')}</span>` : ''}
+          <span class="title">${escapeHtml(item.name)}</span>
+          ${item.undecryptable ? '<span class="tag">Undecryptable</span>' : ''}
+        </span>
+        ${sub ? `<span class="item-sub">${escapeHtml(sub)}</span>` : ''}
+      </span>
+      <span class="chevron">${icon('chevron')}</span>
+    </button>`;
+  }).join('');
   for (const row of list.querySelectorAll<HTMLElement>('.item')) {
     row.addEventListener('click', () => renderDetail(row.dataset.id!));
   }
@@ -333,16 +390,27 @@ function renderVaultList() {
 function renderDetail(id: string) {
   const item = vaultItems.find((i) => i.id === id);
   if (!item) return;
+  const uris = item.uris
+    .map((u) => `<div class="v is-link"><a href="${safeHref(u)}" target="_blank" rel="noreferrer">${escapeHtml(u)}</a></div>`)
+    .join('');
   app.innerHTML = `
-    <button id="back" class="secondary" type="button">Back</button>
-    <h1>${escapeHtml(item.name)}</h1>
-    <p class="muted">${escapeHtml(item.username ?? '')}</p>
-    ${item.uris.map((u) => `<p><a href="${safeHref(u)}" target="_blank" rel="noreferrer">${escapeHtml(u)}</a></p>`).join('')}
-    <div class="detail-actions">
-      <button id="copyPassword" type="button">Copy password</button>
-      <button id="copyUsername" class="secondary" type="button">Copy username</button>
-    </div>
-    <div id="detailStatus"></div>`;
+    <div class="detail">
+      <div class="detail-head">
+        <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
+        <div class="titles">
+          <h1>${escapeHtml(item.name)}</h1>
+          ${item.username ? `<span class="sub">${escapeHtml(item.username)}</span>` : ''}
+        </div>
+      </div>
+      <div class="detail-body">
+        ${uris ? `<div class="readout"><div class="k">${icon('globe')} Website</div><div class="v-row">${uris}</div></div>` : ''}
+        <div class="detail-actions">
+          <button id="copyPassword" type="button" class="btn btn-block">${icon('copy')}<span>Copy password</span></button>
+          <button id="copyUsername" type="button" class="btn btn-secondary btn-block">${icon('user')}<span>Copy username</span></button>
+        </div>
+        <div id="detailStatus" class="detail-status"></div>
+      </div>
+    </div>`;
   document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
   document.getElementById('copyPassword')!.addEventListener('click', async () => {
     if (isPending) return;
@@ -414,7 +482,22 @@ async function copyWithClear(value: string): Promise<void> {
 function setDetailStatus(message: string, isError: boolean) {
   const status = document.getElementById('detailStatus');
   if (!status) return;
-  status.innerHTML = `<p class="${isError ? 'error' : 'success'}">${escapeHtml(message)}</p>`;
+  status.innerHTML = `<p class="note ${isError ? 'error' : 'success'}">${icon(isError ? 'alert' : 'checkCircle')}<span>${escapeHtml(message)}</span></p>`;
+}
+
+/** First alphanumeric character of a name, for the monogram chip. */
+function monogramLetter(name: string): string {
+  const match = name.match(/[\p{L}\p{N}]/u);
+  return match ? match[0]!.toUpperCase() : '•';
+}
+
+/** Deterministic hue (0–359) from a name, so each item keeps a stable tint. */
+function hueFor(name: string): number {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  }
+  return hash % 360;
 }
 
 /** Allow only http: and https: URIs; return '#' for anything else. */

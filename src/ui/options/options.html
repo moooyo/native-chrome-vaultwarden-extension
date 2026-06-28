@@ -2,27 +2,60 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="../theme.css" />
   <link rel="stylesheet" href="options.css" />
 </head>
 <body>
-  <main>
-    <h1>Vaultwarden Settings</h1>
-    <form id="settingsForm">
-      <label for="serverUrl">Server URL</label>
-      <input id="serverUrl" type="url" placeholder="https://vault.example.com/" required />
-      <label for="defaultUriMatchStrategy">Default URI match strategy</label>
-      <select id="defaultUriMatchStrategy">
-        <option value="0">Base domain / Domain</option>
-        <option value="1">Host</option>
-        <option value="2">Starts with</option>
-        <option value="3">Exact</option>
-        <option value="4">Regular expression</option>
-        <option value="5">Never</option>
-      </select>
-      <button type="submit">Save</button>
-    </form>
-    <div id="status"></div>
-  </main>
+  <div class="page">
+    <header class="page-head">
+      <div class="brand">
+        <span class="brand-mark" id="brandMark"></span>
+        <span class="titles">
+          <span class="wordmark">Vaultwarden</span>
+          <span class="eyebrow">Extension settings</span>
+        </span>
+      </div>
+    </header>
+
+    <main class="card settings">
+      <div class="settings-head">
+        <h1>Connection</h1>
+        <p class="muted">Point the extension at your self-hosted Vaultwarden server and choose how saved logins are matched to websites.</p>
+      </div>
+
+      <form id="settingsForm">
+        <label class="field" for="serverUrl">
+          <span class="field-label">Server URL</span>
+          <input id="serverUrl" class="input mono" type="url" placeholder="https://vault.example.com/" required />
+          <span class="help">Saving prompts for permission to reach this origin. Use the full address, including <span class="mono">https://</span>.</span>
+        </label>
+
+        <label class="field" for="defaultUriMatchStrategy">
+          <span class="field-label">Default URI match strategy</span>
+          <select id="defaultUriMatchStrategy" class="select">
+            <option value="0">Base domain / Domain</option>
+            <option value="1">Host</option>
+            <option value="2">Starts with</option>
+            <option value="3">Exact</option>
+            <option value="4">Regular expression</option>
+            <option value="5">Never</option>
+          </select>
+          <span class="help" id="strategyHelp"></span>
+        </label>
+
+        <div class="actions">
+          <button type="submit" class="btn" id="saveButton"><span>Save settings</span></button>
+        </div>
+      </form>
+
+      <div id="status" class="status" aria-live="polite"></div>
+    </main>
+
+    <footer class="page-foot">
+      <span class="muted">The master password and vault keys never leave this device.</span>
+    </footer>
+  </div>
   <script type="module" src="options.js"></script>
 </body>
 </html>

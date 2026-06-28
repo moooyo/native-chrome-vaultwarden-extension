@@ -1,0 +1,300 @@
+/*
+ * Warden theme — shared design tokens and components.
+ *
+ * The extension presents itself as a small security instrument: calm cool-slate
+ * surfaces, a single disciplined iris accent, and a teal "secured" signal. UI text
+ * uses a tuned grotesque stack; credential data (usernames, URIs, codes) is set in
+ * monospace so machine strings stay unambiguous — l/1/I and O/0 never blur.
+ *
+ * Everything is sized in rem so it scales with the user's font size, and all
+ * iconography is inline SVG so it stays crisp at any resolution or DPI. A full
+ * dark theme follows prefers-color-scheme, and motion is gated on
+ * prefers-reduced-motion.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Light palette — instrument glass */
+  --bg: #eef1f8;
+  --surface: #ffffff;
+  --surface-2: #f3f5fb;
+  --surface-inset: #eaedf6;
+  --ink: #181d2b;
+  --ink-soft: #5b647a;
+  --ink-faint: #8b93a7;
+  --line: #dee3ef;
+  --line-strong: #cdd4e3;
+
+  --accent: #4f46e5;
+  --accent-strong: #4338ca;
+  --accent-tint: #ecebfc;
+  --on-accent: #ffffff;
+
+  --ok: #0e9b74;
+  --ok-tint: #e2f6ef;
+  --danger: #d4374f;
+  --danger-strong: #b91d38;
+  --danger-tint: #fbe9ec;
+
+  --focus: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  --shadow-sm: 0 1px 2px rgba(20, 27, 45, 0.06), 0 1px 1px rgba(20, 27, 45, 0.04);
+  --shadow-md: 0 6px 16px rgba(20, 27, 45, 0.10), 0 2px 6px rgba(20, 27, 45, 0.06);
+  --shadow-lg: 0 18px 48px rgba(20, 27, 45, 0.18), 0 6px 16px rgba(20, 27, 45, 0.10);
+
+  /* Spacing scale (rem) */
+  --s1: 0.25rem;
+  --s2: 0.5rem;
+  --s3: 0.75rem;
+  --s4: 1rem;
+  --s5: 1.5rem;
+  --s6: 2rem;
+
+  --r-sm: 0.5rem;
+  --r-md: 0.75rem;
+  --r-lg: 1rem;
+  --r-pill: 999px;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SF Mono", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --dur: 140ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0c0f17;
+    --surface: #151a26;
+    --surface-2: #1b2230;
+    --surface-inset: #11151f;
+    --ink: #e9edf7;
+    --ink-soft: #9aa4b8;
+    --ink-faint: #6c7689;
+    --line: #283041;
+    --line-strong: #333d52;
+
+    --accent: #8b87ff;
+    --accent-strong: #a39fff;
+    --accent-tint: #211f3b;
+    --on-accent: #11122a;
+
+    --ok: #2fd3a5;
+    --ok-tint: #11271f;
+    --danger: #ff6b81;
+    --danger-strong: #ff8497;
+    --danger-tint: #2a141a;
+
+    --focus: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 22px 56px rgba(0, 0, 0, 0.6);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+
+a { color: var(--accent); text-underline-offset: 2px; }
+
+/* ----- Eyebrow / labels ----- */
+.eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.muted { color: var(--ink-soft); }
+.mono { font-family: var(--font-mono); font-size: 0.8125rem; }
+
+/* ----- Brand mark + wordmark ----- */
+.brand { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.5rem;
+  background: linear-gradient(150deg, var(--accent), var(--accent-strong));
+  color: var(--on-accent);
+  box-shadow: var(--shadow-sm);
+  flex: none;
+}
+.brand-mark svg { width: 1.05rem; height: 1.05rem; }
+.wordmark { font-weight: 680; font-size: 0.9375rem; letter-spacing: -0.01em; white-space: nowrap; }
+
+/* ----- Lock-state chip (the signature element) ----- */
+.statechip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  padding: 0.2rem 0.55rem 0.2rem 0.45rem;
+  border-radius: var(--r-pill);
+  font-size: 0.6875rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.statechip svg { width: 0.8125rem; height: 0.8125rem; }
+.statechip[data-state="unlocked"] { color: var(--ok); background: var(--ok-tint); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+.statechip[data-state="locked"] { color: var(--ink-soft); background: var(--surface-inset); border-color: var(--line-strong); }
+
+/* ----- Buttons ----- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  font: inherit;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), transform var(--dur) var(--ease), border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.btn svg { width: 1rem; height: 1rem; flex: none; }
+.btn:hover { background: var(--accent-strong); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: 0.55; cursor: default; transform: none; }
+
+.btn-secondary { background: var(--surface); color: var(--ink); border-color: var(--line-strong); }
+.btn-secondary:hover { background: var(--surface-2); border-color: var(--ink-faint); }
+
+.btn-ghost { background: transparent; color: var(--ink-soft); border-color: transparent; padding: 0.45rem 0.6rem; }
+.btn-ghost:hover { background: var(--surface-2); color: var(--ink); }
+
+.btn-danger { background: transparent; color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.btn-danger:hover { background: var(--danger-tint); border-color: var(--danger); }
+
+.btn-block { width: 100%; }
+
+/* Compact icon-only button */
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.icon-btn svg { width: 1rem; height: 1rem; }
+.icon-btn:hover { background: var(--surface-2); color: var(--ink); border-color: var(--ink-faint); }
+.icon-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* ----- Fields ----- */
+.field { display: block; margin-top: var(--s4); }
+.field-label {
+  display: block;
+  margin-bottom: var(--s2);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+}
+.input, .select {
+  width: 100%;
+  font: inherit;
+  color: var(--ink);
+  padding: 0.6rem 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.input::placeholder { color: var(--ink-faint); }
+.input:focus, .select:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
+
+/* Search field with leading icon */
+.search { position: relative; }
+.search svg { position: absolute; left: 0.65rem; top: 50%; transform: translateY(-50%); width: 1rem; height: 1rem; color: var(--ink-faint); pointer-events: none; }
+.search .input { padding-left: 2.1rem; }
+
+:focus-visible { outline: none; box-shadow: var(--focus); }
+
+/* ----- Cards ----- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ----- Monogram chip for vault items ----- */
+/* JS injects only `--mono-h` (a hue); the theme derives light/dark tints so the
+   chip stays legible in both schemes. */
+.monogram {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  border-radius: 0.55rem;
+  font-weight: 680;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  color: hsl(var(--mono-h, 245) 52% 40%);
+  background: hsl(var(--mono-h, 245) 62% 93%);
+  border: 1px solid hsl(var(--mono-h, 245) 50% 85%);
+}
+@media (prefers-color-scheme: dark) {
+  .monogram {
+    color: hsl(var(--mono-h, 245) 72% 78%);
+    background: hsl(var(--mono-h, 245) 38% 18%);
+    border-color: hsl(var(--mono-h, 245) 36% 28%);
+  }
+}
+
+/* ----- Status messages ----- */
+.note { display: flex; align-items: flex-start; gap: var(--s2); margin-top: var(--s3); font-size: 0.8125rem; }
+.note svg { width: 0.95rem; height: 0.95rem; flex: none; margin-top: 0.1rem; }
+.note.error { color: var(--danger-strong); }
+.note.success { color: var(--ok); }
+.error { color: var(--danger-strong); }
+.success { color: var(--ok); }
+
+/* ----- Spinner ----- */
+.spinner {
+  display: inline-block;
+  width: 1.1rem;
+  height: 1.1rem;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ----- Scrollbar ----- */
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); background-clip: content-box; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}

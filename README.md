@@ -19,6 +19,15 @@ M4 adds:
 
 Organization ciphers and Argon2id accounts are not decrypted in this milestone.
 
+## User interface
+
+All three surfaces — the popup, the options page, and the in-page autofill popover — share one design system (`src/ui/theme.css`):
+
+- A cool-slate palette with a single indigo accent and a teal "secured" signal. Credential data (usernames, URIs, codes) is set in monospace so machine strings stay unambiguous.
+- A full dark theme that follows `prefers-color-scheme`, and motion that respects `prefers-reduced-motion`.
+- Iconography is inline SVG and sizing is `rem`-based, so the UI stays crisp and proportional across resolutions, DPI, and browser zoom. The toolbar/extension icon set (16/32/48/128) is generated from a single vector source by `tools/gen-icons.mjs`.
+- The options page is a responsive centered column; the popup is a fixed-width panel whose regions scroll within Chrome's height budget; the popover is Shadow-DOM isolated and flips above / clamps to the viewport edge when space is tight.
+
 ## Development
 
 ```bash
@@ -53,3 +62,6 @@ Load `dist/` from Chrome `chrome://extensions` with Developer Mode enabled.
 18. Lock the vault, reload a login page, and confirm the popover reports locked without showing or filling credentials.
 19. Test an iframe login page and confirm matching uses the iframe URL, not the top-level page URL.
 20. Confirm hidden, disabled, and readonly fields are not filled.
+21. Switch the OS/browser to dark mode and confirm the popup, options page, and popover all adopt the dark theme.
+22. Set the display to a HiDPI scale (e.g. 150% / 200%) and confirm icons and text stay crisp in all surfaces.
+23. Narrow the options tab and confirm the layout reflows without horizontal scrolling.

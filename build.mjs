@@ -7,6 +7,9 @@ const outdir = 'dist';
 
 async function copyStatic() {
   await cp('src/manifest.json', join(outdir, 'manifest.json'));
+  await mkdir(join(outdir, 'ui'), { recursive: true });
+  await cp('src/ui/theme.css', join(outdir, 'ui', 'theme.css'));
+  await cp('src/icons', join(outdir, 'icons'), { recursive: true });
   for (const page of ['popup', 'options']) {
     await mkdir(join(outdir, 'ui', page), { recursive: true });
     await cp(`src/ui/${page}/${page}.html`, join(outdir, 'ui', page, `${page}.html`));
