@@ -11,6 +11,12 @@ M1-M3 provides:
 - MV3 service worker-centered session management with UserKey stored only in `storage.session`.
 - Read-only vault sync, search, detail view, and on-demand password copy.
 
+M4 adds:
+
+- Native content-script autofill on `http://*/*` and `https://*/*` pages, including all frames.
+- Bitwarden-like URI match strategies: Domain, Host, Starts With, Exact, Regular Expression, and Never.
+- Semi-automatic form-side popover: credentials are filled only after user selection and forms are never auto-submitted.
+
 Organization ciphers and Argon2id accounts are not decrypted in this milestone.
 
 ## Development
@@ -39,3 +45,11 @@ Load `dist/` from Chrome `chrome://extensions` with Developer Mode enabled.
 10. Keep the popup open for 60 seconds and confirm the clipboard clears if the value is unchanged (best-effort: clearing only occurs while the popup document remains open).
 11. Click Lock, reopen the popup, unlock with the master password, and confirm cached items are available.
 12. Log out and confirm the popup returns to the login form.
+13. Confirm Options exposes the default URI match strategy and defaults to Base domain / Domain.
+14. Open a website with one matching login item and confirm the Vaultwarden popover appears near the password field.
+15. Click the matching login item and confirm username/password fill without submitting the form.
+16. Open a website with multiple matching login items and confirm favorites and stronger match types are listed first.
+17. Open a website with no matching login item and confirm the popover reports no matching logins.
+18. Lock the vault, reload a login page, and confirm the popover reports locked without showing or filling credentials.
+19. Test an iframe login page and confirm matching uses the iframe URL, not the top-level page URL.
+20. Confirm hidden, disabled, and readonly fields are not filled.
