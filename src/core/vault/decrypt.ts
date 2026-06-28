@@ -49,6 +49,7 @@ export async function decryptCipher(
     if (cipher.folderId) out.folderId = cipher.folderId;
     if (cipher.collectionIds?.length) out.collectionIds = cipher.collectionIds;
     if (cipher.reprompt) out.reprompt = true;
+    if (cipher.passwordHistory?.length) out.passwordHistoryCount = cipher.passwordHistory.length;
     const username = await decryptOptional(cipher.login?.username, key);
     const password = await decryptOptional(cipher.login?.password, key);
     const totp = await decryptOptional(cipher.login?.totp, key);

@@ -742,6 +742,65 @@ describe('VaultService', () => {
     expect(JSON.stringify(r)).not.toContain('"kept"');
   });
 
+  describe('password history', () => {
+    it('archives the prior password and stamps the revision date when the password changes', async () => {
+      const sync = makeSync(); // cipher-1 password = FIELD_VECTOR (plaintext "Hello, Vault!")
+      const { service, api } = await makeService(sync, { now: () => 1_700_000_000_000 });
+      await service.sync();
+      await service.updateCipher('cipher-1', { type: 1, name: 'X', login: { password: 'a-new-password' } });
+      const [, , req] = (api.updateCipher as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      const r = req as { passwordHistory?: Array<{ password: string; lastUsedDate?: string }>; login?: { passwordRevisionDate?: string } };
+      expect(r.passwordHistory?.length).toBe(1);
+      expect(r.passwordHistory![0]!.password).toBe(FIELD_VECTOR.encString); // the prior EncString, verbatim
+      expect(r.passwordHistory![0]!.lastUsedDate).toBe(new Date(1_700_000_000_000).toISOString());
+      expect(r.login?.passwordRevisionDate).toBe(new Date(1_700_000_000_000).toISOString());
+    });
+
+    it('does not add a history entry when the password is unchanged', async () => {
+      const { service, api } = await makeService(makeSync());
+      await service.sync();
+      // Same plaintext as the cached cipher's password.
+      await service.updateCipher('cipher-1', { type: 1, name: 'X', login: { password: FIELD_VECTOR.plaintext } });
+      const [, , req] = (api.updateCipher as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect((req as { passwordHistory?: unknown }).passwordHistory).toBeUndefined();
+    });
+
+    it('sync surfaces the password-history count on the summary', async () => {
+      const sync = makeSync();
+      sync.ciphers[0]!.passwordHistory = [
+        { password: await encUnder('old1', testUserKey), lastUsedDate: '2020-01-01T00:00:00.000Z' },
+        { password: await encUnder('old2', testUserKey) },
+      ];
+      const { service } = await makeService(sync);
+      const { items } = await service.sync();
+      expect(items[0]!.passwordHistoryCount).toBe(2);
+    });
+
+    it('getPasswordHistory decrypts entries most-recent first, reprompt-gated', async () => {
+      const sync = makeSync();
+      sync.ciphers[0]!.passwordHistory = [
+        { password: await encUnder('old1', testUserKey), lastUsedDate: '2020-01-01T00:00:00.000Z' },
+        { password: await encUnder('old2', testUserKey) },
+      ];
+      const { service } = await makeService(sync);
+      await service.sync();
+      await expect(service.getPasswordHistory('cipher-1')).resolves.toEqual([
+        { password: 'old1', lastUsedDate: '2020-01-01T00:00:00.000Z' },
+        { password: 'old2' },
+      ]);
+    });
+
+    it('getPasswordHistory requires the master password for a reprompt item', async () => {
+      const sync = makeSync();
+      sync.ciphers[0]!.reprompt = 1;
+      sync.ciphers[0]!.passwordHistory = [{ password: await encUnder('old1', testUserKey) }];
+      const { service } = await makeService(sync);
+      await service.sync();
+      await expect(service.getPasswordHistory('cipher-1')).rejects.toMatchObject({ code: 'reprompt_required' });
+      await expect(service.getPasswordHistory('cipher-1', 'correct-master')).resolves.toEqual([{ password: 'old1' }]);
+    });
+  });
+
   it('deleteCipher calls the API by id and re-syncs', async () => {
     const { service, api } = await makeService();
     await service.deleteCipher('cipher-1');

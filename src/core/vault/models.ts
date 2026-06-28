@@ -27,6 +27,8 @@ export interface CipherSummary {
   /** True when the item is master-password-reprompt protected: secrets are released only after the
    *  master password is re-verified. The worker enforces this; the UI must gate access accordingly. */
   reprompt?: boolean;
+  /** Number of retained previous passwords (non-secret count; the values are fetched on demand). */
+  passwordHistoryCount?: number;
   /** Soft-delete timestamp; when set, the cipher is in the trash (excluded from the main list & autofill). */
   deletedDate?: string;
   undecryptable?: boolean;

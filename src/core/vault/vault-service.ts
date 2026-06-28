@@ -1,5 +1,5 @@
 import type { ApiClient } from '../api/client.js';
-import type { CipherResponse, SyncProfile, SyncResponse } from '../api/types.js';
+import type { CipherRequest, CipherResponse, SyncProfile, SyncResponse } from '../api/types.js';
 import type { SessionManager } from '../session/session-manager.js';
 import type { AuthService } from '../session/auth-service.js';
 import type { KeyValueStore } from '../../platform/store.js';
@@ -9,7 +9,8 @@ import { decryptCipher, decryptFolders, decryptCollections, buildOrgKeyMap } fro
 import { encryptCipher, mergeServerManagedFields } from './encrypt.js';
 import { getTotp, type TotpResult } from './totp.js';
 import { signFido2Assertion, type PasskeyAssertion } from './fido2.js';
-import { encryptToText } from '../crypto/encstring.js';
+import { encryptToText, decryptToText } from '../crypto/encstring.js';
+import { unwrapSymmetricKey } from '../crypto/keys.js';
 import { base64UrlToBytes } from '../crypto/encoding.js';
 import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealthInput } from './password-health.js';
 import { buildExportJson, parseImportJson } from './vault-io.js';
@@ -33,6 +34,8 @@ const COLLECTION_CACHE_KEY = 'vaultCollections';
 const EQUIV_DOMAINS_KEY = 'vaultEquivalentDomains';
 const EQUIV_EXCLUDED_KEY = 'vaultExcludedDomains';
 const SKIPPED_ORG_KEY = 'vaultSkippedOrgCount';
+/** Cap on retained prior passwords (the server may trim further). Keeps the audit trail bounded. */
+const MAX_PASSWORD_HISTORY = 20;
 
 export interface VaultListing {
   items: CipherSummary[];
@@ -137,12 +140,38 @@ export class VaultService {
   async updateCipher(id: string, input: CipherInput): Promise<VaultListing> {
     const userKey = await this.requireUserKey();
     const token = await this.requireToken();
+    const original = await this.findCachedCipher(id);
+    // Old plaintext for the password-history diff; only meaningful when the cipher is cached.
+    const previous = original ? await this.decryptCipherById(id) : undefined;
     const request = await encryptCipher(input, userKey);
-    // Carry forward server-managed fields the editor cannot represent (passkeys, custom fields,
-    // password history, reprompt, the per-cipher key) so the wholesale PUT does not wipe them.
-    mergeServerManagedFields(request, await this.findCachedCipher(id));
+    // Carry forward server-managed fields the editor cannot represent (passkeys, the per-cipher key,
+    // password history) so the wholesale PUT does not wipe them.
+    mergeServerManagedFields(request, original);
+    // When the password actually changed, archive the prior one and bump the revision date so the
+    // security audit trail stays current (previously the history went stale on every edit here).
+    this.appendPasswordHistory(request, original, input, previous);
     await this.deps.api.updateCipher(token, id, request);
     return this.sync();
+  }
+
+  /** Prepend the previous (still-encrypted) password to history and stamp passwordRevisionDate when the
+   *  login password changed. Reuses the original EncString verbatim — no re-encryption of old secrets. */
+  private appendPasswordHistory(
+    request: CipherRequest,
+    original: CipherResponse | undefined,
+    input: CipherInput,
+    previous: DecryptedCipher | undefined,
+  ): void {
+    if (request.type !== 1 || !original?.login?.password) return;
+    const oldPassword = previous?.password;
+    const newPassword = input.login?.password ?? '';
+    if (!oldPassword || oldPassword === newPassword) return;
+    const now = new Date((this.deps.now ?? Date.now)()).toISOString();
+    request.passwordHistory = [
+      { password: original.login.password, lastUsedDate: now },
+      ...(request.passwordHistory ?? []),
+    ].slice(0, MAX_PASSWORD_HISTORY);
+    request.login = { ...(request.login ?? {}), passwordRevisionDate: now };
   }
 
   /** Look up the raw (still-encrypted) cipher from the last sync cache, for field-preserving updates. */
@@ -278,6 +307,33 @@ export class VaultService {
     if (!decrypted) return undefined;
     await this.assertRepromptCleared(decrypted, masterPassword);
     return decrypted.fields?.[index]?.value;
+  }
+
+  /** Decrypt a login's retained previous passwords (most-recent first), reprompt-gated. The decrypted
+   *  values cross the boundary only on this explicit, user-initiated request. */
+  async getPasswordHistory(id: string, masterPassword?: string): Promise<Array<{ password: string; lastUsedDate?: string }>> {
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    if (!cache) throw new AppError('sync_required', 'Sync required');
+    const cipher = cache.ciphers.find((c) => c.id === id);
+    if (!cipher?.passwordHistory?.length) return [];
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) throw new AppError('locked', 'Vault is locked');
+    const orgKeys = await this.buildOrgKeys(cache.profile);
+    await this.assertRepromptCleared(await decryptCipher(cipher, userKey, orgKeys), masterPassword);
+    const baseKey = cipher.organizationId ? orgKeys.get(cipher.organizationId) : userKey;
+    if (!baseKey) return [];
+    const key = cipher.key ? await unwrapSymmetricKey(cipher.key, baseKey) : baseKey;
+    const out: Array<{ password: string; lastUsedDate?: string }> = [];
+    for (const entry of cipher.passwordHistory) {
+      if (!entry.password) continue;
+      try {
+        const password = await decryptToText(entry.password, key);
+        out.push(entry.lastUsedDate ? { password, lastUsedDate: entry.lastUsedDate } : { password });
+      } catch {
+        // Skip an entry we cannot decrypt rather than failing the whole history.
+      }
+    }
+    return out;
   }
 
   /** Generate the current TOTP code for a login, decrypting the secret only inside the worker. */
@@ -599,6 +655,7 @@ export class VaultService {
             if (decrypted.totp) summary.hasTotp = true;
             if (decrypted.fido2Credentials?.length) summary.hasPasskey = true;
             if (decrypted.reprompt) summary.reprompt = true;
+            if (decrypted.passwordHistoryCount) summary.passwordHistoryCount = decrypted.passwordHistoryCount;
             if (decrypted.organizationId) summary.organizationId = decrypted.organizationId;
             if (decrypted.folderId) summary.folderId = decrypted.folderId;
             if (decrypted.collectionIds) summary.collectionIds = decrypted.collectionIds;

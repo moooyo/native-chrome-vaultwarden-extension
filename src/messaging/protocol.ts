@@ -49,6 +49,7 @@ export type RequestMessage =
   | { type: 'vault.listItems' }
   | { type: 'vault.getField'; id: string; field: FieldName; masterPassword?: string }
   | { type: 'vault.getCustomField'; id: string; index: number; masterPassword?: string }
+  | { type: 'vault.getPasswordHistory'; id: string; masterPassword?: string }
   | { type: 'vault.getCipherDetail'; id: string }
   | { type: 'vault.getTotp'; id: string; masterPassword?: string }
   | { type: 'vault.getSkippedOrgCount' }
@@ -84,6 +85,7 @@ export type ResponseMessage =
   | { ok: true; data: { totp: TotpResult | null } }
   | { ok: true; data: { count: number } }
   | { ok: true; data: { entries: PasswordHealthEntry[] } }
+  | { ok: true; data: { history: Array<{ password: string; lastUsedDate?: string }> } }
   | { ok: true; data: { json: string } }
   | { ok: true; data: { imported: number } }
   | { ok: true; data: { enabled: boolean } }

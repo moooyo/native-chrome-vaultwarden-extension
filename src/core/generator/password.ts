@@ -77,7 +77,7 @@ function shuffle(arr: string[], randomInt: (maxExclusive: number) => number): vo
 }
 
 /** Unbiased integer in [0, maxExclusive) via rejection sampling over crypto.getRandomValues. */
-function cryptoRandomInt(maxExclusive: number): number {
+export function cryptoRandomInt(maxExclusive: number): number {
   if (maxExclusive <= 1) return 0;
   const limit = Math.floor(0x1_0000_0000 / maxExclusive) * maxExclusive;
   const buf = new Uint32Array(1);

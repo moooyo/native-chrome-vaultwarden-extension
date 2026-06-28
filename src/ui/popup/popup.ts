@@ -3,6 +3,7 @@ import type { AuthResult } from '../../core/session/auth-service.js';
 import type { CipherInput, CipherSummary, CollectionSummary, CustomFieldType, DecryptedCipher, DecryptedField, FolderSummary } from '../../core/vault/models.js';
 import { filterSummariesByFolderCollectionAndQuery, NO_FOLDER } from '../../core/vault/search.js';
 import { generatePassword, DEFAULT_PASSWORD_OPTIONS, type PasswordGenOptions } from '../../core/generator/password.js';
+import { generatePassphrase, DEFAULT_PASSPHRASE_OPTIONS, type PassphraseGenOptions } from '../../core/generator/passphrase.js';
 import { addPasswordToHistory } from '../../core/generator/history.js';
 import { icon } from '../icons.js';
 
@@ -40,6 +41,8 @@ let repromptMp: string | null = null;
 let repromptForId: string | null = null;
 // Password generator options, persisted while the popup stays open.
 let genOptions: PasswordGenOptions = { ...DEFAULT_PASSWORD_OPTIONS };
+let genMode: 'password' | 'passphrase' = 'password';
+let genPassphraseOptions: PassphraseGenOptions = { ...DEFAULT_PASSPHRASE_OPTIONS };
 // Generated-password history for this popup session only (never persisted — see core/generator/history).
 let genHistory: string[] = [];
 
@@ -809,43 +812,78 @@ function downloadTextFile(content: string, filename: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** Standalone password generator panel — runs locally; no vault secret involved. */
+/** Password options block markup for the generator panel. */
+function passwordGenOptionsHtml(): string {
+  return `
+    <div class="gen-options">
+      <label class="gen-row"><span>Length</span><input id="genLength" class="input" type="number" min="4" max="128" value="${genOptions.length}" /></label>
+      <label class="gen-check"><input id="genLower" type="checkbox" ${genOptions.lowercase ? 'checked' : ''} /><span>Lowercase (a-z)</span></label>
+      <label class="gen-check"><input id="genUpper" type="checkbox" ${genOptions.uppercase ? 'checked' : ''} /><span>Uppercase (A-Z)</span></label>
+      <label class="gen-check"><input id="genNumbers" type="checkbox" ${genOptions.numbers ? 'checked' : ''} /><span>Numbers (0-9)</span></label>
+      <label class="gen-check"><input id="genSpecial" type="checkbox" ${genOptions.special ? 'checked' : ''} /><span>Special (!@#$%^&amp;*)</span></label>
+      <label class="gen-check"><input id="genAmbiguous" type="checkbox" ${genOptions.avoidAmbiguous ? 'checked' : ''} /><span>Avoid ambiguous (Il1O0)</span></label>
+    </div>`;
+}
+
+/** Passphrase options block markup for the generator panel. */
+function passphraseGenOptionsHtml(): string {
+  const o = genPassphraseOptions;
+  return `
+    <div class="gen-options">
+      <label class="gen-row"><span>Words</span><input id="genWords" class="input" type="number" min="3" max="20" value="${o.numWords}" /></label>
+      <label class="gen-row"><span>Separator</span><input id="genSep" class="input" maxlength="3" value="${escapeHtml(o.separator)}" /></label>
+      <label class="gen-check"><input id="genCap" type="checkbox" ${o.capitalize ? 'checked' : ''} /><span>Capitalize</span></label>
+      <label class="gen-check"><input id="genNum" type="checkbox" ${o.includeNumber ? 'checked' : ''} /><span>Include number</span></label>
+    </div>`;
+}
+
+/** Standalone password/passphrase generator panel — runs locally; no vault secret involved. */
 function renderGenerator(): void {
   clearTotpTimer();
+  const isPass = genMode === 'passphrase';
   app.innerHTML = `
     <div class="detail">
       <div class="detail-head">
         <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
-        <div class="titles"><h1>Password generator</h1></div>
+        <div class="titles"><h1>Generator</h1></div>
       </div>
       <div class="detail-body">
+        <div class="seg" role="tablist">
+          <button id="modePassword" type="button" class="seg-btn${isPass ? '' : ' is-active'}" role="tab" aria-selected="${!isPass}">Password</button>
+          <button id="modePassphrase" type="button" class="seg-btn${isPass ? ' is-active' : ''}" role="tab" aria-selected="${isPass}">Passphrase</button>
+        </div>
         <div class="readout">
-          <div class="k">${icon('key')} Generated password</div>
+          <div class="k">${icon('key')} Generated ${isPass ? 'passphrase' : 'password'}</div>
           <div class="v-row">
             <code id="genOut" class="v mono"></code>
             <button id="genRegen" class="icon-btn" type="button" title="Regenerate" aria-label="Regenerate">${icon('refresh')}</button>
           </div>
         </div>
-        <div class="gen-options">
-          <label class="gen-row"><span>Length</span><input id="genLength" class="input" type="number" min="4" max="128" value="${genOptions.length}" /></label>
-          <label class="gen-check"><input id="genLower" type="checkbox" ${genOptions.lowercase ? 'checked' : ''} /><span>Lowercase (a-z)</span></label>
-          <label class="gen-check"><input id="genUpper" type="checkbox" ${genOptions.uppercase ? 'checked' : ''} /><span>Uppercase (A-Z)</span></label>
-          <label class="gen-check"><input id="genNumbers" type="checkbox" ${genOptions.numbers ? 'checked' : ''} /><span>Numbers (0-9)</span></label>
-          <label class="gen-check"><input id="genSpecial" type="checkbox" ${genOptions.special ? 'checked' : ''} /><span>Special (!@#$%^&amp;*)</span></label>
-          <label class="gen-check"><input id="genAmbiguous" type="checkbox" ${genOptions.avoidAmbiguous ? 'checked' : ''} /><span>Avoid ambiguous (Il1O0)</span></label>
-        </div>
+        ${isPass ? passphraseGenOptionsHtml() : passwordGenOptionsHtml()}
         <div class="detail-actions">
-          <button id="genCopy" type="button" class="btn btn-block">${icon('copy')}<span>Copy password</span></button>
+          <button id="genCopy" type="button" class="btn btn-block">${icon('copy')}<span>Copy</span></button>
         </div>
         <div id="genHistory"></div>
         <div id="detailStatus" class="detail-status"></div>
       </div>
     </div>`;
   document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
+  document.getElementById('modePassword')!.addEventListener('click', () => { genMode = 'password'; renderGenerator(); });
+  document.getElementById('modePassphrase')!.addEventListener('click', () => { genMode = 'passphrase'; renderGenerator(); });
 
   const out = document.getElementById('genOut')!;
   let current = '';
   const readOptions = (): void => {
+    if (isPass) {
+      const numWords = Number((document.getElementById('genWords') as HTMLInputElement).value);
+      genPassphraseOptions = {
+        numWords: Number.isFinite(numWords) ? Math.min(Math.max(Math.trunc(numWords), 3), 20) : genPassphraseOptions.numWords,
+        separator: (document.getElementById('genSep') as HTMLInputElement).value || '-',
+        capitalize: (document.getElementById('genCap') as HTMLInputElement).checked,
+        includeNumber: (document.getElementById('genNum') as HTMLInputElement).checked,
+      };
+      return;
+    }
     const length = Number((document.getElementById('genLength') as HTMLInputElement).value);
     genOptions = {
       ...genOptions,
@@ -857,19 +895,22 @@ function renderGenerator(): void {
       avoidAmbiguous: (document.getElementById('genAmbiguous') as HTMLInputElement).checked,
     };
   };
-  // Update the displayed password (on option changes) without touching history.
+  // Update the displayed value (on option changes) without touching history.
   const regenerate = (): void => {
     readOptions();
-    current = generatePassword(genOptions);
+    current = isPass ? generatePassphrase(genPassphraseOptions) : generatePassword(genOptions);
     out.textContent = current || 'Enable at least one character set';
   };
-  // Generate a fresh password AND record the previous one in history (explicit Regenerate / open).
+  // Generate a fresh value AND record the previous one in history (explicit Regenerate / open).
   const regenerateAndRecord = (): void => {
     if (current) genHistory = addPasswordToHistory(genHistory, current);
     regenerate();
     renderGenHistory();
   };
-  for (const id of ['genLength', 'genLower', 'genUpper', 'genNumbers', 'genSpecial', 'genAmbiguous']) {
+  const optionIds = isPass
+    ? ['genWords', 'genSep', 'genCap', 'genNum']
+    : ['genLength', 'genLower', 'genUpper', 'genNumbers', 'genSpecial', 'genAmbiguous'];
+  for (const id of optionIds) {
     document.getElementById(id)!.addEventListener('input', regenerate);
   }
   document.getElementById('genRegen')!.addEventListener('click', regenerateAndRecord);
@@ -878,7 +919,7 @@ function renderGenerator(): void {
       genHistory = addPasswordToHistory(genHistory, current);
       renderGenHistory();
     }
-    await copyValue(current, 'Password');
+    await copyValue(current, isPass ? 'Passphrase' : 'Password');
   }));
   regenerate();
   renderGenHistory();
@@ -1516,6 +1557,15 @@ function renderLoginDetail(id: string, item: CipherSummary) {
           <div class="k">${icon('shield')} Passkey</div>
           <div class="v-row"><span class="v">Passkey saved — sign in with it on this site.</span></div>
         </div>` : ''}
+        ${item.passwordHistoryCount ? `
+        <div class="readout">
+          <div class="k">${icon('refresh')} Password history</div>
+          <div class="v-row">
+            <span class="v">${item.passwordHistoryCount} previous password${item.passwordHistoryCount > 1 ? 's' : ''}</span>
+            <button id="viewHistory" class="icon-btn" type="button" aria-pressed="false" title="View history" aria-label="View password history">${icon('eye')}</button>
+          </div>
+          <div id="historyList"></div>
+        </div>` : ''}
         <div id="customFields" class="custom-fields"></div>
         <div class="detail-actions">
           <button id="copyPassword" type="button" class="btn btn-block">${icon('copy')}<span>Copy password</span></button>
@@ -1550,6 +1600,25 @@ function renderLoginDetail(id: string, item: CipherSummary) {
   }));
   document.getElementById('copyPassword')!.addEventListener('click', () => void withDetailBusy(() => copyField(id, 'password', 'Password')));
   document.getElementById('copyUsername')!.addEventListener('click', () => void withDetailBusy(() => copyValue(item.username, 'Username')));
+
+  if (item.passwordHistoryCount) {
+    let shown = false;
+    document.getElementById('viewHistory')?.addEventListener('click', () => void withDetailBusy(async () => {
+      const listEl = document.getElementById('historyList');
+      const btn = document.getElementById('viewHistory') as HTMLButtonElement;
+      if (!listEl) return;
+      if (shown) {
+        shown = false; listEl.innerHTML = '';
+        btn.innerHTML = icon('eye'); btn.setAttribute('aria-pressed', 'false');
+        return;
+      }
+      const response = await sendRequest({ type: 'vault.getPasswordHistory', id, ...mpArg(id) });
+      if (!response.ok) return setDetailStatus(response.error.message, true);
+      renderPasswordHistory(listEl, (response.data as { history: Array<{ password: string; lastUsedDate?: string }> }).history);
+      shown = true;
+      btn.innerHTML = icon('eyeOff'); btn.setAttribute('aria-pressed', 'true');
+    }));
+  }
 
   if (item.hasTotp) {
     let currentCode: string | undefined;
@@ -1704,6 +1773,25 @@ function bindStructuredHandlers(id: string, container: HTMLElement): void {
       btn.innerHTML = icon('eyeOff');
       btn.setAttribute('aria-pressed', 'true');
     }));
+  });
+}
+
+/** Render decrypted password-history entries (most-recent first) with per-entry copy. */
+function renderPasswordHistory(container: HTMLElement, history: Array<{ password: string; lastUsedDate?: string }>): void {
+  if (!history.length) {
+    container.innerHTML = `<div class="muted">No previous passwords</div>`;
+    return;
+  }
+  container.innerHTML = history.map((h) => {
+    const when = h.lastUsedDate ? new Date(h.lastUsedDate).toLocaleDateString() : '';
+    return `<div class="hist-row">
+      <code class="v mono">${escapeHtml(h.password)}</code>
+      ${when ? `<span class="muted hist-when">${escapeHtml(when)}</span>` : ''}
+      <button class="icon-btn" type="button" data-hist-copy="${escapeHtml(h.password)}" title="Copy" aria-label="Copy previous password">${icon('copy')}</button>
+    </div>`;
+  }).join('');
+  container.querySelectorAll<HTMLButtonElement>('button[data-hist-copy]').forEach((btn) => {
+    btn.addEventListener('click', () => void withDetailBusy(() => copyValue(btn.dataset.histCopy, 'Previous password')));
   });
 }
 

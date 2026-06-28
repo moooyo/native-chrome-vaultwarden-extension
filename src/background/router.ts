@@ -115,6 +115,10 @@ export function createRouter(deps: RouterDeps) {
             const cipher = await deps.vault.getCipherDetail(request.id);
             return { ok: true, data: { cipher: cipher ?? null } };
           }
+          case 'vault.getPasswordHistory': {
+            if (!deps.vault.getPasswordHistory) throw new Error('vault.getPasswordHistory is not wired');
+            return { ok: true, data: { history: await deps.vault.getPasswordHistory(request.id, request.masterPassword) } };
+          }
           case 'vault.getTotp': {
             if (!deps.vault.getTotpCode) throw new Error('vault.getTotpCode is not wired');
             const totp = await deps.vault.getTotpCode(request.id, request.masterPassword);
