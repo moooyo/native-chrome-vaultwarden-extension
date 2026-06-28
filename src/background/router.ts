@@ -57,6 +57,21 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.auth.unlock) throw new Error('auth.unlock is not wired');
             await deps.auth.unlock(request.masterPassword);
             return { ok: true, data: null };
+          case 'auth.unlockWithPin':
+            if (!deps.auth.unlockWithPin) throw new Error('auth.unlockWithPin is not wired');
+            await deps.auth.unlockWithPin(request.pin);
+            return { ok: true, data: null };
+          case 'auth.setPin':
+            if (!deps.auth.setPin) throw new Error('auth.setPin is not wired');
+            await deps.auth.setPin(request.pin);
+            return { ok: true, data: null };
+          case 'auth.disablePin':
+            if (!deps.auth.disablePin) throw new Error('auth.disablePin is not wired');
+            await deps.auth.disablePin();
+            return { ok: true, data: null };
+          case 'auth.pinStatus':
+            if (!deps.auth.isPinEnabled) throw new Error('auth.isPinEnabled is not wired');
+            return { ok: true, data: { enabled: await deps.auth.isPinEnabled() } };
           case 'auth.lock':
             if (!deps.auth.lock) throw new Error('auth.lock is not wired');
             await deps.auth.lock();

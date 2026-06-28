@@ -162,6 +162,7 @@ body { width: 360px; }
 .footer .note { margin-top: 0; }
 .footer-tools { display: flex; gap: var(--s2); margin-bottom: var(--s2); }
 .footer-tools .btn { flex: 1; }
+.pin-unlock { display: grid; gap: var(--s2); margin-top: var(--s2); padding-top: var(--s2); border-top: 1px solid var(--line); }
 
 /* Sync affordance spins while a sync is in flight. */
 .icon-btn.is-spinning svg { animation: spin 0.7s linear infinite; }

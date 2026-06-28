@@ -31,6 +31,10 @@ export type RequestMessage =
   | { type: 'auth.submitTwoFactor'; provider: 0 | 1; code: string; remember?: boolean }
   | { type: 'auth.sendEmailCode' }
   | { type: 'auth.unlock'; masterPassword: string }
+  | { type: 'auth.unlockWithPin'; pin: string }
+  | { type: 'auth.setPin'; pin: string }
+  | { type: 'auth.disablePin' }
+  | { type: 'auth.pinStatus' }
   | { type: 'auth.lock' }
   | { type: 'auth.logout' }
   | { type: 'vault.sync' }
@@ -66,6 +70,7 @@ export type ResponseMessage =
   | { ok: true; data: { entries: PasswordHealthEntry[] } }
   | { ok: true; data: { json: string } }
   | { ok: true; data: { imported: number } }
+  | { ok: true; data: { enabled: boolean } }
   | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting; lockTimeout: LockTimeoutSetting } }
   | { ok: true; data: null }
   | { ok: true; data: AutofillCandidate[] }

@@ -13,7 +13,8 @@ import { AuthService } from './auth-service.js';
 import { SessionManager } from './session-manager.js';
 import { createMemoryStore } from '../../platform/store.js';
 import type { ApiClient, PasswordLoginInput } from '../api/client.js';
-import { base64ToBytes, bytesToHex } from '../crypto/encoding.js';
+import { base64ToBytes, bytesToHex, hexToBytes } from '../crypto/encoding.js';
+import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import { KDF_VECTOR, KDF_VECTOR_600K, USER_KEY_VECTOR, USER_KEY_VECTOR_600K, RSA_PRIVATE_KEY_VECTOR } from '../../../test/vectors.js';
 
 function makeService(api: Partial<ApiClient>) {
@@ -417,5 +418,42 @@ describe('AuthService', () => {
     await expect(
       auth.submitTwoFactor({ provider: 0, code: '000000' }),
     ).rejects.toThrow('no pending 2FA login');
+  });
+
+  // PIN unlock tests use a 5000-iteration KDF so the PBKDF2 derivation stays fast.
+  async function makeUnlocked() {
+    const { auth, sm } = makeService({});
+    const userKey = symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex));
+    await sm.saveUnlocked({
+      email: 'u@example.com', accessToken: 'a', refreshToken: 'r', expiresAt: 999999,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000, userKey,
+    });
+    return { auth, sm, userKey };
+  }
+
+  it('sets a PIN and unlocks with it after locking', async () => {
+    const { auth, sm, userKey } = await makeUnlocked();
+    await auth.setPin('1357');
+    expect(await auth.isPinEnabled()).toBe(true);
+    await sm.lock();
+    expect(await sm.getState()).toBe('locked');
+    await auth.unlockWithPin('1357');
+    expect(await sm.getState()).toBe('unlocked');
+    expect(bytesToHex((await sm.loadUserKey())!.encKey)).toBe(bytesToHex(userKey.encKey));
+  });
+
+  it('rejects unlock with the wrong PIN', async () => {
+    const { auth, sm } = await makeUnlocked();
+    await auth.setPin('1357');
+    await sm.lock();
+    await expect(auth.unlockWithPin('0000')).rejects.toThrow();
+    expect(await sm.getState()).toBe('locked');
+  });
+
+  it('disablePin removes the PIN-protected key', async () => {
+    const { auth } = await makeUnlocked();
+    await auth.setPin('1357');
+    await auth.disablePin();
+    expect(await auth.isPinEnabled()).toBe(false);
   });
 });

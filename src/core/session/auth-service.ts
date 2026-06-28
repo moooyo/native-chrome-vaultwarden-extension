@@ -1,6 +1,7 @@
 import type { ApiClient, PasswordLoginInput, PasswordLoginResult } from '../api/client.js';
 import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey, assertKdfIterationsFloor } from '../crypto/kdf.js';
-import { unwrapSymmetricKey, decryptPrivateKey } from '../crypto/keys.js';
+import { unwrapSymmetricKey, decryptPrivateKey, type SymmetricKey } from '../crypto/keys.js';
+import { encryptToBytes } from '../crypto/encstring.js';
 import { buildRegistration } from '../crypto/registration.js';
 import type { SessionManager, SessionState } from './session-manager.js';
 
@@ -89,6 +90,47 @@ export class AuthService {
     const userKey = await unwrapSymmetricKey(auth.protectedKey, await stretchMasterKey(masterKey));
     const privateKey = auth.encPrivateKey ? await decryptPrivateKey(auth.encPrivateKey, userKey) : undefined;
     await this.deps.session.saveUnlocked(privateKey ? { ...auth, userKey, privateKey } : { ...auth, userKey });
+  }
+
+  /**
+   * Enable PIN unlock: wrap the current UserKey under a PIN-derived key and persist it. The PIN is
+   * low-entropy, so the persisted blob is brute-forceable offline (PBKDF2 raises the cost) — an
+   * explicit convenience/security trade-off, matching Bitwarden's PIN unlock. Requires an unlocked vault.
+   */
+  async setPin(pin: string): Promise<void> {
+    const auth = await this.deps.session.getPersistedAuth();
+    if (!auth) throw new Error('not logged in');
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) throw new Error('vault is locked');
+    const pinKey = await this.derivePinKey(pin, auth.email, auth.kdfIterations);
+    const raw = new Uint8Array(64);
+    raw.set(userKey.encKey, 0);
+    raw.set(userKey.macKey, 32);
+    await this.deps.session.savePinProtectedUserKey(await encryptToBytes(raw, pinKey));
+  }
+
+  /** Unlock with a PIN (no network). A wrong PIN fails the MAC check and throws. */
+  async unlockWithPin(pin: string): Promise<void> {
+    const auth = await this.deps.session.getPersistedAuth();
+    if (!auth) throw new Error('not logged in');
+    const blob = await this.deps.session.getPinProtectedUserKey();
+    if (!blob) throw new Error('PIN unlock is not enabled');
+    const pinKey = await this.derivePinKey(pin, auth.email, auth.kdfIterations);
+    const userKey = await unwrapSymmetricKey(blob, pinKey);
+    const privateKey = auth.encPrivateKey ? await decryptPrivateKey(auth.encPrivateKey, userKey) : undefined;
+    await this.deps.session.saveUnlocked(privateKey ? { ...auth, userKey, privateKey } : { ...auth, userKey });
+  }
+
+  async disablePin(): Promise<void> {
+    await this.deps.session.removePinProtectedUserKey();
+  }
+
+  async isPinEnabled(): Promise<boolean> {
+    return Boolean(await this.deps.session.getPinProtectedUserKey());
+  }
+
+  private async derivePinKey(pin: string, email: string, iterations: number): Promise<SymmetricKey> {
+    return stretchMasterKey(await deriveMasterKey(pin, email, iterations));
   }
 
   getState(): Promise<SessionState> {

@@ -96,7 +96,10 @@
   / `parseImportJson`）；`VaultService.exportVault`（worker 内全量解密→明文 JSON，**显式用户操作**）
   / `importVault`（解析→逐条 createCipher→一次 sync）；popup 页脚「Export（二次确认明文）/ Import（选文件）」。
   剩余：加密导出（.json with password）、组织条目与文件夹关系的完整保真。
-- PIN 解锁 / 生物识别解锁。
+- PIN 解锁 ✅（本次落地）/ 生物识别解锁（仍待）：`AuthService.setPin/unlockWithPin/disablePin/
+  isPinEnabled`——用 PIN 经 PBKDF2+stretch 派生 key 把 UserKey 包成 `pinProtectedUserKey` 存 local，
+  解锁时反解（错误 PIN 触发 MAC 校验失败）。popup 页脚「PIN」设/删、锁屏在已设 PIN 时显示「Unlock with PIN」。
+  **安全权衡**（已注释）：PIN 低熵，持久化的包裹块可离线暴力（PBKDF2 抬高成本），与上游 Bitwarden 一致。
 - 多账户切换。
 - 密码健康报告 ✅（本次落地）：`vault/password-health.ts`（启发式强度评分 + 重复计数）；
   `VaultService.getPasswordHealth` 在 worker 内解密所有登录密码、只回传「弱/重复次数」标记（密码不过边界）；

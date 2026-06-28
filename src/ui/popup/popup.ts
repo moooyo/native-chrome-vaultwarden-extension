@@ -255,10 +255,12 @@ function renderLocked(error?: string) {
           <input id="unlockPassword" class="input" type="password" autocomplete="current-password" required />
         </label>
         <button type="submit" class="btn btn-block">${icon('unlock')}<span>Unlock</span></button>
+        <div id="pinUnlockSlot"></div>
         <button id="logout" type="button" class="btn btn-danger btn-block">${icon('logout')}<span>Log out</span></button>
         ${errorNote(error)}
       </form>
     </div>`;
+  void populatePinUnlock();
   document.getElementById('unlockForm')!.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (isPending) return;
@@ -305,6 +307,35 @@ function renderLocked(error?: string) {
   });
 }
 
+/** On the locked screen, show a PIN unlock field when a PIN has been set. */
+async function populatePinUnlock(): Promise<void> {
+  const slot = document.getElementById('pinUnlockSlot');
+  if (!slot) return;
+  const status = await sendRequest({ type: 'auth.pinStatus' });
+  if (!status.ok || !(status.data as { enabled: boolean }).enabled) return;
+  if (!document.getElementById('pinUnlockSlot')) return; // view changed while awaiting
+  slot.innerHTML = `
+    <div class="pin-unlock">
+      <input id="pinUnlockInput" class="input" inputmode="numeric" autocomplete="off" placeholder="PIN" />
+      <button id="pinUnlockBtn" class="btn btn-secondary btn-block" type="button">${icon('unlock')}<span>Unlock with PIN</span></button>
+    </div>`;
+  const input = document.getElementById('pinUnlockInput') as HTMLInputElement;
+  const submit = async () => {
+    if (isPending) return;
+    const pin = input.value.trim();
+    if (!pin) return;
+    isPending = true;
+    try {
+      const response = await sendRequest({ type: 'auth.unlockWithPin', pin });
+      render(response.ok ? { kind: 'unlocked' } : { kind: 'locked', error: response.error.message });
+    } finally {
+      isPending = false;
+    }
+  };
+  document.getElementById('pinUnlockBtn')!.addEventListener('click', () => void submit());
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void submit(); } });
+}
+
 function renderUnlockedShell(error?: string) {
   app.innerHTML = `
     <div class="appbar">
@@ -331,6 +362,7 @@ function renderUnlockedShell(error?: string) {
       <div class="footer-tools">
         <button id="exportVault" class="btn btn-secondary btn-sm" type="button">${icon('logout')}<span>Export</span></button>
         <button id="importVault" class="btn btn-secondary btn-sm" type="button">${icon('plus')}<span>Import</span></button>
+        <button id="pinBtn" class="btn btn-secondary btn-sm" type="button">${icon('lock')}<span>PIN</span></button>
         <input id="importFile" type="file" accept="application/json,.json" hidden />
       </div>
       <div id="footerStatus" class="detail-status"></div>
@@ -671,6 +703,43 @@ function bindExportImport(): void {
       isPending = false;
     }
   });
+
+  document.getElementById('pinBtn')!.addEventListener('click', () => void openPinEditor(setFooterStatus));
+}
+
+/** Manage the PIN unlock: set a new PIN, or remove an existing one. Rendered into #footerStatus. */
+async function openPinEditor(setFooterStatus: (m: string, e: boolean) => void): Promise<void> {
+  const host = document.getElementById('footerStatus');
+  if (!host) return;
+  const status = await sendRequest({ type: 'auth.pinStatus' });
+  const enabled = status.ok && (status.data as { enabled: boolean }).enabled;
+  if (enabled) {
+    host.innerHTML = `<div class="confirm-row">
+      <span class="muted">PIN unlock is on.</span>
+      <button id="pinRemove" class="btn btn-danger btn-sm" type="button">Remove PIN</button>
+      <button id="pinCancel" class="btn btn-secondary btn-sm" type="button">Cancel</button></div>`;
+    document.getElementById('pinCancel')!.addEventListener('click', () => { host.innerHTML = ''; });
+    document.getElementById('pinRemove')!.addEventListener('click', async () => {
+      const response = await sendRequest({ type: 'auth.disablePin' });
+      setFooterStatus(response.ok ? 'PIN unlock removed.' : (response as { error: { message: string } }).error.message, !response.ok);
+    });
+    return;
+  }
+  host.innerHTML = `<div class="confirm-row">
+    <input id="pinInput" class="input" inputmode="numeric" autocomplete="off" placeholder="New PIN (4+ digits)" />
+    <button id="pinSave" class="btn btn-sm" type="button">Set PIN</button>
+    <button id="pinCancel" class="btn btn-secondary btn-sm" type="button">Cancel</button></div>`;
+  const input = document.getElementById('pinInput') as HTMLInputElement;
+  input.focus();
+  document.getElementById('pinCancel')!.addEventListener('click', () => { host.innerHTML = ''; });
+  const save = async () => {
+    const pin = input.value.trim();
+    if (pin.length < 4) return setFooterStatus('PIN must be at least 4 digits', true);
+    const response = await sendRequest({ type: 'auth.setPin', pin });
+    setFooterStatus(response.ok ? 'PIN unlock enabled.' : (response as { error: { message: string } }).error.message, !response.ok);
+  };
+  document.getElementById('pinSave')!.addEventListener('click', () => void save());
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void save(); } });
 }
 
 /** Trigger a client-side download of a text file (used for vault export). */

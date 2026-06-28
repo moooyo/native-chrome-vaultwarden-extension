@@ -31,6 +31,7 @@ export interface SessionManagerDeps {
 const AUTH_KEY = 'auth';
 const USER_KEY_KEY = 'userKey';
 const PRIVATE_KEY_KEY = 'privateKey';
+const PIN_KEY = 'pinProtectedUserKey';
 
 export class SessionManager {
   constructor(private readonly deps: SessionManagerDeps) {}
@@ -83,6 +84,20 @@ export class SessionManager {
     await this.deps.sessionStore.remove(USER_KEY_KEY);
     await this.deps.sessionStore.remove(PRIVATE_KEY_KEY);
     await this.deps.localStore.remove(AUTH_KEY);
+    await this.deps.localStore.remove(PIN_KEY);
+  }
+
+  /** PIN-protected UserKey (encType=2 wrapped by a PIN-derived key). Persisted to enable PIN unlock. */
+  async savePinProtectedUserKey(blob: string): Promise<void> {
+    await this.deps.localStore.set(PIN_KEY, blob);
+  }
+
+  async getPinProtectedUserKey(): Promise<string | undefined> {
+    return this.deps.localStore.get<string>(PIN_KEY);
+  }
+
+  async removePinProtectedUserKey(): Promise<void> {
+    await this.deps.localStore.remove(PIN_KEY);
   }
 
   private async saveUserKey(userKey: SymmetricKey): Promise<void> {
