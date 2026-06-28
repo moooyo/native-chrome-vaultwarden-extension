@@ -45,7 +45,7 @@ describe('decryptCipher', () => {
         username: FIELD_VECTOR.encString,
         password: FIELD_VECTOR.encString,
         totp: FIELD_VECTOR.encString,
-        uris: [{ uri: FIELD_VECTOR.encString }],
+        uris: [{ uri: FIELD_VECTOR.encString, match: 1 }],
       },
     };
     const out = await decryptCipher(cipher, userKey);
@@ -59,6 +59,7 @@ describe('decryptCipher', () => {
       password: FIELD_VECTOR.plaintext,
       totp: FIELD_VECTOR.plaintext,
       uris: [FIELD_VECTOR.plaintext],
+      loginUris: [{ uri: FIELD_VECTOR.plaintext, match: 1 }],
     });
   });
 
@@ -90,6 +91,7 @@ describe('decryptCipher', () => {
       favorite: true,
       name: '(error)',
       uris: [],
+      loginUris: [],
       undecryptable: true,
     });
   });
@@ -114,7 +116,7 @@ describe('decryptCipher', () => {
       login: {
         username: await encryptString('user@example.com', itemKey),
         password: await encryptString('s3cr3t', itemKey),
-        uris: [{ uri: await encryptString('https://example.com', itemKey) }],
+        uris: [{ uri: await encryptString('https://example.com', itemKey), match: 0 }],
       },
     };
     const out = await decryptCipher(cipher, userKey);
@@ -127,6 +129,7 @@ describe('decryptCipher', () => {
       username: 'user@example.com',
       password: 's3cr3t',
       uris: ['https://example.com'],
+      loginUris: [{ uri: 'https://example.com', match: 0 }],
     });
   });
 });

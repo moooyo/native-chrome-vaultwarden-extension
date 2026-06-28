@@ -3,6 +3,7 @@ import { decryptToText, EncStringMacError, UnsupportedEncTypeError } from '../cr
 import type { SymmetricKey } from '../crypto/keys.js';
 import { unwrapSymmetricKey } from '../crypto/keys.js';
 import type { CipherSummary, DecryptedCipher } from './models.js';
+import type { LoginUri } from './uri-match.js';
 
 export async function decryptCipher(
   cipher: CipherResponse,
@@ -12,15 +13,23 @@ export async function decryptCipher(
   try {
     const key = cipher.key ? await unwrapSymmetricKey(cipher.key, userKey) : userKey;
     const name = await decryptRequired(cipher.name, key, '(no name)');
-    const uris = await Promise.all(
-      (cipher.login?.uris ?? []).map(async (u) => (u.uri ? decryptToText(u.uri, key) : undefined)),
-    );
+    const loginUris: LoginUri[] = [];
+    for (const u of cipher.login?.uris ?? []) {
+      if (u.uri) {
+        const loginUri: LoginUri = { uri: await decryptToText(u.uri, key) };
+        if (u.match !== undefined && u.match !== null) {
+          loginUri.match = u.match;
+        }
+        loginUris.push(loginUri);
+      }
+    }
     const out: DecryptedCipher = {
       id: cipher.id,
       type: cipher.type,
       favorite: cipher.favorite ?? false,
       name,
-      uris: uris.filter((u): u is string => Boolean(u)),
+      uris: loginUris.map((u) => u.uri),
+      loginUris,
     };
     const username = await decryptOptional(cipher.login?.username, key);
     const password = await decryptOptional(cipher.login?.password, key);
@@ -39,6 +48,7 @@ export async function decryptCipher(
         favorite: cipher.favorite ?? false,
         name: '(error)',
         uris: [],
+        loginUris: [],
         undecryptable: true,
       };
       return undecryptable;

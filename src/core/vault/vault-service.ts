@@ -65,6 +65,7 @@ export class VaultService {
               favorite: decrypted.favorite,
               name: '(undecryptable)',
               uris: [],
+              loginUris: [],
               undecryptable: true,
             });
           } else {
@@ -74,6 +75,7 @@ export class VaultService {
               favorite: decrypted.favorite,
               name: decrypted.name,
               uris: decrypted.uris,
+              loginUris: decrypted.loginUris,
             };
             if (decrypted.username) summary.username = decrypted.username;
             out.push(summary);
@@ -86,6 +88,7 @@ export class VaultService {
           favorite: cipher.favorite ?? false,
           name: '(undecryptable)',
           uris: [],
+          loginUris: [],
           undecryptable: true,
         });
       }

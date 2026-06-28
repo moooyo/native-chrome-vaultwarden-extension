@@ -54,7 +54,7 @@ describe('VaultService', () => {
     const { service, api } = await makeService();
     const list = await service.sync();
     expect(api.sync).toHaveBeenCalledWith('access');
-    expect(list).toEqual([{ id: 'cipher-1', type: 1, favorite: false, name: FIELD_VECTOR.plaintext, username: FIELD_VECTOR.plaintext, uris: [FIELD_VECTOR.plaintext] }]);
+    expect(list).toEqual([{ id: 'cipher-1', type: 1, favorite: false, name: FIELD_VECTOR.plaintext, username: FIELD_VECTOR.plaintext, uris: [FIELD_VECTOR.plaintext], loginUris: [{ uri: FIELD_VECTOR.plaintext }] }]);
   });
 
   it('getField decrypts the requested field on demand from encrypted cache', async () => {
@@ -68,7 +68,7 @@ describe('VaultService', () => {
     bad.ciphers[0]!.name = '2.bad|bad|bad';
     const { service } = await makeService(bad);
     const list = await service.sync();
-    expect(list).toEqual([{ id: 'cipher-1', type: 1, favorite: false, name: '(undecryptable)', uris: [], undecryptable: true }]);
+    expect(list).toEqual([{ id: 'cipher-1', type: 1, favorite: false, name: '(undecryptable)', uris: [], loginUris: [], undecryptable: true }]);
   });
 
   // Coverage-only: public method listItems() — not exercised by the sync test above.

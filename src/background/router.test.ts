@@ -97,7 +97,7 @@ describe('router', () => {
   });
 
   it('routes vault.listItems', async () => {
-    const items = [{ id: '1', name: 'item', uris: [], type: 1 as const, favorite: false }];
+    const items = [{ id: '1', name: 'item', uris: [], loginUris: [], type: 1 as const, favorite: false }];
     const router = createRouter({
       auth: {},
       vault: { listItems: vi.fn(async () => items) },

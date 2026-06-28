@@ -1,3 +1,5 @@
+import type { LoginUri } from './uri-match.js';
+
 export type FieldName = 'username' | 'password' | 'totp' | 'notes';
 
 export interface CipherSummary {
@@ -5,6 +7,7 @@ export interface CipherSummary {
   name: string;
   username?: string;
   uris: string[];
+  loginUris: LoginUri[];
   type: 1 | 2 | 3 | 4 | 5;
   favorite: boolean;
   undecryptable?: boolean;

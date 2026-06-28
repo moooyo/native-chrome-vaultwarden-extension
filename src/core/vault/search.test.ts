@@ -3,8 +3,8 @@ import { filterSummaries } from './search.js';
 import type { CipherSummary } from './models.js';
 
 const items: CipherSummary[] = [
-  { id: '1', type: 1, name: 'GitHub', username: 'octo', uris: ['https://github.com'], favorite: false },
-  { id: '2', type: 1, name: 'Email', username: 'me@example.com', uris: ['https://mail.example.com'], favorite: true },
+  { id: '1', type: 1, name: 'GitHub', username: 'octo', uris: ['https://github.com'], loginUris: [{ uri: 'https://github.com' }], favorite: false },
+  { id: '2', type: 1, name: 'Email', username: 'me@example.com', uris: ['https://mail.example.com'], loginUris: [{ uri: 'https://mail.example.com' }], favorite: true },
 ];
 
 describe('filterSummaries', () => {
