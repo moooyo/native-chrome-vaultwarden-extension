@@ -19,6 +19,8 @@ export interface AutofillCandidate {
 export interface AutofillCredentials {
   username?: string;
   password?: string;
+  /** Current TOTP code for the login, when it carries a TOTP secret. Generated fresh in the worker. */
+  totp?: string;
 }
 
 export type RequestMessage =

@@ -3,17 +3,23 @@ export interface DetectedLoginForm {
   form: HTMLFormElement | null;
   usernameInput?: HTMLInputElement;
   passwordInput?: HTMLInputElement;
+  /** A one-time-code / TOTP field, when one is present in the form's scope. */
+  totpInput?: HTMLInputElement;
   anchor: HTMLElement;
 }
 
 let nextFormId = 0;
 
 const USERNAME_TYPES = ['email', 'text', 'search', 'tel', 'url'];
+const TOTP_TYPES = ['text', 'tel', 'number'];
 const NEW_PASSWORD_HINT = /new|confirm|retype|repeat|again|verify/;
+// One-time-code hints: the standard `autocomplete="one-time-code"` plus common name/id patterns.
+const TOTP_HINT = /otp|one[-_ ]?time|mfa|2fa|two[-_ ]?factor|authenticator|verif(?:y|ication)?[-_ ]?code|security[-_ ]?code|auth[-_ ]?code/;
 
 export function detectLoginForms(root: ParentNode = document): DetectedLoginForm[] {
   const forms: DetectedLoginForm[] = [];
   const consumedUsernames = new Set<HTMLInputElement>();
+  const consumedTotps = new Set<HTMLInputElement>();
 
   // 1) Password-based forms. Passwords inside the same <form> collapse to ONE form (change-password
   //    blocks); formless passwords stay one-per-field so distinct logins under a shared ancestor are
@@ -36,14 +42,17 @@ export function detectLoginForms(root: ParentNode = document): DetectedLoginForm
     if (!current) continue; // every field is a new-password field → nothing safe to fill
     const scope = current.form ?? nearestContainer(current);
     const usernameInput = findUsernameInput(scope, current);
+    const totpInput = findTotpInput(scope, current, usernameInput);
     const entry: DetectedLoginForm = {
       id: current.dataset.vwAutofillId ?? assignFormId(current),
       form: current.form,
       passwordInput: current,
       anchor: current,
       ...(usernameInput !== undefined ? { usernameInput } : {}),
+      ...(totpInput !== undefined ? { totpInput } : {}),
     };
     if (usernameInput) consumedUsernames.add(usernameInput);
+    if (totpInput) consumedTotps.add(totpInput);
     forms.push(entry);
   }
 
@@ -64,6 +73,26 @@ export function detectLoginForms(root: ParentNode = document): DetectedLoginForm
       form: u.form,
       usernameInput: u,
       anchor: u,
+    });
+  }
+
+  // 3) Standalone verification-code steps: a one-time-code field whose container has no fillable
+  //    password (the second step of a 2FA flow). Requires a submit affordance, like the username step.
+  const totpCandidates = Array.from(root.querySelectorAll<HTMLInputElement>('input')).filter(isFillableInput).filter(isTotpCandidate);
+  const seenTotpContainers = new Set<ParentNode>();
+  for (const t of totpCandidates) {
+    if (consumedTotps.has(t)) continue;
+    const container = t.form ?? nearestContainer(t);
+    if (seenTotpContainers.has(container)) continue;
+    const containerHasPassword = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="password"]')).some(isFillableInput);
+    if (containerHasPassword) continue;
+    if (!hasSubmitAffordance(container, t)) continue;
+    seenTotpContainers.add(container);
+    forms.push({
+      id: t.dataset.vwAutofillId ?? assignFormId(t),
+      form: t.form,
+      totpInput: t,
+      anchor: t,
     });
   }
 
@@ -96,6 +125,13 @@ function isUsernameCandidate(input: HTMLInputElement): boolean {
   return hint.includes('user') || hint.includes('email') || hint.includes('login') || input.type === 'email';
 }
 
+/** A one-time-code / TOTP field: an `autocomplete="one-time-code"` field or a code-named text field. */
+export function isTotpCandidate(input: HTMLInputElement): boolean {
+  if (!TOTP_TYPES.includes(input.type)) return false;
+  if (input.autocomplete === 'one-time-code') return true;
+  return TOTP_HINT.test(fieldHint(input));
+}
+
 function hasSubmitAffordance(container: ParentNode, usernameInput: HTMLInputElement): boolean {
   if (usernameInput.form) return true; // a wrapping <form> submits on Enter
   return container.querySelector('button:not([type="button"]), input[type="submit"], input[type="image"], [role="button"]') !== null;
@@ -121,6 +157,19 @@ function findUsernameInput(container: ParentNode, passwordInput: HTMLInputElemen
     .filter(isFillableInput)
     .filter(isUsernameCandidate);
   return candidates.at(-1);
+}
+
+/** Find a one-time-code field in scope, excluding the already-claimed password and username inputs. */
+function findTotpInput(
+  container: ParentNode,
+  passwordInput: HTMLInputElement,
+  usernameInput: HTMLInputElement | undefined,
+): HTMLInputElement | undefined {
+  return Array.from(container.querySelectorAll<HTMLInputElement>('input'))
+    .filter((input) => input !== passwordInput && input !== usernameInput)
+    .filter(isFillableInput)
+    .filter(isTotpCandidate)
+    .at(0);
 }
 
 function isVisibleInTree(input: HTMLInputElement): boolean {

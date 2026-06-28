@@ -82,4 +82,39 @@ describe('fillLoginForm', () => {
     fillLoginForm(form, { username: 'me@example.com', password: 'secret' });
     expect(np.value).toBe('');
   });
+
+  it('fills the TOTP code into a one-time-code field alongside the credentials', () => {
+    document.body.innerHTML = `
+      <form>
+        <input id="user" type="email">
+        <input id="pass" type="password">
+        <input id="otp" type="text" autocomplete="one-time-code">
+      </form>
+    `;
+    const form = detectLoginForms()[0]!;
+    expect(fillLoginForm(form, { username: 'me@example.com', password: 'secret', totp: '123456' })).toBe(true);
+    expect((document.getElementById('otp') as HTMLInputElement).value).toBe('123456');
+  });
+
+  it('fills only the TOTP code on a standalone verification step', () => {
+    document.body.innerHTML = `
+      <form><input id="otp" type="text" autocomplete="one-time-code" name="otp"><button>Verify</button></form>
+    `;
+    const form = detectLoginForms()[0]!;
+    expect(form.passwordInput).toBeUndefined();
+    expect(fillLoginForm(form, { totp: '654321' })).toBe(true);
+    expect((document.getElementById('otp') as HTMLInputElement).value).toBe('654321');
+  });
+
+  it('leaves a one-time-code field empty when the credentials carry no TOTP code', () => {
+    document.body.innerHTML = `
+      <form>
+        <input id="user" type="email"><input id="pass" type="password">
+        <input id="otp" type="text" autocomplete="one-time-code">
+      </form>
+    `;
+    const form = detectLoginForms()[0]!;
+    fillLoginForm(form, { username: 'me@example.com', password: 'secret' });
+    expect((document.getElementById('otp') as HTMLInputElement).value).toBe('');
+  });
 });

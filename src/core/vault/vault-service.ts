@@ -180,6 +180,11 @@ export class VaultService {
     const out: AutofillCredentials = {};
     if (decrypted.username) out.username = decrypted.username;
     if (decrypted.password) out.password = decrypted.password;
+    // Generate the current TOTP code in the worker; the secret itself never crosses the boundary.
+    if (decrypted.totp) {
+      const totp = await getTotp(decrypted.totp, (this.deps.now ?? Date.now)());
+      if (totp) out.totp = totp.code;
+    }
     return out;
   }
 

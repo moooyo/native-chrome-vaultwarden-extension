@@ -186,4 +186,67 @@ describe('form detection', () => {
     const forms = detectLoginForms();
     expect(forms.map((f) => f.passwordInput?.getAttribute('name')).sort()).toEqual(['pass1', 'pass2']);
   });
+
+  it('attaches a one-time-code field within a login form as totpInput', () => {
+    document.body.innerHTML = `
+      <form>
+        <input type="email" autocomplete="username">
+        <input type="password" autocomplete="current-password">
+        <input type="text" autocomplete="one-time-code" name="otp">
+      </form>
+    `;
+    const forms = detectLoginForms();
+    expect(forms).toHaveLength(1);
+    expect(forms[0]?.passwordInput?.type).toBe('password');
+    expect(forms[0]?.totpInput?.getAttribute('name')).toBe('otp');
+  });
+
+  it('matches a TOTP field by name hint when autocomplete is absent', () => {
+    document.body.innerHTML = `
+      <form>
+        <input type="email" autocomplete="username">
+        <input type="password" autocomplete="current-password">
+        <input type="tel" name="verificationCode">
+      </form>
+    `;
+    const forms = detectLoginForms();
+    expect(forms).toHaveLength(1);
+    expect(forms[0]?.totpInput?.getAttribute('name')).toBe('verificationCode');
+  });
+
+  it('detects a standalone verification-code step with no username or password', () => {
+    document.body.innerHTML = `
+      <form>
+        <input type="text" inputmode="numeric" autocomplete="one-time-code" name="totp">
+        <button>Verify</button>
+      </form>
+    `;
+    const forms = detectLoginForms();
+    expect(forms).toHaveLength(1);
+    expect(forms[0]?.totpInput?.getAttribute('name')).toBe('totp');
+    expect(forms[0]?.passwordInput).toBeUndefined();
+    expect(forms[0]?.usernameInput).toBeUndefined();
+  });
+
+  it('does not treat an ordinary text field as a TOTP field', () => {
+    document.body.innerHTML = `
+      <form>
+        <input type="email" autocomplete="username">
+        <input type="password" autocomplete="current-password">
+        <input type="text" name="fullname">
+      </form>
+    `;
+    const forms = detectLoginForms();
+    expect(forms).toHaveLength(1);
+    expect(forms[0]?.totpInput).toBeUndefined();
+  });
+
+  it('does not also emit a username-only step for a standalone OTP field', () => {
+    document.body.innerHTML = `
+      <section><input type="text" name="otp" autocomplete="one-time-code"><button>Verify</button></section>
+    `;
+    const forms = detectLoginForms();
+    expect(forms).toHaveLength(1);
+    expect(forms[0]?.totpInput?.getAttribute('name')).toBe('otp');
+  });
 });

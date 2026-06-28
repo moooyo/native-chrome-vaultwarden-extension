@@ -290,6 +290,30 @@ describe('autofill controller', () => {
     expect(current.showStatus).not.toHaveBeenCalledWith('Form is no longer available');
     expect(current.showStatus).toHaveBeenCalledWith('Filled');
   });
+
+  it('fills a standalone verification-code step without reporting it unavailable', async () => {
+    document.body.innerHTML = '<form><input type="text" autocomplete="one-time-code" name="otp"><button>Verify</button></form>';
+    vi.mocked(fillLoginForm).mockReturnValue(true);
+    vi.mocked(sendRequest)
+      .mockResolvedValueOnce({
+        ok: true,
+        data: [{ id: '1', name: 'Test', matchedUri: 'https://example.com', matchType: 0, favorite: false }],
+      })
+      .mockResolvedValueOnce({ ok: true, data: { totp: '123456' } });
+
+    startAutofill('https://example.com/login');
+    const current = popover();
+    current.options.onOpen();
+    await new Promise(r => setTimeout(r, 0));
+    current.options.onSelect('1');
+    await new Promise(r => setTimeout(r, 0));
+
+    const filledForm = vi.mocked(fillLoginForm).mock.calls[0]?.[0];
+    expect(filledForm?.totpInput?.getAttribute('name')).toBe('otp');
+    expect(filledForm?.passwordInput).toBeUndefined();
+    expect(current.showStatus).not.toHaveBeenCalledWith('Form is no longer available');
+    expect(current.showStatus).toHaveBeenCalledWith('Filled');
+  });
 });
 
 function popover(): FakePopover {

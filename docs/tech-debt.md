@@ -12,13 +12,16 @@
   - popup 工具栏新增生成器面板（长度/字符集开关、重新生成、复制）；纯本地运行，不涉及 vault 密钥。
   - 仍待：生成历史（history）。
 
-- **TOTP 验证码生成 / 显示** ✅（本次落地，原 M6 的一部分）
+- **TOTP 验证码生成 / 显示 / 自动填充** ✅（原 M6 已完整交付）
   - `src/core/vault/totp.ts`：RFC 6238 TOTP（HMAC-SHA1/256/512、可配 digits/period），
     支持裸 base32 密钥与 `otpauth://` URI；用 RFC 6238 Appendix B 标准向量做单测。
   - 密钥只在 worker 内解密：`vault-service.getTotpCode(id)` 仅把 6 位码 + 周期 + 剩余秒数过边界；
     `CipherSummary.hasTotp` 只暴露「是否有 TOTP」的布尔，不含密钥。
   - 路由 `vault.getTotp`；popup 登录详情展示验证码 + 倒计时（窗口翻转时自动取下一码），可复制。
-  - 仍待：把 TOTP **自动填充**进表单（原 M6 的「填充」部分）。
+  - **自动填充**（本次落地）：`form-detection` 识别一次性验证码字段（`autocomplete="one-time-code"`
+    或 otp/2fa/verification-code 等名称提示），既能在登录表单内识别 TOTP 字段，也能识别**独立的
+    二步验证页**（仅验证码字段）；`getAutofillCredentials` 在 worker 内现算当前验证码，密钥不过边界；
+    `fill.ts` 把验证码写入 OTP 字段。仍待：暂无独立「仅 TOTP」候选的优先级排序（候选仍按 URI 匹配排序）。
 
 - **组织条目（Organization cipher）解密** ✅（本次落地）
   - 链路：`Profile.organizations[].key`（encType=4 RSA-OAEP-SHA1 包裹）→ `keys.unwrapRsaWrappedKey`
@@ -47,7 +50,7 @@
 | 里程碑 | 内容 |
 |---|---|
 | M5 | ciphers/folders **CRUD**；密码生成器 ✅（已交付，剩余：生成历史）|
-| M6 | **TOTP** 验证码生成 / 显示 ✅（已交付）；剩余：**填充**进表单 |
+| M6 | **TOTP** 验证码生成 / 显示 / **填充** ✅（已完整交付）|
 | M7 | **passkeys**（`fido2Credentials` 私钥，WebAuthn 独立签名）|
 | M8 | **Sends** 分享 CRUD + 加密 |
 

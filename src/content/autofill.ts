@@ -57,8 +57,9 @@ async function fillSelected(
 ): Promise<void> {
   const pwOk = !form.passwordInput || form.passwordInput.isConnected;
   const userOk = !form.usernameInput || form.usernameInput.isConnected;
-  const anyField = Boolean(form.passwordInput || form.usernameInput);
-  if (!anyField || !pwOk || !userOk) {
+  const totpOk = !form.totpInput || form.totpInput.isConnected;
+  const anyField = Boolean(form.passwordInput || form.usernameInput || form.totpInput);
+  if (!anyField || !pwOk || !userOk || !totpOk) {
     popover.showStatus('Form is no longer available');
     return;
   }
@@ -97,7 +98,7 @@ function isAutofillCandidate(data: unknown): data is AutofillCandidate {
 }
 
 function isAutofillCredentials(data: unknown): data is AutofillCredentials {
-  return isRecord(data) && isOptionalString(data.username) && isOptionalString(data.password);
+  return isRecord(data) && isOptionalString(data.username) && isOptionalString(data.password) && isOptionalString(data.totp);
 }
 
 function isUriMatchStrategySetting(value: unknown): value is AutofillCandidate['matchType'] {

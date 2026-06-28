@@ -13,6 +13,10 @@ export function fillLoginForm(form: DetectedLoginForm, credentials: AutofillCred
     setInputValue(form.passwordInput, credentials.password);
     filled = true;
   }
+  if (credentials.totp && form.totpInput && isFillableInput(form.totpInput)) {
+    setInputValue(form.totpInput, credentials.totp);
+    filled = true;
+  }
   return filled;
 }
 

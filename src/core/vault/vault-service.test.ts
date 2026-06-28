@@ -224,6 +224,20 @@ describe('VaultService', () => {
       .rejects.toMatchObject({ code: 'denied' });
   });
 
+  it('getAutofillCredentials includes the current TOTP code when the login carries a TOTP secret', async () => {
+    const sync = makeSyncUrl();
+    sync.ciphers[0]!.login = {
+      username: FIELD_VECTOR.encString,
+      password: FIELD_VECTOR.encString,
+      totp: await encUnder(TOTP_SECRET_B32, testUserKey),
+      uris: [{ uri: URL_VECTOR.encString, match: UriMatchStrategy.Domain }],
+    };
+    const { service } = await makeService(sync, { now: () => 1111111109_000 });
+    await service.sync();
+    await expect(service.getAutofillCredentials('cipher-1', URL_VECTOR.plaintext, UriMatchStrategy.Domain))
+      .resolves.toEqual({ username: FIELD_VECTOR.plaintext, password: FIELD_VECTOR.plaintext, totp: '081804' });
+  });
+
   it('decrypts folders, attaches folderId, and counts skipped org ciphers', async () => {
     const sync: SyncResponse = {
       profile: { id: 'u', email: 'u@example.com' },
