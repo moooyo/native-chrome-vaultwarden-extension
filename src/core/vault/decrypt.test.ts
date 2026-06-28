@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { decryptCipher, decryptFolders, buildOrgKeyMap } from './decrypt.js';
+import { decryptCipher, decryptFolders, decryptCollections, buildOrgKeyMap } from './decrypt.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import { hexToBytes, bytesToBase64, base64ToBytes } from '../crypto/encoding.js';
 import { hmacSha256 } from '../crypto/primitives.js';
 import { FIELD_VECTOR, USER_KEY_VECTOR, TAMPERED_FIELD_ENCSTRING, RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
-import type { CipherResponse, FolderResponse, OrganizationResponse } from '../api/types.js';
+import type { CipherResponse, CollectionResponse, FolderResponse, OrganizationResponse } from '../api/types.js';
 
 const userKey = symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex));
 const orgKey = symmetricKeyFromBytes(hexToBytes(ORG_KEY_VECTOR.orgKeyHex));
@@ -271,6 +271,50 @@ describe('decryptCipher', () => {
       id: 'c-nofolder', type: 1, name: FIELD_VECTOR.encString, favorite: false, organizationId: null, login: null,
     }, userKey);
     expect(noFolder && 'folderId' in noFolder).toBe(false);
+  });
+
+  it('surfaces collectionIds on an organization cipher and omits them when absent', async () => {
+    const withCollections = await decryptCipher({
+      id: 'org-coll', type: 1, name: await encryptString('Org', orgKey), favorite: false,
+      organizationId: 'org-1', collectionIds: ['col-1', 'col-2'], login: null,
+    }, userKey, new Map([['org-1', orgKey]]));
+    expect(withCollections).toMatchObject({ id: 'org-coll', collectionIds: ['col-1', 'col-2'] });
+
+    const withoutCollections = await decryptCipher({
+      id: 'org-nocoll', type: 1, name: await encryptString('Org', orgKey), favorite: false,
+      organizationId: 'org-1', login: null,
+    }, userKey, new Map([['org-1', orgKey]]));
+    expect(withoutCollections && 'collectionIds' in withoutCollections).toBe(false);
+  });
+});
+
+describe('decryptCollections', () => {
+  it('decrypts collection names using the org key into CollectionSummary[]', async () => {
+    const collections: CollectionResponse[] = [
+      { id: 'c1', organizationId: 'org-1', name: await encryptString('Engineering', orgKey) },
+    ];
+    await expect(decryptCollections(collections, new Map([['org-1', orgKey]])))
+      .resolves.toEqual([{ id: 'c1', organizationId: 'org-1', name: 'Engineering' }]);
+  });
+
+  it('skips collections whose organization key is unavailable', async () => {
+    const collections: CollectionResponse[] = [
+      { id: 'c1', organizationId: 'missing', name: await encryptString('X', orgKey) },
+    ];
+    await expect(decryptCollections(collections, new Map())).resolves.toEqual([]);
+  });
+
+  it('degrades to (undecryptable) when the name cannot be decrypted but the org key exists', async () => {
+    const collections: CollectionResponse[] = [
+      { id: 'c1', organizationId: 'org-1', name: TAMPERED_FIELD_ENCSTRING },
+    ];
+    await expect(decryptCollections(collections, new Map([['org-1', orgKey]])))
+      .resolves.toEqual([{ id: 'c1', organizationId: 'org-1', name: '(undecryptable)' }]);
+  });
+
+  it('returns [] for empty or undefined input', async () => {
+    await expect(decryptCollections(undefined, new Map())).resolves.toEqual([]);
+    await expect(decryptCollections([], new Map())).resolves.toEqual([]);
   });
 });
 

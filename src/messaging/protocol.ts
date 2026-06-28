@@ -1,7 +1,7 @@
 import browser from 'webextension-polyfill';
 import type { AuthResult } from '../core/session/auth-service.js';
 import type { SessionState } from '../core/session/session-manager.js';
-import type { CipherSummary, DecryptedCipher, FieldName, FolderSummary } from '../core/vault/models.js';
+import type { CipherSummary, CollectionSummary, DecryptedCipher, FieldName, FolderSummary } from '../core/vault/models.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 import type { TotpResult } from '../core/vault/totp.js';
 import type { LockTimeoutSetting } from '../background/settings.js';
@@ -45,7 +45,7 @@ export type RequestMessage =
 export type ResponseMessage =
   | { ok: true; data: { state: SessionState } }
   | { ok: true; data: AuthResult }
-  | { ok: true; data: { items: CipherSummary[]; folders: FolderSummary[] } }
+  | { ok: true; data: { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[] } }
   | { ok: true; data: { value?: string } }
   | { ok: true; data: { cipher: DecryptedCipher | null } }
   | { ok: true; data: { totp: TotpResult | null } }

@@ -21,10 +21,25 @@ export function filterByFolder(items: CipherSummary[], folderId: string | null |
   return items.filter((i) => i.folderId === folderId);
 }
 
+/** Filter by collection. null/undefined/'' = all; otherwise items belonging to that collection. */
+export function filterByCollection(items: CipherSummary[], collectionId: string | null | undefined): CipherSummary[] {
+  if (!collectionId) return items;
+  return items.filter((i) => i.collectionIds?.includes(collectionId));
+}
+
 export function filterSummariesByFolderAndQuery(
   items: CipherSummary[],
   folderId: string | null | undefined,
   query: string,
 ): CipherSummary[] {
   return filterSummaries(filterByFolder(items, folderId), query);
+}
+
+export function filterSummariesByFolderCollectionAndQuery(
+  items: CipherSummary[],
+  folderId: string | null | undefined,
+  collectionId: string | null | undefined,
+  query: string,
+): CipherSummary[] {
+  return filterSummaries(filterByCollection(filterByFolder(items, folderId), collectionId), query);
 }

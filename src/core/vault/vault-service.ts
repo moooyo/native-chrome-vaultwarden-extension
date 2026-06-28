@@ -4,8 +4,8 @@ import type { SessionManager } from '../session/session-manager.js';
 import type { AuthService } from '../session/auth-service.js';
 import type { KeyValueStore } from '../../platform/store.js';
 import type { SymmetricKey } from '../crypto/keys.js';
-import type { CipherSummary, DecryptedCipher, FieldName, FolderSummary } from './models.js';
-import { decryptCipher, decryptFolders, buildOrgKeyMap } from './decrypt.js';
+import type { CipherSummary, CollectionSummary, DecryptedCipher, FieldName, FolderSummary } from './models.js';
+import { decryptCipher, decryptFolders, decryptCollections, buildOrgKeyMap } from './decrypt.js';
 import { getTotp, type TotpResult } from './totp.js';
 import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials } from '../../messaging/protocol.js';
@@ -22,11 +22,13 @@ export interface VaultServiceDeps {
 const VAULT_CACHE_KEY = 'vaultCache';
 const SUMMARY_CACHE_KEY = 'vaultSummaries';
 const FOLDER_CACHE_KEY = 'vaultFolders';
+const COLLECTION_CACHE_KEY = 'vaultCollections';
 const SKIPPED_ORG_KEY = 'vaultSkippedOrgCount';
 
 export interface VaultListing {
   items: CipherSummary[];
   folders: FolderSummary[];
+  collections: CollectionSummary[];
 }
 
 export class VaultService {
@@ -43,12 +45,14 @@ export class VaultService {
     const orgKeys = await this.buildOrgKeys(response.profile);
     const items = await this.decryptSummaries(response.ciphers, userKey, orgKeys);
     const folders = await decryptFolders(response.folders, userKey);
+    const collections = await decryptCollections(response.collections, orgKeys);
     // Org ciphers whose key could not be unwrapped (e.g. locked private key) are surfaced to the UI.
     const skippedOrgCount = response.ciphers.filter((c) => c.organizationId && !orgKeys.has(c.organizationId)).length;
     await this.deps.localStore.set(SUMMARY_CACHE_KEY, items);
     await this.deps.localStore.set(FOLDER_CACHE_KEY, folders);
+    await this.deps.localStore.set(COLLECTION_CACHE_KEY, collections);
     await this.deps.localStore.set(SKIPPED_ORG_KEY, skippedOrgCount);
-    return { items, folders };
+    return { items, folders, collections };
   }
 
   /** Unwrap each organization key from the synced profile using the decrypted account private key. */
@@ -61,6 +65,7 @@ export class VaultService {
     return {
       items: (await this.deps.localStore.get<CipherSummary[]>(SUMMARY_CACHE_KEY)) ?? [],
       folders: (await this.deps.localStore.get<FolderSummary[]>(FOLDER_CACHE_KEY)) ?? [],
+      collections: (await this.deps.localStore.get<CollectionSummary[]>(COLLECTION_CACHE_KEY)) ?? [],
     };
   }
 
@@ -122,6 +127,7 @@ export class VaultService {
     await this.deps.localStore.remove(VAULT_CACHE_KEY);
     await this.deps.localStore.remove(SUMMARY_CACHE_KEY);
     await this.deps.localStore.remove(FOLDER_CACHE_KEY);
+    await this.deps.localStore.remove(COLLECTION_CACHE_KEY);
     await this.deps.localStore.remove(SKIPPED_ORG_KEY);
   }
 
@@ -206,6 +212,7 @@ export class VaultService {
             };
             if (decrypted.organizationId) summary.organizationId = decrypted.organizationId;
             if (decrypted.folderId) summary.folderId = decrypted.folderId;
+            if (decrypted.collectionIds) summary.collectionIds = decrypted.collectionIds;
             out.push(summary);
           } else {
             const summary: CipherSummary = {
@@ -220,6 +227,7 @@ export class VaultService {
             if (decrypted.totp) summary.hasTotp = true;
             if (decrypted.organizationId) summary.organizationId = decrypted.organizationId;
             if (decrypted.folderId) summary.folderId = decrypted.folderId;
+            if (decrypted.collectionIds) summary.collectionIds = decrypted.collectionIds;
             const subtitle = summarySubtitle(decrypted);
             if (subtitle) summary.subtitle = subtitle;
             out.push(summary);
@@ -237,6 +245,7 @@ export class VaultService {
         };
         if (cipher.organizationId) summary.organizationId = cipher.organizationId;
         if (cipher.folderId) summary.folderId = cipher.folderId;
+        if (cipher.collectionIds?.length) summary.collectionIds = cipher.collectionIds;
         out.push(summary);
       }
     }

@@ -1,8 +1,8 @@
-import type { CardCipherData, CipherResponse, FolderResponse, IdentityCipherData, OrganizationResponse } from '../api/types.js';
+import type { CardCipherData, CipherResponse, CollectionResponse, FolderResponse, IdentityCipherData, OrganizationResponse } from '../api/types.js';
 import { decryptToText, EncStringMacError, UnsupportedEncTypeError } from '../crypto/encstring.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import { unwrapSymmetricKey, unwrapRsaWrappedKey } from '../crypto/keys.js';
-import type { CipherSummary, DecryptedCard, DecryptedCipher, DecryptedIdentity, FolderSummary } from './models.js';
+import type { CipherSummary, CollectionSummary, DecryptedCard, DecryptedCipher, DecryptedIdentity, FolderSummary } from './models.js';
 import type { LoginUri } from './uri-match.js';
 
 const IDENTITY_FIELDS: Array<keyof IdentityCipherData> = [
@@ -47,6 +47,7 @@ export async function decryptCipher(
     };
     if (cipher.organizationId) out.organizationId = cipher.organizationId;
     if (cipher.folderId) out.folderId = cipher.folderId;
+    if (cipher.collectionIds?.length) out.collectionIds = cipher.collectionIds;
     const username = await decryptOptional(cipher.login?.username, key);
     const password = await decryptOptional(cipher.login?.password, key);
     const totp = await decryptOptional(cipher.login?.totp, key);
@@ -71,6 +72,7 @@ export async function decryptCipher(
       };
       if (cipher.organizationId) undecryptable.organizationId = cipher.organizationId;
       if (cipher.folderId) undecryptable.folderId = cipher.folderId;
+      if (cipher.collectionIds?.length) undecryptable.collectionIds = cipher.collectionIds;
       return undecryptable;
     }
     throw err;
@@ -119,6 +121,28 @@ async function decryptFolderName(name: string | null | undefined, userKey: Symme
     if (err instanceof EncStringMacError || err instanceof UnsupportedEncTypeError) return '(undecryptable)';
     throw err;
   }
+}
+
+/**
+ * Decrypt collection names with their organization key. Collections whose org key is unavailable are
+ * skipped (their ciphers are skipped too); a name that fails to decrypt degrades to a label.
+ */
+export async function decryptCollections(
+  collections: CollectionResponse[] | undefined,
+  orgKeys: Map<string, SymmetricKey>,
+): Promise<CollectionSummary[]> {
+  const out: CollectionSummary[] = [];
+  for (const collection of collections ?? []) {
+    if (!collection.id) continue;
+    const key = orgKeys.get(collection.organizationId);
+    if (!key) continue;
+    out.push({
+      id: collection.id,
+      organizationId: collection.organizationId,
+      name: await decryptFolderName(collection.name, key),
+    });
+  }
+  return out;
 }
 
 async function decryptCard(src: CardCipherData, key: SymmetricKey): Promise<DecryptedCard> {

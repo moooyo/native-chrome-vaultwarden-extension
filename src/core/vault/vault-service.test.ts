@@ -110,7 +110,7 @@ describe('VaultService', () => {
     const { service, api } = await makeService();
     const list = await service.sync();
     expect(api.sync).toHaveBeenCalledWith('access');
-    expect(list).toEqual({ items: [{ id: 'cipher-1', type: 1, favorite: false, name: FIELD_VECTOR.plaintext, username: FIELD_VECTOR.plaintext, uris: [FIELD_VECTOR.plaintext], loginUris: [{ uri: FIELD_VECTOR.plaintext }] }], folders: [] });
+    expect(list).toEqual({ items: [{ id: 'cipher-1', type: 1, favorite: false, name: FIELD_VECTOR.plaintext, username: FIELD_VECTOR.plaintext, uris: [FIELD_VECTOR.plaintext], loginUris: [{ uri: FIELD_VECTOR.plaintext }] }], folders: [], collections: [] });
   });
 
   it('getField decrypts the requested field on demand from encrypted cache', async () => {
@@ -124,7 +124,7 @@ describe('VaultService', () => {
     bad.ciphers[0]!.name = '2.bad|bad|bad';
     const { service } = await makeService(bad);
     const list = await service.sync();
-    expect(list).toEqual({ items: [{ id: 'cipher-1', type: 1, favorite: false, name: '(undecryptable)', uris: [], loginUris: [], undecryptable: true }], folders: [] });
+    expect(list).toEqual({ items: [{ id: 'cipher-1', type: 1, favorite: false, name: '(undecryptable)', uris: [], loginUris: [], undecryptable: true }], folders: [], collections: [] });
   });
 
   // Coverage-only: public method listItems() — not exercised by the sync test above.
@@ -132,7 +132,7 @@ describe('VaultService', () => {
     const { service, api } = await makeService();
 
     // Before any sync the cache is empty.
-    await expect(service.listItems()).resolves.toEqual({ items: [], folders: [] });
+    await expect(service.listItems()).resolves.toEqual({ items: [], folders: [], collections: [] });
 
     // After sync the summaries are cached.
     const synced = await service.sync();
@@ -151,7 +151,7 @@ describe('VaultService', () => {
     expect((await service.listItems()).items).not.toEqual([]);
 
     await service.clearCache();
-    await expect(service.listItems()).resolves.toEqual({ items: [], folders: [] });
+    await expect(service.listItems()).resolves.toEqual({ items: [], folders: [], collections: [] });
   });
 
   it('clearCache removes vault cache so getField rejects with "vault is not synced"', async () => {
@@ -334,6 +334,18 @@ describe('VaultService', () => {
   it('getSkippedOrgCount defaults to 0 before any sync', async () => {
     const { service } = await makeService();
     await expect(service.getSkippedOrgCount()).resolves.toBe(0);
+  });
+
+  it('decrypts collections and attaches collectionIds to organization cipher summaries', async () => {
+    const sync = await makeOrgSync();
+    sync.collections = [{ id: 'col-1', organizationId: 'org-1', name: await encUnder('Engineering', orgKey) }];
+    sync.ciphers[0]!.collectionIds = ['col-1'];
+    const { service } = await makeService(sync, { privateKey: privateKeyBytes });
+    const result = await service.sync();
+    expect(result.collections).toEqual([{ id: 'col-1', organizationId: 'org-1', name: 'Engineering' }]);
+    expect(result.items[0]).toMatchObject({ id: 'org-login', collectionIds: ['col-1'] });
+    // Cached collections survive a listItems round-trip.
+    await expect(service.listItems()).resolves.toMatchObject({ collections: [{ id: 'col-1', name: 'Engineering' }] });
   });
 
   it('decrypts organization ciphers with the account private key and counts none as skipped', async () => {

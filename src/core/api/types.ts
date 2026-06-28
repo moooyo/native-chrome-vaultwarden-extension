@@ -102,6 +102,8 @@ export interface CipherResponse {
   favorite?: boolean;
   organizationId?: string | null;
   folderId?: string | null;
+  /** Collections this cipher belongs to (organization ciphers). Not encrypted. */
+  collectionIds?: string[] | null;
   key?: string | null;
   login?: LoginCipherData | null;
   card?: CardCipherData | null;
@@ -114,8 +116,18 @@ export interface FolderResponse {
   name?: string | null;
 }
 
+/** A collection groups organization ciphers. `name` is an EncString encrypted with the org key. */
+export interface CollectionResponse {
+  id: string;
+  organizationId: string;
+  name?: string | null;
+  externalId?: string | null;
+  readOnly?: boolean;
+}
+
 export interface SyncResponse {
   profile: SyncProfile;
   ciphers: CipherResponse[];
   folders?: FolderResponse[];
+  collections?: CollectionResponse[];
 }

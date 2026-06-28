@@ -16,6 +16,8 @@ export interface CipherSummary {
   folderId?: string;
   /** Present for ciphers owned by an organization (decrypted with that organization's key). */
   organizationId?: string;
+  /** Collections (organization groupings) this cipher belongs to. */
+  collectionIds?: string[];
   /** True when a login carries a TOTP secret. The secret itself never enters a summary. */
   hasTotp?: boolean;
   /** Non-sensitive list subtitle (e.g. card brand or identity full name). Never holds secrets. */
@@ -64,4 +66,10 @@ export interface DecryptedCipher extends CipherSummary {
 export interface FolderSummary {
   id: string;
   name: string;
+}
+
+export interface CollectionSummary {
+  id: string;
+  name: string;
+  organizationId: string;
 }

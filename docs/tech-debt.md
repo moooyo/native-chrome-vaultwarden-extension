@@ -44,10 +44,16 @@
     MAC 密钥，完整性来自 RSA-OAEP 填充（与上游 Bitwarden 一致：RSA 类型不校验 MAC）。组织密钥用
     encType=4，HMAC 变体在 Vaultwarden 中本就罕见。
 
+- **集合（Collection）分组与名称** ✅（本次落地）
+  - `/sync` 的 `collections[]` 与 cipher 的 `collectionIds[]` 已建模（`api/types.ts`）。
+  - `decrypt.decryptCollections(collections, orgKeys)`：集合名用**组织密钥**解密；组织密钥不可用时
+    跳过该集合（其条目本就被跳过），名称解密失败则降级为 `(undecryptable)`。
+  - `vault-service` 在 sync 时解出集合、缓存、并把 `collectionIds` 带进条目摘要；`VaultListing`
+    新增 `collections`。`search.filterByCollection` + `filterSummariesByFolderCollectionAndQuery`
+    组合「文件夹 × 集合 × 文本」过滤。popup 新增集合下拉过滤（仅在存在集合时显示），登出即清。
+
 ## 仍待实现 / 明确超范围
 
-- **集合（Collection）分组与名称**：组织条目本身已可解密，但 `/sync` 的 `collections[]`
-  （集合对象、加密名称、条目→集合归属）尚未建模，因此 UI 暂无按集合的分组/过滤。
 - **Argon2id KDF**：需引入 WASM KDF。`prelogin`/登录成功两处守卫均抛
   `'Argon2id accounts are not supported in this MVP'`（`src/core/session/auth-service.ts`）。
 - **注册（Registration）**：客户端账户密钥生成 + register 端点尚未实现。

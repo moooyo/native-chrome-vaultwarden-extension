@@ -1,7 +1,7 @@
 import { sendRequest } from '../../messaging/protocol.js';
 import type { AuthResult } from '../../core/session/auth-service.js';
-import type { CipherSummary, DecryptedCipher, FolderSummary } from '../../core/vault/models.js';
-import { filterSummariesByFolderAndQuery, NO_FOLDER } from '../../core/vault/search.js';
+import type { CipherSummary, CollectionSummary, DecryptedCipher, FolderSummary } from '../../core/vault/models.js';
+import { filterSummariesByFolderCollectionAndQuery, NO_FOLDER } from '../../core/vault/search.js';
 import { generatePassword, DEFAULT_PASSWORD_OPTIONS, type PasswordGenOptions } from '../../core/generator/password.js';
 import { addPasswordToHistory } from '../../core/generator/history.js';
 import { icon } from '../icons.js';
@@ -22,7 +22,9 @@ let isPending = false;
 // Cached vault items for the current unlocked session.
 let vaultItems: CipherSummary[] = [];
 let vaultFolders: FolderSummary[] = [];
+let vaultCollections: CollectionSummary[] = [];
 let selectedFolderId: string | null = null;
+let selectedCollectionId: string | null = null;
 let skippedOrgCount = 0;
 // Active TOTP countdown interval for the open login detail (cleared on any navigation).
 let totpTimer: number | undefined;
@@ -262,6 +264,7 @@ function renderUnlockedShell(error?: string) {
       <button id="lock" class="icon-btn" type="button" title="Lock vault" aria-label="Lock vault">${icon('lock')}</button>
     </div>
     <div id="folderBar" class="folderbar"></div>
+    <div id="collectionBar" class="folderbar"></div>
     <div id="orgBanner"></div>
     <div id="vaultList" class="list-wrap"></div>
     <div class="footer">
@@ -270,6 +273,7 @@ function renderUnlockedShell(error?: string) {
     ${error ? `<div class="footer">${errorNote(error)}</div>` : ''}`;
   bindUnlockedControls();
   renderFolderFilter();
+  renderCollectionFilter();
   renderOrgBanner();
   void loadCachedList();
 }
@@ -302,6 +306,33 @@ function renderFolderFilter() {
     select.value = selectedFolderId ?? '';
     select.addEventListener('change', () => {
       selectedFolderId = select.value || null;
+      renderVaultList();
+    });
+  }
+}
+
+/** Build the collection <select> from decrypted org collections, preserving a valid selection. */
+function renderCollectionFilter() {
+  const bar = document.getElementById('collectionBar');
+  if (!bar) return;
+  if (vaultCollections.length === 0) {
+    bar.innerHTML = '';
+    return;
+  }
+  // Drop a stale selection (e.g. a collection that no longer exists after a sync).
+  if (selectedCollectionId !== null && !vaultCollections.some((c) => c.id === selectedCollectionId)) {
+    selectedCollectionId = null;
+  }
+  const options = [
+    `<option value="">All collections</option>`,
+    ...vaultCollections.map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`),
+  ].join('');
+  bar.innerHTML = `<div class="folder-select">${icon('shield')}<select id="collectionFilter" class="select" aria-label="Filter by collection">${options}</select></div>`;
+  const select = document.getElementById('collectionFilter') as HTMLSelectElement | null;
+  if (select) {
+    select.value = selectedCollectionId ?? '';
+    select.addEventListener('change', () => {
+      selectedCollectionId = select.value || null;
       renderVaultList();
     });
   }
@@ -363,7 +394,9 @@ function bindUnlockedControls() {
       } else {
         vaultItems = [];
         vaultFolders = [];
+        vaultCollections = [];
         selectedFolderId = null;
+        selectedCollectionId = null;
         skippedOrgCount = 0;
         genHistory = [];
         render({ kind: 'loggedOut' });
@@ -396,11 +429,13 @@ function bindUnlockedControls() {
       if (!response.ok) {
         render({ kind: 'unlocked', error: response.error.message });
       } else {
-        const data = response.data as { items: CipherSummary[]; folders: FolderSummary[] };
+        const data = response.data as { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[] };
         vaultItems = data.items;
         vaultFolders = data.folders;
+        vaultCollections = data.collections;
         await loadSkippedOrgCount();
         renderFolderFilter();
+        renderCollectionFilter();
         renderOrgBanner();
         renderVaultList();
       }
@@ -529,11 +564,13 @@ function renderGenHistory(): void {
 async function loadCachedList() {
   const response = await sendRequest({ type: 'vault.listItems' });
   if (response.ok) {
-    const data = response.data as { items: CipherSummary[]; folders: FolderSummary[] };
+    const data = response.data as { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[] };
     vaultItems = data.items;
     vaultFolders = data.folders;
+    vaultCollections = data.collections;
     await loadSkippedOrgCount();
     renderFolderFilter();
+    renderCollectionFilter();
     renderOrgBanner();
     renderVaultList();
   }
@@ -548,7 +585,7 @@ function renderVaultList() {
   const list = document.getElementById('vaultList');
   if (!list) return;
   const query = (document.getElementById('search') as HTMLInputElement | null)?.value ?? '';
-  const filtered = filterSummariesByFolderAndQuery(vaultItems, selectedFolderId, query);
+  const filtered = filterSummariesByFolderCollectionAndQuery(vaultItems, selectedFolderId, selectedCollectionId, query);
   if (filtered.length === 0) {
     const isSearch = query.trim().length > 0;
     list.innerHTML = `

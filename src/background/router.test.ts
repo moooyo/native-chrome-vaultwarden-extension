@@ -239,7 +239,7 @@ describe('router', () => {
   });
 
   it('routes vault.listItems', async () => {
-    const envelope = { items: [{ id: '1', name: 'item', uris: [], loginUris: [], type: 1 as const, favorite: false }], folders: [] };
+    const envelope = { items: [{ id: '1', name: 'item', uris: [], loginUris: [], type: 1 as const, favorite: false }], folders: [], collections: [] };
     const router = createRouter({
       auth: {},
       vault: { listItems: vi.fn(async () => envelope) },
