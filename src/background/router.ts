@@ -74,10 +74,16 @@ export function createRouter(deps: RouterDeps) {
               await deps.settings.saveDefaultUriMatchStrategy(request.defaultUriMatchStrategy);
             }
             return { ok: true, data: null };
-          case 'autofill.findCandidates':
-            throw new Error('autofill.findCandidates is not implemented');
-          case 'autofill.getCredentials':
-            throw new Error('autofill.getCredentials is not implemented');
+          case 'autofill.findCandidates': {
+            if (!deps.vault.findAutofillCandidates) throw new Error('vault.findAutofillCandidates is not wired');
+            const defaultStrategy = await deps.settings.getDefaultUriMatchStrategy();
+            return { ok: true, data: await deps.vault.findAutofillCandidates(request.frameUrl, defaultStrategy) };
+          }
+          case 'autofill.getCredentials': {
+            if (!deps.vault.getAutofillCredentials) throw new Error('vault.getAutofillCredentials is not wired');
+            const defaultStrategy = await deps.settings.getDefaultUriMatchStrategy();
+            return { ok: true, data: await deps.vault.getAutofillCredentials(request.cipherId, request.frameUrl, defaultStrategy) };
+          }
         }
       } catch (err) {
         if (err instanceof AppError) {

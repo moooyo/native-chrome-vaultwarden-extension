@@ -258,4 +258,52 @@ describe('router', () => {
     await expect(router.handle({ type: 'auth.lock' }))
       .resolves.toEqual({ ok: false, error: { code: 'locked', message: 'Vault is locked' } });
   });
+
+  it('routes autofill.findCandidates through settings default strategy', async () => {
+    const findAutofillCandidates = vi.fn(async () => [{
+      id: '1',
+      name: 'Example',
+      username: 'me@example.com',
+      matchedUri: 'https://example.com',
+      matchType: 0 as const,
+      favorite: false,
+    }]);
+    const router = createRouter({
+      auth: {},
+      vault: { findAutofillCandidates },
+      settings: {
+        getServerUrl: vi.fn(),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+      },
+    });
+    await expect(router.handle({ type: 'autofill.findCandidates', frameUrl: 'https://example.com/login' }))
+      .resolves.toEqual({ ok: true, data: [{
+        id: '1',
+        name: 'Example',
+        username: 'me@example.com',
+        matchedUri: 'https://example.com',
+        matchType: 0,
+        favorite: false,
+      }] });
+    expect(findAutofillCandidates).toHaveBeenCalledWith('https://example.com/login', 0);
+  });
+
+  it('routes autofill.getCredentials through settings default strategy', async () => {
+    const getAutofillCredentials = vi.fn(async () => ({ username: 'me@example.com', password: 'secret' }));
+    const router = createRouter({
+      auth: {},
+      vault: { getAutofillCredentials },
+      settings: {
+        getServerUrl: vi.fn(),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 1),
+        saveDefaultUriMatchStrategy: vi.fn(),
+      },
+    });
+    await expect(router.handle({ type: 'autofill.getCredentials', cipherId: '1', frameUrl: 'https://example.com/login' }))
+      .resolves.toEqual({ ok: true, data: { username: 'me@example.com', password: 'secret' } });
+    expect(getAutofillCredentials).toHaveBeenCalledWith('1', 'https://example.com/login', 1);
+  });
 });
