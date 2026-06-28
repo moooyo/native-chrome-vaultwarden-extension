@@ -208,6 +208,18 @@ describe('VaultService', () => {
     expect(JSON.stringify(candidates)).not.toContain('password');
   });
 
+  it('matches equivalent domains in autofill candidates (a google.com login fills youtube.com)', async () => {
+    const sync = makeSync();
+    sync.ciphers[0]!.login = {
+      username: FIELD_VECTOR.encString,
+      uris: [{ uri: await encUnder('https://google.com', testUserKey), match: UriMatchStrategy.Domain }],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    const candidates = await service.findAutofillCandidates('https://youtube.com/watch', UriMatchStrategy.Domain);
+    expect(candidates.map((c) => c.id)).toEqual(['cipher-1']);
+  });
+
   it('findAutofillCandidates rejects when vault is locked', async () => {
     const { service } = await makeService();
     await expect(service.findAutofillCandidates('https://example.com', UriMatchStrategy.Domain))

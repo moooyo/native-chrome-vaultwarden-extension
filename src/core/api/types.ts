@@ -156,4 +156,6 @@ export interface SyncResponse {
   ciphers: CipherResponse[];
   folders?: FolderResponse[];
   collections?: CollectionResponse[];
+  /** User-defined equivalent-domain groups, when present (often null on self-hosted servers). */
+  domains?: { equivalentDomains?: string[][] | null } | null;
 }

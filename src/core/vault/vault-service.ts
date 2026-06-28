@@ -12,6 +12,7 @@ import { encryptToText } from '../crypto/encstring.js';
 import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
+import { buildEquivalentDomainIndex } from './equivalent-domains.js';
 
 export interface VaultServiceDeps {
   api: ApiClient;
@@ -25,6 +26,7 @@ const VAULT_CACHE_KEY = 'vaultCache';
 const SUMMARY_CACHE_KEY = 'vaultSummaries';
 const FOLDER_CACHE_KEY = 'vaultFolders';
 const COLLECTION_CACHE_KEY = 'vaultCollections';
+const EQUIV_DOMAINS_KEY = 'vaultEquivalentDomains';
 const SKIPPED_ORG_KEY = 'vaultSkippedOrgCount';
 
 export interface VaultListing {
@@ -53,8 +55,15 @@ export class VaultService {
     await this.deps.localStore.set(SUMMARY_CACHE_KEY, items);
     await this.deps.localStore.set(FOLDER_CACHE_KEY, folders);
     await this.deps.localStore.set(COLLECTION_CACHE_KEY, collections);
+    await this.deps.localStore.set(EQUIV_DOMAINS_KEY, response.domains?.equivalentDomains ?? []);
     await this.deps.localStore.set(SKIPPED_ORG_KEY, skippedOrgCount);
     return { items, folders, collections };
+  }
+
+  /** Build the equivalent-domain index from the built-in list plus any cached user-defined groups. */
+  private async loadEquivalentIndex(): Promise<Map<string, number>> {
+    const userGroups = (await this.deps.localStore.get<string[][]>(EQUIV_DOMAINS_KEY)) ?? [];
+    return buildEquivalentDomainIndex(userGroups);
   }
 
   /** Unwrap each organization key from the synced profile using the decrypted account private key. */
@@ -212,6 +221,7 @@ export class VaultService {
     await this.deps.localStore.remove(SUMMARY_CACHE_KEY);
     await this.deps.localStore.remove(FOLDER_CACHE_KEY);
     await this.deps.localStore.remove(COLLECTION_CACHE_KEY);
+    await this.deps.localStore.remove(EQUIV_DOMAINS_KEY);
     await this.deps.localStore.remove(SKIPPED_ORG_KEY);
   }
 
@@ -223,11 +233,12 @@ export class VaultService {
     if (!summaries) throw new AppError('sync_required', 'Sync required');
     const userKey = await this.deps.session.loadUserKey();
     if (!userKey) throw new AppError('locked', 'Vault is locked');
+    const equivalentIndex = await this.loadEquivalentIndex();
 
     const candidates = summaries
       .filter((item) => item.type === 1 && !item.undecryptable)
       .flatMap((item) => {
-        const best = bestMatch(item.loginUris, frameUrl, defaultStrategy);
+        const best = bestMatch(item.loginUris, frameUrl, defaultStrategy, equivalentIndex);
         if (!best) return [];
         const candidate: AutofillCandidate = {
           id: item.id,
@@ -264,7 +275,8 @@ export class VaultService {
     if (!cipher) throw new AppError('denied', 'Autofill item is not allowed for this page');
     const orgKeys = await this.buildOrgKeys(cache.profile);
     const decrypted = await decryptCipher(cipher, userKey, orgKeys);
-    if (!decrypted || decrypted.undecryptable || !bestMatch(decrypted.loginUris, frameUrl, defaultStrategy)) {
+    const equivalentIndex = await this.loadEquivalentIndex();
+    if (!decrypted || decrypted.undecryptable || !bestMatch(decrypted.loginUris, frameUrl, defaultStrategy, equivalentIndex)) {
       throw new AppError('denied', 'Autofill item is not allowed for this page');
     }
     const out: AutofillCredentials = {};
@@ -361,9 +373,10 @@ function bestMatch(
   loginUris: CipherSummary['loginUris'],
   frameUrl: string,
   defaultStrategy: UriMatchStrategySetting,
+  equivalentIndex?: Map<string, number>,
 ): UriMatchResult | undefined {
   return loginUris
-    .map((uri) => matchLoginUri(uri, frameUrl, defaultStrategy))
+    .map((uri) => matchLoginUri(uri, frameUrl, defaultStrategy, equivalentIndex))
     .filter((match): match is UriMatchResult => Boolean(match))
     .sort(compareMatchResults)[0];
 }

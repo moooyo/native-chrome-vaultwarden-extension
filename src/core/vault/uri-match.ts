@@ -1,4 +1,5 @@
 import { getBaseDomain, getHostAndPort, isHttpUrl } from './domain.js';
+import { areDomainsEquivalent } from './equivalent-domains.js';
 import safeRegex from 'safe-regex2';
 
 export const UriMatchStrategy = {
@@ -47,6 +48,7 @@ export function matchLoginUri(
   loginUri: LoginUri,
   frameUrl: string,
   defaultStrategy: UriMatchStrategySetting,
+  equivalentIndex?: Map<string, number>,
 ): UriMatchResult | undefined {
   if (!isHttpUrl(frameUrl)) return undefined;
   const savedUri = loginUri.uri.trim();
@@ -54,7 +56,7 @@ export function matchLoginUri(
   const strategy = isUriMatchStrategySetting(loginUri.match) ? loginUri.match : defaultStrategy;
   if (strategy === UriMatchStrategy.Never) return undefined;
 
-  const matched = matchesStrategy(savedUri, frameUrl, strategy);
+  const matched = matchesStrategy(savedUri, frameUrl, strategy, equivalentIndex);
   if (!matched) return undefined;
   return { matchedUri: savedUri, matchType: strategy, score: MATCH_SCORE[strategy] };
 }
@@ -63,10 +65,15 @@ export function compareMatchResults(a: UriMatchResult, b: UriMatchResult): numbe
   return a.score - b.score;
 }
 
-function matchesStrategy(savedUri: string, frameUrl: string, strategy: UriMatchStrategySetting): boolean {
+function matchesStrategy(
+  savedUri: string,
+  frameUrl: string,
+  strategy: UriMatchStrategySetting,
+  equivalentIndex?: Map<string, number>,
+): boolean {
   switch (strategy) {
     case UriMatchStrategy.Domain:
-      return domainMatches(savedUri, frameUrl);
+      return domainMatches(savedUri, frameUrl, equivalentIndex);
     case UriMatchStrategy.Host:
       return hostMatches(savedUri, frameUrl);
     case UriMatchStrategy.StartsWith:
@@ -80,11 +87,13 @@ function matchesStrategy(savedUri: string, frameUrl: string, strategy: UriMatchS
   }
 }
 
-function domainMatches(savedUri: string, frameUrl: string): boolean {
+function domainMatches(savedUri: string, frameUrl: string, equivalentIndex?: Map<string, number>): boolean {
   if (isHttpsDowngrade(savedUri, frameUrl)) return false;
   const savedDomain = getBaseDomain(savedUri);
   const frameDomain = getBaseDomain(frameUrl);
-  return Boolean(savedDomain && frameDomain && savedDomain === frameDomain);
+  if (!savedDomain || !frameDomain) return false;
+  if (savedDomain === frameDomain) return true;
+  return equivalentIndex ? areDomainsEquivalent(savedDomain, frameDomain, equivalentIndex) : false;
 }
 
 function hostMatches(savedUri: string, frameUrl: string): boolean {

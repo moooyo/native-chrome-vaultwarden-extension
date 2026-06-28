@@ -5,6 +5,20 @@ import {
   matchLoginUri,
   UriMatchStrategy,
 } from './uri-match.js';
+import { buildEquivalentDomainIndex } from './equivalent-domains.js';
+
+describe('equivalent-domain matching', () => {
+  it('matches equivalent domains under the Domain strategy when an index is provided', () => {
+    const index = buildEquivalentDomainIndex();
+    expect(matchLoginUri({ uri: 'https://google.com', match: UriMatchStrategy.Domain }, 'https://youtube.com/watch', UriMatchStrategy.Domain, index))
+      .toMatchObject({ matchType: UriMatchStrategy.Domain });
+  });
+
+  it('does not match equivalent domains without an index', () => {
+    expect(matchLoginUri({ uri: 'https://google.com', match: UriMatchStrategy.Domain }, 'https://youtube.com/watch', UriMatchStrategy.Domain))
+      .toBeUndefined();
+  });
+});
 
 describe('uri matching', () => {
   it('matches by domain including subdomains and complex public suffixes', () => {

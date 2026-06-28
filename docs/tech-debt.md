@@ -96,5 +96,7 @@
 - PIN 解锁 / 生物识别解锁。
 - 多账户切换。
 - 密码健康报告 / HIBP 泄露检测。
-- 等价域名（equivalent domains）。
+- 等价域名（equivalent domains）✅（本次落地）：`vault/equivalent-domains.ts` 内置常见等价组
+  （google/youtube、amazon 各区、microsoft/live 等）+ 合并 `/sync` 的用户自定义组；`uri-match`
+  的 Domain 策略在两域名属同一等价组时也算命中；vault-service 在两处 autofill 匹配处构建索引并传入。
 - 紧急访问（emergency access）。
