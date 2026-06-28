@@ -27,6 +27,18 @@ export function base64ToBytes(s: string): Uint8Array {
   return out;
 }
 
+/** Encode bytes as unpadded base64url (RFC 4648 §5), as used by WebAuthn/FIDO2. */
+export function bytesToBase64Url(b: Uint8Array): string {
+  return bytesToBase64(b).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** Decode unpadded or padded base64url into bytes. */
+export function base64UrlToBytes(s: string): Uint8Array {
+  const base = s.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = base.length % 4;
+  return base64ToBytes(pad ? base + '='.repeat(4 - pad) : base);
+}
+
 export function bytesToHex(b: Uint8Array): string {
   let out = '';
   for (let i = 0; i < b.length; i++) out += b[i]!.toString(16).padStart(2, '0');

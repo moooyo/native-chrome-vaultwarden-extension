@@ -23,6 +23,8 @@ const options = {
     'ui/popup/popup': 'src/ui/popup/popup.ts',
     'ui/options/options': 'src/ui/options/options.ts',
     'content/autofill': 'src/content/autofill.ts',
+    'content/page-webauthn': 'src/content/page-webauthn.ts',
+    'content/webauthn-bridge': 'src/content/webauthn-bridge.ts',
   },
   bundle: true,
   format: 'esm',

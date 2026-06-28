@@ -261,6 +261,28 @@ describe('decryptCipher', () => {
     expect(out).toMatchObject({ id: 'card-bad', type: 3, name: '(error)', undecryptable: true });
   });
 
+  it('decrypts a login cipher with a stored passkey (fido2Credentials)', async () => {
+    const cipher: CipherResponse = {
+      id: 'pk', type: 1, name: await encryptString('Acme', userKey), favorite: false, organizationId: null,
+      login: {
+        username: await encryptString('alice', userKey),
+        fido2Credentials: [{
+          credentialId: await encryptString('cred-1', userKey),
+          keyValue: await encryptString('PKCS8B64URL', userKey),
+          rpId: await encryptString('acme.com', userKey),
+          userName: await encryptString('alice@acme.com', userKey),
+          userHandle: await encryptString('handle-1', userKey),
+          counter: await encryptString('0', userKey),
+        }],
+      },
+    };
+    const out = await decryptCipher(cipher, userKey);
+    expect(out?.fido2Credentials).toEqual([{
+      credentialId: 'cred-1', keyValue: 'PKCS8B64URL', rpId: 'acme.com',
+      counter: 0, userName: 'alice@acme.com', userHandle: 'handle-1',
+    }]);
+  });
+
   it('surfaces folderId when present and omits it when absent', async () => {
     const withFolder = await decryptCipher({
       id: 'c-folder', type: 1, name: FIELD_VECTOR.encString, favorite: false, organizationId: null, folderId: 'folder-1', login: null,

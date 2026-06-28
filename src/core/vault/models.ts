@@ -20,6 +20,8 @@ export interface CipherSummary {
   collectionIds?: string[];
   /** True when a login carries a TOTP secret. The secret itself never enters a summary. */
   hasTotp?: boolean;
+  /** True when a login carries at least one stored passkey (FIDO2 credential). */
+  hasPasskey?: boolean;
   /** Non-sensitive list subtitle (e.g. card brand or identity full name). Never holds secrets. */
   subtitle?: string;
   undecryptable?: boolean;
@@ -61,6 +63,18 @@ export interface DecryptedCipher extends CipherSummary {
   notes?: string;
   card?: DecryptedCard;
   identity?: DecryptedIdentity;
+  fido2Credentials?: DecryptedFido2Credential[];
+}
+
+/** A decrypted passkey. keyValue (PKCS#8 base64url private key) is sensitive — never send it to the UI. */
+export interface DecryptedFido2Credential {
+  credentialId: string;
+  keyValue: string;
+  rpId: string;
+  counter: number;
+  userHandle?: string;
+  userName?: string;
+  rpName?: string;
 }
 
 /** Plaintext cipher form input from the editor, before encryption into a write request. */

@@ -117,6 +117,17 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.vault.importVault) throw new Error('vault.importVault is not wired');
             return { ok: true, data: { imported: await deps.vault.importVault(request.json) } };
           }
+          case 'vault.getPasskeyAssertion': {
+            if (!deps.vault.getPasskeyAssertion) throw new Error('vault.getPasskeyAssertion is not wired');
+            const assertion = await deps.vault.getPasskeyAssertion({
+              rpId: request.rpId,
+              origin: request.origin,
+              challenge: request.challenge,
+              ...(request.allowedCredentialIds ? { allowedCredentialIds: request.allowedCredentialIds } : {}),
+              ...(request.userVerified !== undefined ? { userVerified: request.userVerified } : {}),
+            });
+            return { ok: true, data: { assertion: assertion ?? null } };
+          }
           case 'vault.createFolder':
             if (!deps.vault.createFolder) throw new Error('vault.createFolder is not wired');
             return { ok: true, data: await deps.vault.createFolder(request.name) };

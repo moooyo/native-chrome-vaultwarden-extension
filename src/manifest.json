@@ -29,6 +29,19 @@
       "js": ["content/autofill.js"],
       "run_at": "document_idle",
       "all_frames": true
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content/page-webauthn.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content/webauthn-bridge.js"],
+      "run_at": "document_start",
+      "all_frames": true
     }
   ]
 }

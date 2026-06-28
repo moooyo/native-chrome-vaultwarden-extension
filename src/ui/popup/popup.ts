@@ -1252,6 +1252,11 @@ function renderLoginDetail(id: string, item: CipherSummary) {
             <button id="copyTotp" class="icon-btn" type="button" title="Copy code" aria-label="Copy verification code">${icon('copy')}</button>
           </div>
         </div>` : ''}
+        ${item.hasPasskey ? `
+        <div class="readout">
+          <div class="k">${icon('shield')} Passkey</div>
+          <div class="v-row"><span class="v">Passkey saved — sign in with it on this site.</span></div>
+        </div>` : ''}
         <div class="detail-actions">
           <button id="copyPassword" type="button" class="btn btn-block">${icon('copy')}<span>Copy password</span></button>
           <button id="copyUsername" type="button" class="btn btn-secondary btn-block">${icon('user')}<span>Copy username</span></button>

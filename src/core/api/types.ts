@@ -72,6 +72,24 @@ export interface LoginCipherData {
   password?: string | null;
   totp?: string | null;
   uris?: LoginUriResponse[] | null;
+  fido2Credentials?: Fido2CredentialData[] | null;
+}
+
+/** A stored passkey (FIDO2 credential). All values are EncStrings; keyValue is PKCS#8 base64url. */
+export interface Fido2CredentialData {
+  credentialId?: string | null;
+  keyType?: string | null;
+  keyAlgorithm?: string | null;
+  keyCurve?: string | null;
+  keyValue?: string | null;
+  rpId?: string | null;
+  userHandle?: string | null;
+  userName?: string | null;
+  counter?: string | null;
+  rpName?: string | null;
+  userDisplayName?: string | null;
+  discoverable?: string | null;
+  creationDate?: string | null;
 }
 
 /** All Card fields are EncStrings (encType=2), including brand/expMonth/expYear. */

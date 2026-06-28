@@ -15,9 +15,10 @@ import type { ApiClient } from '../api/client.js';
 import type { AuthService } from '../session/auth-service.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import type { SymmetricKey } from '../crypto/keys.js';
-import { hexToBytes, base64ToBytes, bytesToBase64 } from '../crypto/encoding.js';
+import { hexToBytes, base64ToBytes, bytesToBase64, bytesToBase64Url, base64UrlToBytes } from '../crypto/encoding.js';
 import { hmacSha256 } from '../crypto/primitives.js';
 import { decryptToText } from '../crypto/encstring.js';
+import { derToRawSignature } from './fido2.js';
 import { FIELD_VECTOR, URL_VECTOR, USER_KEY_VECTOR, RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
 import type { SyncResponse } from '../api/types.js';
 
@@ -527,6 +528,41 @@ describe('VaultService', () => {
   it('importVault rejects malformed JSON', async () => {
     const { service } = await makeService();
     await expect(service.importVault('nope')).rejects.toThrow();
+  });
+
+  it('signs a passkey assertion in the worker without leaking the private key', async () => {
+    const subtle = globalThis.crypto.subtle;
+    const pair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    const pkcs8 = new Uint8Array(await subtle.exportKey('pkcs8', pair.privateKey));
+    const keyValueB64url = bytesToBase64Url(pkcs8);
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [{
+        id: 'pk', type: 1, name: await encUnder('Acme', testUserKey), favorite: false, organizationId: null,
+        login: { fido2Credentials: [{
+          credentialId: await encUnder('cred-1', testUserKey),
+          keyValue: await encUnder(keyValueB64url, testUserKey),
+          rpId: await encUnder('acme.com', testUserKey),
+          counter: await encUnder('0', testUserKey),
+        }] },
+      }],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    expect((await service.listItems()).items[0]).toMatchObject({ id: 'pk', hasPasskey: true });
+
+    const challenge = bytesToBase64Url(new TextEncoder().encode('chal'));
+    const assertion = await service.getPasskeyAssertion({ rpId: 'acme.com', origin: 'https://acme.com', challenge });
+    expect(assertion?.credentialId).toBe('cred-1');
+    expect(JSON.stringify(assertion)).not.toContain(keyValueB64url);
+
+    // The returned signature verifies against the credential's public key.
+    const authData = base64UrlToBytes(assertion!.authenticatorData);
+    const clientHash = new Uint8Array(await subtle.digest('SHA-256', base64UrlToBytes(assertion!.clientDataJSON) as BufferSource));
+    const signedData = new Uint8Array([...authData, ...clientHash]);
+    const rawSig = derToRawSignature(base64UrlToBytes(assertion!.signature));
+    const ok = await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pair.publicKey, rawSig as BufferSource, signedData as BufferSource);
+    expect(ok).toBe(true);
   });
 
   it('reports weak and reused passwords without leaking the passwords', async () => {

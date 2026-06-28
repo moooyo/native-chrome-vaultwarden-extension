@@ -8,7 +8,9 @@ import type { CipherSummary, CipherInput, CollectionSummary, DecryptedCipher, Fi
 import { decryptCipher, decryptFolders, decryptCollections, buildOrgKeyMap } from './decrypt.js';
 import { encryptCipher } from './encrypt.js';
 import { getTotp, type TotpResult } from './totp.js';
+import { signFido2Assertion, type PasskeyAssertion } from './fido2.js';
 import { encryptToText } from '../crypto/encstring.js';
+import { base64UrlToBytes } from '../crypto/encoding.js';
 import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealthInput } from './password-health.js';
 import { buildExportJson, parseImportJson } from './vault-io.js';
 import { AppError } from '../errors.js';
@@ -197,6 +199,10 @@ export class VaultService {
       delete safe.identity.passportNumber;
       delete safe.identity.licenseNumber;
     }
+    // Passkeys may ride along for display, but the private key (keyValue) must never cross the boundary.
+    if (safe.fido2Credentials) {
+      safe.fido2Credentials = safe.fido2Credentials.map((c) => ({ ...c, keyValue: '' }));
+    }
     return safe;
   }
 
@@ -205,6 +211,45 @@ export class VaultService {
     const decrypted = await this.decryptCipherById(id);
     if (!decrypted?.totp) return undefined;
     return getTotp(decrypted.totp, (this.deps.now ?? Date.now)());
+  }
+
+  /**
+   * Sign a WebAuthn assertion for a stored passkey matching the request. Searches all logins for a
+   * fido2Credential with the requested rpId (and allowed credentialId, if any), signs in the worker
+   * with the credential's private key, and returns the assertion. The private key never leaves the worker.
+   */
+  async getPasskeyAssertion(params: {
+    rpId: string;
+    origin: string;
+    challenge: string;
+    allowedCredentialIds?: string[];
+    userVerified?: boolean;
+  }): Promise<PasskeyAssertion | undefined> {
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    if (!cache) throw new AppError('sync_required', 'Sync required');
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) throw new AppError('locked', 'Vault is locked');
+    const orgKeys = await this.buildOrgKeys(cache.profile);
+    const allowed = params.allowedCredentialIds;
+    for (const cipher of cache.ciphers) {
+      if (cipher.type !== 1 || !cipher.login?.fido2Credentials?.length) continue;
+      const decrypted = await decryptCipher(cipher, userKey, orgKeys);
+      for (const cred of decrypted?.fido2Credentials ?? []) {
+        if (cred.rpId !== params.rpId) continue;
+        if (allowed?.length && !allowed.includes(cred.credentialId)) continue;
+        const assertion = await signFido2Assertion(base64UrlToBytes(cred.keyValue), {
+          rpId: params.rpId,
+          origin: params.origin,
+          challenge: params.challenge,
+          counter: cred.counter,
+          userVerified: params.userVerified ?? true,
+        });
+        const result: PasskeyAssertion = { credentialId: cred.credentialId, ...assertion };
+        if (cred.userHandle) result.userHandle = cred.userHandle;
+        return result;
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -377,6 +422,7 @@ export class VaultService {
             };
             if (decrypted.username) summary.username = decrypted.username;
             if (decrypted.totp) summary.hasTotp = true;
+            if (decrypted.fido2Credentials?.length) summary.hasPasskey = true;
             if (decrypted.organizationId) summary.organizationId = decrypted.organizationId;
             if (decrypted.folderId) summary.folderId = decrypted.folderId;
             if (decrypted.collectionIds) summary.collectionIds = decrypted.collectionIds;

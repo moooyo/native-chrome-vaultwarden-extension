@@ -1,8 +1,8 @@
-import type { CardCipherData, CipherResponse, CollectionResponse, FolderResponse, IdentityCipherData, OrganizationResponse } from '../api/types.js';
+import type { CardCipherData, CipherResponse, CollectionResponse, Fido2CredentialData, FolderResponse, IdentityCipherData, OrganizationResponse } from '../api/types.js';
 import { decryptToText, EncStringMacError, UnsupportedEncTypeError } from '../crypto/encstring.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import { unwrapSymmetricKey, unwrapRsaWrappedKey } from '../crypto/keys.js';
-import type { CipherSummary, CollectionSummary, DecryptedCard, DecryptedCipher, DecryptedIdentity, FolderSummary } from './models.js';
+import type { CipherSummary, CollectionSummary, DecryptedCard, DecryptedCipher, DecryptedFido2Credential, DecryptedIdentity, FolderSummary } from './models.js';
 import type { LoginUri } from './uri-match.js';
 
 const IDENTITY_FIELDS: Array<keyof IdentityCipherData> = [
@@ -56,6 +56,10 @@ export async function decryptCipher(
     if (password) out.password = password;
     if (totp) out.totp = totp;
     if (notes) out.notes = notes;
+    if (cipher.login?.fido2Credentials?.length) {
+      const passkeys = await decryptFido2Credentials(cipher.login.fido2Credentials, key);
+      if (passkeys.length) out.fido2Credentials = passkeys;
+    }
     if (cipher.card) out.card = await decryptCard(cipher.card, key);
     if (cipher.identity) out.identity = await decryptIdentity(cipher.identity, key);
     return out;
@@ -141,6 +145,27 @@ export async function decryptCollections(
       organizationId: collection.organizationId,
       name: await decryptFolderName(collection.name, key),
     });
+  }
+  return out;
+}
+
+/** Decrypt stored passkeys; a credential missing its key material or rpId is dropped. */
+async function decryptFido2Credentials(src: Fido2CredentialData[], key: SymmetricKey): Promise<DecryptedFido2Credential[]> {
+  const out: DecryptedFido2Credential[] = [];
+  for (const fc of src) {
+    const keyValue = await decryptOptional(fc.keyValue, key);
+    const credentialId = await decryptOptional(fc.credentialId, key);
+    const rpId = await decryptOptional(fc.rpId, key);
+    if (!keyValue || !credentialId || !rpId) continue;
+    const counter = Number(await decryptOptional(fc.counter, key));
+    const cred: DecryptedFido2Credential = { credentialId, keyValue, rpId, counter: Number.isFinite(counter) ? counter : 0 };
+    const userHandle = await decryptOptional(fc.userHandle, key);
+    if (userHandle) cred.userHandle = userHandle;
+    const userName = await decryptOptional(fc.userName, key);
+    if (userName) cred.userName = userName;
+    const rpName = await decryptOptional(fc.rpName, key);
+    if (rpName) cred.rpName = rpName;
+    out.push(cred);
   }
   return out;
 }

@@ -5,6 +5,7 @@ import type { CipherInput, CipherSummary, CollectionSummary, DecryptedCipher, Fi
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 import type { TotpResult } from '../core/vault/totp.js';
 import type { PasswordHealthEntry } from '../core/vault/password-health.js';
+import type { PasskeyAssertion } from '../core/vault/fido2.js';
 import type { LockTimeoutSetting } from '../background/settings.js';
 import type { AppErrorCode } from '../core/errors.js';
 
@@ -46,6 +47,7 @@ export type RequestMessage =
   | { type: 'vault.getPasswordHealth' }
   | { type: 'vault.export' }
   | { type: 'vault.import'; json: string }
+  | { type: 'vault.getPasskeyAssertion'; rpId: string; origin: string; challenge: string; allowedCredentialIds?: string[]; userVerified?: boolean }
   | { type: 'vault.createFolder'; name: string }
   | { type: 'vault.renameFolder'; id: string; name: string }
   | { type: 'vault.deleteFolder'; id: string }
@@ -71,6 +73,7 @@ export type ResponseMessage =
   | { ok: true; data: { json: string } }
   | { ok: true; data: { imported: number } }
   | { ok: true; data: { enabled: boolean } }
+  | { ok: true; data: { assertion: PasskeyAssertion | null } }
   | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting; lockTimeout: LockTimeoutSetting } }
   | { ok: true; data: null }
   | { ok: true; data: AutofillCandidate[] }

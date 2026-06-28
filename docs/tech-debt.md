@@ -66,14 +66,17 @@
     Vaultwarden（2025.12.0）跑通 登录→建→sync→解密往返→改→删。
   - 仍待：个人条目之外的**组织条目编辑 / 软删除回收站 / SshKey(type=5) 编辑 / 多 URI 编辑**。
 
-- **注册（Registration）** ✅（本次落地，真实服务端验证）
-  - `crypto/registration.buildRegistration(email, password, iters)`：客户端零知识生成——随机 64B
-    UserKey（用 stretched master key 包成 `key`）+ 新 RSA-2048 keypair（公钥 SPKI base64、私钥 PKCS8
-    用 UserKey 包成 `encryptedPrivateKey`）+ `masterPasswordHash`。往返单测（UserKey 解包、RSA 公私钥配对）。
-  - `ApiClient.register` → `POST /identity/accounts/register`（RegisterData）；`AuthService.register`
-    生成密钥后注册并**自动登录**；路由 `auth.register`；popup 登录页「Create account」→ 注册表单
-    （邮箱/姓名/主密码/确认，长度与一致性校验）。
-  - **真实服务端验证**：`test/live/crud.live.test.ts` 注册全新账户→登录→建条目并在新账户密钥下解密成功。
+- **注册（Registration）** ✅（本次落地，真实服务端验证）：`crypto/registration.buildRegistration`
+  客户端零知识生成随机 UserKey（包成 `key`）+ RSA-2048 keypair（公钥 SPKI、私钥用 UserKey 包成
+  `encryptedPrivateKey`）+ `masterPasswordHash`；`ApiClient.register`→`POST /identity/accounts/register`；
+  `AuthService.register` 注册后自动登录；popup 登录页「Create account」表单。live 测试注册→登录→建条目验证。
+
+- **M7 passkeys** ✅（本次落地）：`vault/fido2.signFido2Assertion`（ES256 P-256，authenticatorData ‖
+  SHA-256(clientDataJSON) 签名 + raw→DER；以公钥验签往返单测）；`decrypt` 解出 `login.fido2Credentials`
+  （keyValue=PKCS8 base64url）；`VaultService.getPasskeyAssertion` 在 worker 内按 rpId/allowCredentials
+  匹配并签名（私钥不过边界），摘要 `hasPasskey`、详情剥离 keyValue；MAIN world `page-webauthn` 包裹
+  `navigator.credentials.get` + 隔离世界 `webauthn-bridge` 转发至 worker，无匹配则回退原生。
+  仍待：`navigator.credentials.create`（注册新 passkey）、严格 `instanceof PublicKeyCredential` 的站点、计数器持久化。
 
 ## 仍待实现 / 明确超范围
 
@@ -86,7 +89,7 @@
 |---|---|
 | M5 | ciphers/folders **CRUD** ✅ + 密码生成器 ✅（含生成历史）|
 | M6 | **TOTP** 验证码生成 / 显示 / **填充** ✅（已完整交付）|
-| M7 | **passkeys**（`fido2Credentials` 私钥，WebAuthn 独立签名）|
+| M7 | **passkeys** ✅（已交付）：`fido2Credentials` 私钥解密 + WebAuthn 断言独立签名 |
 | 注册 | 客户端账户密钥生成 + register 端点 ✅（已交付）|
 | M8 | **Sends** 分享 CRUD + 加密 |
 
