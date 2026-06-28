@@ -16,6 +16,8 @@ export interface CipherSummary {
   folderId?: string;
   /** Present for ciphers owned by an organization (decrypted with that organization's key). */
   organizationId?: string;
+  /** True when a login carries a TOTP secret. The secret itself never enters a summary. */
+  hasTotp?: boolean;
   /** Non-sensitive list subtitle (e.g. card brand or identity full name). Never holds secrets. */
   subtitle?: string;
   undecryptable?: boolean;

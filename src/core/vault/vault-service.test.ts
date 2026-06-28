@@ -22,6 +22,9 @@ import type { SyncResponse } from '../api/types.js';
 
 const orgKey = symmetricKeyFromBytes(hexToBytes(ORG_KEY_VECTOR.orgKeyHex));
 const privateKeyBytes = base64ToBytes(RSA_VECTOR.privateKeyPkcs8B64);
+const testUserKey = symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex));
+// RFC 6238 SHA1 seed as base32; at 1111111109s the 6-digit code is 081804.
+const TOTP_SECRET_B32 = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
 
 // Test-only encType=2 EncString encryptor (fixed IV) for building org-key-protected fixtures.
 async function encUnder(plaintext: string, key: SymmetricKey): Promise<string> {
@@ -82,7 +85,7 @@ function makeSyncUrl(): SyncResponse {
   };
 }
 
-async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8Array } = {}) {
+async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8Array; now?: () => number } = {}) {
   const localStore = createMemoryStore();
   const sm = new SessionManager({ localStore, sessionStore: createMemoryStore() });
   await sm.saveUnlocked({
@@ -98,7 +101,8 @@ async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8
   });
   const api = { sync: vi.fn(async () => syncResponse) } as unknown as ApiClient;
   const auth = { refreshIfNeeded: vi.fn(async () => {}) } as unknown as AuthService;
-  return { service: new VaultService({ api, auth, session: sm, localStore }), api, session: sm };
+  const deps = { api, auth, session: sm, localStore, ...(opts.now ? { now: opts.now } : {}) };
+  return { service: new VaultService(deps), api, session: sm };
 }
 
 describe('VaultService', () => {
@@ -356,5 +360,30 @@ describe('VaultService', () => {
 
     await expect(service.getAutofillCredentials('org-login', 'https://org.example/login', UriMatchStrategy.Domain))
       .resolves.toEqual({ username: 'alice@org.example', password: 'org-s3cret' });
+  });
+
+  it('marks a login summary with hasTotp without leaking the secret', async () => {
+    const sync = makeSync();
+    sync.ciphers[0]!.login = { username: FIELD_VECTOR.encString, totp: await encUnder(TOTP_SECRET_B32, testUserKey) };
+    const { service } = await makeService(sync);
+    const { items } = await service.sync();
+    expect(items[0]).toMatchObject({ id: 'cipher-1', hasTotp: true });
+    expect(JSON.stringify(items)).not.toContain(TOTP_SECRET_B32);
+    expect(JSON.stringify(items)).not.toContain('totp');
+  });
+
+  it('getTotpCode generates the current code in the worker for a login with a TOTP secret', async () => {
+    const sync = makeSync();
+    sync.ciphers[0]!.login = { username: FIELD_VECTOR.encString, totp: await encUnder(TOTP_SECRET_B32, testUserKey) };
+    const { service } = await makeService(sync, { now: () => 1111111109_000 });
+    await service.sync();
+    await expect(service.getTotpCode('cipher-1')).resolves.toEqual({ code: '081804', period: 30, remaining: 1 });
+  });
+
+  it('getTotpCode returns undefined for a login without a TOTP secret or a missing cipher', async () => {
+    const { service } = await makeService();
+    await service.sync();
+    await expect(service.getTotpCode('cipher-1')).resolves.toBeUndefined();
+    await expect(service.getTotpCode('nope')).resolves.toBeUndefined();
   });
 });

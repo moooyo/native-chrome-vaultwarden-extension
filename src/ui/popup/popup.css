@@ -103,6 +103,8 @@ body { width: 360px; }
 .readout .v { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 0.8125rem; word-break: break-all; }
 .readout .v.is-link a { color: var(--accent); text-decoration: none; }
 .readout .v.is-link a:hover { text-decoration: underline; }
+#totpCode { flex: none; letter-spacing: 0.08em; color: var(--accent); }
+.totp-countdown { flex: 1; font-family: var(--font-mono); font-size: 0.75rem; font-variant-numeric: tabular-nums; text-align: right; }
 
 .detail-actions { display: grid; gap: var(--s2); margin-top: var(--s1); }
 .detail-status { min-height: 1rem; }

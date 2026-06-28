@@ -22,6 +22,15 @@ let vaultItems: CipherSummary[] = [];
 let vaultFolders: FolderSummary[] = [];
 let selectedFolderId: string | null = null;
 let skippedOrgCount = 0;
+// Active TOTP countdown interval for the open login detail (cleared on any navigation).
+let totpTimer: number | undefined;
+
+function clearTotpTimer(): void {
+  if (totpTimer !== undefined) {
+    clearInterval(totpTimer);
+    totpTimer = undefined;
+  }
+}
 
 void init();
 
@@ -34,6 +43,7 @@ async function init() {
 }
 
 function render(view: View) {
+  clearTotpTimer();
   currentViewKind = view.kind;
   if (view.kind === 'loading') {
     app.innerHTML = `<div class="center"><span class="spinner"></span><span class="muted">Loading vault…</span></div>`;
@@ -456,6 +466,7 @@ function renderVaultList() {
 }
 
 function renderDetail(id: string) {
+  clearTotpTimer();
   const item = vaultItems.find((i) => i.id === id);
   if (!item) return;
   if (item.type === 2) return renderSecureNoteDetail(id, item);
@@ -531,6 +542,15 @@ function renderLoginDetail(id: string, item: CipherSummary) {
             <button id="togglePassword" class="icon-btn" type="button" aria-pressed="false" title="Show password" aria-label="Show password">${icon('eye')}</button>
           </div>
         </div>
+        ${item.hasTotp ? `
+        <div class="readout">
+          <div class="k">${icon('key')} Verification code</div>
+          <div class="v-row">
+            <code id="totpCode" class="v mono">······</code>
+            <span id="totpCountdown" class="totp-countdown muted" aria-hidden="true"></span>
+            <button id="copyTotp" class="icon-btn" type="button" title="Copy code" aria-label="Copy verification code">${icon('copy')}</button>
+          </div>
+        </div>` : ''}
         <div class="detail-actions">
           <button id="copyPassword" type="button" class="btn btn-block">${icon('copy')}<span>Copy password</span></button>
           <button id="copyUsername" type="button" class="btn btn-secondary btn-block">${icon('user')}<span>Copy username</span></button>
@@ -562,6 +582,51 @@ function renderLoginDetail(id: string, item: CipherSummary) {
   }));
   document.getElementById('copyPassword')!.addEventListener('click', () => void withDetailBusy(() => copyField(id, 'password', 'Password')));
   document.getElementById('copyUsername')!.addEventListener('click', () => void withDetailBusy(() => copyValue(item.username, 'Username')));
+
+  if (item.hasTotp) {
+    let currentCode: string | undefined;
+    document.getElementById('copyTotp')!.addEventListener('click', () => void withDetailBusy(() => copyValue(currentCode, 'Verification code')));
+    const loadTotp = async (): Promise<void> => {
+      const codeEl = document.getElementById('totpCode');
+      const countdownEl = document.getElementById('totpCountdown');
+      if (!codeEl || !countdownEl) return clearTotpTimer();
+      const response = await sendRequest({ type: 'vault.getTotp', id });
+      if (!response.ok) {
+        clearTotpTimer();
+        return setDetailStatus(response.error.message, true);
+      }
+      const totp = (response.data as { totp: { code: string; period: number; remaining: number } | null }).totp;
+      if (!totp) {
+        clearTotpTimer();
+        countdownEl.textContent = '';
+        return setDetailStatus('No verification code for this item', true);
+      }
+      currentCode = totp.code;
+      codeEl.textContent = formatTotp(totp.code);
+      let remaining = totp.remaining;
+      countdownEl.textContent = `${remaining}s`;
+      clearTotpTimer();
+      totpTimer = window.setInterval(() => {
+        const cd = document.getElementById('totpCountdown');
+        if (!cd) return clearTotpTimer();
+        remaining -= 1;
+        if (remaining <= 0) {
+          clearTotpTimer();
+          void loadTotp(); // fetch the next window's code
+          return;
+        }
+        cd.textContent = `${remaining}s`;
+      }, 1000);
+    };
+    void loadTotp();
+  }
+}
+
+/** Group a TOTP code into two halves for readability (e.g. "081804" -> "081 804"). */
+function formatTotp(code: string): string {
+  if (code.length % 2 !== 0) return code;
+  const half = code.length / 2;
+  return `${code.slice(0, half)} ${code.slice(half)}`;
 }
 
 function renderSecureNoteDetail(id: string, item: CipherSummary) {

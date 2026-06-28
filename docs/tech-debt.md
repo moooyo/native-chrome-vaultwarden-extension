@@ -5,6 +5,14 @@
 
 ## 已交付
 
+- **TOTP 验证码生成 / 显示** ✅（本次落地，原 M6 的一部分）
+  - `src/core/vault/totp.ts`：RFC 6238 TOTP（HMAC-SHA1/256/512、可配 digits/period），
+    支持裸 base32 密钥与 `otpauth://` URI；用 RFC 6238 Appendix B 标准向量做单测。
+  - 密钥只在 worker 内解密：`vault-service.getTotpCode(id)` 仅把 6 位码 + 周期 + 剩余秒数过边界；
+    `CipherSummary.hasTotp` 只暴露「是否有 TOTP」的布尔，不含密钥。
+  - 路由 `vault.getTotp`；popup 登录详情展示验证码 + 倒计时（窗口翻转时自动取下一码），可复制。
+  - 仍待：把 TOTP **自动填充**进表单（原 M6 的「填充」部分）。
+
 - **组织条目（Organization cipher）解密** ✅（本次落地）
   - 链路：`Profile.organizations[].key`（encType=4 RSA-OAEP-SHA1 包裹）→ `keys.unwrapRsaWrappedKey`
     （内部 `parseRsaEncString` + `primitives.rsaOaepDecrypt`，账户私钥来自 `storage.session`）→
@@ -32,7 +40,7 @@
 | 里程碑 | 内容 |
 |---|---|
 | M5 | ciphers/folders **CRUD** + 密码生成器（含生成历史）|
-| M6 | **TOTP** 验证码生成 / 显示 / 填充 |
+| M6 | **TOTP** 验证码生成 / 显示 ✅（已交付）；剩余：**填充**进表单 |
 | M7 | **passkeys**（`fido2Credentials` 私钥，WebAuthn 独立签名）|
 | M8 | **Sends** 分享 CRUD + 加密 |
 

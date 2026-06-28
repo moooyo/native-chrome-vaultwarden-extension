@@ -279,6 +279,28 @@ describe('router', () => {
       .resolves.toEqual({ ok: true, data: { count: 2 } });
   });
 
+  it('routes vault.getTotp and maps an absent code to null', async () => {
+    const getTotpCode = vi.fn(async (id: string) =>
+      id === 'has' ? { code: '081804', period: 30, remaining: 1 } : undefined);
+    const router = createRouter({
+      auth: {},
+      vault: { getTotpCode },
+      settings: {
+        getServerUrl: vi.fn(),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
+      },
+    });
+    await expect(router.handle({ type: 'vault.getTotp', id: 'has' }))
+      .resolves.toEqual({ ok: true, data: { totp: { code: '081804', period: 30, remaining: 1 } } });
+    await expect(router.handle({ type: 'vault.getTotp', id: 'none' }))
+      .resolves.toEqual({ ok: true, data: { totp: null } });
+    expect(getTotpCode).toHaveBeenCalledWith('has');
+  });
+
   it('turns non-Error throws into ok:false with string message', async () => {
     const router = createRouter({
       auth: { lock: vi.fn(async () => { throw 'string error'; }) },

@@ -71,6 +71,11 @@ export function createRouter(deps: RouterDeps) {
             const cipher = await deps.vault.getCipherDetail(request.id);
             return { ok: true, data: { cipher: cipher ?? null } };
           }
+          case 'vault.getTotp': {
+            if (!deps.vault.getTotpCode) throw new Error('vault.getTotpCode is not wired');
+            const totp = await deps.vault.getTotpCode(request.id);
+            return { ok: true, data: { totp: totp ?? null } };
+          }
           case 'vault.getSkippedOrgCount': {
             if (!deps.vault.getSkippedOrgCount) throw new Error('vault.getSkippedOrgCount is not wired');
             return { ok: true, data: { count: await deps.vault.getSkippedOrgCount() } };

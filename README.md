@@ -20,6 +20,7 @@ M4 adds:
 Beyond the milestones, the extension now also:
 
 - Decrypts organization-owned ciphers by unwrapping each organization key (RSA-OAEP-SHA1, encType=4) with the account private key, so org logins appear in the list and participate in autofill.
+- Generates RFC 6238 TOTP codes for logins that store a TOTP secret (base32 or `otpauth://`), shown with a live countdown in the login detail. The secret is decrypted only in the service worker; only the current code crosses to the popup.
 
 Collections grouping, Argon2id accounts, and account registration are not implemented in this milestone.
 
@@ -69,3 +70,4 @@ Load `dist/` from Chrome `chrome://extensions` with Developer Mode enabled.
 21. Switch the OS/browser to dark mode and confirm the popup, options page, and popover all adopt the dark theme.
 22. Set the display to a HiDPI scale (e.g. 150% / 200%) and confirm icons and text stay crisp in all surfaces.
 23. Narrow the options tab and confirm the layout reflows without horizontal scrolling.
+24. Open a login that stores a TOTP secret and confirm the verification code shows with a countdown, rolls over at the end of its window, and copies on demand.

@@ -6,6 +6,7 @@ import type { KeyValueStore } from '../../platform/store.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import type { CipherSummary, DecryptedCipher, FieldName, FolderSummary } from './models.js';
 import { decryptCipher, decryptFolders, buildOrgKeyMap } from './decrypt.js';
+import { getTotp, type TotpResult } from './totp.js';
 import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
@@ -15,6 +16,7 @@ export interface VaultServiceDeps {
   auth: Pick<AuthService, 'refreshIfNeeded'>;
   session: SessionManager;
   localStore: KeyValueStore;
+  now?: () => number;
 }
 
 const VAULT_CACHE_KEY = 'vaultCache';
@@ -96,6 +98,13 @@ export class VaultService {
       delete safe.identity.licenseNumber;
     }
     return safe;
+  }
+
+  /** Generate the current TOTP code for a login, decrypting the secret only inside the worker. */
+  async getTotpCode(id: string): Promise<TotpResult | undefined> {
+    const decrypted = await this.decryptCipherById(id);
+    if (!decrypted?.totp) return undefined;
+    return getTotp(decrypted.totp, (this.deps.now ?? Date.now)());
   }
 
   private async decryptCipherById(id: string): Promise<DecryptedCipher | undefined> {
@@ -203,6 +212,7 @@ export class VaultService {
               loginUris: decrypted.loginUris,
             };
             if (decrypted.username) summary.username = decrypted.username;
+            if (decrypted.totp) summary.hasTotp = true;
             if (decrypted.organizationId) summary.organizationId = decrypted.organizationId;
             if (decrypted.folderId) summary.folderId = decrypted.folderId;
             const subtitle = summarySubtitle(decrypted);
