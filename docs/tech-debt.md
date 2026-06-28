@@ -119,9 +119,16 @@
 - ⬆ **2FA 扩展**（本次部分交付）：现支持所有**码型**提供方——Authenticator(0)/Email(1)/Duo passcode(2/6)/
   YubiKey OTP(3)，popup 提供选择器与按提供方提示。**仍待**：WebAuthn/FIDO2 安全密钥(7)（需托管 connector）、
   Duo push（异步轮询）、新设备 email OTP 提交、captcha/hCaptcha、SSO + Key Connector、设备批准/TDE、passwordless。
-- ⬆ **附件（attachments）**：无模型/无 per-attachment key/无端点；带附件条目编辑有丢数据风险。
-- ⬆ **组织策略（policies）拉取与执行**；**改主密码 / 改 KDF / 密钥轮换**；**Sends（文本+文件）**；
-  **加密导出 + CSV/第三方导入**。
+- ✅ **加密导出 + CSV/编码导入**（已交付）：密码保护导出（PBKDF2→HKDF stretch、encType=2 payload，Bitwarden
+  格式）+ 加密导入（验证 MAC）；CSV 导入（Bitwarden CSV + 通用浏览器导出）；`parseImport` 自动识别 JSON/CSV。
+  剩余：第三方专有格式（LastPass/1Password/KeePass 等）、CSV 卡/身份/自定义字段映射。
+- ✅ **改主密码 / 改 KDF 迭代**（已交付）：重新包裹 UserKey（库不重新加密）+ 更新服务端与本地材料；
+  KDF 迭代有下限保护。剩余：Argon2 目标 KDF（按范围暂忽略）、全库密钥轮换。
+- ✅ **附件（attachments）**（已交付）：per-attachment key（库密钥包裹）+ EncArrayBuffer 文件格式；
+  详情展示 + 按需下载解密（reprompt 门控）+ 上传（multipart，Vaultwarden 兼容）+ 删除。
+- ✅ **Sends（文本）**（已交付）：HKDF 多块派生 send key（`derive_shareable_key`）、创建/列表/删除、
+  密码哈希、分享链接（含 send key）。剩余：**文件 Sends**、编辑现有 Send、Send 访问/解密页（接收端）。
+- ⬆ **组织策略（policies）拉取与执行**；**全库密钥轮换**。
 - ➖ 键盘快捷键（manifest `commands`）、右键上下文菜单、**Card/Identity 页面自动填充**、
   **用户名/转发邮箱别名生成器**、HIBP 泄露检测、超时动作（锁定 vs 登出）、
   跨服务器多账户、集合 CRUD、i18n/`_locales`、生物识别解锁、徽章计数、账户指纹短语、Firefox 打包、

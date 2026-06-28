@@ -204,6 +204,57 @@ export interface CipherRequest {
   reprompt?: number | null;
 }
 
+/** Send text payload. `text` is an EncString under the (HKDF-derived) send key; `hidden` masks it. */
+export interface SendTextData {
+  text?: string | null;
+  hidden?: boolean;
+}
+
+/** Send file metadata. `fileName` is an EncString under the send key. */
+export interface SendFileData {
+  id?: string | null;
+  fileName?: string | null;
+  size?: string | null;
+  sizeName?: string | null;
+}
+
+/** A Send as returned by the server. `key` wraps the 16-byte send key under the account user key;
+ *  `name`/text/file fields are EncStrings under the HKDF-derived send key. */
+export interface SendResponse {
+  id: string;
+  accessId: string;
+  type: number; // 0 text, 1 file
+  name?: string | null;
+  notes?: string | null;
+  key: string;
+  text?: SendTextData | null;
+  file?: SendFileData | null;
+  maxAccessCount?: number | null;
+  accessCount?: number;
+  expirationDate?: string | null;
+  deletionDate: string;
+  disabled?: boolean;
+  password?: string | null;
+  hideEmail?: boolean | null;
+  revisionDate?: string | null;
+}
+
+/** Create/update Send request body (camelCase). All text fields are EncStrings. */
+export interface SendRequest {
+  type: number;
+  name: string;
+  notes?: string | null;
+  key: string;
+  text?: SendTextData | null;
+  file?: SendFileData | null;
+  maxAccessCount?: number | null;
+  expirationDate?: string | null;
+  deletionDate: string;
+  password?: string | null;
+  disabled?: boolean;
+  hideEmail?: boolean | null;
+}
+
 /** A collection groups organization ciphers. `name` is an EncString encrypted with the org key. */
 export interface CollectionResponse {
   id: string;

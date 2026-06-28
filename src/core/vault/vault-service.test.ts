@@ -20,6 +20,7 @@ import { hmacSha256 } from '../crypto/primitives.js';
 import { decryptToText } from '../crypto/encstring.js';
 import { derToRawSignature } from './fido2.js';
 import { encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
+import { buildTextSendRequest } from './sends.js';
 import { FIELD_VECTOR, URL_VECTOR, USER_KEY_VECTOR, RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
 import type { SyncResponse } from '../api/types.js';
 
@@ -116,6 +117,9 @@ async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8
     downloadAttachment: vi.fn(async () => new Uint8Array()),
     uploadAttachment: vi.fn(async () => ({ id: 'cipher-1', type: 1, name: '2.enc' })),
     deleteAttachment: vi.fn(async () => {}),
+    listSends: vi.fn(async () => []),
+    createSend: vi.fn(async (_t: string, send: unknown) => ({ id: 's1', accessId: 'acc1', ...(send as object) })),
+    deleteSend: vi.fn(async () => {}),
   } as unknown as ApiClient;
   const auth = {
     refreshIfNeeded: vi.fn(async () => {}),
@@ -480,6 +484,34 @@ describe('VaultService', () => {
       await service.deleteAttachment('cipher-1', 'att-1');
       expect(api.deleteAttachment).toHaveBeenCalledWith('access', 'cipher-1', 'att-1');
       expect(api.sync).toHaveBeenCalled();
+    });
+  });
+
+  describe('sends', () => {
+    it('listSends decrypts each send for display with its share URL', async () => {
+      const { request } = await buildTextSendRequest({ name: 'Shared note', text: 'body', deletionDays: 7 }, testUserKey);
+      const { service, api } = await makeService();
+      (api.listSends as ReturnType<typeof vi.fn>).mockResolvedValue([{ id: 's1', accessId: 'acc1', ...request }]);
+      const sends = await service.listSends('https://vault.example');
+      expect(sends).toHaveLength(1);
+      expect(sends[0]).toMatchObject({ id: 's1', name: 'Shared note', text: 'body' });
+      expect(sends[0]!.url).toContain('https://vault.example/#/send/acc1/');
+    });
+
+    it('createTextSend posts an encrypted send and returns it with a share URL', async () => {
+      const { service, api } = await makeService();
+      const summary = await service.createTextSend({ name: 'Hi', text: 'secret-body', deletionDays: 7 }, 'https://vault.example');
+      const [token, body] = (api.createSend as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(token).toBe('access');
+      expect(JSON.stringify(body)).not.toContain('secret-body'); // text is encrypted
+      expect(summary.name).toBe('Hi');
+      expect(summary.url).toContain('https://vault.example/#/send/acc1/');
+    });
+
+    it('deleteSend calls the API by id', async () => {
+      const { service, api } = await makeService();
+      await service.deleteSend('s1');
+      expect(api.deleteSend).toHaveBeenCalledWith('access', 's1');
     });
   });
 

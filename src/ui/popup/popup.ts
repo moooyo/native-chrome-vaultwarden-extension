@@ -5,6 +5,7 @@ import { filterSummariesByFolderCollectionAndQuery, NO_FOLDER } from '../../core
 import { generatePassword, DEFAULT_PASSWORD_OPTIONS, type PasswordGenOptions } from '../../core/generator/password.js';
 import { generatePassphrase, DEFAULT_PASSPHRASE_OPTIONS, type PassphraseGenOptions } from '../../core/generator/passphrase.js';
 import { addPasswordToHistory } from '../../core/generator/history.js';
+import type { SendInput, SendSummary } from '../../core/vault/sends.js';
 import { icon } from '../icons.js';
 
 type View =
@@ -406,6 +407,7 @@ function renderUnlockedShell(error?: string) {
       <button id="addItem" class="icon-btn" type="button" title="Add item" aria-label="Add item">${icon('plus')}</button>
       <button id="health" class="icon-btn" type="button" title="Password health" aria-label="Password health">${icon('checkCircle')}</button>
       <button id="generate" class="icon-btn" type="button" title="Password generator" aria-label="Password generator">${icon('key')}</button>
+      <button id="sends" class="icon-btn" type="button" title="Sends" aria-label="Sends">${icon('mail')}</button>
       <button id="sync" class="icon-btn" type="button" title="Sync vault" aria-label="Sync vault">${icon('refresh')}</button>
       <button id="trashToggle" class="icon-btn" type="button" title="Trash" aria-label="Trash">${icon('trash')}</button>
       <button id="lock" class="icon-btn" type="button" title="Lock vault" aria-label="Lock vault">${icon('lock')}</button>
@@ -706,6 +708,7 @@ function bindUnlockedControls() {
 
   document.getElementById('search')!.addEventListener('input', renderVaultList);
   document.getElementById('generate')!.addEventListener('click', () => renderGenerator());
+  document.getElementById('sends')!.addEventListener('click', () => void renderSends());
   document.getElementById('addItem')!.addEventListener('click', () => renderTypePicker());
   document.getElementById('health')!.addEventListener('click', () => void renderHealthReport());
   bindExportImport();
@@ -968,6 +971,99 @@ function passphraseGenOptionsHtml(): string {
       <label class="gen-check"><input id="genCap" type="checkbox" ${o.capitalize ? 'checked' : ''} /><span>Capitalize</span></label>
       <label class="gen-check"><input id="genNum" type="checkbox" ${o.includeNumber ? 'checked' : ''} /><span>Include number</span></label>
     </div>`;
+}
+
+/** Sends panel: create text Sends and list/copy/delete existing ones. */
+async function renderSends(): Promise<void> {
+  clearTotpTimer();
+  app.innerHTML = `
+    <div class="detail">
+      <div class="detail-head">
+        <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
+        <div class="titles"><h1>Sends</h1></div>
+      </div>
+      <div class="detail-body">
+        <div class="ed-field"><span class="ed-label">New text Send</span>
+          ${editorTextRow('send_name', 'Name', '')}
+          <label class="ed-field"><span class="ed-label">Text to share</span><textarea id="send_text" class="input ed-textarea"></textarea></label>
+          <label class="gen-check"><input id="send_hidden" type="checkbox" /><span>Hide text by default</span></label>
+          <input id="send_password" class="input" type="password" placeholder="Password (optional)" autocomplete="new-password" />
+          <div class="ed-grid">
+            ${editorTextRow('send_expiry', 'Expire in days (optional)', '')}
+            ${editorTextRow('send_deletion', 'Delete in days', '7')}
+            ${editorTextRow('send_max', 'Max views (optional)', '')}
+          </div>
+          <button id="send_create" type="button" class="btn btn-block">${icon('plus')}<span>Create Send</span></button>
+        </div>
+        <div id="sendList"><div class="muted center">Loading…</div></div>
+        <div id="detailStatus" class="detail-status"></div>
+      </div>
+    </div>`;
+  document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
+  document.getElementById('send_create')!.addEventListener('click', () => void createSend());
+  await loadSends();
+}
+
+async function loadSends(): Promise<void> {
+  const list = document.getElementById('sendList');
+  if (!list) return;
+  const response = await sendRequest({ type: 'sends.list' });
+  if (!response.ok) { list.innerHTML = ''; return setDetailStatus(response.error.message, true); }
+  renderSendList(list, (response.data as { sends: SendSummary[] }).sends);
+}
+
+function renderSendList(list: HTMLElement, sends: SendSummary[]): void {
+  if (!sends.length) { list.innerHTML = `<div class="muted center">No active Sends</div>`; return; }
+  list.innerHTML = `<div class="cf-head">Active Sends</div>` + sends.map((s) => `
+    <div class="readout">
+      <div class="k">${icon('mail')} ${escapeHtml(s.name)}${s.passwordProtected ? ' 🔒' : ''}${s.disabled ? ' (disabled)' : ''}</div>
+      <div class="v-row"><span class="sub">Deletes ${escapeHtml(new Date(s.deletionDate).toLocaleDateString())}${s.maxAccessCount != null ? ` · ${s.accessCount}/${s.maxAccessCount} views` : ''}</span></div>
+      <div class="v-row">
+        <code class="v mono">${escapeHtml(s.url)}</code>
+        <button class="icon-btn" type="button" data-send-copy="${escapeHtml(s.url)}" title="Copy link" aria-label="Copy Send link">${icon('copy')}</button>
+        <button class="icon-btn" type="button" data-send-delete="${escapeHtml(s.id)}" title="Delete" aria-label="Delete Send">${icon('trash')}</button>
+      </div>
+    </div>`).join('');
+  list.querySelectorAll<HTMLButtonElement>('button[data-send-copy]').forEach((btn) => {
+    btn.addEventListener('click', () => void withDetailBusy(() => copyValue(btn.dataset.sendCopy, 'Send link')));
+  });
+  list.querySelectorAll<HTMLButtonElement>('button[data-send-delete]').forEach((btn) => {
+    btn.addEventListener('click', () => void withDetailBusy(async () => {
+      const response = await sendRequest({ type: 'sends.delete', id: btn.dataset.sendDelete! });
+      if (!response.ok) return setDetailStatus(response.error.message, true);
+      await loadSends();
+    }));
+  });
+}
+
+async function createSend(): Promise<void> {
+  if (isPending) return;
+  const val = (id: string): string => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement).value;
+  const text = val('send_text');
+  if (!text) return setDetailStatus('Enter the text to share', true);
+  const input: SendInput = {
+    name: val('send_name').trim() || 'Send',
+    text,
+    hidden: (document.getElementById('send_hidden') as HTMLInputElement).checked,
+    deletionDays: Number(val('send_deletion')) || 7,
+  };
+  const pwd = val('send_password'); if (pwd) input.password = pwd;
+  const expiry = Number(val('send_expiry')); if (expiry > 0) input.expirationDays = expiry;
+  const max = Number(val('send_max')); if (max > 0) input.maxAccessCount = max;
+  isPending = true;
+  document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = true));
+  try {
+    const response = await sendRequest({ type: 'sends.createText', input });
+    if (!response.ok) return setDetailStatus(response.error.message, true);
+    const send = (response.data as { send: SendSummary }).send;
+    await copyValue(send.url, 'Send link'); // copies the share link to the clipboard
+    (document.getElementById('send_name') as HTMLInputElement).value = '';
+    (document.getElementById('send_text') as HTMLTextAreaElement).value = '';
+    await loadSends();
+  } finally {
+    isPending = false;
+    document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = false));
+  }
 }
 
 /** Standalone password/passphrase generator panel — runs locally; no vault secret involved. */

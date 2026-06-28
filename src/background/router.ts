@@ -226,6 +226,23 @@ export function createRouter(deps: RouterDeps) {
               await deps.settings.saveLockTimeout(request.lockTimeout);
             }
             return { ok: true, data: null };
+          case 'sends.list': {
+            if (!deps.vault.listSends) throw new Error('vault.listSends is not wired');
+            const serverUrl = await deps.settings.getServerUrl();
+            if (!serverUrl) throw new AppError('error', 'Server URL is not configured');
+            return { ok: true, data: { sends: await deps.vault.listSends(serverUrl) } };
+          }
+          case 'sends.createText': {
+            if (!deps.vault.createTextSend) throw new Error('vault.createTextSend is not wired');
+            const serverUrl = await deps.settings.getServerUrl();
+            if (!serverUrl) throw new AppError('error', 'Server URL is not configured');
+            return { ok: true, data: { send: await deps.vault.createTextSend(request.input, serverUrl) } };
+          }
+          case 'sends.delete': {
+            if (!deps.vault.deleteSend) throw new Error('vault.deleteSend is not wired');
+            await deps.vault.deleteSend(request.id);
+            return { ok: true, data: null };
+          }
           case 'autofill.findCandidates': {
             if (!deps.vault.findAutofillCandidates) throw new Error('vault.findAutofillCandidates is not wired');
             const defaultStrategy = await deps.settings.getDefaultUriMatchStrategy();

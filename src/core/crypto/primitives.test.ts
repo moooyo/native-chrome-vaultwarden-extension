@@ -27,6 +27,20 @@ describe('primitives', () => {
       .toBe('0586d3103bfe6a5e5c72ec94d05907bda43b6b26bafeb67e896885e5addab596');
   });
 
+  it('HKDF-Expand multi-block (64B) follows RFC 5869 chaining (used for Send keys)', async () => {
+    const prk = hexToBytes('c6e36acf506a7d05ec07ebe2c4f8406ccb1b69e761e71e61e7e24edc0b7736bd');
+    const okm = await hkdfExpandSha256(prk, 'send', 64);
+    expect(okm.length).toBe(64);
+    // First block equals the single-block expansion.
+    const t1 = await hkdfExpandSha256(prk, 'send', 32);
+    expect(bytesToHex(okm.slice(0, 32))).toBe(bytesToHex(t1));
+    // Second block = HMAC(PRK, T(1) ‖ info ‖ 0x02).
+    const info = new TextEncoder().encode('send');
+    const t2Input = new Uint8Array(t1.length + info.length + 1);
+    t2Input.set(t1, 0); t2Input.set(info, t1.length); t2Input[t2Input.length - 1] = 0x02;
+    expect(bytesToHex(okm.slice(32))).toBe(bytesToHex(await hmacSha256(prk, t2Input)));
+  });
+
   it('AES-256-CBC decrypts what WebCrypto encrypts', async () => {
     const key = hexToBytes('00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff');
     const iv = hexToBytes('0102030405060708090a0b0c0d0e0f10');

@@ -22,17 +22,32 @@ export async function hmacSha256(key: Uint8Array, data: Uint8Array): Promise<Uin
   return new Uint8Array(await subtle.sign('HMAC', k, data as BufferSource));
 }
 
+/**
+ * HKDF-Expand (RFC 5869 §2.3) over SHA-256. Multi-block: T(n) = HMAC(PRK, T(n-1) ‖ info ‖ n), with
+ * the output the first `lengthBytes` of T(1) ‖ T(2) ‖ … Single-block (≤32B) matches the prior
+ * behavior; 64B output is used for Bitwarden Send keys (derive_shareable_key).
+ */
 export async function hkdfExpandSha256(
   prk: Uint8Array,
   info: string,
   lengthBytes: number,
 ): Promise<Uint8Array> {
-  if (lengthBytes > 32) throw new Error('hkdfExpand: only single-block (<=32B) supported');
+  if (lengthBytes <= 0 || lengthBytes > 255 * 32) throw new Error('hkdfExpand: invalid length');
   const infoBytes = utf8ToBytes(info);
-  const input = new Uint8Array(infoBytes.length + 1);
-  input.set(infoBytes, 0);
-  input[infoBytes.length] = 0x01;
-  return (await hmacSha256(prk, input)).slice(0, lengthBytes);
+  const out = new Uint8Array(lengthBytes);
+  let previous: Uint8Array = new Uint8Array(0);
+  let pos = 0;
+  for (let counter = 1; pos < lengthBytes; counter++) {
+    const input = new Uint8Array(previous.length + infoBytes.length + 1);
+    input.set(previous, 0);
+    input.set(infoBytes, previous.length);
+    input[input.length - 1] = counter & 0xff;
+    previous = await hmacSha256(prk, input);
+    const take = Math.min(previous.length, lengthBytes - pos);
+    out.set(previous.subarray(0, take), pos);
+    pos += take;
+  }
+  return out;
 }
 
 export async function aesCbc256Decrypt(

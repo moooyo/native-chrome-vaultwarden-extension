@@ -5,6 +5,7 @@ import type { CipherInput, CipherSummary, CollectionSummary, DecryptedCipher, Fi
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 import type { TotpResult } from '../core/vault/totp.js';
 import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
+import type { SendInput, SendSummary } from '../core/vault/sends.js';
 import type { PasswordHealthEntry } from '../core/vault/password-health.js';
 import type { PasskeyAssertion } from '../core/vault/fido2.js';
 import type { LockTimeoutSetting } from '../background/settings.js';
@@ -77,6 +78,9 @@ export type RequestMessage =
   | { type: 'settings.save'; serverUrl: string; defaultUriMatchStrategy?: UriMatchStrategySetting; lockTimeout?: LockTimeoutSetting }
   | { type: 'autofill.findCandidates'; frameUrl: string; formSignature?: string }
   | { type: 'autofill.getCredentials'; cipherId: string; frameUrl: string }
+  | { type: 'sends.list' }
+  | { type: 'sends.createText'; input: SendInput }
+  | { type: 'sends.delete'; id: string }
   | { type: 'autofill.checkSaveLogin'; frameUrl: string; username?: string; password: string }
   | { type: 'autofill.saveLogin'; frameUrl: string; username?: string; password: string }
   | { type: 'autofill.updateLogin'; cipherId: string; frameUrl: string; password: string };
@@ -105,6 +109,8 @@ export type ResponseMessage =
   | { ok: true; data: AutofillCandidate[] }
   | { ok: true; data: AutofillCredentials }
   | { ok: true; data: SaveLoginPrompt }
+  | { ok: true; data: { sends: SendSummary[] } }
+  | { ok: true; data: { send: SendSummary } }
   | { ok: false; error: { code: AppErrorCode; message: string } };
 
 export async function sendRequest(request: RequestMessage): Promise<ResponseMessage> {

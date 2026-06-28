@@ -15,6 +15,7 @@ import { base64UrlToBytes, base64ToBytes, bytesToBase64 } from '../crypto/encodi
 import { decryptAttachmentKey, decryptAttachmentFile, encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
 import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealthInput } from './password-health.js';
 import { buildExportJson, buildEncryptedExportJson, parseImport } from './vault-io.js';
+import { buildTextSendRequest, decryptSend, type SendInput, type SendSummary } from './sends.js';
 import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
@@ -228,6 +229,36 @@ export class VaultService {
     request.organizationId = organizationId;
     await this.deps.api.shareCipher(token, id, { cipher: request, collectionIds });
     return this.sync();
+  }
+
+  /** List the account's Sends, decrypted for display (name/text + the shareable access URL). */
+  async listSends(serverUrl: string): Promise<SendSummary[]> {
+    const userKey = await this.requireUserKey();
+    const token = await this.requireToken();
+    const sends = await this.deps.api.listSends(token);
+    const out: SendSummary[] = [];
+    for (const send of sends) {
+      try {
+        out.push(await decryptSend(send, userKey, serverUrl));
+      } catch {
+        // Skip a send we cannot decrypt rather than failing the whole list.
+      }
+    }
+    return out;
+  }
+
+  /** Create a text Send and return it decrypted (with its access URL) for immediate sharing. */
+  async createTextSend(input: SendInput, serverUrl: string): Promise<SendSummary> {
+    const userKey = await this.requireUserKey();
+    const token = await this.requireToken();
+    const { request } = await buildTextSendRequest(input, userKey, this.deps.now ? { now: this.deps.now } : {});
+    const created = await this.deps.api.createSend(token, request);
+    return decryptSend(created, userKey, serverUrl);
+  }
+
+  /** Delete a Send. */
+  async deleteSend(id: string): Promise<void> {
+    await this.deps.api.deleteSend(await this.requireToken(), id);
   }
 
   /** Permanently delete a cipher (no recovery), then re-sync. Used for "delete forever" from the trash. */

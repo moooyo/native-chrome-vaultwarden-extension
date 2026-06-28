@@ -7,6 +7,8 @@ import type {
   PreloginResponse,
   RefreshTokenResponse,
   RegisterRequest,
+  SendRequest,
+  SendResponse,
   SyncResponse,
   TwoFactorRequiredResponse,
 } from './types.js';
@@ -203,6 +205,32 @@ export class ApiClient {
   async restoreCipher(accessToken: string, id: string): Promise<void> {
     await this.noBodyRequest(`/api/ciphers/${encodeURIComponent(id)}/restore`, {
       method: 'PUT',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+  }
+
+  /** List the account's Sends. */
+  async listSends(accessToken: string): Promise<SendResponse[]> {
+    const res = await this.jsonRequest<{ data?: SendResponse[] }>('/api/sends', {
+      method: 'GET',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    return res.data ?? [];
+  }
+
+  /** Create a (text) Send. */
+  async createSend(accessToken: string, send: SendRequest): Promise<SendResponse> {
+    return this.jsonRequest<SendResponse>('/api/sends', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(send),
+    });
+  }
+
+  /** Delete a Send. */
+  async deleteSend(accessToken: string, id: string): Promise<void> {
+    await this.noBodyRequest(`/api/sends/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
       headers: { authorization: `Bearer ${accessToken}` },
     });
   }
