@@ -24,6 +24,8 @@ export interface CipherSummary {
   hasPasskey?: boolean;
   /** Non-sensitive list subtitle (e.g. card brand or identity full name). Never holds secrets. */
   subtitle?: string;
+  /** Soft-delete timestamp; when set, the cipher is in the trash (excluded from the main list & autofill). */
+  deletedDate?: string;
   undecryptable?: boolean;
 }
 

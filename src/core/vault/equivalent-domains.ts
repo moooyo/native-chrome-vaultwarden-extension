@@ -24,11 +24,17 @@ export const BUILTIN_EQUIVALENT_DOMAINS: string[][] = [
  * Build a domain -> group-id index from the built-in list plus any user-defined groups. Two domains
  * are equivalent when they share a group id. (Groups are kept distinct; a domain listed in more than
  * one group takes the last group id — overlaps are rare in the curated list.)
+ *
+ * `excludedDomains` carries the domains of server global-equivalence groups the user has switched off
+ * (globalEquivalentDomains[].excluded). Any built-in group containing such a domain is dropped, so the
+ * client honors the server's Domain Rules. User-defined groups are always kept.
  */
-export function buildEquivalentDomainIndex(userGroups: string[][] = []): Map<string, number> {
+export function buildEquivalentDomainIndex(userGroups: string[][] = [], excludedDomains: string[] = []): Map<string, number> {
+  const excluded = new Set(excludedDomains.map((d) => d.toLowerCase()));
+  const builtins = BUILTIN_EQUIVALENT_DOMAINS.filter((group) => !group.some((d) => excluded.has(d.toLowerCase())));
   const index = new Map<string, number>();
   let groupId = 0;
-  for (const group of [...BUILTIN_EQUIVALENT_DOMAINS, ...userGroups]) {
+  for (const group of [...builtins, ...userGroups]) {
     const id = groupId++;
     for (const domain of group) index.set(domain.toLowerCase(), id);
   }

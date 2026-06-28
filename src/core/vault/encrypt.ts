@@ -1,4 +1,4 @@
-import type { CardCipherData, CipherRequest, IdentityCipherData, LoginCipherData } from '../api/types.js';
+import type { CardCipherData, CipherRequest, CipherResponse, IdentityCipherData, LoginCipherData } from '../api/types.js';
 import { encryptToText } from '../crypto/encstring.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import type { CipherInput, DecryptedCard, DecryptedIdentity } from './models.js';
@@ -33,6 +33,28 @@ export async function encryptCipher(input: CipherInput, key: SymmetricKey): Prom
     req.identity = (await encryptFields(input.identity ?? {}, IDENTITY_FIELDS, key)) as IdentityCipherData;
   }
   return req;
+}
+
+/**
+ * Carry forward the fields the editor does not model from the original (cached) cipher onto a freshly
+ * encrypted update request, so a wholesale PUT does not silently wipe them server-side. Everything copied
+ * is already an EncString (or an opaque flag), so no user key is needed. No-op on the create path.
+ */
+export function mergeServerManagedFields(request: CipherRequest, original: CipherResponse | undefined): CipherRequest {
+  if (!original) return request;
+  if (original.key != null) request.key = original.key;
+  if (original.fields != null) request.fields = original.fields;
+  if (original.passwordHistory != null) request.passwordHistory = original.passwordHistory;
+  if (original.reprompt != null) request.reprompt = original.reprompt;
+  // Login sub-fields the editor cannot represent (a stored passkey, the password-revision timestamp)
+  // must ride along, or the wholesale PUT drops them. Only touch login on login ciphers.
+  if (request.type === 1) {
+    const carried: Partial<LoginCipherData> = {};
+    if (original.login?.fido2Credentials != null) carried.fido2Credentials = original.login.fido2Credentials;
+    if (original.login?.passwordRevisionDate != null) carried.passwordRevisionDate = original.login.passwordRevisionDate;
+    if (Object.keys(carried).length) request.login = { ...(request.login ?? {}), ...carried };
+  }
+  return request;
 }
 
 async function encryptLogin(login: NonNullable<CipherInput['login']>, key: SymmetricKey): Promise<LoginCipherData> {

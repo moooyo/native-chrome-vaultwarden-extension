@@ -57,6 +57,8 @@ export type RequestMessage =
   | { type: 'vault.createCipher'; input: CipherInput }
   | { type: 'vault.updateCipher'; id: string; input: CipherInput }
   | { type: 'vault.deleteCipher'; id: string }
+  | { type: 'vault.softDeleteCipher'; id: string }
+  | { type: 'vault.restoreCipher'; id: string }
   | { type: 'vault.getCipherInput'; id: string }
   | { type: 'settings.get' }
   | { type: 'settings.save'; serverUrl: string; defaultUriMatchStrategy?: UriMatchStrategySetting; lockTimeout?: LockTimeoutSetting }

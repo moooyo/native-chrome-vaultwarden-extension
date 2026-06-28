@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { encryptCipher } from './encrypt.js';
+import { encryptCipher, mergeServerManagedFields } from './encrypt.js';
 import { decryptCipher } from './decrypt.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import { hexToBytes } from '../crypto/encoding.js';
@@ -31,6 +31,15 @@ describe('encryptCipher', () => {
       username: 'octo', password: 's3cret', totp: 'JBSWY3DPEHPK3PXP', uris: ['https://github.com'],
       loginUris: [{ uri: 'https://github.com', match: 0 }],
     });
+  });
+
+  it('round-trips a login with multiple URIs and preserves each match (multi-URI editor data path)', async () => {
+    const input: CipherInput = {
+      type: 1, name: 'Multi',
+      login: { password: 'p', uris: [{ uri: 'https://app.example.com', match: 0 }, { uri: 'https://example.com' }] },
+    };
+    const { decrypted } = await roundTrip(input);
+    expect(decrypted?.loginUris).toEqual([{ uri: 'https://app.example.com', match: 0 }, { uri: 'https://example.com' }]);
   });
 
   it('encrypts a secure note with a secureNote.type marker and round-trips name/notes', async () => {
@@ -69,5 +78,57 @@ describe('encryptCipher', () => {
     expect(req.notes == null).toBe(true);
     expect(req.login?.password == null).toBe(true);
     expect(req.login?.uris == null).toBe(true);
+  });
+});
+
+describe('mergeServerManagedFields', () => {
+  it('preserves a passkey, custom fields, passwordHistory, reprompt and cipher key from the original on update', async () => {
+    const req = await encryptCipher({ type: 1, name: 'GitHub', login: { username: 'octo', password: 's3cret' } }, userKey);
+    const original: CipherResponse = {
+      id: 'c1', type: 1,
+      key: '2.cipherkey==',
+      reprompt: 1,
+      fields: [{ type: 0, name: '2.fieldname==', value: '2.fieldvalue==' }],
+      passwordHistory: [{ password: '2.oldpassword==', lastUsedDate: '2020-01-01T00:00:00.000Z' }],
+      login: {
+        username: '2.ignored==',
+        fido2Credentials: [{ credentialId: '2.cid==', keyValue: '2.kv==', rpId: '2.rp==' }],
+        passwordRevisionDate: '2020-01-01T00:00:00.000Z',
+      },
+    };
+    const merged = mergeServerManagedFields(req, original);
+    // The high-severity case: the passkey survives an edit.
+    expect(merged.login?.fido2Credentials).toEqual(original.login!.fido2Credentials);
+    // The editor's own login fields are not clobbered by the merge.
+    expect(merged.login?.username).toBe(req.login!.username);
+    expect(merged.login?.password).toBe(req.login!.password);
+    expect(merged.login?.passwordRevisionDate).toBe('2020-01-01T00:00:00.000Z');
+    // Non-login server-managed metadata is carried forward verbatim.
+    expect(merged.fields).toEqual(original.fields);
+    expect(merged.passwordHistory).toEqual(original.passwordHistory);
+    expect(merged.reprompt).toBe(1);
+    expect(merged.key).toBe('2.cipherkey==');
+  });
+
+  it('is a no-op on the create path (no original cipher)', async () => {
+    const req = await encryptCipher({ type: 1, name: 'New', login: { password: 'x' } }, userKey);
+    const merged = mergeServerManagedFields(req, undefined);
+    expect(merged.login?.fido2Credentials == null).toBe(true);
+    expect(merged.fields == null).toBe(true);
+    expect(merged.passwordHistory == null).toBe(true);
+    expect(merged.reprompt == null).toBe(true);
+    expect(merged.key == null).toBe(true);
+  });
+
+  it('does not fabricate a login on non-login ciphers but still carries metadata', async () => {
+    const req = await encryptCipher({ type: 2, name: 'Note' }, userKey);
+    const original: CipherResponse = {
+      id: 'c1', type: 2, reprompt: 1,
+      fields: [{ type: 0, name: '2.n==', value: '2.v==' }],
+    };
+    const merged = mergeServerManagedFields(req, original);
+    expect(merged.login == null).toBe(true);
+    expect(merged.fields).toEqual(original.fields);
+    expect(merged.reprompt).toBe(1);
   });
 });

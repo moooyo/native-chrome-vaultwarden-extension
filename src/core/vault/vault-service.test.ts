@@ -109,6 +109,8 @@ async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8
     createCipher: vi.fn(async () => ({ id: 'new-cipher', type: 1, name: '2.enc' })),
     updateCipher: vi.fn(async () => ({ id: 'cipher-1', type: 1, name: '2.enc' })),
     deleteCipher: vi.fn(async () => {}),
+    softDeleteCipher: vi.fn(async () => {}),
+    restoreCipher: vi.fn(async () => {}),
   } as unknown as ApiClient;
   const auth = { refreshIfNeeded: vi.fn(async () => {}) } as unknown as AuthService;
   const deps = { api, auth, session: sm, localStore, ...(opts.now ? { now: opts.now } : {}) };
@@ -218,6 +220,32 @@ describe('VaultService', () => {
     const { service } = await makeService(sync);
     await service.sync();
     const candidates = await service.findAutofillCandidates('https://youtube.com/watch', UriMatchStrategy.Domain);
+    expect(candidates.map((c) => c.id)).toEqual(['cipher-1']);
+  });
+
+  it('honors a server-excluded global equivalent-domain group (google login no longer fills youtube)', async () => {
+    const sync = makeSync();
+    sync.ciphers[0]!.login = {
+      username: FIELD_VECTOR.encString,
+      uris: [{ uri: await encUnder('https://google.com', testUserKey), match: UriMatchStrategy.Domain }],
+    };
+    sync.domains = { globalEquivalentDomains: [{ type: 1, domains: ['google.com', 'youtube.com', 'gmail.com'], excluded: true }] };
+    const { service } = await makeService(sync);
+    await service.sync();
+    const candidates = await service.findAutofillCandidates('https://youtube.com/watch', UriMatchStrategy.Domain);
+    expect(candidates.map((c) => c.id)).toEqual([]);
+  });
+
+  it('consumes user-defined equivalent domains from sync (a custom group links two domains)', async () => {
+    const sync = makeSync();
+    sync.ciphers[0]!.login = {
+      username: FIELD_VECTOR.encString,
+      uris: [{ uri: await encUnder('https://corp-a.example', testUserKey), match: UriMatchStrategy.Domain }],
+    };
+    sync.domains = { equivalentDomains: [['corp-a.example', 'corp-b.example']] };
+    const { service } = await makeService(sync);
+    await service.sync();
+    const candidates = await service.findAutofillCandidates('https://corp-b.example/login', UriMatchStrategy.Domain);
     expect(candidates.map((c) => c.id)).toEqual(['cipher-1']);
   });
 
@@ -486,11 +514,63 @@ describe('VaultService', () => {
     expect((req as { name: string }).name.startsWith('2.')).toBe(true);
   });
 
+  it('updateCipher preserves the passkey, custom fields, reprompt and cipher key the editor does not model', async () => {
+    const sync = makeSync();
+    sync.ciphers[0]!.login = {
+      username: FIELD_VECTOR.encString,
+      password: FIELD_VECTOR.encString,
+      fido2Credentials: [{ credentialId: '2.cid==', keyValue: '2.kv==', rpId: '2.rp==', counter: '2.ct==' }],
+    };
+    sync.ciphers[0]!.fields = [{ type: 0, name: '2.fn==', value: '2.fv==' }];
+    sync.ciphers[0]!.reprompt = 1;
+    sync.ciphers[0]!.key = '2.cipherkey==';
+    const { service, api } = await makeService(sync);
+    await service.sync(); // populate the raw cache the merge reads from
+    await service.updateCipher('cipher-1', { type: 1, name: 'Renamed', login: { password: 'newpass' } });
+    const [, id, req] = (api.updateCipher as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(id).toBe('cipher-1');
+    const r = req as { login?: { fido2Credentials?: unknown }; fields?: unknown; reprompt?: number; key?: string };
+    expect(r.login?.fido2Credentials).toEqual(sync.ciphers[0]!.login!.fido2Credentials);
+    expect(r.fields).toEqual(sync.ciphers[0]!.fields);
+    expect(r.reprompt).toBe(1);
+    expect(r.key).toBe('2.cipherkey==');
+    // The editor's new secret is still encrypted, never sent as plaintext.
+    expect(JSON.stringify(r)).not.toContain('newpass');
+  });
+
   it('deleteCipher calls the API by id and re-syncs', async () => {
     const { service, api } = await makeService();
     await service.deleteCipher('cipher-1');
     expect(api.deleteCipher).toHaveBeenCalledWith('access', 'cipher-1');
     expect(api.sync).toHaveBeenCalled();
+  });
+
+  it('softDeleteCipher moves the cipher to trash via the API and re-syncs', async () => {
+    const { service, api } = await makeService();
+    await service.softDeleteCipher('cipher-1');
+    expect(api.softDeleteCipher).toHaveBeenCalledWith('access', 'cipher-1');
+    expect(api.deleteCipher).not.toHaveBeenCalled();
+    expect(api.sync).toHaveBeenCalled();
+  });
+
+  it('restoreCipher restores from trash via the API and re-syncs', async () => {
+    const { service, api } = await makeService();
+    await service.restoreCipher('cipher-1');
+    expect(api.restoreCipher).toHaveBeenCalledWith('access', 'cipher-1');
+    expect(api.sync).toHaveBeenCalled();
+  });
+
+  it('tags soft-deleted ciphers with deletedDate and keeps active ones in autofill', async () => {
+    const sync = makeSyncUrl();
+    sync.ciphers[0]!.deletedDate = '2026-01-01T00:00:00.000Z';
+    const { service } = await makeService(sync);
+    await service.sync();
+    // The trashed cipher is tagged so the UI can build a trash view…
+    const listing = await service.listItems();
+    expect(listing.items.find((i) => i.id === 'cipher-1')?.deletedDate).toBe('2026-01-01T00:00:00.000Z');
+    // …and it is NOT offered as an autofill candidate for its own URL.
+    const candidates = await service.findAutofillCandidates(URL_VECTOR.plaintext, UriMatchStrategy.Domain);
+    expect(candidates.find((c) => c.id === 'cipher-1')).toBeUndefined();
   });
 
   it('getCipherInput returns the editable plaintext including secrets', async () => {

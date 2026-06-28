@@ -182,6 +182,22 @@ export class ApiClient {
     });
   }
 
+  /** Soft-delete a cipher: move it to the trash (sets deletedDate server-side; recoverable). */
+  async softDeleteCipher(accessToken: string, id: string): Promise<void> {
+    await this.noBodyRequest(`/api/ciphers/${encodeURIComponent(id)}/delete`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+  }
+
+  /** Restore a cipher from the trash (clears deletedDate server-side). */
+  async restoreCipher(accessToken: string, id: string): Promise<void> {
+    await this.noBodyRequest(`/api/ciphers/${encodeURIComponent(id)}/restore`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+  }
+
   /** Send a request that may return an empty body (DELETE endpoints); throws on a non-OK status. */
   private async noBodyRequest(path: string, init: RequestInit): Promise<void> {
     const response = await this.fetchFn(await this.url(path), init);

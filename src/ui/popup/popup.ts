@@ -26,6 +26,8 @@ let vaultFolders: FolderSummary[] = [];
 let vaultCollections: CollectionSummary[] = [];
 let selectedFolderId: string | null = null;
 let selectedCollectionId: string | null = null;
+// When true, the vault list shows trashed (soft-deleted) items instead of active ones.
+let showTrash = false;
 let skippedOrgCount = 0;
 // Active TOTP countdown interval for the open login detail (cleared on any navigation).
 let totpTimer: number | undefined;
@@ -351,6 +353,7 @@ function renderUnlockedShell(error?: string) {
       <button id="health" class="icon-btn" type="button" title="Password health" aria-label="Password health">${icon('checkCircle')}</button>
       <button id="generate" class="icon-btn" type="button" title="Password generator" aria-label="Password generator">${icon('key')}</button>
       <button id="sync" class="icon-btn" type="button" title="Sync vault" aria-label="Sync vault">${icon('refresh')}</button>
+      <button id="trashToggle" class="icon-btn" type="button" title="Trash" aria-label="Trash">${icon('trash')}</button>
       <button id="lock" class="icon-btn" type="button" title="Lock vault" aria-label="Lock vault">${icon('lock')}</button>
     </div>
     <div id="folderBar" class="folderbar"></div>
@@ -539,6 +542,10 @@ function renderOrgBanner() {
 }
 
 function bindUnlockedControls() {
+  document.getElementById('trashToggle')!.addEventListener('click', () => {
+    showTrash = !showTrash;
+    renderVaultList();
+  });
   document.getElementById('lock')!.addEventListener('click', async () => {
     if (isPending) return;
     isPending = true;
@@ -988,6 +995,13 @@ function editorTextRow(id: string, label: string, value = ''): string {
   return `<label class="ed-field"><span class="ed-label">${escapeHtml(label)}</span><input id="${id}" class="input" value="${escapeHtml(value)}" /></label>`;
 }
 
+/** One URI input row for the login editor. The per-URI match strategy rides along in data-match so a
+ *  save preserves it (the editor doesn't expose a match picker), and extra URIs are no longer dropped. */
+function uriEditorRow(uri: string, match?: number | null): string {
+  const matchAttr = match != null ? ` data-match="${escapeHtml(String(match))}"` : '';
+  return `<input class="input mono ed-uri-input" value="${escapeHtml(uri)}" placeholder="https://example.com"${matchAttr} />`;
+}
+
 /** Render the create/edit form for a cipher type. */
 function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: CipherInput, id?: string): void {
   clearTotpTimer();
@@ -1010,7 +1024,12 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
         </div>
       </label>
       ${editorTextRow('ed_totp', 'Authenticator key (TOTP)', login.totp ?? '')}
-      ${editorTextRow('ed_uri', 'Website (URI)', login.uris?.[0]?.uri ?? '')}`;
+      <label class="ed-field"><span class="ed-label">Websites (URIs)</span>
+        <div id="ed_uris" class="ed-uris">
+          ${(login.uris?.length ? login.uris : [{ uri: '' }]).map((u) => uriEditorRow(u.uri, u.match)).join('')}
+        </div>
+        <button id="ed_addUri" class="btn btn-secondary btn-sm" type="button">${icon('plus')}<span>Add URI</span></button>
+      </label>`;
   } else if (type === 3) {
     typeFields = CARD_FORM.map((f) => editorTextRow(`ed_${f.key}`, f.label, (v.card as Record<string, string> | undefined)?.[f.key] ?? '')).join('');
   } else if (type === 4) {
@@ -1048,6 +1067,9 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
     document.getElementById('ed_pwGen')!.addEventListener('click', () => {
       (document.getElementById('ed_password') as HTMLInputElement).value = generatePassword(genOptions);
     });
+    document.getElementById('ed_addUri')!.addEventListener('click', () => {
+      document.getElementById('ed_uris')!.insertAdjacentHTML('beforeend', uriEditorRow(''));
+    });
   }
   document.getElementById('ed_save')!.addEventListener('click', () => void saveEditor(mode, type, id));
   if (mode === 'edit' && id) {
@@ -1069,7 +1091,14 @@ function collectEditorInput(type: 1 | 2 | 3 | 4): CipherInput {
     const u = val('ed_username'); if (u) login.username = u;
     const p = val('ed_password'); if (p) login.password = p;
     const t = val('ed_totp'); if (t) login.totp = t;
-    const uri = val('ed_uri').trim(); if (uri) login.uris = [{ uri }];
+    const uris: NonNullable<NonNullable<CipherInput['login']>['uris']> = [];
+    for (const el of document.querySelectorAll<HTMLInputElement>('#ed_uris .ed-uri-input')) {
+      const uri = el.value.trim();
+      if (!uri) continue;
+      const m = el.dataset.match;
+      uris.push(m !== undefined && m !== '' ? { uri, match: Number(m) } : { uri });
+    }
+    if (uris.length) login.uris = uris;
     input.login = login;
   } else if (type === 3) {
     const card: Record<string, string> = {};
@@ -1113,13 +1142,15 @@ async function openEditorForEdit(id: string): Promise<void> {
   renderEditor('edit', input.type, input, id);
 }
 
-/** Inline two-step delete confirmation rendered into the detail status line. */
-function confirmDeleteCipher(id: string, name: string): void {
+/** Inline two-step delete confirmation. Soft-deletes (to trash) by default; permanent=true hard-deletes. */
+function confirmDeleteCipher(id: string, name: string, permanent = false): void {
   const status = document.getElementById('detailStatus');
   if (!status) return;
+  const prompt = permanent ? `Delete “${escapeHtml(name)}” forever? This cannot be undone.` : `Move “${escapeHtml(name)}” to trash?`;
+  const label = permanent ? 'Delete forever' : 'Move to trash';
   status.innerHTML = `<div class="confirm-row">
-    <span class="muted">Delete “${escapeHtml(name)}”?</span>
-    <button id="ed_confirmDel" class="btn btn-danger btn-sm" type="button">Delete</button>
+    <span class="muted">${prompt}</span>
+    <button id="ed_confirmDel" class="btn btn-danger btn-sm" type="button">${label}</button>
     <button id="ed_cancelDel" class="btn btn-secondary btn-sm" type="button">Cancel</button>
   </div>`;
   document.getElementById('ed_cancelDel')!.addEventListener('click', () => { status.innerHTML = ''; });
@@ -1128,13 +1159,26 @@ function confirmDeleteCipher(id: string, name: string): void {
     isPending = true;
     status.querySelectorAll('button').forEach((b) => (b.disabled = true));
     try {
-      const response = await sendRequest({ type: 'vault.deleteCipher', id });
+      const response = await sendRequest(permanent ? { type: 'vault.deleteCipher', id } : { type: 'vault.softDeleteCipher', id });
       if (!response.ok) return setDetailStatus(response.error.message, true);
       render({ kind: 'unlocked' });
     } finally {
       isPending = false;
     }
   });
+}
+
+/** Restore a soft-deleted cipher from the trash, then return to the list. */
+async function restoreCipherAction(id: string): Promise<void> {
+  if (isPending) return;
+  isPending = true;
+  try {
+    const response = await sendRequest({ type: 'vault.restoreCipher', id });
+    if (!response.ok) return setDetailStatus(response.error.message, true);
+    render({ kind: 'unlocked' });
+  } finally {
+    isPending = false;
+  }
 }
 
 async function loadCachedList() {
@@ -1160,14 +1204,25 @@ async function loadSkippedOrgCount() {
 function renderVaultList() {
   const list = document.getElementById('vaultList');
   if (!list) return;
+  const trashToggle = document.getElementById('trashToggle');
+  const trashedCount = vaultItems.filter((i) => i.deletedDate).length;
+  if (trashToggle) {
+    trashToggle.classList.toggle('active', showTrash);
+    trashToggle.setAttribute('title', showTrash ? 'Exit trash' : `Trash${trashedCount ? ` (${trashedCount})` : ''}`);
+  }
   const query = (document.getElementById('search') as HTMLInputElement | null)?.value ?? '';
-  const filtered = filterSummariesByFolderCollectionAndQuery(vaultItems, selectedFolderId, selectedCollectionId, query);
+  // The trash view shows only soft-deleted items; the main list excludes them.
+  const scope = vaultItems.filter((item) => (showTrash ? Boolean(item.deletedDate) : !item.deletedDate));
+  const filtered = filterSummariesByFolderCollectionAndQuery(scope, selectedFolderId, selectedCollectionId, query);
   if (filtered.length === 0) {
     const isSearch = query.trim().length > 0;
+    const message = showTrash
+      ? (isSearch ? 'No trashed items match your search.' : 'Trash is empty.')
+      : (isSearch ? 'No items match your search.' : 'Your vault is empty. Sync to load items.');
     list.innerHTML = `
       <div class="empty">
-        <span class="glyph">${icon(isSearch ? 'search' : 'shield')}</span>
-        <span>${isSearch ? 'No items match your search.' : 'Your vault is empty. Sync to load items.'}</span>
+        <span class="glyph">${icon(isSearch ? 'search' : (showTrash ? 'trash' : 'shield'))}</span>
+        <span>${message}</span>
       </div>`;
     return;
   }
@@ -1204,7 +1259,19 @@ function renderDetail(id: string) {
 
 /** Standard detail header (back button + title + optional subtitle + edit/delete actions). */
 function detailHead(item: CipherSummary): string {
-  const editable = !item.undecryptable && item.type !== 5;
+  const trashed = Boolean(item.deletedDate);
+  const editable = !item.undecryptable && item.type !== 5 && !trashed;
+  const actions = trashed
+    ? `<div class="detail-head-actions">
+        <button id="detailRestore" class="icon-btn" type="button" title="Restore" aria-label="Restore">${icon('refresh')}</button>
+        <button id="detailDelete" class="icon-btn" type="button" title="Delete forever" aria-label="Delete forever">${icon('trash')}</button>
+      </div>`
+    : editable
+    ? `<div class="detail-head-actions">
+        <button id="detailEdit" class="icon-btn" type="button" title="Edit" aria-label="Edit">${icon('edit')}</button>
+        <button id="detailDelete" class="icon-btn" type="button" title="Delete" aria-label="Delete">${icon('trash')}</button>
+      </div>`
+    : '';
   return `
     <div class="detail-head">
       <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
@@ -1212,10 +1279,7 @@ function detailHead(item: CipherSummary): string {
         <h1>${escapeHtml(item.name)}</h1>
         ${item.username ? `<span class="sub">${escapeHtml(item.username)}</span>` : ''}
       </div>
-      ${editable ? `<div class="detail-head-actions">
-        <button id="detailEdit" class="icon-btn" type="button" title="Edit" aria-label="Edit">${icon('edit')}</button>
-        <button id="detailDelete" class="icon-btn" type="button" title="Delete" aria-label="Delete">${icon('trash')}</button>
-      </div>` : ''}
+      ${actions}
     </div>`;
 }
 
@@ -1223,10 +1287,15 @@ function bindBack(): void {
   document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
 }
 
-/** Wire the edit/delete actions in a detail header (no-op when the item is not editable). */
+/** Wire the edit/delete (or restore/delete-forever, for trashed items) actions in a detail header. */
 function bindDetailActions(item: CipherSummary): void {
+  if (item.deletedDate) {
+    document.getElementById('detailRestore')?.addEventListener('click', () => void restoreCipherAction(item.id));
+    document.getElementById('detailDelete')?.addEventListener('click', () => confirmDeleteCipher(item.id, item.name, true));
+    return;
+  }
   document.getElementById('detailEdit')?.addEventListener('click', () => void openEditorForEdit(item.id));
-  document.getElementById('detailDelete')?.addEventListener('click', () => confirmDeleteCipher(item.id, item.name));
+  document.getElementById('detailDelete')?.addEventListener('click', () => confirmDeleteCipher(item.id, item.name, false));
 }
 
 /** Run a detail action with the busy guard, disabling/re-enabling every detail button. */

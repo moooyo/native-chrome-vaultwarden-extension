@@ -157,6 +157,12 @@ export function createRouter(deps: RouterDeps) {
           case 'vault.deleteCipher':
             if (!deps.vault.deleteCipher) throw new Error('vault.deleteCipher is not wired');
             return { ok: true, data: await deps.vault.deleteCipher(request.id) };
+          case 'vault.softDeleteCipher':
+            if (!deps.vault.softDeleteCipher) throw new Error('vault.softDeleteCipher is not wired');
+            return { ok: true, data: await deps.vault.softDeleteCipher(request.id) };
+          case 'vault.restoreCipher':
+            if (!deps.vault.restoreCipher) throw new Error('vault.restoreCipher is not wired');
+            return { ok: true, data: await deps.vault.restoreCipher(request.id) };
           case 'vault.getCipherInput': {
             if (!deps.vault.getCipherInput) throw new Error('vault.getCipherInput is not wired');
             const input = await deps.vault.getCipherInput(request.id);

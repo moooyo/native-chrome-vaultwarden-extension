@@ -32,4 +32,18 @@ describe('equivalent domains', () => {
   it('ships a non-trivial built-in list', () => {
     expect(BUILTIN_EQUIVALENT_DOMAINS.length).toBeGreaterThan(5);
   });
+
+  it('skips a built-in group when the server marks its domains excluded', () => {
+    // google.com/youtube.com share a built-in group; excluding google.com drops the whole group…
+    const idx = buildEquivalentDomainIndex([], ['google.com']);
+    expect(areDomainsEquivalent('google.com', 'youtube.com', idx)).toBe(false);
+    // …but other built-in groups are unaffected.
+    expect(areDomainsEquivalent('amazon.com', 'amazon.co.uk', idx)).toBe(true);
+  });
+
+  it('still applies user groups when a built-in group is excluded', () => {
+    const idx = buildEquivalentDomainIndex([['a.local', 'b.local']], ['youtube.com']);
+    expect(areDomainsEquivalent('a.local', 'b.local', idx)).toBe(true);
+    expect(areDomainsEquivalent('google.com', 'youtube.com', idx)).toBe(false);
+  });
 });

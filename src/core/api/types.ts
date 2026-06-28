@@ -73,6 +73,8 @@ export interface LoginCipherData {
   totp?: string | null;
   uris?: LoginUriResponse[] | null;
   fido2Credentials?: Fido2CredentialData[] | null;
+  /** Server-tracked timestamp of the last password change. Opaque to us; preserved across edits. */
+  passwordRevisionDate?: string | null;
 }
 
 /** A stored passkey (FIDO2 credential). All values are EncStrings; keyValue is PKCS#8 base64url. */
@@ -124,6 +126,20 @@ export interface IdentityCipherData {
   licenseNumber?: string | null;
 }
 
+/** A custom field on a cipher. `name`/`value` are EncStrings (type 0/1/2/3). Opaque to us. */
+export interface CipherFieldData {
+  type?: number | null;
+  name?: string | null;
+  value?: string | null;
+  linkedId?: number | null;
+}
+
+/** A prior password retained server-side. `password` is an EncString. Opaque to us. */
+export interface CipherPasswordHistoryData {
+  password?: string | null;
+  lastUsedDate?: string | null;
+}
+
 export interface CipherResponse {
   id: string;
   type: 1 | 2 | 3 | 4 | 5;
@@ -138,6 +154,14 @@ export interface CipherResponse {
   login?: LoginCipherData | null;
   card?: CardCipherData | null;
   identity?: IdentityCipherData | null;
+  /** Custom fields — not modeled by the editor; preserved verbatim across edits. */
+  fields?: CipherFieldData[] | null;
+  /** Server-retained password history — not modeled by the editor; preserved verbatim across edits. */
+  passwordHistory?: CipherPasswordHistoryData[] | null;
+  /** Master-password reprompt flag (0/1) — not modeled by the editor; preserved across edits. */
+  reprompt?: number | null;
+  /** Soft-delete timestamp; when set, the cipher lives in the trash. */
+  deletedDate?: string | null;
   revisionDate?: string | null;
 }
 
@@ -158,6 +182,14 @@ export interface CipherRequest {
   card?: CardCipherData | null;
   identity?: IdentityCipherData | null;
   secureNote?: { type: number } | null;
+  /** Per-cipher key, when the cipher has its own wrapped key. Preserved from the original on update. */
+  key?: string | null;
+  /** Custom fields preserved verbatim from the original cipher on update (the editor doesn't manage them). */
+  fields?: CipherFieldData[] | null;
+  /** Password history preserved verbatim from the original cipher on update. */
+  passwordHistory?: CipherPasswordHistoryData[] | null;
+  /** Master-password reprompt flag preserved from the original cipher on update. */
+  reprompt?: number | null;
 }
 
 /** A collection groups organization ciphers. `name` is an EncString encrypted with the org key. */
@@ -175,5 +207,16 @@ export interface SyncResponse {
   folders?: FolderResponse[];
   collections?: CollectionResponse[];
   /** User-defined equivalent-domain groups, when present (often null on self-hosted servers). */
-  domains?: { equivalentDomains?: string[][] | null } | null;
+  domains?: {
+    equivalentDomains?: string[][] | null;
+    /** Official global groups with per-group `excluded` flags reflecting the user's Domain Rules. */
+    globalEquivalentDomains?: GlobalEquivalentDomainsGroup[] | null;
+  } | null;
+}
+
+/** One server global equivalent-domains group. `excluded` is true when the user has switched it off. */
+export interface GlobalEquivalentDomainsGroup {
+  type?: number;
+  domains?: string[] | null;
+  excluded?: boolean;
 }

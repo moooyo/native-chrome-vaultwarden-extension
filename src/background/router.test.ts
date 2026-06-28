@@ -332,10 +332,12 @@ describe('router', () => {
     const createCipher = vi.fn(async () => listing);
     const updateCipher = vi.fn(async () => listing);
     const deleteCipher = vi.fn(async () => listing);
+    const softDeleteCipher = vi.fn(async () => listing);
+    const restoreCipher = vi.fn(async () => listing);
     const getCipherInput = vi.fn(async (id: string) => (id === 'c1' ? input : undefined));
     const router = createRouter({
       auth: {},
-      vault: { createCipher, updateCipher, deleteCipher, getCipherInput },
+      vault: { createCipher, updateCipher, deleteCipher, softDeleteCipher, restoreCipher, getCipherInput },
       settings: {
         getServerUrl: vi.fn(),
         saveServerUrl: vi.fn(),
@@ -351,6 +353,10 @@ describe('router', () => {
     expect(updateCipher).toHaveBeenCalledWith('c1', input);
     await expect(router.handle({ type: 'vault.deleteCipher', id: 'c1' })).resolves.toEqual({ ok: true, data: listing });
     expect(deleteCipher).toHaveBeenCalledWith('c1');
+    await expect(router.handle({ type: 'vault.softDeleteCipher', id: 'c1' })).resolves.toEqual({ ok: true, data: listing });
+    expect(softDeleteCipher).toHaveBeenCalledWith('c1');
+    await expect(router.handle({ type: 'vault.restoreCipher', id: 'c1' })).resolves.toEqual({ ok: true, data: listing });
+    expect(restoreCipher).toHaveBeenCalledWith('c1');
     await expect(router.handle({ type: 'vault.getCipherInput', id: 'c1' })).resolves.toEqual({ ok: true, data: { input } });
     await expect(router.handle({ type: 'vault.getCipherInput', id: 'missing' })).resolves.toEqual({ ok: true, data: { input: null } });
   });

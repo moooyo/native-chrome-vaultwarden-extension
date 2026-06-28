@@ -6,7 +6,7 @@ import type { KeyValueStore } from '../../platform/store.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import type { CipherSummary, CipherInput, CollectionSummary, DecryptedCipher, FieldName, FolderSummary } from './models.js';
 import { decryptCipher, decryptFolders, decryptCollections, buildOrgKeyMap } from './decrypt.js';
-import { encryptCipher } from './encrypt.js';
+import { encryptCipher, mergeServerManagedFields } from './encrypt.js';
 import { getTotp, type TotpResult } from './totp.js';
 import { signFido2Assertion, type PasskeyAssertion } from './fido2.js';
 import { encryptToText } from '../crypto/encstring.js';
@@ -31,6 +31,7 @@ const SUMMARY_CACHE_KEY = 'vaultSummaries';
 const FOLDER_CACHE_KEY = 'vaultFolders';
 const COLLECTION_CACHE_KEY = 'vaultCollections';
 const EQUIV_DOMAINS_KEY = 'vaultEquivalentDomains';
+const EQUIV_EXCLUDED_KEY = 'vaultExcludedDomains';
 const SKIPPED_ORG_KEY = 'vaultSkippedOrgCount';
 
 export interface VaultListing {
@@ -60,14 +61,22 @@ export class VaultService {
     await this.deps.localStore.set(FOLDER_CACHE_KEY, folders);
     await this.deps.localStore.set(COLLECTION_CACHE_KEY, collections);
     await this.deps.localStore.set(EQUIV_DOMAINS_KEY, response.domains?.equivalentDomains ?? []);
+    // Domains of global equivalence groups the user has switched off (Domain Rules), so the client
+    // stops treating them as equivalent for autofill.
+    const excludedDomains = (response.domains?.globalEquivalentDomains ?? [])
+      .filter((g) => g.excluded)
+      .flatMap((g) => g.domains ?? []);
+    await this.deps.localStore.set(EQUIV_EXCLUDED_KEY, excludedDomains);
     await this.deps.localStore.set(SKIPPED_ORG_KEY, skippedOrgCount);
     return { items, folders, collections };
   }
 
-  /** Build the equivalent-domain index from the built-in list plus any cached user-defined groups. */
+  /** Build the equivalent-domain index from the built-in list plus any cached user-defined groups,
+   *  dropping built-in groups the server's Domain Rules have excluded. */
   private async loadEquivalentIndex(): Promise<Map<string, number>> {
     const userGroups = (await this.deps.localStore.get<string[][]>(EQUIV_DOMAINS_KEY)) ?? [];
-    return buildEquivalentDomainIndex(userGroups);
+    const excludedDomains = (await this.deps.localStore.get<string[]>(EQUIV_EXCLUDED_KEY)) ?? [];
+    return buildEquivalentDomainIndex(userGroups, excludedDomains);
   }
 
   /** Unwrap each organization key from the synced profile using the decrypted account private key. */
@@ -122,13 +131,38 @@ export class VaultService {
   async updateCipher(id: string, input: CipherInput): Promise<VaultListing> {
     const userKey = await this.requireUserKey();
     const token = await this.requireToken();
-    await this.deps.api.updateCipher(token, id, await encryptCipher(input, userKey));
+    const request = await encryptCipher(input, userKey);
+    // Carry forward server-managed fields the editor cannot represent (passkeys, custom fields,
+    // password history, reprompt, the per-cipher key) so the wholesale PUT does not wipe them.
+    mergeServerManagedFields(request, await this.findCachedCipher(id));
+    await this.deps.api.updateCipher(token, id, request);
     return this.sync();
   }
 
+  /** Look up the raw (still-encrypted) cipher from the last sync cache, for field-preserving updates. */
+  private async findCachedCipher(id: string): Promise<CipherResponse | undefined> {
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    return cache?.ciphers.find((c) => c.id === id);
+  }
+
+  /** Permanently delete a cipher (no recovery), then re-sync. Used for "delete forever" from the trash. */
   async deleteCipher(id: string): Promise<VaultListing> {
     const token = await this.requireToken();
     await this.deps.api.deleteCipher(token, id);
+    return this.sync();
+  }
+
+  /** Soft-delete a cipher: move it to the trash (recoverable), then re-sync. */
+  async softDeleteCipher(id: string): Promise<VaultListing> {
+    const token = await this.requireToken();
+    await this.deps.api.softDeleteCipher(token, id);
+    return this.sync();
+  }
+
+  /** Restore a cipher from the trash, then re-sync. */
+  async restoreCipher(id: string): Promise<VaultListing> {
+    const token = await this.requireToken();
+    await this.deps.api.restoreCipher(token, id);
     return this.sync();
   }
 
@@ -233,6 +267,7 @@ export class VaultService {
     const allowed = params.allowedCredentialIds;
     for (const cipher of cache.ciphers) {
       if (cipher.type !== 1 || !cipher.login?.fido2Credentials?.length) continue;
+      if (cipher.deletedDate) continue; // trashed passkeys must not authenticate
       const decrypted = await decryptCipher(cipher, userKey, orgKeys);
       for (const cred of decrypted?.fido2Credentials ?? []) {
         if (cred.rpId !== params.rpId) continue;
@@ -265,6 +300,7 @@ export class VaultService {
     const inputs: PasswordHealthInput[] = [];
     for (const cipher of cache.ciphers) {
       if (cipher.type !== 1) continue;
+      if (cipher.deletedDate) continue; // exclude trashed logins from the health report
       const decrypted = await decryptCipher(cipher, userKey, orgKeys);
       if (decrypted && !decrypted.undecryptable && decrypted.password) {
         inputs.push({ id: decrypted.id, name: decrypted.name, password: decrypted.password });
@@ -286,6 +322,7 @@ export class VaultService {
     const folders = (await this.deps.localStore.get<FolderSummary[]>(FOLDER_CACHE_KEY)) ?? [];
     const decrypted: DecryptedCipher[] = [];
     for (const cipher of cache.ciphers) {
+      if (cipher.deletedDate) continue; // trashed ciphers are excluded from exports
       const d = await decryptCipher(cipher, userKey, orgKeys);
       if (d && !d.undecryptable) decrypted.push(d);
     }
@@ -323,6 +360,7 @@ export class VaultService {
     await this.deps.localStore.remove(FOLDER_CACHE_KEY);
     await this.deps.localStore.remove(COLLECTION_CACHE_KEY);
     await this.deps.localStore.remove(EQUIV_DOMAINS_KEY);
+    await this.deps.localStore.remove(EQUIV_EXCLUDED_KEY);
     await this.deps.localStore.remove(SKIPPED_ORG_KEY);
   }
 
@@ -337,7 +375,7 @@ export class VaultService {
     const equivalentIndex = await this.loadEquivalentIndex();
 
     const candidates = summaries
-      .filter((item) => item.type === 1 && !item.undecryptable)
+      .filter((item) => item.type === 1 && !item.undecryptable && !item.deletedDate)
       .flatMap((item) => {
         const best = bestMatch(item.loginUris, frameUrl, defaultStrategy, equivalentIndex);
         if (!best) return [];
@@ -410,6 +448,7 @@ export class VaultService {
             if (decrypted.organizationId) summary.organizationId = decrypted.organizationId;
             if (decrypted.folderId) summary.folderId = decrypted.folderId;
             if (decrypted.collectionIds) summary.collectionIds = decrypted.collectionIds;
+            if (cipher.deletedDate) summary.deletedDate = cipher.deletedDate;
             out.push(summary);
           } else {
             const summary: CipherSummary = {
@@ -426,6 +465,7 @@ export class VaultService {
             if (decrypted.organizationId) summary.organizationId = decrypted.organizationId;
             if (decrypted.folderId) summary.folderId = decrypted.folderId;
             if (decrypted.collectionIds) summary.collectionIds = decrypted.collectionIds;
+            if (cipher.deletedDate) summary.deletedDate = cipher.deletedDate;
             const subtitle = summarySubtitle(decrypted);
             if (subtitle) summary.subtitle = subtitle;
             out.push(summary);
@@ -444,6 +484,7 @@ export class VaultService {
         if (cipher.organizationId) summary.organizationId = cipher.organizationId;
         if (cipher.folderId) summary.folderId = cipher.folderId;
         if (cipher.collectionIds?.length) summary.collectionIds = cipher.collectionIds;
+        if (cipher.deletedDate) summary.deletedDate = cipher.deletedDate;
         out.push(summary);
       }
     }

@@ -342,6 +342,24 @@ describe('ApiClient ciphers', () => {
       headers: { authorization: 'Bearer token' },
     });
   });
+
+  it('PUTs /api/ciphers/<id>/delete to soft-delete (move to trash) with an empty body', async () => {
+    const fetchFn = vi.fn(async () => textResponse('', 200));
+    await expect(makeApi(fetchFn).softDeleteCipher('token', 'c1')).resolves.toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers/c1/delete', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer token' },
+    });
+  });
+
+  it('PUTs /api/ciphers/<id>/restore to restore from trash', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ id: 'c1', type: 1, name: '2.enc', deletedDate: null }));
+    await expect(makeApi(fetchFn).restoreCipher('token', 'c1')).resolves.toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers/c1/restore', {
+      method: 'PUT',
+      headers: { authorization: 'Bearer token' },
+    });
+  });
 });
 
 describe('ApiClient register', () => {
