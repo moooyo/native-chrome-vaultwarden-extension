@@ -49,8 +49,18 @@ describe('form detection', () => {
   it('checks fillable input state directly', () => {
     const input = document.createElement('input');
     input.type = 'password';
+    expect(isFillableInput(input)).toBe(false);
+    document.body.appendChild(input);
     expect(isFillableInput(input)).toBe(true);
     input.readOnly = true;
     expect(isFillableInput(input)).toBe(false);
+  });
+
+  it('ignores inputs hidden by CSS display:none', () => {
+    document.body.innerHTML = `
+      <input type="password" style="display:none">
+    `;
+
+    expect(detectLoginForms()).toEqual([]);
   });
 });
