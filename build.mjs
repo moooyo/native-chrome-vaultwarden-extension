@@ -19,6 +19,7 @@ const options = {
     background: 'src/background/index.ts',
     'ui/popup/popup': 'src/ui/popup/popup.ts',
     'ui/options/options': 'src/ui/options/options.ts',
+    'content/autofill': 'src/content/autofill.ts',
   },
   bundle: true,
   format: 'esm',
