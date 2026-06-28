@@ -63,6 +63,23 @@ export interface DecryptedCipher extends CipherSummary {
   identity?: DecryptedIdentity;
 }
 
+/** Plaintext cipher form input from the editor, before encryption into a write request. */
+export interface CipherInput {
+  type: 1 | 2 | 3 | 4;
+  name: string;
+  notes?: string;
+  favorite?: boolean;
+  folderId?: string | null;
+  login?: {
+    username?: string;
+    password?: string;
+    totp?: string;
+    uris?: LoginUri[];
+  };
+  card?: DecryptedCard;
+  identity?: DecryptedIdentity;
+}
+
 export interface FolderSummary {
   id: string;
   name: string;

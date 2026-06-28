@@ -304,3 +304,42 @@ describe('ApiClient folders', () => {
     expect(err.status).toBe(400);
   });
 });
+
+describe('ApiClient ciphers', () => {
+  const makeApi = (fetchFn: typeof fetch) => new ApiClient({
+    serverUrlProvider: async () => 'https://vw.example.com/',
+    fetchFn,
+    localStore: createMemoryStore(),
+  });
+  const request = { type: 1 as const, name: '2.enc', favorite: false, folderId: null, login: { username: '2.u' } };
+
+  it('POSTs /api/ciphers with the encrypted request and Bearer token', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ id: 'c1', type: 1, name: '2.enc' }));
+    const res = await makeApi(fetchFn).createCipher('token', request);
+    expect(res).toMatchObject({ id: 'c1' });
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer token' },
+      body: JSON.stringify(request),
+    });
+  });
+
+  it('PUTs /api/ciphers/<id> to update', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ id: 'c1', type: 1, name: '2.enc' }));
+    await makeApi(fetchFn).updateCipher('token', 'c1', request);
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers/c1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer token' },
+      body: JSON.stringify(request),
+    });
+  });
+
+  it('DELETEs /api/ciphers/<id> and tolerates an empty body', async () => {
+    const fetchFn = vi.fn(async () => textResponse('', 200));
+    await expect(makeApi(fetchFn).deleteCipher('token', 'c1')).resolves.toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers/c1', {
+      method: 'DELETE',
+      headers: { authorization: 'Bearer token' },
+    });
+  });
+});

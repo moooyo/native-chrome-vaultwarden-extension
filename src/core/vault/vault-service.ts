@@ -4,8 +4,9 @@ import type { SessionManager } from '../session/session-manager.js';
 import type { AuthService } from '../session/auth-service.js';
 import type { KeyValueStore } from '../../platform/store.js';
 import type { SymmetricKey } from '../crypto/keys.js';
-import type { CipherSummary, CollectionSummary, DecryptedCipher, FieldName, FolderSummary } from './models.js';
+import type { CipherSummary, CipherInput, CollectionSummary, DecryptedCipher, FieldName, FolderSummary } from './models.js';
 import { decryptCipher, decryptFolders, decryptCollections, buildOrgKeyMap } from './decrypt.js';
+import { encryptCipher } from './encrypt.js';
 import { getTotp, type TotpResult } from './totp.js';
 import { encryptToText } from '../crypto/encstring.js';
 import { AppError } from '../errors.js';
@@ -95,6 +96,52 @@ export class VaultService {
     const token = await this.requireToken();
     await this.deps.api.deleteFolder(token, id);
     return this.sync();
+  }
+
+  /** Create a personal cipher: encrypt every field under the user key, POST it, then re-sync. */
+  async createCipher(input: CipherInput): Promise<VaultListing> {
+    const userKey = await this.requireUserKey();
+    const token = await this.requireToken();
+    await this.deps.api.createCipher(token, await encryptCipher(input, userKey));
+    return this.sync();
+  }
+
+  async updateCipher(id: string, input: CipherInput): Promise<VaultListing> {
+    const userKey = await this.requireUserKey();
+    const token = await this.requireToken();
+    await this.deps.api.updateCipher(token, id, await encryptCipher(input, userKey));
+    return this.sync();
+  }
+
+  async deleteCipher(id: string): Promise<VaultListing> {
+    const token = await this.requireToken();
+    await this.deps.api.deleteCipher(token, id);
+    return this.sync();
+  }
+
+  /**
+   * Decrypt a cipher into editable plaintext for the editor. Unlike getCipherDetail this DOES include
+   * secrets (password/totp/card number/etc.) because the editor must round-trip them.
+   */
+  async getCipherInput(id: string): Promise<CipherInput | undefined> {
+    const decrypted = await this.decryptCipherById(id);
+    if (!decrypted || decrypted.undecryptable || decrypted.type === 5) return undefined;
+    const input: CipherInput = { type: decrypted.type, name: decrypted.name, favorite: decrypted.favorite };
+    if (decrypted.notes) input.notes = decrypted.notes;
+    if (decrypted.folderId) input.folderId = decrypted.folderId;
+    if (decrypted.type === 1) {
+      const login: NonNullable<CipherInput['login']> = {};
+      if (decrypted.username) login.username = decrypted.username;
+      if (decrypted.password) login.password = decrypted.password;
+      if (decrypted.totp) login.totp = decrypted.totp;
+      if (decrypted.loginUris.length) login.uris = decrypted.loginUris;
+      input.login = login;
+    } else if (decrypted.type === 3 && decrypted.card) {
+      input.card = decrypted.card;
+    } else if (decrypted.type === 4 && decrypted.identity) {
+      input.identity = decrypted.identity;
+    }
+    return input;
   }
 
   private async requireUserKey(): Promise<SymmetricKey> {

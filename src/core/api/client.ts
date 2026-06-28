@@ -1,5 +1,7 @@
 import type { KeyValueStore } from '../../platform/store.js';
 import type {
+  CipherRequest,
+  CipherResponse,
   FolderResponse,
   LoginSuccessResponse,
   PreloginResponse,
@@ -139,10 +141,40 @@ export class ApiClient {
   }
 
   async deleteFolder(accessToken: string, id: string): Promise<void> {
-    const response = await this.fetchFn(await this.url(`/api/folders/${encodeURIComponent(id)}`), {
+    await this.noBodyRequest(`/api/folders/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: { authorization: `Bearer ${accessToken}` },
     });
+  }
+
+  /** Create a personal cipher. `cipher` carries EncString field values. */
+  async createCipher(accessToken: string, cipher: CipherRequest): Promise<CipherResponse> {
+    return this.jsonRequest<CipherResponse>('/api/ciphers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(cipher),
+    });
+  }
+
+  async updateCipher(accessToken: string, id: string, cipher: CipherRequest): Promise<CipherResponse> {
+    return this.jsonRequest<CipherResponse>(`/api/ciphers/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(cipher),
+    });
+  }
+
+  /** Hard-delete a cipher. */
+  async deleteCipher(accessToken: string, id: string): Promise<void> {
+    await this.noBodyRequest(`/api/ciphers/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+  }
+
+  /** Send a request that may return an empty body (DELETE endpoints); throws on a non-OK status. */
+  private async noBodyRequest(path: string, init: RequestInit): Promise<void> {
+    const response = await this.fetchFn(await this.url(path), init);
     if (!response.ok) {
       const text = await response.text();
       let body: unknown;

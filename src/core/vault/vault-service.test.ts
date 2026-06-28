@@ -105,6 +105,9 @@ async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8
     createFolder: vi.fn(async () => ({ id: 'new-folder', name: '2.enc' })),
     updateFolder: vi.fn(async () => ({ id: 'f1', name: '2.enc' })),
     deleteFolder: vi.fn(async () => {}),
+    createCipher: vi.fn(async () => ({ id: 'new-cipher', type: 1, name: '2.enc' })),
+    updateCipher: vi.fn(async () => ({ id: 'cipher-1', type: 1, name: '2.enc' })),
+    deleteCipher: vi.fn(async () => {}),
   } as unknown as ApiClient;
   const auth = { refreshIfNeeded: vi.fn(async () => {}) } as unknown as AuthService;
   const deps = { api, auth, session: sm, localStore, ...(opts.now ? { now: opts.now } : {}) };
@@ -449,5 +452,47 @@ describe('VaultService', () => {
     const { service, session } = await makeService();
     await session.lock();
     await expect(service.createFolder('X')).rejects.toThrow();
+  });
+
+  it('createCipher encrypts the cipher under the user key, POSTs it, and re-syncs', async () => {
+    const { service, api } = await makeService();
+    await service.createCipher({ type: 1, name: 'New Login', login: { password: 'p@ssw0rd' } });
+    expect(api.createCipher).toHaveBeenCalledTimes(1);
+    const [token, req] = (api.createCipher as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(token).toBe('access');
+    expect((req as { name: string }).name.startsWith('2.')).toBe(true);
+    expect(JSON.stringify(req)).not.toContain('p@ssw0rd');
+    expect(api.sync).toHaveBeenCalled();
+  });
+
+  it('updateCipher encrypts and PUTs by id', async () => {
+    const { service, api } = await makeService();
+    await service.updateCipher('cipher-1', { type: 1, name: 'Renamed' });
+    const [token, id, req] = (api.updateCipher as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect([token, id]).toEqual(['access', 'cipher-1']);
+    expect((req as { name: string }).name.startsWith('2.')).toBe(true);
+  });
+
+  it('deleteCipher calls the API by id and re-syncs', async () => {
+    const { service, api } = await makeService();
+    await service.deleteCipher('cipher-1');
+    expect(api.deleteCipher).toHaveBeenCalledWith('access', 'cipher-1');
+    expect(api.sync).toHaveBeenCalled();
+  });
+
+  it('getCipherInput returns the editable plaintext including secrets', async () => {
+    const { service } = await makeService();
+    await service.sync();
+    const input = await service.getCipherInput('cipher-1');
+    expect(input).toMatchObject({
+      type: 1, name: FIELD_VECTOR.plaintext,
+      login: { username: FIELD_VECTOR.plaintext, password: FIELD_VECTOR.plaintext },
+    });
+  });
+
+  it('createCipher rejects when the vault is locked', async () => {
+    const { service, session } = await makeService();
+    await session.lock();
+    await expect(service.createCipher({ type: 1, name: 'x' })).rejects.toThrow();
   });
 });

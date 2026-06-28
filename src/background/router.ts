@@ -89,6 +89,20 @@ export function createRouter(deps: RouterDeps) {
           case 'vault.deleteFolder':
             if (!deps.vault.deleteFolder) throw new Error('vault.deleteFolder is not wired');
             return { ok: true, data: await deps.vault.deleteFolder(request.id) };
+          case 'vault.createCipher':
+            if (!deps.vault.createCipher) throw new Error('vault.createCipher is not wired');
+            return { ok: true, data: await deps.vault.createCipher(request.input) };
+          case 'vault.updateCipher':
+            if (!deps.vault.updateCipher) throw new Error('vault.updateCipher is not wired');
+            return { ok: true, data: await deps.vault.updateCipher(request.id, request.input) };
+          case 'vault.deleteCipher':
+            if (!deps.vault.deleteCipher) throw new Error('vault.deleteCipher is not wired');
+            return { ok: true, data: await deps.vault.deleteCipher(request.id) };
+          case 'vault.getCipherInput': {
+            if (!deps.vault.getCipherInput) throw new Error('vault.getCipherInput is not wired');
+            const input = await deps.vault.getCipherInput(request.id);
+            return { ok: true, data: { input: input ?? null } };
+          }
           case 'settings.get': {
             const serverUrl = await deps.settings.getServerUrl();
             const defaultUriMatchStrategy = await deps.settings.getDefaultUriMatchStrategy();

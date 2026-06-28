@@ -116,6 +116,20 @@ export interface FolderResponse {
   name?: string | null;
 }
 
+/** Create/update cipher request body (camelCase). All field values are EncStrings. */
+export interface CipherRequest {
+  type: 1 | 2 | 3 | 4 | 5;
+  name: string;
+  notes?: string | null;
+  favorite?: boolean;
+  folderId?: string | null;
+  organizationId?: string | null;
+  login?: LoginCipherData | null;
+  card?: CardCipherData | null;
+  identity?: IdentityCipherData | null;
+  secureNote?: { type: number } | null;
+}
+
 /** A collection groups organization ciphers. `name` is an EncString encrypted with the org key. */
 export interface CollectionResponse {
   id: string;

@@ -326,6 +326,35 @@ describe('router', () => {
     expect(deleteFolder).toHaveBeenCalledWith('f1');
   });
 
+  it('routes vault cipher mutations and getCipherInput', async () => {
+    const listing = { items: [], folders: [], collections: [] };
+    const input = { type: 1 as const, name: 'GitHub', login: { username: 'octo' } };
+    const createCipher = vi.fn(async () => listing);
+    const updateCipher = vi.fn(async () => listing);
+    const deleteCipher = vi.fn(async () => listing);
+    const getCipherInput = vi.fn(async (id: string) => (id === 'c1' ? input : undefined));
+    const router = createRouter({
+      auth: {},
+      vault: { createCipher, updateCipher, deleteCipher, getCipherInput },
+      settings: {
+        getServerUrl: vi.fn(),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
+      },
+    });
+    await expect(router.handle({ type: 'vault.createCipher', input })).resolves.toEqual({ ok: true, data: listing });
+    expect(createCipher).toHaveBeenCalledWith(input);
+    await expect(router.handle({ type: 'vault.updateCipher', id: 'c1', input })).resolves.toEqual({ ok: true, data: listing });
+    expect(updateCipher).toHaveBeenCalledWith('c1', input);
+    await expect(router.handle({ type: 'vault.deleteCipher', id: 'c1' })).resolves.toEqual({ ok: true, data: listing });
+    expect(deleteCipher).toHaveBeenCalledWith('c1');
+    await expect(router.handle({ type: 'vault.getCipherInput', id: 'c1' })).resolves.toEqual({ ok: true, data: { input } });
+    await expect(router.handle({ type: 'vault.getCipherInput', id: 'missing' })).resolves.toEqual({ ok: true, data: { input: null } });
+  });
+
   it('turns non-Error throws into ok:false with string message', async () => {
     const router = createRouter({
       auth: { lock: vi.fn(async () => { throw 'string error'; }) },
