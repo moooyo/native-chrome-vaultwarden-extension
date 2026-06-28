@@ -123,6 +123,18 @@ export function createRouter(deps: RouterDeps) {
             const cipher = await deps.vault.getCipherDetail(request.id);
             return { ok: true, data: { cipher: cipher ?? null } };
           }
+          case 'vault.getAttachment': {
+            if (!deps.vault.getAttachment) throw new Error('vault.getAttachment is not wired');
+            return { ok: true, data: await deps.vault.getAttachment(request.cipherId, request.attachmentId, request.masterPassword) };
+          }
+          case 'vault.addAttachment': {
+            if (!deps.vault.addAttachment) throw new Error('vault.addAttachment is not wired');
+            return { ok: true, data: await deps.vault.addAttachment(request.cipherId, request.fileName, request.dataB64, request.masterPassword) };
+          }
+          case 'vault.deleteAttachment': {
+            if (!deps.vault.deleteAttachment) throw new Error('vault.deleteAttachment is not wired');
+            return { ok: true, data: await deps.vault.deleteAttachment(request.cipherId, request.attachmentId) };
+          }
           case 'vault.getPasswordHistory': {
             if (!deps.vault.getPasswordHistory) throw new Error('vault.getPasswordHistory is not wired');
             return { ok: true, data: { history: await deps.vault.getPasswordHistory(request.id, request.masterPassword) } };

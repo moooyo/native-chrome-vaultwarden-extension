@@ -72,6 +72,15 @@ export interface DecryptedCipher extends CipherSummary {
   identity?: DecryptedIdentity;
   fido2Credentials?: DecryptedFido2Credential[];
   fields?: DecryptedField[];
+  attachments?: DecryptedAttachment[];
+}
+
+/** Non-secret attachment metadata for display. The encrypted blob is fetched/decrypted on demand. */
+export interface DecryptedAttachment {
+  id: string;
+  fileName: string;
+  size?: string;
+  sizeName?: string;
 }
 
 /** Custom field types (Bitwarden FieldType): 0 Text, 1 Hidden, 2 Boolean, 3 Linked. */

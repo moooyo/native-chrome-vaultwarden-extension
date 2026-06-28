@@ -19,6 +19,7 @@ import { hexToBytes, base64ToBytes, bytesToBase64, bytesToBase64Url, base64UrlTo
 import { hmacSha256 } from '../crypto/primitives.js';
 import { decryptToText } from '../crypto/encstring.js';
 import { derToRawSignature } from './fido2.js';
+import { encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
 import { FIELD_VECTOR, URL_VECTOR, USER_KEY_VECTOR, RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
 import type { SyncResponse } from '../api/types.js';
 
@@ -112,6 +113,9 @@ async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8
     deleteCipher: vi.fn(async () => {}),
     softDeleteCipher: vi.fn(async () => {}),
     restoreCipher: vi.fn(async () => {}),
+    downloadAttachment: vi.fn(async () => new Uint8Array()),
+    uploadAttachment: vi.fn(async () => ({ id: 'cipher-1', type: 1, name: '2.enc' })),
+    deleteAttachment: vi.fn(async () => {}),
   } as unknown as ApiClient;
   const auth = {
     refreshIfNeeded: vi.fn(async () => {}),
@@ -409,6 +413,73 @@ describe('VaultService', () => {
       await service.sync();
       const input = await service.getCipherInput('cf');
       expect(input?.fields).toEqual([{ type: 0, name: 'Text', value: 'shown' }]);
+    });
+  });
+
+  describe('attachments', () => {
+    async function syncWithAttachment(extra: { reprompt?: number } = {}): Promise<{ sync: SyncResponse; blob: Uint8Array }> {
+      const attKey = generateAttachmentKey(() => new Uint8Array(64).fill(5));
+      const wrapped = await wrapAttachmentKey(attKey, testUserKey);
+      const blob = await encryptAttachmentFile(new TextEncoder().encode('secret-file-contents'), attKey);
+      return {
+        sync: {
+          profile: { id: 'u', email: 'u@example.com' },
+          ciphers: [{
+            id: 'cipher-1', type: 1, favorite: false, organizationId: null, ...(extra.reprompt ? { reprompt: extra.reprompt } : {}),
+            name: await encUnder('Item', testUserKey),
+            attachments: [{ id: 'att-1', url: 'https://files.example/att-1', key: wrapped, fileName: await encUnder('report.pdf', testUserKey), size: '20', sizeName: '20 B' }],
+          }],
+        } as SyncResponse,
+        blob,
+      };
+    }
+
+    it('getCipherDetail surfaces attachment metadata without url/key', async () => {
+      const { sync } = await syncWithAttachment();
+      const { service } = await makeService(sync);
+      await service.sync();
+      const detail = await service.getCipherDetail('cipher-1');
+      expect(detail?.attachments).toEqual([{ id: 'att-1', fileName: 'report.pdf', size: '20', sizeName: '20 B' }]);
+    });
+
+    it('getAttachment downloads and decrypts the file inside the worker', async () => {
+      const { sync, blob } = await syncWithAttachment();
+      const { service, api } = await makeService(sync);
+      (api.downloadAttachment as ReturnType<typeof vi.fn>).mockResolvedValue(blob);
+      await service.sync();
+      const result = await service.getAttachment('cipher-1', 'att-1');
+      expect(api.downloadAttachment).toHaveBeenCalledWith('https://files.example/att-1', 'access');
+      expect(result.fileName).toBe('report.pdf');
+      expect(result.dataB64).toBe(bytesToBase64(new TextEncoder().encode('secret-file-contents')));
+    });
+
+    it('getAttachment requires the master password for a reprompt item', async () => {
+      const { sync, blob } = await syncWithAttachment({ reprompt: 1 });
+      const { service, api } = await makeService(sync);
+      (api.downloadAttachment as ReturnType<typeof vi.fn>).mockResolvedValue(blob);
+      await service.sync();
+      await expect(service.getAttachment('cipher-1', 'att-1')).rejects.toMatchObject({ code: 'reprompt_required' });
+    });
+
+    it('addAttachment uploads an encrypted blob + wrapped key and re-syncs', async () => {
+      const { service, api } = await makeService();
+      await service.sync();
+      await service.addAttachment('cipher-1', 'notes.txt', bytesToBase64(new TextEncoder().encode('plain text body')));
+      const [token, cipherId, params] = (api.uploadAttachment as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(token).toBe('access');
+      expect(cipherId).toBe('cipher-1');
+      expect(params.key.startsWith('2.')).toBe(true);            // wrapped attachment key
+      expect(params.encryptedFileName.startsWith('2.')).toBe(true); // encrypted file name
+      expect(params.data[0]).toBe(2);                            // EncArrayBuffer encType marker
+      expect(JSON.stringify([...params.data])).not.toContain('plain'); // never plaintext
+      expect(api.sync).toHaveBeenCalled();
+    });
+
+    it('deleteAttachment calls the API and re-syncs', async () => {
+      const { service, api } = await makeService();
+      await service.deleteAttachment('cipher-1', 'att-1');
+      expect(api.deleteAttachment).toHaveBeenCalledWith('access', 'cipher-1', 'att-1');
+      expect(api.sync).toHaveBeenCalled();
     });
   });
 

@@ -1,8 +1,8 @@
-import type { CardCipherData, CipherFieldData, CipherResponse, CollectionResponse, Fido2CredentialData, FolderResponse, IdentityCipherData, OrganizationResponse } from '../api/types.js';
+import type { AttachmentData, CardCipherData, CipherFieldData, CipherResponse, CollectionResponse, Fido2CredentialData, FolderResponse, IdentityCipherData, OrganizationResponse } from '../api/types.js';
 import { decryptToText, EncStringMacError, UnsupportedEncTypeError } from '../crypto/encstring.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import { unwrapSymmetricKey, unwrapRsaWrappedKey } from '../crypto/keys.js';
-import type { CipherSummary, CollectionSummary, CustomFieldType, DecryptedCard, DecryptedCipher, DecryptedField, DecryptedFido2Credential, DecryptedIdentity, FolderSummary } from './models.js';
+import type { CipherSummary, CollectionSummary, CustomFieldType, DecryptedAttachment, DecryptedCard, DecryptedCipher, DecryptedField, DecryptedFido2Credential, DecryptedIdentity, FolderSummary } from './models.js';
 import type { LoginUri } from './uri-match.js';
 
 const IDENTITY_FIELDS: Array<keyof IdentityCipherData> = [
@@ -67,6 +67,10 @@ export async function decryptCipher(
     if (cipher.fields?.length) {
       const fields = await decryptCustomFields(cipher.fields, key);
       if (fields.length) out.fields = fields;
+    }
+    if (cipher.attachments?.length) {
+      const attachments = await decryptAttachments(cipher.attachments, key);
+      if (attachments.length) out.attachments = attachments;
     }
     return out;
   } catch (err) {
@@ -190,6 +194,23 @@ async function decryptCustomFields(src: CipherFieldData[], key: SymmetricKey): P
       if (value !== undefined) field.value = value;
     }
     out.push(field);
+  }
+  return out;
+}
+
+/** Decrypt attachment metadata for display (fileName under the cipher key); a failed name degrades. */
+async function decryptAttachments(src: AttachmentData[], key: SymmetricKey): Promise<DecryptedAttachment[]> {
+  const out: DecryptedAttachment[] = [];
+  for (const a of src) {
+    if (!a.id) continue;
+    let fileName = '(file)';
+    if (a.fileName) {
+      try { fileName = await decryptToText(a.fileName, key); } catch { fileName = '(undecryptable)'; }
+    }
+    const att: DecryptedAttachment = { id: a.id, fileName };
+    if (a.size != null) att.size = a.size;
+    if (a.sizeName != null) att.sizeName = a.sizeName;
+    out.push(att);
   }
   return out;
 }

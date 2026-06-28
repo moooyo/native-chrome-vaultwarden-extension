@@ -140,9 +140,21 @@ export interface CipherPasswordHistoryData {
   lastUsedDate?: string | null;
 }
 
+/** A file attachment on a cipher. `fileName` and `key` are EncStrings; `key` wraps the per-attachment
+ *  symmetric key (under the cipher key). `url` points to the encrypted blob. */
+export interface AttachmentData {
+  id: string;
+  url?: string | null;
+  fileName?: string | null;
+  key?: string | null;
+  size?: string | null;
+  sizeName?: string | null;
+}
+
 export interface CipherResponse {
   id: string;
   type: 1 | 2 | 3 | 4 | 5;
+  attachments?: AttachmentData[] | null;
   name?: string | null;
   notes?: string | null;
   favorite?: boolean;

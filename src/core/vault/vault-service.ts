@@ -11,7 +11,8 @@ import { getTotp, type TotpResult } from './totp.js';
 import { signFido2Assertion, type PasskeyAssertion } from './fido2.js';
 import { encryptToText, decryptToText } from '../crypto/encstring.js';
 import { unwrapSymmetricKey } from '../crypto/keys.js';
-import { base64UrlToBytes } from '../crypto/encoding.js';
+import { base64UrlToBytes, base64ToBytes, bytesToBase64 } from '../crypto/encoding.js';
+import { decryptAttachmentKey, decryptAttachmentFile, encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
 import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealthInput } from './password-health.js';
 import { buildExportJson, buildEncryptedExportJson, parseImport } from './vault-io.js';
 import { AppError } from '../errors.js';
@@ -356,6 +357,50 @@ export class VaultService {
     if (!decrypted) return undefined;
     await this.assertRepromptCleared(decrypted, masterPassword);
     return decrypted.fields?.[index]?.value;
+  }
+
+  /**
+   * Download and decrypt one attachment inside the worker, returning the plaintext bytes (base64) and
+   * file name for the popup to save. Reprompt-gated; the attachment key never crosses the boundary.
+   */
+  async getAttachment(cipherId: string, attachmentId: string, masterPassword?: string): Promise<{ fileName: string; dataB64: string }> {
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    if (!cache) throw new AppError('sync_required', 'Sync required');
+    const cipher = cache.ciphers.find((c) => c.id === cipherId);
+    const att = cipher?.attachments?.find((a) => a.id === attachmentId);
+    if (!cipher || !att?.url || !att.key) throw new AppError('error', 'Attachment is unavailable');
+    const decrypted = await this.decryptCipherById(cipherId);
+    await this.assertRepromptCleared(decrypted, masterPassword);
+    const cipherKey = await this.cipherFieldKey(cipher);
+    const attachmentKey = await decryptAttachmentKey(att.key, cipherKey);
+    const blob = await this.deps.api.downloadAttachment(att.url, await this.requireToken());
+    const data = await decryptAttachmentFile(blob, attachmentKey);
+    const fileName = decrypted?.attachments?.find((a) => a.id === attachmentId)?.fileName ?? 'attachment';
+    return { fileName, dataB64: bytesToBase64(data) };
+  }
+
+  /** Encrypt a file under a fresh attachment key (wrapped by the cipher key) and upload it, then re-sync. */
+  async addAttachment(cipherId: string, fileName: string, dataB64: string, masterPassword?: string): Promise<VaultListing> {
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    const cipher = cache?.ciphers.find((c) => c.id === cipherId);
+    if (!cipher) throw new AppError('error', 'Item is not available');
+    const decrypted = await this.decryptCipherById(cipherId);
+    await this.assertRepromptCleared(decrypted, masterPassword);
+    const token = await this.requireToken();
+    const cipherKey = await this.cipherFieldKey(cipher);
+    const attachmentKey = generateAttachmentKey();
+    const wrappedKey = await wrapAttachmentKey(attachmentKey, cipherKey);
+    const encrypted = await encryptAttachmentFile(base64ToBytes(dataB64), attachmentKey);
+    const encryptedFileName = await encryptToText(fileName, cipherKey);
+    await this.deps.api.uploadAttachment(token, cipherId, { key: wrappedKey, encryptedFileName, data: encrypted });
+    return this.sync();
+  }
+
+  /** Delete one attachment from a cipher, then re-sync. */
+  async deleteAttachment(cipherId: string, attachmentId: string): Promise<VaultListing> {
+    const token = await this.requireToken();
+    await this.deps.api.deleteAttachment(token, cipherId, attachmentId);
+    return this.sync();
   }
 
   /** Decrypt a login's retained previous passwords (most-recent first), reprompt-gated. The decrypted

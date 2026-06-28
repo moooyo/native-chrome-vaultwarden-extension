@@ -207,6 +207,34 @@ export class ApiClient {
     });
   }
 
+  /** Download an attachment's encrypted blob from its (absolute) URL. */
+  async downloadAttachment(url: string, accessToken: string): Promise<Uint8Array> {
+    const response = await this.fetchFn(url, { headers: { authorization: `Bearer ${accessToken}` } });
+    if (!response.ok) throw new ApiHttpError(response.status, await response.text());
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  /** Upload an encrypted attachment (legacy single-POST multipart, supported by Vaultwarden). The
+   *  multipart file's filename is the encrypted file name (an EncString); `key` wraps the file key. */
+  async uploadAttachment(accessToken: string, cipherId: string, params: { key: string; encryptedFileName: string; data: Uint8Array }): Promise<CipherResponse> {
+    const form = new FormData();
+    form.append('key', params.key);
+    form.append('data', new Blob([params.data as BlobPart], { type: 'application/octet-stream' }), params.encryptedFileName);
+    return this.jsonRequest<CipherResponse>(`/api/ciphers/${encodeURIComponent(cipherId)}/attachment`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${accessToken}` }, // no content-type: the browser sets the multipart boundary
+      body: form,
+    });
+  }
+
+  /** Delete one attachment from a cipher. */
+  async deleteAttachment(accessToken: string, cipherId: string, attachmentId: string): Promise<void> {
+    await this.noBodyRequest(`/api/ciphers/${encodeURIComponent(cipherId)}/attachment/${encodeURIComponent(attachmentId)}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+  }
+
   /** Change the master password: the UserKey is re-wrapped under the new password (`key`); ciphers stay valid. */
   async changePassword(accessToken: string, body: { masterPasswordHash: string; newMasterPasswordHash: string; key: string; masterPasswordHint?: string }): Promise<void> {
     await this.noBodyRequest('/api/accounts/password', {

@@ -1310,6 +1310,9 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
           <div id="ed_fields" class="ed-cfields">${(v.fields ?? []).map((f) => customFieldEditorRow(f)).join('')}</div>
           <button id="ed_addField" class="btn btn-secondary btn-sm" type="button">${icon('plus')}<span>Add field</span></button>
         </div>
+        ${mode === 'edit' && id ? `<label class="ed-field"><span class="ed-label">Add attachment</span>
+          <div class="ed-attach"><input id="ed_attachFile" type="file" class="input" />
+          <button id="ed_attachAdd" class="btn btn-secondary btn-sm" type="button">${icon('plus')}<span>Upload</span></button></div></label>` : ''}
         <div class="detail-actions">
           <button id="ed_save" type="button" class="btn btn-block">${icon('check')}<span>Save</span></button>
           ${mode === 'edit' && id && canMoveToOrg(id) ? `<button id="ed_move" type="button" class="btn btn-secondary btn-block">${icon('folder')}<span>Move to organization</span></button>` : ''}
@@ -1339,7 +1342,36 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
   if (mode === 'edit' && id) {
     document.getElementById('ed_delete')!.addEventListener('click', () => confirmDeleteCipher(id, v.name));
     document.getElementById('ed_move')?.addEventListener('click', () => renderMoveToOrg(id, v.name));
+    document.getElementById('ed_attachAdd')?.addEventListener('click', () => void uploadAttachmentFromEditor(id));
   }
+}
+
+/** Read the chosen file, encrypt+upload it as an attachment on the cipher being edited, then report. */
+async function uploadAttachmentFromEditor(id: string): Promise<void> {
+  if (isPending) return;
+  const fileInput = document.getElementById('ed_attachFile') as HTMLInputElement | null;
+  const file = fileInput?.files?.[0];
+  if (!file) return setDetailStatus('Choose a file to upload', true);
+  isPending = true;
+  document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = true));
+  try {
+    const dataB64 = await fileToBase64(file);
+    const response = await sendRequest({ type: 'vault.addAttachment', cipherId: id, fileName: file.name, dataB64, ...mpArg(id) });
+    if (!response.ok) return setDetailStatus(response.error.message, true);
+    fileInput!.value = '';
+    setDetailStatus(`Uploaded ${file.name}`, false);
+  } finally {
+    isPending = false;
+    document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = false));
+  }
+}
+
+/** Read a File into base64 (the worker re-encrypts it under a fresh attachment key). */
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+  return btoa(binary);
 }
 
 /** A personal (non-org) item can be moved into an organization when collections are available. */
@@ -1753,7 +1785,7 @@ function renderLoginDetail(id: string, item: CipherSummary) {
     </div>`;
   bindBack();
   bindDetailActions(item);
-  void loadCustomFields(id);
+  void loadDetailExtras(id);
   document.getElementById('togglePassword')!.addEventListener('click', () => void withDetailBusy(async () => {
     const codeEl = document.getElementById('passwordReveal')!;
     const btn = document.getElementById('togglePassword') as HTMLButtonElement;
@@ -1856,7 +1888,7 @@ function renderSecureNoteDetail(id: string, item: CipherSummary) {
     </div>`;
   bindBack();
   bindDetailActions(item);
-  void loadCustomFields(id);
+  void loadDetailExtras(id);
   void (async () => {
     const response = await sendRequest({ type: 'vault.getField', id, field: 'notes', ...mpArg(id) });
     const body = document.getElementById('noteBody');
@@ -1898,9 +1930,9 @@ function renderStructuredDetail(id: string, item: CipherSummary, kind: 'card' | 
     }
     if (kind === 'card') renderCardFields(id, container, cipher);
     else renderIdentityFields(id, container, cipher);
-    // Custom fields ride along on the same detail fetch (no second round-trip).
-    const fieldsEl = document.getElementById('customFields');
-    if (fieldsEl && cipher.fields?.length) renderCustomFieldRows(id, fieldsEl, cipher.fields);
+    // Custom fields + attachments ride along on the same detail fetch (no second round-trip).
+    const extrasEl = document.getElementById('customFields');
+    if (extrasEl) renderDetailExtras(id, extrasEl, cipher);
   })();
 }
 
@@ -1979,18 +2011,28 @@ function linkedLabel(linkedId?: number): string {
   return 'Linked field';
 }
 
-/** Fetch a cipher's custom fields (Hidden values masked by the worker) and render them. */
-async function loadCustomFields(id: string): Promise<void> {
+/** Fetch a cipher's detail (custom fields + attachments) and render the extras section. */
+async function loadDetailExtras(id: string): Promise<void> {
   const container = document.getElementById('customFields');
   if (!container) return;
   const response = await sendRequest({ type: 'vault.getCipherDetail', id });
   if (!response.ok) return;
   const cipher = (response.data as { cipher: DecryptedCipher | null }).cipher;
-  if (cipher?.fields?.length) renderCustomFieldRows(id, container, cipher.fields);
+  if (cipher) renderDetailExtras(id, container, cipher);
 }
 
-/** Render custom-field readout rows: Text/Boolean/Linked inline, Hidden masked with reveal + copy. */
-function renderCustomFieldRows(id: string, container: HTMLElement, fields: DecryptedField[]): void {
+/** Render the custom-field + attachment sections into `container` and wire their handlers. */
+function renderDetailExtras(id: string, container: HTMLElement, cipher: DecryptedCipher): void {
+  const parts: string[] = [];
+  if (cipher.fields?.length) parts.push(customFieldsHtml(cipher.fields));
+  if (cipher.attachments?.length) parts.push(attachmentsHtml(cipher.attachments));
+  container.innerHTML = parts.join('');
+  if (cipher.fields?.length) bindCustomFieldHandlers(id, container);
+  if (cipher.attachments?.length) bindAttachmentHandlers(id, container);
+}
+
+/** Custom-field readout rows: Text/Boolean/Linked inline, Hidden masked with reveal + copy. */
+function customFieldsHtml(fields: DecryptedField[]): string {
   const rows = fields.map((f, index) => {
     const label = f.name || 'Field';
     if (f.type === 1) {
@@ -2003,12 +2045,60 @@ function renderCustomFieldRows(id: string, container: HTMLElement, fields: Decry
     const value = f.type === 2 ? (f.value === 'true' ? 'Yes' : 'No') : f.type === 3 ? linkedLabel(f.linkedId) : (f.value ?? '');
     return plainRow(label, value);
   });
-  container.innerHTML = `<div class="cf-head">Custom fields</div>${rows.join('')}`;
+  return `<div class="cf-head">Custom fields</div>${rows.join('')}`;
+}
+
+function bindCustomFieldHandlers(id: string, container: HTMLElement): void {
   // Inline copy for non-hidden fields (value already present in the data-copy attribute).
   container.querySelectorAll<HTMLButtonElement>('button[data-copy]').forEach((btn) => {
     btn.addEventListener('click', () => void withDetailBusy(() => copyValue(btn.dataset.copy, btn.dataset.label ?? 'Value')));
   });
   bindHiddenCustomFields(id, container);
+}
+
+/** Attachment rows: name + size with download and delete actions (fetched/decrypted on demand). */
+function attachmentsHtml(attachments: NonNullable<DecryptedCipher['attachments']>): string {
+  const rows = attachments.map((a) => `<div class="readout"><div class="k">${icon('note')} ${escapeHtml(a.fileName)}</div>
+    <div class="v-row"><span class="v">${escapeHtml(a.sizeName ?? '')}</span>
+      <button class="icon-btn" type="button" data-att-download="${escapeHtml(a.id)}" title="Download" aria-label="Download attachment">${icon('logout')}</button>
+      <button class="icon-btn" type="button" data-att-delete="${escapeHtml(a.id)}" data-att-name="${escapeHtml(a.fileName)}" title="Delete" aria-label="Delete attachment">${icon('trash')}</button>
+    </div></div>`).join('');
+  return `<div class="cf-head">Attachments</div>${rows}`;
+}
+
+function bindAttachmentHandlers(id: string, container: HTMLElement): void {
+  container.querySelectorAll<HTMLButtonElement>('button[data-att-download]').forEach((btn) => {
+    btn.addEventListener('click', () => void withDetailBusy(async () => {
+      const response = await sendRequest({ type: 'vault.getAttachment', cipherId: id, attachmentId: btn.dataset.attDownload!, ...mpArg(id) });
+      if (!response.ok) return setDetailStatus(response.error.message, true);
+      const { fileName, dataB64 } = response.data as { fileName: string; dataB64: string };
+      downloadBase64File(dataB64, fileName);
+      setDetailStatus(`Downloaded ${fileName}`, false);
+    }));
+  });
+  container.querySelectorAll<HTMLButtonElement>('button[data-att-delete]').forEach((btn) => {
+    btn.addEventListener('click', () => void withDetailBusy(async () => {
+      const response = await sendRequest({ type: 'vault.deleteAttachment', cipherId: id, attachmentId: btn.dataset.attDelete! });
+      if (!response.ok) return setDetailStatus(response.error.message, true);
+      await loadCachedList();
+      renderDetail(id); // refresh the detail (and its attachment list)
+    }));
+  });
+}
+
+/** Trigger a download of decrypted attachment bytes (base64 → Blob). */
+function downloadBase64File(base64: string, fileName: string): void {
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([bytes]));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /** Reveal/copy handlers for Hidden custom fields, fetched on demand by index (reprompt-aware). */
