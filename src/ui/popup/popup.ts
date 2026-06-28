@@ -1,6 +1,6 @@
 import { sendRequest } from '../../messaging/protocol.js';
 import type { AuthResult } from '../../core/session/auth-service.js';
-import type { CipherSummary, CollectionSummary, DecryptedCipher, FolderSummary } from '../../core/vault/models.js';
+import type { CipherInput, CipherSummary, CollectionSummary, DecryptedCipher, FolderSummary } from '../../core/vault/models.js';
 import { filterSummariesByFolderCollectionAndQuery, NO_FOLDER } from '../../core/vault/search.js';
 import { generatePassword, DEFAULT_PASSWORD_OPTIONS, type PasswordGenOptions } from '../../core/generator/password.js';
 import { addPasswordToHistory } from '../../core/generator/history.js';
@@ -259,6 +259,7 @@ function renderUnlockedShell(error?: string) {
     </div>
     <div class="toolbar">
       <div class="search">${icon('search')}<input id="search" class="input" placeholder="Search vault" autocomplete="off" /></div>
+      <button id="addItem" class="icon-btn" type="button" title="Add item" aria-label="Add item">${icon('plus')}</button>
       <button id="generate" class="icon-btn" type="button" title="Password generator" aria-label="Password generator">${icon('key')}</button>
       <button id="sync" class="icon-btn" type="button" title="Sync vault" aria-label="Sync vault">${icon('refresh')}</button>
       <button id="lock" class="icon-btn" type="button" title="Lock vault" aria-label="Lock vault">${icon('lock')}</button>
@@ -546,6 +547,7 @@ function bindUnlockedControls() {
 
   document.getElementById('search')!.addEventListener('input', renderVaultList);
   document.getElementById('generate')!.addEventListener('click', () => renderGenerator());
+  document.getElementById('addItem')!.addEventListener('click', () => renderTypePicker());
 }
 
 /** Standalone password generator panel — runs locally; no vault secret involved. */
@@ -653,6 +655,207 @@ function renderGenHistory(): void {
   });
 }
 
+/** Cipher type names for editor headers. */
+const CIPHER_TYPE_NAMES: Record<1 | 2 | 3 | 4, string> = { 1: 'Login', 2: 'Secure note', 3: 'Card', 4: 'Identity' };
+
+interface EditorFieldSpec { key: string; label: string }
+const CARD_FORM: EditorFieldSpec[] = [
+  { key: 'cardholderName', label: 'Cardholder name' },
+  { key: 'brand', label: 'Brand' },
+  { key: 'number', label: 'Number' },
+  { key: 'expMonth', label: 'Expiration month' },
+  { key: 'expYear', label: 'Expiration year' },
+  { key: 'code', label: 'Security code' },
+];
+const IDENTITY_FORM: EditorFieldSpec[] = [
+  { key: 'title', label: 'Title' }, { key: 'firstName', label: 'First name' },
+  { key: 'middleName', label: 'Middle name' }, { key: 'lastName', label: 'Last name' },
+  { key: 'username', label: 'Username' }, { key: 'company', label: 'Company' },
+  { key: 'email', label: 'Email' }, { key: 'phone', label: 'Phone' },
+  { key: 'address1', label: 'Address 1' }, { key: 'address2', label: 'Address 2' },
+  { key: 'address3', label: 'Address 3' }, { key: 'city', label: 'City' },
+  { key: 'state', label: 'State' }, { key: 'postalCode', label: 'Postal code' },
+  { key: 'country', label: 'Country' }, { key: 'ssn', label: 'SSN' },
+  { key: 'passportNumber', label: 'Passport number' }, { key: 'licenseNumber', label: 'License number' },
+];
+
+/** Step 1 of "add item": choose a type, then open the editor. */
+function renderTypePicker(): void {
+  clearTotpTimer();
+  app.innerHTML = `
+    <div class="detail">
+      <div class="detail-head">
+        <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
+        <div class="titles"><h1>Add item</h1></div>
+      </div>
+      <div class="detail-body">
+        <div class="type-grid">
+          <button class="type-card" type="button" data-type="1">${icon('key')}<span>Login</span></button>
+          <button class="type-card" type="button" data-type="2">${icon('note')}<span>Secure note</span></button>
+          <button class="type-card" type="button" data-type="3">${icon('card')}<span>Card</span></button>
+          <button class="type-card" type="button" data-type="4">${icon('idcard')}<span>Identity</span></button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
+  for (const btn of app.querySelectorAll<HTMLButtonElement>('.type-card')) {
+    btn.addEventListener('click', () => renderEditor('create', Number(btn.dataset.type) as 1 | 2 | 3 | 4));
+  }
+}
+
+function editorTextRow(id: string, label: string, value = ''): string {
+  return `<label class="ed-field"><span class="ed-label">${escapeHtml(label)}</span><input id="${id}" class="input" value="${escapeHtml(value)}" /></label>`;
+}
+
+/** Render the create/edit form for a cipher type. */
+function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: CipherInput, id?: string): void {
+  clearTotpTimer();
+  const v = input ?? { type, name: '' };
+  const folderOptions = [
+    `<option value="">No folder</option>`,
+    ...vaultFolders.map((f) => `<option value="${escapeHtml(f.id)}"${v.folderId === f.id ? ' selected' : ''}>${escapeHtml(f.name)}</option>`),
+  ].join('');
+
+  let typeFields = '';
+  if (type === 1) {
+    const login = v.login ?? {};
+    typeFields = `
+      ${editorTextRow('ed_username', 'Username', login.username ?? '')}
+      <label class="ed-field"><span class="ed-label">Password</span>
+        <div class="ed-password">
+          <input id="ed_password" class="input mono" type="password" value="${escapeHtml(login.password ?? '')}" />
+          <button id="ed_pwReveal" class="icon-btn" type="button" title="Show password" aria-label="Show password">${icon('eye')}</button>
+          <button id="ed_pwGen" class="icon-btn" type="button" title="Generate password" aria-label="Generate password">${icon('refresh')}</button>
+        </div>
+      </label>
+      ${editorTextRow('ed_totp', 'Authenticator key (TOTP)', login.totp ?? '')}
+      ${editorTextRow('ed_uri', 'Website (URI)', login.uris?.[0]?.uri ?? '')}`;
+  } else if (type === 3) {
+    typeFields = CARD_FORM.map((f) => editorTextRow(`ed_${f.key}`, f.label, (v.card as Record<string, string> | undefined)?.[f.key] ?? '')).join('');
+  } else if (type === 4) {
+    typeFields = `<div class="ed-grid">${IDENTITY_FORM.map((f) => editorTextRow(`ed_${f.key}`, f.label, (v.identity as Record<string, string> | undefined)?.[f.key] ?? '')).join('')}</div>`;
+  }
+
+  app.innerHTML = `
+    <div class="detail">
+      <div class="detail-head">
+        <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
+        <div class="titles"><h1>${mode === 'create' ? 'Add' : 'Edit'} ${escapeHtml(CIPHER_TYPE_NAMES[type].toLowerCase())}</h1></div>
+      </div>
+      <div class="detail-body">
+        ${editorTextRow('ed_name', 'Name', v.name)}
+        ${typeFields}
+        <label class="ed-field"><span class="ed-label">Notes</span><textarea id="ed_notes" class="input ed-textarea">${escapeHtml(v.notes ?? '')}</textarea></label>
+        <label class="ed-field"><span class="ed-label">Folder</span><select id="ed_folder" class="select">${folderOptions}</select></label>
+        <label class="gen-check"><input id="ed_favorite" type="checkbox" ${v.favorite ? 'checked' : ''} /><span>Favorite</span></label>
+        <div class="detail-actions">
+          <button id="ed_save" type="button" class="btn btn-block">${icon('check')}<span>Save</span></button>
+          ${mode === 'edit' ? `<button id="ed_delete" type="button" class="btn btn-danger btn-block">${icon('trash')}<span>Delete</span></button>` : ''}
+        </div>
+        <div id="detailStatus" class="detail-status"></div>
+      </div>
+    </div>`;
+  document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
+  if (type === 1) {
+    document.getElementById('ed_pwReveal')!.addEventListener('click', () => {
+      const pw = document.getElementById('ed_password') as HTMLInputElement;
+      const btn = document.getElementById('ed_pwReveal') as HTMLButtonElement;
+      const show = pw.type === 'password';
+      pw.type = show ? 'text' : 'password';
+      btn.innerHTML = icon(show ? 'eyeOff' : 'eye');
+    });
+    document.getElementById('ed_pwGen')!.addEventListener('click', () => {
+      (document.getElementById('ed_password') as HTMLInputElement).value = generatePassword(genOptions);
+    });
+  }
+  document.getElementById('ed_save')!.addEventListener('click', () => void saveEditor(mode, type, id));
+  if (mode === 'edit' && id) {
+    document.getElementById('ed_delete')!.addEventListener('click', () => confirmDeleteCipher(id, v.name));
+  }
+}
+
+function collectEditorInput(type: 1 | 2 | 3 | 4): CipherInput {
+  const val = (elId: string): string => (document.getElementById(elId) as HTMLInputElement | HTMLTextAreaElement | null)?.value ?? '';
+  const input: CipherInput = {
+    type,
+    name: val('ed_name').trim(),
+    favorite: (document.getElementById('ed_favorite') as HTMLInputElement).checked,
+    folderId: val('ed_folder') || null,
+  };
+  const notes = val('ed_notes'); if (notes) input.notes = notes;
+  if (type === 1) {
+    const login: NonNullable<CipherInput['login']> = {};
+    const u = val('ed_username'); if (u) login.username = u;
+    const p = val('ed_password'); if (p) login.password = p;
+    const t = val('ed_totp'); if (t) login.totp = t;
+    const uri = val('ed_uri').trim(); if (uri) login.uris = [{ uri }];
+    input.login = login;
+  } else if (type === 3) {
+    const card: Record<string, string> = {};
+    for (const f of CARD_FORM) { const x = val(`ed_${f.key}`); if (x) card[f.key] = x; }
+    input.card = card;
+  } else if (type === 4) {
+    const identity: Record<string, string> = {};
+    for (const f of IDENTITY_FORM) { const x = val(`ed_${f.key}`); if (x) identity[f.key] = x; }
+    input.identity = identity;
+  }
+  return input;
+}
+
+async function saveEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, id?: string): Promise<void> {
+  if (isPending) return;
+  const input = collectEditorInput(type);
+  if (!input.name) return setDetailStatus('Name is required', true);
+  isPending = true;
+  document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = true));
+  try {
+    const response = mode === 'create'
+      ? await sendRequest({ type: 'vault.createCipher', input })
+      : await sendRequest({ type: 'vault.updateCipher', id: id!, input });
+    if (!response.ok) {
+      setDetailStatus(response.error.message, true);
+      document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = false));
+      return;
+    }
+    render({ kind: 'unlocked' });
+  } finally {
+    isPending = false;
+  }
+}
+
+/** Open the editor prefilled from the worker's decrypted plaintext. */
+async function openEditorForEdit(id: string): Promise<void> {
+  const response = await sendRequest({ type: 'vault.getCipherInput', id });
+  if (!response.ok) return setDetailStatus(response.error.message, true);
+  const input = (response.data as { input: CipherInput | null }).input;
+  if (!input) return setDetailStatus('This item type cannot be edited yet', true);
+  renderEditor('edit', input.type, input, id);
+}
+
+/** Inline two-step delete confirmation rendered into the detail status line. */
+function confirmDeleteCipher(id: string, name: string): void {
+  const status = document.getElementById('detailStatus');
+  if (!status) return;
+  status.innerHTML = `<div class="confirm-row">
+    <span class="muted">Delete “${escapeHtml(name)}”?</span>
+    <button id="ed_confirmDel" class="btn btn-danger btn-sm" type="button">Delete</button>
+    <button id="ed_cancelDel" class="btn btn-secondary btn-sm" type="button">Cancel</button>
+  </div>`;
+  document.getElementById('ed_cancelDel')!.addEventListener('click', () => { status.innerHTML = ''; });
+  document.getElementById('ed_confirmDel')!.addEventListener('click', async () => {
+    if (isPending) return;
+    isPending = true;
+    status.querySelectorAll('button').forEach((b) => (b.disabled = true));
+    try {
+      const response = await sendRequest({ type: 'vault.deleteCipher', id });
+      if (!response.ok) return setDetailStatus(response.error.message, true);
+      render({ kind: 'unlocked' });
+    } finally {
+      isPending = false;
+    }
+  });
+}
+
 async function loadCachedList() {
   const response = await sendRequest({ type: 'vault.listItems' });
   if (response.ok) {
@@ -718,8 +921,9 @@ function renderDetail(id: string) {
   return renderLoginDetail(id, item);
 }
 
-/** Standard detail header (back button + title + optional subtitle). */
+/** Standard detail header (back button + title + optional subtitle + edit/delete actions). */
 function detailHead(item: CipherSummary): string {
+  const editable = !item.undecryptable && item.type !== 5;
   return `
     <div class="detail-head">
       <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
@@ -727,11 +931,21 @@ function detailHead(item: CipherSummary): string {
         <h1>${escapeHtml(item.name)}</h1>
         ${item.username ? `<span class="sub">${escapeHtml(item.username)}</span>` : ''}
       </div>
+      ${editable ? `<div class="detail-head-actions">
+        <button id="detailEdit" class="icon-btn" type="button" title="Edit" aria-label="Edit">${icon('edit')}</button>
+        <button id="detailDelete" class="icon-btn" type="button" title="Delete" aria-label="Delete">${icon('trash')}</button>
+      </div>` : ''}
     </div>`;
 }
 
 function bindBack(): void {
   document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
+}
+
+/** Wire the edit/delete actions in a detail header (no-op when the item is not editable). */
+function bindDetailActions(item: CipherSummary): void {
+  document.getElementById('detailEdit')?.addEventListener('click', () => void openEditorForEdit(item.id));
+  document.getElementById('detailDelete')?.addEventListener('click', () => confirmDeleteCipher(item.id, item.name));
 }
 
 /** Run a detail action with the busy guard, disabling/re-enabling every detail button. */
@@ -802,6 +1016,7 @@ function renderLoginDetail(id: string, item: CipherSummary) {
       </div>
     </div>`;
   bindBack();
+  bindDetailActions(item);
   document.getElementById('togglePassword')!.addEventListener('click', () => void withDetailBusy(async () => {
     const codeEl = document.getElementById('passwordReveal')!;
     const btn = document.getElementById('togglePassword') as HTMLButtonElement;
@@ -883,6 +1098,7 @@ function renderSecureNoteDetail(id: string, item: CipherSummary) {
       </div>
     </div>`;
   bindBack();
+  bindDetailActions(item);
   void (async () => {
     const response = await sendRequest({ type: 'vault.getField', id, field: 'notes' });
     const body = document.getElementById('noteBody');
@@ -907,6 +1123,7 @@ function renderStructuredDetail(id: string, item: CipherSummary, kind: 'card' | 
       </div>
     </div>`;
   bindBack();
+  bindDetailActions(item);
   void (async () => {
     const response = await sendRequest({ type: 'vault.getCipherDetail', id });
     const container = document.getElementById('structuredFields');

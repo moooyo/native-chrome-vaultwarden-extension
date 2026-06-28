@@ -52,22 +52,22 @@
     新增 `collections`。`search.filterByCollection` + `filterSummariesByFolderCollectionAndQuery`
     组合「文件夹 × 集合 × 文本」过滤。popup 新增集合下拉过滤（仅在存在集合时显示），登出即清。
 
-- **对称加密原语 + 文件夹（Folder）CRUD** ✅（本次落地，原 M5 写入路径的第一段）
+- **对称加密原语 + 条目/文件夹（Cipher/Folder）CRUD** ✅（本次落地，原 M5 写入路径）
   - 写入地基：`primitives.aesCbc256Encrypt` + `encstring.encryptToBytes/encryptToText` 构造
-    encType=2（AES-256-CBC + Encrypt-then-MAC、随机 IV，IV 可注入便于测试）。这是注册与 M5/M8
-    其余 CRUD 的共同前置（此前代码库只有解密）。往返 + 防篡改 + 随机 IV 单测。
-  - `ApiClient.createFolder/updateFolder/deleteFolder`（`POST/PUT/DELETE /api/folders`，Bearer，
-    DELETE 容忍空响应体）；mock fetch 单测。
-  - `VaultService.createFolder/renameFolder/deleteFolder`：名称在 worker 内用 UserKey 加密后上送，
-    成功后整库重新 `sync` 刷新缓存并回传 `VaultListing`；锁定时拒绝。
-  - 路由 `vault.createFolder/renameFolder/deleteFolder`；popup 文件夹栏新增「新建 / 重命名 / 删除」
-    内联编辑器（Enter 提交、Esc 取消、删除二次确认）。
-  - 仍待：**条目（cipher）CRUD**（各类型字段的新增/编辑/删除/移动文件夹）。
+    encType=2（AES-256-CBC + Encrypt-then-MAC、随机 IV，IV 可注入便于测试）。往返 + 防篡改 + 随机 IV 单测。
+  - **条目 CRUD**：`vault/encrypt.encryptCipher`（明文 `CipherInput` → 密文请求，按
+    login/note/card/identity 用「加密→`decryptCipher` 往返」验证）；`ApiClient.create/update/deleteCipher`
+    （`POST/PUT/DELETE /api/ciphers`）；`VaultService.createCipher/updateCipher/deleteCipher`（worker 内
+    用 UserKey 加密后上送、成功重新 sync）+ `getCipherInput`（解密为可编辑明文，含机密）；路由/协议贯通；
+    popup 工具栏「+」新增（四类型选择器 + 表单，含密码生成/显隐）、详情页「编辑/删除」（内联二次确认）。
+  - **文件夹 CRUD**：`ApiClient.create/update/deleteFolder`（`/api/folders`）；`VaultService` 编排；
+    popup 文件夹栏内联编辑器。
+  - **真实服务端验证**：`test/live/crud.live.test.ts`（`LIVE=1` 门控，默认跳过）对 CLAUDE.md 的测试
+    Vaultwarden（2025.12.0）跑通 登录→建→sync→解密往返→改→删。
+  - 仍待：个人条目之外的**组织条目编辑 / 软删除回收站 / SshKey(type=5) 编辑 / 多 URI 编辑**。
 
 ## 仍待实现 / 明确超范围
 
-- **条目（Cipher）CRUD**：写入地基（对称加密）已就绪，但登录/卡片/身份/备注各类型字段的
-  新增/编辑/删除、`/ciphers` 端点与表单 UI 尚未实现。
 - **Argon2id KDF**：需引入 WASM KDF。`prelogin`/登录成功两处守卫均抛
   `'Argon2id accounts are not supported in this MVP'`（`src/core/session/auth-service.ts`）。
 - **注册（Registration）**：客户端账户密钥生成 + register 端点尚未实现（对称加密原语已具备，
@@ -77,7 +77,7 @@
 
 | 里程碑 | 内容 |
 |---|---|
-| M5 | folders **CRUD** ✅ + 密码生成器 ✅（含生成历史）；剩余：ciphers **CRUD** |
+| M5 | ciphers/folders **CRUD** ✅ + 密码生成器 ✅（含生成历史）|
 | M6 | **TOTP** 验证码生成 / 显示 / **填充** ✅（已完整交付）|
 | M7 | **passkeys**（`fido2Credentials` 私钥，WebAuthn 独立签名）|
 | M8 | **Sends** 分享 CRUD + 加密 |

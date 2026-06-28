@@ -122,6 +122,21 @@ body { width: 360px; }
 .detail-actions { display: grid; gap: var(--s2); margin-top: var(--s1); }
 .detail-status { min-height: 1rem; }
 
+/* ----- Cipher editor ----- */
+.detail-head-actions { display: flex; gap: var(--s1); margin-left: auto; }
+.type-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
+.type-card { display: flex; flex-direction: column; align-items: center; gap: var(--s2); padding: var(--s4); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); color: var(--ink); cursor: pointer; font-size: 0.8125rem; }
+.type-card svg { width: 1.4rem; height: 1.4rem; color: var(--accent); }
+.type-card:hover { border-color: var(--accent); background: var(--accent-tint); }
+.ed-field { display: grid; gap: var(--s1); margin-bottom: var(--s2); }
+.ed-label { font-size: 0.6875rem; font-weight: 650; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-faint); }
+.ed-textarea { min-height: 4rem; resize: vertical; font-family: inherit; }
+.ed-password { display: flex; align-items: center; gap: var(--s2); }
+.ed-password .input { flex: 1; min-width: 0; }
+.ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 var(--s2); }
+.confirm-row { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.confirm-row .muted { flex: 1; }
+
 /* ----- Password generator ----- */
 .gen-options { display: grid; gap: var(--s2); margin-top: var(--s2); }
 .gen-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); font-size: 0.8125rem; }
