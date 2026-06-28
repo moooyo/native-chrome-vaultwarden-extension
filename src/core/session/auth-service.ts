@@ -126,6 +126,67 @@ export class AuthService {
   }
 
   /**
+   * Change the master password without re-encrypting the vault: the UserKey is unchanged, only its
+   * wrapping (protectedKey) and the password hash change. Verifies the current password first, sends
+   * the re-wrapped key + new hash to the server, then updates the local persisted material so the next
+   * unlock uses the new password. Requires an unlocked vault and the current password.
+   */
+  async changeMasterPassword(currentPassword: string, newPassword: string): Promise<void> {
+    const { auth, userKey, oldMasterKey } = await this.requireForRewrap(currentPassword);
+    const newMasterKey = await deriveMasterKey(newPassword, auth.email, auth.kdfIterations);
+    const newProtectedKey = await this.wrapUserKey(userKey, await stretchMasterKey(newMasterKey));
+    await this.deps.api.changePassword(auth.accessToken, {
+      masterPasswordHash: await deriveMasterPasswordHash(oldMasterKey, currentPassword),
+      newMasterPasswordHash: await deriveMasterPasswordHash(newMasterKey, newPassword),
+      key: newProtectedKey,
+    });
+    await this.deps.session.updateMasterKeyMaterial({ protectedKey: newProtectedKey });
+  }
+
+  /**
+   * Change the KDF iteration count (PBKDF2): re-derive from the same password with the new iterations,
+   * re-wrap the UserKey, and update the server + local material. Argon2 is out of scope.
+   */
+  async changeKdfIterations(currentPassword: string, newIterations: number): Promise<void> {
+    assertKdfIterationsFloor(newIterations);
+    const { auth, userKey, oldMasterKey } = await this.requireForRewrap(currentPassword);
+    if (newIterations === auth.kdfIterations) throw new Error('KDF iterations are already set to that value');
+    const newMasterKey = await deriveMasterKey(currentPassword, auth.email, newIterations);
+    const newProtectedKey = await this.wrapUserKey(userKey, await stretchMasterKey(newMasterKey));
+    await this.deps.api.changeKdf(auth.accessToken, {
+      kdf: 0,
+      kdfIterations: newIterations,
+      masterPasswordHash: await deriveMasterPasswordHash(oldMasterKey, currentPassword),
+      newMasterPasswordHash: await deriveMasterPasswordHash(newMasterKey, currentPassword),
+      key: newProtectedKey,
+    });
+    await this.deps.session.updateMasterKeyMaterial({ protectedKey: newProtectedKey, kdfIterations: newIterations });
+  }
+
+  /** Shared preamble for password/KDF re-wrap: require unlock + verify the current password. */
+  private async requireForRewrap(currentPassword: string) {
+    const auth = await this.deps.session.getPersistedAuth();
+    if (!auth) throw new Error('not logged in');
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) throw new Error('vault is locked');
+    const oldMasterKey = await deriveMasterKey(currentPassword, auth.email, auth.kdfIterations);
+    try {
+      await unwrapSymmetricKey(auth.protectedKey, await stretchMasterKey(oldMasterKey));
+    } catch {
+      throw new Error('Current master password is incorrect');
+    }
+    return { auth, userKey, oldMasterKey };
+  }
+
+  /** Wrap the 64-byte UserKey (enc‖mac) under a stretched master key as an encType=2 EncString. */
+  private async wrapUserKey(userKey: SymmetricKey, stretched: SymmetricKey): Promise<string> {
+    const raw = new Uint8Array(64);
+    raw.set(userKey.encKey, 0);
+    raw.set(userKey.macKey, 32);
+    return encryptToBytes(raw, stretched);
+  }
+
+  /**
    * Verify the master password against the persisted account WITHOUT changing lock state. Re-derives
    * the master key and confirms it still unwraps the stored UserKey (the unwrap MAC-checks, so a wrong
    * password fails). Used to satisfy master-password reprompt. Returns false on mismatch or no account;

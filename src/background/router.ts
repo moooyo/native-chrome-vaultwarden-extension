@@ -60,6 +60,14 @@ export function createRouter(deps: RouterDeps) {
           case 'auth.verifyMasterPassword':
             if (!deps.auth.verifyMasterPassword) throw new Error('auth.verifyMasterPassword is not wired');
             return { ok: true, data: { verified: await deps.auth.verifyMasterPassword(request.masterPassword) } };
+          case 'auth.changePassword':
+            if (!deps.auth.changeMasterPassword) throw new Error('auth.changeMasterPassword is not wired');
+            await deps.auth.changeMasterPassword(request.currentPassword, request.newPassword);
+            return { ok: true, data: null };
+          case 'auth.changeKdf':
+            if (!deps.auth.changeKdfIterations) throw new Error('auth.changeKdfIterations is not wired');
+            await deps.auth.changeKdfIterations(request.currentPassword, request.iterations);
+            return { ok: true, data: null };
           case 'auth.unlockWithPin':
             if (!deps.auth.unlockWithPin) throw new Error('auth.unlockWithPin is not wired');
             await deps.auth.unlockWithPin(request.pin);

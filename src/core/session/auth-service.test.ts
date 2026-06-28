@@ -14,7 +14,8 @@ import { SessionManager } from './session-manager.js';
 import { createMemoryStore } from '../../platform/store.js';
 import type { ApiClient, PasswordLoginInput } from '../api/client.js';
 import { base64ToBytes, bytesToHex, hexToBytes } from '../crypto/encoding.js';
-import { symmetricKeyFromBytes } from '../crypto/keys.js';
+import { symmetricKeyFromBytes, unwrapSymmetricKey } from '../crypto/keys.js';
+import { deriveMasterKey, stretchMasterKey } from '../crypto/kdf.js';
 import { KDF_VECTOR, KDF_VECTOR_600K, USER_KEY_VECTOR, USER_KEY_VECTOR_600K, RSA_PRIVATE_KEY_VECTOR } from '../../../test/vectors.js';
 
 function makeService(api: Partial<ApiClient>) {
@@ -252,6 +253,60 @@ describe('AuthService', () => {
     it('returns false when no account is persisted', async () => {
       const { auth } = makeService({});
       await expect(auth.verifyMasterPassword(KDF_VECTOR.password)).resolves.toBe(false);
+    });
+  });
+
+  describe('changeMasterPassword / changeKdfIterations', () => {
+    const persist600k = (sm: SessionManager) => sm.saveUnlocked({
+      email: KDF_VECTOR_600K.email,
+      accessToken: 'access', refreshToken: 'refresh', expiresAt: 1000,
+      protectedKey: USER_KEY_VECTOR_600K.akey,
+      kdf: 0, kdfIterations: KDF_VECTOR_600K.iterations,
+      userKey: symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex)),
+    });
+    const keyHex = (k: { encKey: Uint8Array; macKey: Uint8Array }) => bytesToHex(new Uint8Array([...k.encKey, ...k.macKey]));
+
+    it('re-wraps the UserKey under the new password and updates the server + local material', async () => {
+      const changePassword = vi.fn<ApiClient['changePassword']>(async () => {});
+      const { auth, sm } = makeService({ changePassword });
+      await persist600k(sm);
+      await auth.changeMasterPassword(KDF_VECTOR_600K.password, 'a-brand-new-master');
+      const [accessToken, body] = changePassword.mock.calls[0]!;
+      expect(accessToken).toBe('access');
+      expect(body.masterPasswordHash).toBe(KDF_VECTOR_600K.masterPasswordHashB64); // proves the current pw
+      // The new protectedKey unwraps the SAME UserKey under the new password (vault is not re-encrypted).
+      const newStretched = await stretchMasterKey(await deriveMasterKey('a-brand-new-master', KDF_VECTOR_600K.email, KDF_VECTOR_600K.iterations));
+      expect(keyHex(await unwrapSymmetricKey(body.key, newStretched))).toBe(USER_KEY_VECTOR.userKeyHex);
+      expect((await sm.getPersistedAuth())!.protectedKey).toBe(body.key); // local material updated
+    });
+
+    it('rejects a wrong current password and makes no server call', async () => {
+      const changePassword = vi.fn<ApiClient['changePassword']>(async () => {});
+      const { auth, sm } = makeService({ changePassword });
+      await persist600k(sm);
+      await expect(auth.changeMasterPassword('wrong-current', 'whatever-new')).rejects.toThrow(/incorrect/i);
+      expect(changePassword).not.toHaveBeenCalled();
+    });
+
+    it('changeKdfIterations re-wraps under the new iteration count and persists it', async () => {
+      const changeKdf = vi.fn<ApiClient['changeKdf']>(async () => {});
+      const { auth, sm } = makeService({ changeKdf });
+      await persist600k(sm);
+      const newIters = 800_000;
+      await auth.changeKdfIterations(KDF_VECTOR_600K.password, newIters);
+      const [, body] = changeKdf.mock.calls[0]!;
+      expect(body.kdfIterations).toBe(newIters);
+      const newStretched = await stretchMasterKey(await deriveMasterKey(KDF_VECTOR_600K.password, KDF_VECTOR_600K.email, newIters));
+      expect(keyHex(await unwrapSymmetricKey(body.key, newStretched))).toBe(USER_KEY_VECTOR.userKeyHex);
+      expect((await sm.getPersistedAuth())!.kdfIterations).toBe(newIters);
+    });
+
+    it('changeKdfIterations refuses an unsafe iteration count', async () => {
+      const changeKdf = vi.fn<ApiClient['changeKdf']>(async () => {});
+      const { auth, sm } = makeService({ changeKdf });
+      await persist600k(sm);
+      await expect(auth.changeKdfIterations(KDF_VECTOR_600K.password, 1000)).rejects.toThrow(/unsafe KDF/);
+      expect(changeKdf).not.toHaveBeenCalled();
     });
   });
 

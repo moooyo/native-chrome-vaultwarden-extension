@@ -207,6 +207,24 @@ export class ApiClient {
     });
   }
 
+  /** Change the master password: the UserKey is re-wrapped under the new password (`key`); ciphers stay valid. */
+  async changePassword(accessToken: string, body: { masterPasswordHash: string; newMasterPasswordHash: string; key: string; masterPasswordHint?: string }): Promise<void> {
+    await this.noBodyRequest('/api/accounts/password', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** Change KDF settings: the UserKey is re-wrapped under the password re-derived with the new KDF. */
+  async changeKdf(accessToken: string, body: { kdf: number; kdfIterations: number; masterPasswordHash: string; newMasterPasswordHash: string; key: string }): Promise<void> {
+    await this.noBodyRequest('/api/accounts/kdf', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(body),
+    });
+  }
+
   /** Send a request that may return an empty body (DELETE endpoints); throws on a non-OK status. */
   private async noBodyRequest(path: string, init: RequestInit): Promise<void> {
     const response = await this.fetchFn(await this.url(path), init);

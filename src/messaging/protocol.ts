@@ -36,6 +36,8 @@ export type RequestMessage =
   | { type: 'auth.sendEmailCode' }
   | { type: 'auth.unlock'; masterPassword: string }
   | { type: 'auth.verifyMasterPassword'; masterPassword: string }
+  | { type: 'auth.changePassword'; currentPassword: string; newPassword: string }
+  | { type: 'auth.changeKdf'; currentPassword: string; iterations: number }
   | { type: 'auth.unlockWithPin'; pin: string }
   | { type: 'auth.setPin'; pin: string }
   | { type: 'auth.disablePin' }

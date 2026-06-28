@@ -420,8 +420,9 @@ function renderUnlockedShell(error?: string) {
         <button id="exportVault" class="btn btn-secondary btn-sm" type="button">${icon('logout')}<span>Export</span></button>
         <button id="importVault" class="btn btn-secondary btn-sm" type="button">${icon('plus')}<span>Import</span></button>
         <button id="pinBtn" class="btn btn-secondary btn-sm" type="button">${icon('lock')}<span>PIN</span></button>
+        <button id="securityBtn" class="btn btn-secondary btn-sm" type="button">${icon('key')}<span>Password</span></button>
         <button id="accountsBtn" class="btn btn-secondary btn-sm" type="button">${icon('user')}<span>Accounts</span></button>
-        <input id="importFile" type="file" accept="application/json,.json" hidden />
+        <input id="importFile" type="file" accept="application/json,.json,text/csv,.csv" hidden />
       </div>
       <div id="footerStatus" class="detail-status"></div>
       <button id="logoutUnlocked" class="btn btn-danger btn-block" type="button">${icon('logout')}<span>Log out</span></button>
@@ -742,10 +743,59 @@ function bindExportImport(): void {
   });
 
   document.getElementById('pinBtn')!.addEventListener('click', () => void openPinEditor(setFooterStatus));
+  document.getElementById('securityBtn')!.addEventListener('click', () => openSecurityEditor(setFooterStatus));
   document.getElementById('accountsBtn')!.addEventListener('click', () => void openAccountSwitcher());
 }
 
 type FooterStatus = (message: string, isError: boolean) => void;
+
+/** Inline editor to change the master password or the KDF iteration count. Rendered into #footerStatus. */
+function openSecurityEditor(setFooterStatus: FooterStatus): void {
+  const host = document.getElementById('footerStatus');
+  if (!host) return;
+  host.innerHTML = `
+    <div class="inline-form">
+      <span class="muted">Change master password</span>
+      <input id="secCurrent" class="input" type="password" autocomplete="current-password" placeholder="Current master password" />
+      <input id="secNew" class="input" type="password" autocomplete="new-password" placeholder="New master password" />
+      <input id="secConfirm" class="input" type="password" autocomplete="new-password" placeholder="Confirm new password" />
+      <button id="secSave" class="btn btn-sm btn-block" type="button">${icon('check')}<span>Change password</span></button>
+      <span class="muted">Or change KDF iterations (PBKDF2)</span>
+      <input id="secIters" class="input" type="number" min="600000" step="100000" placeholder="KDF iterations (e.g. 600000)" />
+      <button id="secKdf" class="btn btn-secondary btn-sm btn-block" type="button">${icon('refresh')}<span>Change KDF iterations</span></button>
+    </div>`;
+  document.getElementById('secSave')!.addEventListener('click', () => void (async () => {
+    if (isPending) return;
+    const current = (document.getElementById('secCurrent') as HTMLInputElement).value;
+    const next = (document.getElementById('secNew') as HTMLInputElement).value;
+    const confirm = (document.getElementById('secConfirm') as HTMLInputElement).value;
+    if (!current || !next) return setFooterStatus('Enter your current and new password', true);
+    if (next.length < 8) return setFooterStatus('New master password must be at least 8 characters', true);
+    if (next !== confirm) return setFooterStatus('New passwords do not match', true);
+    isPending = true;
+    try {
+      const response = await sendRequest({ type: 'auth.changePassword', currentPassword: current, newPassword: next });
+      setFooterStatus(response.ok ? 'Master password changed.' : response.error.message, !response.ok);
+    } finally {
+      isPending = false;
+    }
+  })());
+  document.getElementById('secKdf')!.addEventListener('click', () => void (async () => {
+    if (isPending) return;
+    const current = (document.getElementById('secCurrent') as HTMLInputElement).value;
+    const iterations = Number((document.getElementById('secIters') as HTMLInputElement).value);
+    if (!current) return setFooterStatus('Enter your current master password', true);
+    if (!Number.isFinite(iterations) || iterations < 600_000) return setFooterStatus('Use at least 600000 iterations', true);
+    isPending = true;
+    try {
+      const response = await sendRequest({ type: 'auth.changeKdf', currentPassword: current, iterations });
+      setFooterStatus(response.ok ? `KDF iterations changed to ${iterations}.` : response.error.message, !response.ok);
+    } finally {
+      isPending = false;
+    }
+  })());
+  (document.getElementById('secCurrent') as HTMLInputElement).focus();
+}
 
 /** Inline export panel: choose a password-protected (encrypted) export, or an explicit plaintext one. */
 function openExportPanel(setFooterStatus: FooterStatus): void {

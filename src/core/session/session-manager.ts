@@ -73,6 +73,23 @@ export class SessionManager {
     return this.deps.localStore.get<PersistedAuth>(AUTH_KEY);
   }
 
+  /**
+   * Update the master-password-derived material after a password or KDF change: the UserKey-wrapping
+   * protectedKey, and the KDF iterations when changed. The UserKey itself is unchanged, so the cached
+   * vault, the session UserKey, and any PIN-protected blob all stay valid.
+   */
+  async updateMasterKeyMaterial(update: { protectedKey: string; kdfIterations?: number }): Promise<void> {
+    const auth = await this.getPersistedAuth();
+    if (!auth) throw new Error('not logged in');
+    const updated: PersistedAuth = {
+      ...auth,
+      protectedKey: update.protectedKey,
+      ...(update.kdfIterations !== undefined ? { kdfIterations: update.kdfIterations } : {}),
+    };
+    await this.deps.localStore.set(AUTH_KEY, updated);
+    await this.upsertAccount(updated);
+  }
+
   async loadUserKey(): Promise<SymmetricKey | undefined> {
     const stored = await this.deps.sessionStore.get<string>(USER_KEY_KEY);
     if (!stored) return undefined;
