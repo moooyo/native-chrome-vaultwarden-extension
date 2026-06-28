@@ -2,6 +2,7 @@ import type { AuthService } from '../core/session/auth-service.js';
 import type { VaultService } from '../core/vault/vault-service.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 import type { RequestMessage, ResponseMessage } from '../messaging/protocol.js';
+import { AppError } from '../core/errors.js';
 
 export interface RouterDeps {
   auth: Partial<AuthService>;
@@ -73,8 +74,15 @@ export function createRouter(deps: RouterDeps) {
               await deps.settings.saveDefaultUriMatchStrategy(request.defaultUriMatchStrategy);
             }
             return { ok: true, data: null };
+          case 'autofill.findCandidates':
+            throw new Error('autofill.findCandidates is not implemented');
+          case 'autofill.getCredentials':
+            throw new Error('autofill.getCredentials is not implemented');
         }
       } catch (err) {
+        if (err instanceof AppError) {
+          return { ok: false, error: { code: err.code, message: err.message } };
+        }
         return { ok: false, error: { code: 'error', message: err instanceof Error ? err.message : String(err) } };
       }
     },

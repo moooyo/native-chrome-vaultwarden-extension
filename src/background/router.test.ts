@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SessionState } from '../core/session/session-manager.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
+import { AppError } from '../core/errors.js';
 import { createRouter } from './router.js';
 
 describe('router', () => {
@@ -241,5 +242,20 @@ describe('router', () => {
       .resolves.toEqual({ ok: true, data: { kind: 'unlocked' } });
     expect(submitTwoFactor).toHaveBeenCalledWith({ provider: 0, code: '123456', remember: true });
     expect(submitTwoFactor).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves typed application error codes', async () => {
+    const router = createRouter({
+      auth: { lock: vi.fn(async () => { throw new AppError('locked', 'Vault is locked'); }) },
+      vault: {},
+      settings: {
+        getServerUrl: vi.fn(),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+      },
+    });
+    await expect(router.handle({ type: 'auth.lock' }))
+      .resolves.toEqual({ ok: false, error: { code: 'locked', message: 'Vault is locked' } });
   });
 });

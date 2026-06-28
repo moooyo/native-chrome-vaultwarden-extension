@@ -3,6 +3,21 @@ import type { AuthResult } from '../core/session/auth-service.js';
 import type { SessionState } from '../core/session/session-manager.js';
 import type { CipherSummary, FieldName } from '../core/vault/models.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
+import type { AppErrorCode } from '../core/errors.js';
+
+export interface AutofillCandidate {
+  id: string;
+  name: string;
+  username?: string;
+  matchedUri: string;
+  matchType: UriMatchStrategySetting;
+  favorite: boolean;
+}
+
+export interface AutofillCredentials {
+  username?: string;
+  password?: string;
+}
 
 export type RequestMessage =
   | { type: 'auth.getState' }
@@ -16,7 +31,9 @@ export type RequestMessage =
   | { type: 'vault.listItems' }
   | { type: 'vault.getField'; id: string; field: FieldName }
   | { type: 'settings.get' }
-  | { type: 'settings.save'; serverUrl: string; defaultUriMatchStrategy?: UriMatchStrategySetting };
+  | { type: 'settings.save'; serverUrl: string; defaultUriMatchStrategy?: UriMatchStrategySetting }
+  | { type: 'autofill.findCandidates'; frameUrl: string; formSignature?: string }
+  | { type: 'autofill.getCredentials'; cipherId: string; frameUrl: string };
 
 export type ResponseMessage =
   | { ok: true; data: { state: SessionState } }
@@ -25,7 +42,9 @@ export type ResponseMessage =
   | { ok: true; data: { value?: string } }
   | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting } }
   | { ok: true; data: null }
-  | { ok: false; error: { code: string; message: string } };
+  | { ok: true; data: AutofillCandidate[] }
+  | { ok: true; data: AutofillCredentials }
+  | { ok: false; error: { code: AppErrorCode; message: string } };
 
 export async function sendRequest(request: RequestMessage): Promise<ResponseMessage> {
   return browser.runtime.sendMessage(request) as Promise<ResponseMessage>;
