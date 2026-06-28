@@ -266,6 +266,30 @@ describe('autofill controller', () => {
 
     expect(current.showStatus).toHaveBeenCalledWith('Unexpected autofill response');
   });
+
+  it('fills only the username for a username-only step without reporting it unavailable', async () => {
+    document.body.innerHTML = '<form><input type="email" autocomplete="username"><button>Next</button></form>';
+    vi.mocked(fillLoginForm).mockReturnValue(true);
+    vi.mocked(sendRequest)
+      .mockResolvedValueOnce({
+        ok: true,
+        data: [{ id: '1', name: 'Test', username: 'user', matchedUri: 'https://example.com', matchType: 0, favorite: false }],
+      })
+      .mockResolvedValueOnce({ ok: true, data: { username: 'user', password: 'secret' } });
+
+    startAutofill('https://example.com/login');
+    const current = popover();
+    current.options.onOpen();
+    await new Promise(r => setTimeout(r, 0));
+    current.options.onSelect('1');
+    await new Promise(r => setTimeout(r, 0));
+
+    const filledForm = vi.mocked(fillLoginForm).mock.calls[0]?.[0];
+    expect(filledForm?.passwordInput).toBeUndefined();
+    expect(filledForm?.usernameInput?.type).toBe('email');
+    expect(current.showStatus).not.toHaveBeenCalledWith('Form is no longer available');
+    expect(current.showStatus).toHaveBeenCalledWith('Filled');
+  });
 });
 
 function popover(): FakePopover {

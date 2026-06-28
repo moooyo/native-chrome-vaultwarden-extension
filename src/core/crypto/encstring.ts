@@ -9,6 +9,14 @@ export interface ParsedEncString {
   mac: Uint8Array;
 }
 
+/** RSA EncStrings are single-segment `encType.data` (encType 3/4/6). */
+export interface ParsedRsaEncString {
+  encType: number;
+  data: Uint8Array;
+}
+
+const RSA_ENC_TYPES = new Set([3, 4, 6]);
+
 export class UnsupportedEncTypeError extends Error {}
 export class EncStringMacError extends Error {}
 
@@ -26,6 +34,22 @@ export function parseEncString(value: string): ParsedEncString {
     ct: base64ToBytes(parts[1]!),
     mac: base64ToBytes(parts[2]!),
   };
+}
+
+/**
+ * Parse an RSA EncString (encType 3/4/6). The body is a single base64 segment (the RSA blob);
+ * for encType=6 any trailing `|`-separated outer HMAC is ignored (verification is out of scope
+ * until org-key unwrap lands — see docs/tech-debt.md).
+ */
+export function parseRsaEncString(value: string): ParsedRsaEncString {
+  const dot = value.indexOf('.');
+  if (dot < 0) throw new UnsupportedEncTypeError('missing encType prefix');
+  const encType = Number(value.slice(0, dot));
+  if (Number.isNaN(encType) || !RSA_ENC_TYPES.has(encType)) {
+    throw new UnsupportedEncTypeError(`unsupported RSA encType ${value.slice(0, dot)}`);
+  }
+  const firstSegment = value.slice(dot + 1).split('|')[0]!;
+  return { encType, data: base64ToBytes(firstSegment) };
 }
 
 export async function decryptToBytes(value: string, key: SymmetricKey): Promise<Uint8Array> {

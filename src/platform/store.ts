@@ -44,3 +44,19 @@ export function createBrowserStore(area: 'local' | 'session'): KeyValueStore {
     },
   };
 }
+
+/**
+ * Pin chrome.storage.session to TRUSTED_CONTEXTS so the UserKey / private key cached there can
+ * never be read from a content script. Chrome's default is already TRUSTED_CONTEXTS; this makes
+ * the boundary explicit and survives a future default change. Feature-detected because the method
+ * is Chromium-only and absent from the polyfill types / non-browser test environments.
+ *
+ * Callers must wrap this in `.catch()` — it is left un-swallowed so it stays unit-testable.
+ */
+export async function hardenSessionAccessLevel(): Promise<void> {
+  const sessionArea = browser.storage.session as unknown as {
+    setAccessLevel?: (opts: { accessLevel: 'TRUSTED_CONTEXTS' | 'TRUSTED_AND_UNTRUSTED_CONTEXTS' }) => Promise<void>;
+  };
+  if (typeof sessionArea?.setAccessLevel !== 'function') return;
+  await sessionArea.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+}

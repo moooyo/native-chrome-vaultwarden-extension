@@ -3,8 +3,9 @@ import type { CipherResponse, SyncResponse } from '../api/types.js';
 import type { SessionManager } from '../session/session-manager.js';
 import type { AuthService } from '../session/auth-service.js';
 import type { KeyValueStore } from '../../platform/store.js';
-import type { CipherSummary, FieldName } from './models.js';
-import { decryptCipher } from './decrypt.js';
+import type { SymmetricKey } from '../crypto/keys.js';
+import type { CipherSummary, DecryptedCipher, FieldName, FolderSummary } from './models.js';
+import { decryptCipher, decryptFolders } from './decrypt.js';
 import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
@@ -18,39 +19,92 @@ export interface VaultServiceDeps {
 
 const VAULT_CACHE_KEY = 'vaultCache';
 const SUMMARY_CACHE_KEY = 'vaultSummaries';
+const FOLDER_CACHE_KEY = 'vaultFolders';
+const SKIPPED_ORG_KEY = 'vaultSkippedOrgCount';
+
+export interface VaultListing {
+  items: CipherSummary[];
+  folders: FolderSummary[];
+}
 
 export class VaultService {
   constructor(private readonly deps: VaultServiceDeps) {}
 
-  async sync(): Promise<CipherSummary[]> {
+  async sync(): Promise<VaultListing> {
     await this.deps.auth.refreshIfNeeded();
     const auth = await this.deps.session.getPersistedAuth();
     if (!auth) throw new Error('not logged in');
     const response = await this.deps.api.sync(auth.accessToken);
     await this.deps.localStore.set(VAULT_CACHE_KEY, response);
-    const summaries = await this.decryptSummaries(response.ciphers);
-    await this.deps.localStore.set(SUMMARY_CACHE_KEY, summaries);
-    return summaries;
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) throw new Error('vault is locked');
+    const items = await this.decryptSummaries(response.ciphers, userKey);
+    const folders = await decryptFolders(response.folders, userKey);
+    const skippedOrgCount = response.ciphers.filter((c) => c.organizationId).length;
+    await this.deps.localStore.set(SUMMARY_CACHE_KEY, items);
+    await this.deps.localStore.set(FOLDER_CACHE_KEY, folders);
+    await this.deps.localStore.set(SKIPPED_ORG_KEY, skippedOrgCount);
+    return { items, folders };
   }
 
-  async listItems(): Promise<CipherSummary[]> {
-    return (await this.deps.localStore.get<CipherSummary[]>(SUMMARY_CACHE_KEY)) ?? [];
+  async listItems(): Promise<VaultListing> {
+    return {
+      items: (await this.deps.localStore.get<CipherSummary[]>(SUMMARY_CACHE_KEY)) ?? [],
+      folders: (await this.deps.localStore.get<FolderSummary[]>(FOLDER_CACHE_KEY)) ?? [],
+    };
+  }
+
+  async getSkippedOrgCount(): Promise<number> {
+    return (await this.deps.localStore.get<number>(SKIPPED_ORG_KEY)) ?? 0;
   }
 
   async getField(id: string, field: FieldName): Promise<string | undefined> {
+    const decrypted = await this.decryptCipherById(id);
+    if (!decrypted) return undefined;
+    if (field === 'card.number') return decrypted.card?.number;
+    if (field === 'card.code') return decrypted.card?.code;
+    if (field === 'identity.ssn') return decrypted.identity?.ssn;
+    if (field === 'identity.passportNumber') return decrypted.identity?.passportNumber;
+    if (field === 'identity.licenseNumber') return decrypted.identity?.licenseNumber;
+    return decrypted[field];
+  }
+
+  /** Decrypt one cipher for the detail view, with the sensitive secrets stripped out. */
+  async getCipherDetail(id: string): Promise<DecryptedCipher | undefined> {
+    const decrypted = await this.decryptCipherById(id);
+    if (!decrypted) return undefined;
+    const safe: DecryptedCipher = { ...decrypted };
+    delete safe.password;
+    delete safe.totp;
+    if (safe.card) {
+      safe.card = { ...safe.card };
+      delete safe.card.number;
+      delete safe.card.code;
+    }
+    if (safe.identity) {
+      safe.identity = { ...safe.identity };
+      delete safe.identity.ssn;
+      delete safe.identity.passportNumber;
+      delete safe.identity.licenseNumber;
+    }
+    return safe;
+  }
+
+  private async decryptCipherById(id: string): Promise<DecryptedCipher | undefined> {
     const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
     if (!cache) throw new Error('vault is not synced');
     const cipher = cache.ciphers.find((c) => c.id === id);
     if (!cipher) return undefined;
     const userKey = await this.deps.session.loadUserKey();
     if (!userKey) throw new Error('vault is locked');
-    const decrypted = await decryptCipher(cipher, userKey);
-    return decrypted?.[field];
+    return decryptCipher(cipher, userKey);
   }
 
   async clearCache(): Promise<void> {
     await this.deps.localStore.remove(VAULT_CACHE_KEY);
     await this.deps.localStore.remove(SUMMARY_CACHE_KEY);
+    await this.deps.localStore.remove(FOLDER_CACHE_KEY);
+    await this.deps.localStore.remove(SKIPPED_ORG_KEY);
   }
 
   async findAutofillCandidates(
@@ -110,16 +164,14 @@ export class VaultService {
     return out;
   }
 
-  private async decryptSummaries(ciphers: CipherResponse[]): Promise<CipherSummary[]> {
-    const userKey = await this.deps.session.loadUserKey();
-    if (!userKey) throw new Error('vault is locked');
+  private async decryptSummaries(ciphers: CipherResponse[], userKey: SymmetricKey): Promise<CipherSummary[]> {
     const out: CipherSummary[] = [];
     for (const cipher of ciphers) {
       try {
         const decrypted = await decryptCipher(cipher, userKey);
         if (decrypted) {
           if (decrypted.undecryptable) {
-            out.push({
+            const summary: CipherSummary = {
               id: decrypted.id,
               type: decrypted.type,
               favorite: decrypted.favorite,
@@ -127,7 +179,9 @@ export class VaultService {
               uris: [],
               loginUris: [],
               undecryptable: true,
-            });
+            };
+            if (decrypted.folderId) summary.folderId = decrypted.folderId;
+            out.push(summary);
           } else {
             const summary: CipherSummary = {
               id: decrypted.id,
@@ -138,11 +192,14 @@ export class VaultService {
               loginUris: decrypted.loginUris,
             };
             if (decrypted.username) summary.username = decrypted.username;
+            if (decrypted.folderId) summary.folderId = decrypted.folderId;
+            const subtitle = summarySubtitle(decrypted);
+            if (subtitle) summary.subtitle = subtitle;
             out.push(summary);
           }
         }
       } catch {
-        out.push({
+        const summary: CipherSummary = {
           id: cipher.id,
           type: cipher.type,
           favorite: cipher.favorite ?? false,
@@ -150,11 +207,23 @@ export class VaultService {
           uris: [],
           loginUris: [],
           undecryptable: true,
-        });
+        };
+        if (cipher.folderId) summary.folderId = cipher.folderId;
+        out.push(summary);
       }
     }
     return out;
   }
+}
+
+/** Non-sensitive list subtitle for card (brand) and identity (full name). Never returns secrets. */
+function summarySubtitle(decrypted: DecryptedCipher): string | undefined {
+  if (decrypted.type === 3) return decrypted.card?.brand;
+  if (decrypted.type === 4) {
+    const name = [decrypted.identity?.firstName, decrypted.identity?.lastName].filter(Boolean).join(' ');
+    return name || undefined;
+  }
+  return undefined;
 }
 
 // Score map mirrors uri-match.ts MATCH_SCORE (lower = better match)

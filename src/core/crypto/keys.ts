@@ -15,3 +15,14 @@ export async function unwrapSymmetricKey(
 ): Promise<SymmetricKey> {
   return symmetricKeyFromBytes(await decryptToBytes(protectedKey, wrappingKey));
 }
+
+/**
+ * Decrypt the account RSA PrivateKey into raw PKCS8 DER bytes. The PrivateKey field is an
+ * encType=2 EncString wrapped by the UserKey (symmetric), NOT an RSA blob.
+ */
+export async function decryptPrivateKey(
+  encPrivateKey: string,
+  userKey: SymmetricKey,
+): Promise<Uint8Array> {
+  return decryptToBytes(encPrivateKey, userKey);
+}

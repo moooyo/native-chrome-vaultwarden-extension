@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SessionState } from '../core/session/session-manager.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
+import type { LockTimeoutSetting } from './settings.js';
 import { AppError } from '../core/errors.js';
 import { createRouter } from './router.js';
 
@@ -14,6 +15,8 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.getState' })).resolves.toEqual({ ok: true, data: { state: 'locked' } });
@@ -28,6 +31,8 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.login', email: 'u', masterPassword: 'p' }))
@@ -43,6 +48,8 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'vault.getField', id: '1', field: 'password' }))
@@ -58,6 +65,8 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'vault.getField', id: 'missing', field: 'password' }))
@@ -73,10 +82,12 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'settings.get' }))
-      .resolves.toEqual({ ok: true, data: { serverUrl: 'https://vault.example.com', defaultUriMatchStrategy: 0 } });
+      .resolves.toEqual({ ok: true, data: { serverUrl: 'https://vault.example.com', defaultUriMatchStrategy: 0, lockTimeout: '15' } });
   });
 
   it('routes settings.get when serverUrl is undefined', async () => {
@@ -88,10 +99,12 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'settings.get' }))
-      .resolves.toEqual({ ok: true, data: { defaultUriMatchStrategy: 0 } });
+      .resolves.toEqual({ ok: true, data: { defaultUriMatchStrategy: 0, lockTimeout: '15' } });
   });
 
   it('routes settings.save', async () => {
@@ -104,6 +117,8 @@ describe('router', () => {
         saveServerUrl: save,
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'settings.save', serverUrl: 'https://vault.example.com' }))
@@ -120,10 +135,12 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'settings.get' }))
-      .resolves.toEqual({ ok: true, data: { serverUrl: 'https://vault.example.com', defaultUriMatchStrategy: 0 } });
+      .resolves.toEqual({ ok: true, data: { serverUrl: 'https://vault.example.com', defaultUriMatchStrategy: 0, lockTimeout: '15' } });
   });
 
   it('routes settings.save with default autofill strategy', async () => {
@@ -137,12 +154,52 @@ describe('router', () => {
         saveServerUrl,
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy,
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'settings.save', serverUrl: 'https://vault.example.com', defaultUriMatchStrategy: 1 }))
       .resolves.toEqual({ ok: true, data: null });
     expect(saveServerUrl).toHaveBeenCalledWith('https://vault.example.com');
     expect(saveDefaultUriMatchStrategy).toHaveBeenCalledWith(1);
+  });
+
+  it('routes settings.save persisting lockTimeout when provided', async () => {
+    const saveLockTimeout = vi.fn(async () => {});
+    const router = createRouter({
+      auth: {},
+      vault: {},
+      settings: {
+        getServerUrl: vi.fn(),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout,
+      },
+    });
+    await expect(router.handle({ type: 'settings.save', serverUrl: 'https://vault.example.com', lockTimeout: '30' }))
+      .resolves.toEqual({ ok: true, data: null });
+    expect(saveLockTimeout).toHaveBeenCalledWith('30');
+  });
+
+  it('routes settings.save without lockTimeout leaves it untouched', async () => {
+    const saveLockTimeout = vi.fn(async () => {});
+    const router = createRouter({
+      auth: {},
+      vault: {},
+      settings: {
+        getServerUrl: vi.fn(),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout,
+      },
+    });
+    await expect(router.handle({ type: 'settings.save', serverUrl: 'https://vault.example.com' }))
+      .resolves.toEqual({ ok: true, data: null });
+    expect(saveLockTimeout).not.toHaveBeenCalled();
   });
 
   it('routes auth.lock', async () => {
@@ -155,6 +212,8 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.lock' })).resolves.toEqual({ ok: true, data: null });
@@ -171,6 +230,8 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.logout' })).resolves.toEqual({ ok: true, data: null });
@@ -178,19 +239,44 @@ describe('router', () => {
   });
 
   it('routes vault.listItems', async () => {
-    const items = [{ id: '1', name: 'item', uris: [], loginUris: [], type: 1 as const, favorite: false }];
+    const envelope = { items: [{ id: '1', name: 'item', uris: [], loginUris: [], type: 1 as const, favorite: false }], folders: [] };
     const router = createRouter({
       auth: {},
-      vault: { listItems: vi.fn(async () => items) },
+      vault: { listItems: vi.fn(async () => envelope) },
       settings: {
         getServerUrl: vi.fn(),
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'vault.listItems' }))
-      .resolves.toEqual({ ok: true, data: items });
+      .resolves.toEqual({ ok: true, data: envelope });
+  });
+
+  it('routes vault.getCipherDetail and vault.getSkippedOrgCount', async () => {
+    const cipher = { id: 'card-1', name: 'Card', type: 3 as const, favorite: false, uris: [], loginUris: [], card: { brand: 'Visa' } };
+    const router = createRouter({
+      auth: {},
+      vault: {
+        getCipherDetail: vi.fn(async () => cipher),
+        getSkippedOrgCount: vi.fn(async () => 2),
+      },
+      settings: {
+        getServerUrl: vi.fn(),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
+      },
+    });
+    await expect(router.handle({ type: 'vault.getCipherDetail', id: 'card-1' }))
+      .resolves.toEqual({ ok: true, data: { cipher } });
+    await expect(router.handle({ type: 'vault.getSkippedOrgCount' }))
+      .resolves.toEqual({ ok: true, data: { count: 2 } });
   });
 
   it('turns non-Error throws into ok:false with string message', async () => {
@@ -202,6 +288,8 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.lock' }))
@@ -218,6 +306,8 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.submitTwoFactor', provider: 0, code: '123456' }))
@@ -236,6 +326,8 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.submitTwoFactor', provider: 0, code: '123456', remember: true }))
@@ -253,6 +345,8 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.lock' }))
@@ -276,6 +370,8 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'autofill.findCandidates', frameUrl: 'https://example.com/login' }))
@@ -300,6 +396,8 @@ describe('router', () => {
         saveServerUrl: vi.fn(),
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 1),
         saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'autofill.getCredentials', cipherId: '1', frameUrl: 'https://example.com/login' }))

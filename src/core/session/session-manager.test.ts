@@ -11,10 +11,11 @@ vi.mock('webextension-polyfill', () => ({
 import { SessionManager } from './session-manager.js';
 import { createMemoryStore } from '../../platform/store.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
-import { hexToBytes, bytesToHex } from '../crypto/encoding.js';
-import { USER_KEY_VECTOR } from '../../../test/vectors.js';
+import { hexToBytes, bytesToHex, base64ToBytes } from '../crypto/encoding.js';
+import { USER_KEY_VECTOR, RSA_PRIVATE_KEY_VECTOR } from '../../../test/vectors.js';
 
 const userKey = symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex));
+const privateKeyBytes = base64ToBytes(RSA_PRIVATE_KEY_VECTOR.pkcs8B64);
 
 describe('SessionManager', () => {
   it('starts loggedOut when no persisted auth exists', async () => {
@@ -117,5 +118,56 @@ describe('SessionManager', () => {
     });
     await sm.logout();
     expect(await sm.getState()).toBe('loggedOut');
+  });
+
+  describe('privateKey (PKCS8) session slot', () => {
+    it('saveUnlocked stores the decrypted privateKey only in session storage', async () => {
+      const local = createMemoryStore();
+      const session = createMemoryStore();
+      const sm = new SessionManager({ localStore: local, sessionStore: session });
+      await sm.saveUnlocked({
+        email: 'user@example.com',
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        expiresAt: 123,
+        protectedKey: USER_KEY_VECTOR.akey,
+        kdf: 0,
+        kdfIterations: 600000,
+        userKey,
+        privateKey: privateKeyBytes,
+      });
+      expect(await local.get('privateKey')).toBeUndefined();
+      expect(bytesToHex((await sm.loadPrivateKey())!)).toBe(bytesToHex(privateKeyBytes));
+    });
+
+    it('lock and logout remove the privateKey from session', async () => {
+      const sm = new SessionManager({ localStore: createMemoryStore(), sessionStore: createMemoryStore() });
+      await sm.saveUnlocked({
+        email: 'user@example.com',
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        expiresAt: 123,
+        protectedKey: USER_KEY_VECTOR.akey,
+        kdf: 0,
+        kdfIterations: 600000,
+        userKey,
+        privateKey: privateKeyBytes,
+      });
+      await sm.lock();
+      expect(await sm.loadPrivateKey()).toBeUndefined();
+      await sm.saveUnlocked({
+        email: 'user@example.com',
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        expiresAt: 123,
+        protectedKey: USER_KEY_VECTOR.akey,
+        kdf: 0,
+        kdfIterations: 600000,
+        userKey,
+        privateKey: privateKeyBytes,
+      });
+      await sm.logout();
+      expect(await sm.loadPrivateKey()).toBeUndefined();
+    });
   });
 });

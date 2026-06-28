@@ -1,6 +1,7 @@
 import type { AuthService } from '../core/session/auth-service.js';
 import type { VaultService } from '../core/vault/vault-service.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
+import type { LockTimeoutSetting } from './settings.js';
 import type { RequestMessage, ResponseMessage } from '../messaging/protocol.js';
 import { AppError } from '../core/errors.js';
 
@@ -12,6 +13,8 @@ export interface RouterDeps {
     saveServerUrl(serverUrl: string): Promise<void>;
     getDefaultUriMatchStrategy(): Promise<UriMatchStrategySetting>;
     saveDefaultUriMatchStrategy(strategy: UriMatchStrategySetting): Promise<void>;
+    getLockTimeout(): Promise<LockTimeoutSetting>;
+    saveLockTimeout(value: LockTimeoutSetting): Promise<void>;
   };
 }
 
@@ -63,15 +66,28 @@ export function createRouter(deps: RouterDeps) {
             const value = await deps.vault.getField(request.id, request.field);
             return { ok: true, data: value === undefined ? {} : { value } };
           }
+          case 'vault.getCipherDetail': {
+            if (!deps.vault.getCipherDetail) throw new Error('vault.getCipherDetail is not wired');
+            const cipher = await deps.vault.getCipherDetail(request.id);
+            return { ok: true, data: { cipher: cipher ?? null } };
+          }
+          case 'vault.getSkippedOrgCount': {
+            if (!deps.vault.getSkippedOrgCount) throw new Error('vault.getSkippedOrgCount is not wired');
+            return { ok: true, data: { count: await deps.vault.getSkippedOrgCount() } };
+          }
           case 'settings.get': {
             const serverUrl = await deps.settings.getServerUrl();
             const defaultUriMatchStrategy = await deps.settings.getDefaultUriMatchStrategy();
-            return { ok: true, data: serverUrl === undefined ? { defaultUriMatchStrategy } : { serverUrl, defaultUriMatchStrategy } };
+            const lockTimeout = await deps.settings.getLockTimeout();
+            return { ok: true, data: serverUrl === undefined ? { defaultUriMatchStrategy, lockTimeout } : { serverUrl, defaultUriMatchStrategy, lockTimeout } };
           }
           case 'settings.save':
             await deps.settings.saveServerUrl(request.serverUrl);
             if (request.defaultUriMatchStrategy !== undefined) {
               await deps.settings.saveDefaultUriMatchStrategy(request.defaultUriMatchStrategy);
+            }
+            if (request.lockTimeout !== undefined) {
+              await deps.settings.saveLockTimeout(request.lockTimeout);
             }
             return { ok: true, data: null };
           case 'autofill.findCandidates': {

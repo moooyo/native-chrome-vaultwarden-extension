@@ -1,8 +1,9 @@
 import browser from 'webextension-polyfill';
 import type { AuthResult } from '../core/session/auth-service.js';
 import type { SessionState } from '../core/session/session-manager.js';
-import type { CipherSummary, FieldName } from '../core/vault/models.js';
+import type { CipherSummary, DecryptedCipher, FieldName, FolderSummary } from '../core/vault/models.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
+import type { LockTimeoutSetting } from '../background/settings.js';
 import type { AppErrorCode } from '../core/errors.js';
 
 export interface AutofillCandidate {
@@ -30,17 +31,21 @@ export type RequestMessage =
   | { type: 'vault.sync' }
   | { type: 'vault.listItems' }
   | { type: 'vault.getField'; id: string; field: FieldName }
+  | { type: 'vault.getCipherDetail'; id: string }
+  | { type: 'vault.getSkippedOrgCount' }
   | { type: 'settings.get' }
-  | { type: 'settings.save'; serverUrl: string; defaultUriMatchStrategy?: UriMatchStrategySetting }
+  | { type: 'settings.save'; serverUrl: string; defaultUriMatchStrategy?: UriMatchStrategySetting; lockTimeout?: LockTimeoutSetting }
   | { type: 'autofill.findCandidates'; frameUrl: string; formSignature?: string }
   | { type: 'autofill.getCredentials'; cipherId: string; frameUrl: string };
 
 export type ResponseMessage =
   | { ok: true; data: { state: SessionState } }
   | { ok: true; data: AuthResult }
-  | { ok: true; data: CipherSummary[] }
+  | { ok: true; data: { items: CipherSummary[]; folders: FolderSummary[] } }
   | { ok: true; data: { value?: string } }
-  | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting } }
+  | { ok: true; data: { cipher: DecryptedCipher | null } }
+  | { ok: true; data: { count: number } }
+  | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting; lockTimeout: LockTimeoutSetting } }
   | { ok: true; data: null }
   | { ok: true; data: AutofillCandidate[] }
   | { ok: true; data: AutofillCredentials }

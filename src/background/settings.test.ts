@@ -34,4 +34,38 @@ describe('settings service', () => {
     const settings = createSettingsService(createMemoryStore());
     await expect(settings.saveDefaultUriMatchStrategy(6 as never)).rejects.toThrow('unsupported URI match strategy');
   });
+
+  it('defaults lock timeout to 15 minutes', async () => {
+    const settings = createSettingsService(createMemoryStore());
+    await expect(settings.getLockTimeout()).resolves.toBe('15');
+  });
+
+  it('persists supported lock timeout values including onClose and never', async () => {
+    const settings = createSettingsService(createMemoryStore());
+    await settings.saveLockTimeout('5');
+    await expect(settings.getLockTimeout()).resolves.toBe('5');
+    await settings.saveLockTimeout('onClose');
+    await expect(settings.getLockTimeout()).resolves.toBe('onClose');
+    await settings.saveLockTimeout('never');
+    await expect(settings.getLockTimeout()).resolves.toBe('never');
+  });
+
+  it('rejects unsupported lock timeout values', async () => {
+    const settings = createSettingsService(createMemoryStore());
+    await expect(settings.saveLockTimeout('99' as never)).rejects.toThrow('unsupported lock timeout');
+    await expect(settings.saveLockTimeout(15 as never)).rejects.toThrow('unsupported lock timeout');
+  });
+
+  it('maps lock timeout to idle milliseconds, with null for onClose and never', async () => {
+    const settings = createSettingsService(createMemoryStore());
+    await expect(settings.getIdleMs()).resolves.toBe(15 * 60 * 1000); // default
+    await settings.saveLockTimeout('1');
+    await expect(settings.getIdleMs()).resolves.toBe(60 * 1000);
+    await settings.saveLockTimeout('30');
+    await expect(settings.getIdleMs()).resolves.toBe(30 * 60 * 1000);
+    await settings.saveLockTimeout('onClose');
+    await expect(settings.getIdleMs()).resolves.toBeNull();
+    await settings.saveLockTimeout('never');
+    await expect(settings.getIdleMs()).resolves.toBeNull();
+  });
 });

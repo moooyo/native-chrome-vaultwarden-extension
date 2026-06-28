@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
-import { createMemoryStore } from './store.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import browser from 'webextension-polyfill';
+import { createMemoryStore, hardenSessionAccessLevel } from './store.js';
 
 vi.mock('webextension-polyfill', () => ({
   default: {
@@ -45,5 +46,29 @@ describe('memory store', () => {
     await s.set('a', obj);
     obj.n = 99;
     expect(await s.get<{ n: number }>('a')).toEqual({ n: 1 });
+  });
+});
+
+describe('hardenSessionAccessLevel', () => {
+  const session = browser.storage.session as unknown as Record<string, unknown>;
+  afterEach(() => {
+    delete session.setAccessLevel;
+  });
+
+  it('calls setAccessLevel with TRUSTED_CONTEXTS when the API is available', async () => {
+    const spy = vi.fn().mockResolvedValue(undefined);
+    session.setAccessLevel = spy;
+    await hardenSessionAccessLevel();
+    expect(spy).toHaveBeenCalledWith({ accessLevel: 'TRUSTED_CONTEXTS' });
+  });
+
+  it('no-ops without throwing when setAccessLevel is unavailable (feature-detect)', async () => {
+    delete session.setAccessLevel;
+    await expect(hardenSessionAccessLevel()).resolves.toBeUndefined();
+  });
+
+  it('propagates a rejection to the caller (so index.ts must wrap it in catch)', async () => {
+    session.setAccessLevel = vi.fn().mockRejectedValue(new Error('nope'));
+    await expect(hardenSessionAccessLevel()).rejects.toThrow('nope');
   });
 });

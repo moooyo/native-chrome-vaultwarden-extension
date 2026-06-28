@@ -1,11 +1,13 @@
 import browser from 'webextension-polyfill';
 import { sendRequest } from '../../messaging/protocol.js';
 import { isUriMatchStrategySetting } from '../../core/vault/uri-match.js';
+import { isLockTimeoutSetting } from '../../background/settings.js';
 import { icon } from '../icons.js';
 
 const form = document.getElementById('settingsForm') as HTMLFormElement;
 const input = document.getElementById('serverUrl') as HTMLInputElement;
 const defaultUriMatchStrategyInput = document.getElementById('defaultUriMatchStrategy') as HTMLSelectElement;
+const lockTimeoutInput = document.getElementById('lockTimeout') as HTMLSelectElement;
 const status = document.getElementById('status')!;
 const strategyHelp = document.getElementById('strategyHelp')!;
 const saveButton = document.getElementById('saveButton') as HTMLButtonElement;
@@ -30,9 +32,10 @@ void init();
 async function init() {
   const response = await sendRequest({ type: 'settings.get' });
   if (response.ok) {
-    const { serverUrl, defaultUriMatchStrategy } = response.data as { serverUrl?: string; defaultUriMatchStrategy: number };
+    const { serverUrl, defaultUriMatchStrategy, lockTimeout } = response.data as { serverUrl?: string; defaultUriMatchStrategy: number; lockTimeout: string };
     if (serverUrl) input.value = serverUrl;
     defaultUriMatchStrategyInput.value = String(defaultUriMatchStrategy);
+    lockTimeoutInput.value = lockTimeout;
   }
   updateStrategyHelp();
 }
@@ -55,7 +58,11 @@ form.addEventListener('submit', async (event) => {
       setStatus('Unsupported URI match strategy.', true);
       return;
     }
-    const response = await sendRequest({ type: 'settings.save', serverUrl: normalized, defaultUriMatchStrategy: parsedStrategy });
+    if (!isLockTimeoutSetting(lockTimeoutInput.value)) {
+      setStatus('Unsupported lock timeout.', true);
+      return;
+    }
+    const response = await sendRequest({ type: 'settings.save', serverUrl: normalized, defaultUriMatchStrategy: parsedStrategy, lockTimeout: lockTimeoutInput.value });
     if (!response.ok) {
       setStatus(response.error.message, true);
       return;

@@ -55,7 +55,10 @@ async function fillSelected(
   cipherId: string,
   popover: ReturnType<typeof createAutofillPopover>,
 ): Promise<void> {
-  if (!form.passwordInput.isConnected || (form.usernameInput && !form.usernameInput.isConnected)) {
+  const pwOk = !form.passwordInput || form.passwordInput.isConnected;
+  const userOk = !form.usernameInput || form.usernameInput.isConnected;
+  const anyField = Boolean(form.passwordInput || form.usernameInput);
+  if (!anyField || !pwOk || !userOk) {
     popover.showStatus('Form is no longer available');
     return;
   }

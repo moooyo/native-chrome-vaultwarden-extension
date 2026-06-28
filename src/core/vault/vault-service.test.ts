@@ -69,7 +69,7 @@ describe('VaultService', () => {
     const { service, api } = await makeService();
     const list = await service.sync();
     expect(api.sync).toHaveBeenCalledWith('access');
-    expect(list).toEqual([{ id: 'cipher-1', type: 1, favorite: false, name: FIELD_VECTOR.plaintext, username: FIELD_VECTOR.plaintext, uris: [FIELD_VECTOR.plaintext], loginUris: [{ uri: FIELD_VECTOR.plaintext }] }]);
+    expect(list).toEqual({ items: [{ id: 'cipher-1', type: 1, favorite: false, name: FIELD_VECTOR.plaintext, username: FIELD_VECTOR.plaintext, uris: [FIELD_VECTOR.plaintext], loginUris: [{ uri: FIELD_VECTOR.plaintext }] }], folders: [] });
   });
 
   it('getField decrypts the requested field on demand from encrypted cache', async () => {
@@ -83,34 +83,34 @@ describe('VaultService', () => {
     bad.ciphers[0]!.name = '2.bad|bad|bad';
     const { service } = await makeService(bad);
     const list = await service.sync();
-    expect(list).toEqual([{ id: 'cipher-1', type: 1, favorite: false, name: '(undecryptable)', uris: [], loginUris: [], undecryptable: true }]);
+    expect(list).toEqual({ items: [{ id: 'cipher-1', type: 1, favorite: false, name: '(undecryptable)', uris: [], loginUris: [], undecryptable: true }], folders: [] });
   });
 
   // Coverage-only: public method listItems() — not exercised by the sync test above.
-  it('listItems returns [] before sync and cached summaries after sync without calling api.sync again', async () => {
+  it('listItems returns empty envelope before sync and cached summaries after sync without calling api.sync again', async () => {
     const { service, api } = await makeService();
 
-    // Before any sync the cache is empty — listItems returns [].
-    await expect(service.listItems()).resolves.toEqual([]);
+    // Before any sync the cache is empty.
+    await expect(service.listItems()).resolves.toEqual({ items: [], folders: [] });
 
     // After sync the summaries are cached.
     const synced = await service.sync();
     expect(api.sync).toHaveBeenCalledTimes(1);
 
-    // listItems must return the cached summaries without calling api.sync a second time.
+    // listItems must return the cached envelope without calling api.sync a second time.
     const listed = await service.listItems();
     expect(listed).toEqual(synced);
     expect(api.sync).toHaveBeenCalledTimes(1);
   });
 
   // Coverage-only: public method clearCache() — removes cached data.
-  it('clearCache removes cached summaries so listItems returns [] again', async () => {
+  it('clearCache removes cached summaries so listItems returns the empty envelope again', async () => {
     const { service } = await makeService();
     await service.sync();
-    expect(await service.listItems()).not.toEqual([]);
+    expect((await service.listItems()).items).not.toEqual([]);
 
     await service.clearCache();
-    await expect(service.listItems()).resolves.toEqual([]);
+    await expect(service.listItems()).resolves.toEqual({ items: [], folders: [] });
   });
 
   it('clearCache removes vault cache so getField rejects with "vault is not synced"', async () => {
@@ -181,5 +181,103 @@ describe('VaultService', () => {
 
     await expect(service.getAutofillCredentials('cipher-1', 'https://not-matching.example.org', UriMatchStrategy.Domain))
       .rejects.toMatchObject({ code: 'denied' });
+  });
+
+  it('decrypts folders, attaches folderId, and counts skipped org ciphers', async () => {
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      folders: [{ id: 'folder-1', name: FIELD_VECTOR.encString }],
+      ciphers: [
+        { id: 'personal', type: 1, name: FIELD_VECTOR.encString, favorite: false, organizationId: null, folderId: 'folder-1', login: { username: FIELD_VECTOR.encString } },
+        { id: 'orgitem', type: 1, name: FIELD_VECTOR.encString, favorite: false, organizationId: 'org-1', login: null },
+      ],
+    };
+    const { service } = await makeService(sync);
+    const result = await service.sync();
+    expect(result.folders).toEqual([{ id: 'folder-1', name: FIELD_VECTOR.plaintext }]);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ id: 'personal', folderId: 'folder-1' });
+    await expect(service.getSkippedOrgCount()).resolves.toBe(1);
+  });
+
+  it('decrypts and reveals card.number on demand while keeping it out of the summary', async () => {
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [{
+        id: 'card-1', type: 3, name: FIELD_VECTOR.encString, favorite: false, organizationId: null,
+        card: { brand: FIELD_VECTOR.encString, number: FIELD_VECTOR.encString, code: FIELD_VECTOR.encString },
+      }],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    // The list summary carries only a non-sensitive brand subtitle, never the number/code.
+    const { items } = await service.listItems();
+    expect(items[0]).toMatchObject({ id: 'card-1', type: 3, subtitle: FIELD_VECTOR.plaintext });
+    expect(JSON.stringify(items)).not.toContain('number');
+    // The number is fetchable on demand.
+    await expect(service.getField('card-1', 'card.number')).resolves.toBe(FIELD_VECTOR.plaintext);
+    await expect(service.getField('card-1', 'card.code')).resolves.toBe(FIELD_VECTOR.plaintext);
+  });
+
+  it('getCipherDetail strips card.number and code from the cross-boundary payload', async () => {
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [{
+        id: 'card-1', type: 3, name: FIELD_VECTOR.encString, favorite: false, organizationId: null,
+        card: { brand: FIELD_VECTOR.encString, number: FIELD_VECTOR.encString, code: FIELD_VECTOR.encString },
+      }],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    const detail = await service.getCipherDetail('card-1');
+    expect(detail?.card?.brand).toBe(FIELD_VECTOR.plaintext);
+    expect(detail?.card?.number).toBeUndefined();
+    expect(detail?.card?.code).toBeUndefined();
+  });
+
+  it('getCipherDetail strips password and totp from a login cipher payload', async () => {
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [{
+        id: 'login-1', type: 1, name: FIELD_VECTOR.encString, favorite: false, organizationId: null,
+        login: { username: FIELD_VECTOR.encString, password: FIELD_VECTOR.encString, totp: FIELD_VECTOR.encString },
+      }],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    const detail = await service.getCipherDetail('login-1');
+    expect(detail?.username).toBe(FIELD_VECTOR.plaintext);
+    expect(detail?.password).toBeUndefined();
+    expect(detail?.totp).toBeUndefined();
+  });
+
+  it('masks identity ssn/passport/license in getCipherDetail and reveals them via getField', async () => {
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [{
+        id: 'id-1', type: 4, name: FIELD_VECTOR.encString, favorite: false, organizationId: null,
+        identity: {
+          firstName: FIELD_VECTOR.encString, lastName: FIELD_VECTOR.encString,
+          ssn: FIELD_VECTOR.encString, passportNumber: FIELD_VECTOR.encString, licenseNumber: FIELD_VECTOR.encString,
+        },
+      }],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    const detail = await service.getCipherDetail('id-1');
+    // Non-sensitive identity fields ride along; national-ID secrets are stripped from the payload.
+    expect(detail?.identity?.firstName).toBe(FIELD_VECTOR.plaintext);
+    expect(detail?.identity?.ssn).toBeUndefined();
+    expect(detail?.identity?.passportNumber).toBeUndefined();
+    expect(detail?.identity?.licenseNumber).toBeUndefined();
+    // They remain fetchable on demand.
+    await expect(service.getField('id-1', 'identity.ssn')).resolves.toBe(FIELD_VECTOR.plaintext);
+    await expect(service.getField('id-1', 'identity.passportNumber')).resolves.toBe(FIELD_VECTOR.plaintext);
+    await expect(service.getField('id-1', 'identity.licenseNumber')).resolves.toBe(FIELD_VECTOR.plaintext);
+  });
+
+  it('getSkippedOrgCount defaults to 0 before any sync', async () => {
+    const { service } = await makeService();
+    await expect(service.getSkippedOrgCount()).resolves.toBe(0);
   });
 });

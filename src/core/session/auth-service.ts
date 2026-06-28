@@ -1,6 +1,6 @@
 import type { ApiClient, PasswordLoginInput, PasswordLoginResult } from '../api/client.js';
-import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey } from '../crypto/kdf.js';
-import { unwrapSymmetricKey } from '../crypto/keys.js';
+import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey, assertKdfIterationsFloor } from '../crypto/kdf.js';
+import { unwrapSymmetricKey, decryptPrivateKey } from '../crypto/keys.js';
 import type { SessionManager, SessionState } from './session-manager.js';
 
 export type AuthResult =
@@ -33,6 +33,7 @@ export class AuthService {
     const email = input.email.trim().toLowerCase();
     const prelogin = await this.deps.api.prelogin(email);
     if (prelogin.kdf !== 0) throw new Error('Argon2id accounts are not supported in this MVP');
+    assertKdfIterationsFloor(prelogin.kdfIterations);
     const masterKey = await deriveMasterKey(input.masterPassword, email, prelogin.kdfIterations);
     const masterPasswordHash = await deriveMasterPasswordHash(masterKey, input.masterPassword);
     const stretchedMasterKey = await stretchMasterKey(masterKey);
@@ -69,7 +70,8 @@ export class AuthService {
     if (!auth) throw new Error('not logged in');
     const masterKey = await deriveMasterKey(masterPassword, auth.email, auth.kdfIterations);
     const userKey = await unwrapSymmetricKey(auth.protectedKey, await stretchMasterKey(masterKey));
-    await this.deps.session.saveUnlocked({ ...auth, userKey });
+    const privateKey = auth.encPrivateKey ? await decryptPrivateKey(auth.encPrivateKey, userKey) : undefined;
+    await this.deps.session.saveUnlocked(privateKey ? { ...auth, userKey, privateKey } : { ...auth, userKey });
   }
 
   getState(): Promise<SessionState> {
@@ -114,7 +116,15 @@ export class AuthService {
     if (data.Kdf !== undefined && data.Kdf !== 0) {
       throw new Error('Argon2id accounts are not supported in this MVP');
     }
+    if (data.KdfIterations !== undefined) {
+      // Defense-in-depth: the token response must not weaken or disagree with the prelogin value.
+      assertKdfIterationsFloor(data.KdfIterations);
+      if (data.KdfIterations !== input.pending.kdfIterations) {
+        throw new Error('Server changed KDF settings during login; refusing to continue.');
+      }
+    }
     const userKey = await unwrapSymmetricKey(data.Key, input.pending.stretchedMasterKey);
+    const privateKey = data.PrivateKey ? await decryptPrivateKey(data.PrivateKey, userKey) : undefined;
     const saveInput = {
       email: input.pending.email,
       accessToken: data.access_token,
@@ -124,9 +134,11 @@ export class AuthService {
       kdf: 0 as const,
       kdfIterations: input.pending.kdfIterations,
       userKey,
+      // Persist only the userKey-wrapped (encrypted) blob; plaintext PKCS8 is set via privateKey below.
+      ...(data.PrivateKey ? { encPrivateKey: data.PrivateKey } : {}),
     };
     await this.deps.session.saveUnlocked(
-      data.PrivateKey ? { ...saveInput, privateKey: data.PrivateKey } : saveInput,
+      privateKey ? { ...saveInput, privateKey } : saveInput,
     );
     this.pendingLogin = undefined;
     return { kind: 'unlocked' };

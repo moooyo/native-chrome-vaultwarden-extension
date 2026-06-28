@@ -3,7 +3,7 @@ import { ApiClient } from '../core/api/client.js';
 import { AuthService } from '../core/session/auth-service.js';
 import { SessionManager } from '../core/session/session-manager.js';
 import { VaultService } from '../core/vault/vault-service.js';
-import { createBrowserStore } from '../platform/store.js';
+import { createBrowserStore, hardenSessionAccessLevel } from '../platform/store.js';
 import { createRouter } from './router.js';
 import { createSettingsService } from './settings.js';
 import { createAlarmHandlers, IDLE_LOCK_ALARM } from './alarms.js';
@@ -26,14 +26,21 @@ const vault = new VaultService({ api, auth, session, localStore });
 const router = createRouter({ auth, vault, settings });
 const alarms = createAlarmHandlers({
   auth,
-  idleMs: 15 * 60 * 1000,
+  getIdleMs: () => settings.getIdleMs(),
   now: () => Date.now(),
   getLastActivity: () => sessionStore.get<number>('lastActivity'),
   setLastActivity: (n) => sessionStore.set('lastActivity', n),
 });
 
+// Pin storage.session to trusted contexts on every SW start (MV3 workers re-evaluate this file
+// on each wake) and again on install. Default is already TRUSTED_CONTEXTS; this is defense-in-depth.
+void hardenSessionAccessLevel().catch(() => {
+  /* default is already TRUSTED_CONTEXTS; ignore if the API is unsupported */
+});
+
 browser.runtime.onInstalled.addListener(() => {
   browser.alarms.create(IDLE_LOCK_ALARM, { periodInMinutes: 1 });
+  void hardenSessionAccessLevel().catch(() => {});
 });
 
 browser.runtime.onMessage.addListener(async (message: unknown) => {

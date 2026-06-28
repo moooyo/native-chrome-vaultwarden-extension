@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parseEncString, decryptToBytes, decryptToText,
+  parseEncString, parseRsaEncString, decryptToBytes, decryptToText,
   EncStringMacError, UnsupportedEncTypeError,
 } from './encstring.js';
 import { symmetricKeyFromBytes } from './keys.js';
 import { hexToBytes, bytesToHex } from './encoding.js';
-import { USER_KEY_VECTOR, FIELD_VECTOR, TAMPERED_FIELD_ENCSTRING, STRETCH_VECTOR } from '../../../test/vectors.js';
+import { USER_KEY_VECTOR, FIELD_VECTOR, TAMPERED_FIELD_ENCSTRING, STRETCH_VECTOR, RSA_VECTOR } from '../../../test/vectors.js';
 
 const userKey = symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex));
 
@@ -37,5 +37,19 @@ describe('encstring', () => {
 
   it('throws EncStringMacError when the mac is tampered', async () => {
     await expect(decryptToText(TAMPERED_FIELD_ENCSTRING, userKey)).rejects.toBeInstanceOf(EncStringMacError);
+  });
+
+  it('parseRsaEncString parses an RSA encType=4 single-segment string', () => {
+    const p = parseRsaEncString(RSA_VECTOR.encType4EncString);
+    expect(p.encType).toBe(4);
+    expect(p.data.length).toBe(256); // 2048-bit RSA ciphertext
+  });
+
+  it('parseRsaEncString rejects a symmetric encType=2 string', () => {
+    expect(() => parseRsaEncString(FIELD_VECTOR.encString)).toThrow(UnsupportedEncTypeError);
+  });
+
+  it('parseEncString still rejects RSA encType=4 (symmetric path untouched)', () => {
+    expect(() => parseEncString(RSA_VECTOR.encType4EncString)).toThrow(UnsupportedEncTypeError);
   });
 });

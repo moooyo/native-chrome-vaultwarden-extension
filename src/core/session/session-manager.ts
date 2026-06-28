@@ -13,11 +13,14 @@ export interface PersistedAuth {
   protectedKey: string;
   kdf: 0;
   kdfIterations: number;
-  privateKey?: string;
+  /** UserKey-wrapped RSA PrivateKey (encType=2). Safe to persist; plaintext PKCS8 lives in session. */
+  encPrivateKey?: string;
 }
 
 export interface SaveUnlockedInput extends PersistedAuth {
   userKey: SymmetricKey;
+  /** Decrypted PKCS8 private key bytes; stored only in session storage. */
+  privateKey?: Uint8Array;
 }
 
 export interface SessionManagerDeps {
@@ -27,6 +30,7 @@ export interface SessionManagerDeps {
 
 const AUTH_KEY = 'auth';
 const USER_KEY_KEY = 'userKey';
+const PRIVATE_KEY_KEY = 'privateKey';
 
 export class SessionManager {
   constructor(private readonly deps: SessionManagerDeps) {}
@@ -39,9 +43,14 @@ export class SessionManager {
   }
 
   async saveUnlocked(input: SaveUnlockedInput): Promise<void> {
-    const { userKey, ...auth } = input;
+    const { userKey, privateKey, ...auth } = input;
     await this.deps.localStore.set(AUTH_KEY, auth);
     await this.saveUserKey(userKey);
+    if (privateKey) {
+      await this.savePrivateKey(privateKey);
+    } else {
+      await this.deps.sessionStore.remove(PRIVATE_KEY_KEY);
+    }
   }
 
   async saveTokens(tokens: { accessToken: string; refreshToken: string; expiresAt: number }): Promise<void> {
@@ -60,12 +69,19 @@ export class SessionManager {
     return symmetricKeyFromBytes(base64ToBytes(stored));
   }
 
+  async loadPrivateKey(): Promise<Uint8Array | undefined> {
+    const stored = await this.deps.sessionStore.get<string>(PRIVATE_KEY_KEY);
+    return stored ? base64ToBytes(stored) : undefined;
+  }
+
   async lock(): Promise<void> {
     await this.deps.sessionStore.remove(USER_KEY_KEY);
+    await this.deps.sessionStore.remove(PRIVATE_KEY_KEY);
   }
 
   async logout(): Promise<void> {
     await this.deps.sessionStore.remove(USER_KEY_KEY);
+    await this.deps.sessionStore.remove(PRIVATE_KEY_KEY);
     await this.deps.localStore.remove(AUTH_KEY);
   }
 
@@ -74,5 +90,9 @@ export class SessionManager {
     raw.set(userKey.encKey, 0);
     raw.set(userKey.macKey, 32);
     await this.deps.sessionStore.set(USER_KEY_KEY, bytesToBase64(raw));
+  }
+
+  private async savePrivateKey(privateKey: Uint8Array): Promise<void> {
+    await this.deps.sessionStore.set(PRIVATE_KEY_KEY, bytesToBase64(privateKey));
   }
 }

@@ -1,7 +1,7 @@
 import { sendRequest } from '../../messaging/protocol.js';
 import type { AuthResult } from '../../core/session/auth-service.js';
-import type { CipherSummary } from '../../core/vault/models.js';
-import { filterSummaries } from '../../core/vault/search.js';
+import type { CipherSummary, DecryptedCipher, FolderSummary } from '../../core/vault/models.js';
+import { filterSummariesByFolderAndQuery, NO_FOLDER } from '../../core/vault/search.js';
 import { icon } from '../icons.js';
 
 type View =
@@ -19,6 +19,9 @@ let currentViewKind: View['kind'] = 'loading';
 let isPending = false;
 // Cached vault items for the current unlocked session.
 let vaultItems: CipherSummary[] = [];
+let vaultFolders: FolderSummary[] = [];
+let selectedFolderId: string | null = null;
+let skippedOrgCount = 0;
 
 void init();
 
@@ -241,13 +244,59 @@ function renderUnlockedShell(error?: string) {
       <button id="sync" class="icon-btn" type="button" title="Sync vault" aria-label="Sync vault">${icon('refresh')}</button>
       <button id="lock" class="icon-btn" type="button" title="Lock vault" aria-label="Lock vault">${icon('lock')}</button>
     </div>
+    <div id="folderBar" class="folderbar"></div>
+    <div id="orgBanner"></div>
     <div id="vaultList" class="list-wrap"></div>
     <div class="footer">
       <button id="logoutUnlocked" class="btn btn-danger btn-block" type="button">${icon('logout')}<span>Log out</span></button>
     </div>
     ${error ? `<div class="footer">${errorNote(error)}</div>` : ''}`;
   bindUnlockedControls();
+  renderFolderFilter();
+  renderOrgBanner();
   void loadCachedList();
+}
+
+/** Rebuild the folder <select>, preserving the current selection when the folder still exists. */
+function renderFolderFilter() {
+  const bar = document.getElementById('folderBar');
+  if (!bar) return;
+  if (vaultFolders.length === 0 && !vaultItems.some((i) => !i.folderId)) {
+    bar.innerHTML = '';
+    return;
+  }
+  const hasNoFolderItems = vaultItems.some((i) => !i.folderId);
+  // Reset a stale selection so the dropdown and the filtered list never desync: a chosen folder
+  // that no longer exists, or "No Folder" when every item now has a folder.
+  if (selectedFolderId !== null && selectedFolderId !== NO_FOLDER && !vaultFolders.some((f) => f.id === selectedFolderId)) {
+    selectedFolderId = null;
+  }
+  if (selectedFolderId === NO_FOLDER && !hasNoFolderItems) {
+    selectedFolderId = null;
+  }
+  const options = [
+    `<option value="">All folders</option>`,
+    ...vaultFolders.map((f) => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.name)}</option>`),
+    hasNoFolderItems ? `<option value="${NO_FOLDER}">No Folder</option>` : '',
+  ].join('');
+  bar.innerHTML = `<div class="folder-select">${icon('folder')}<select id="folderFilter" class="select" aria-label="Filter by folder">${options}</select></div>`;
+  const select = document.getElementById('folderFilter') as HTMLSelectElement | null;
+  if (select) {
+    select.value = selectedFolderId ?? '';
+    select.addEventListener('change', () => {
+      selectedFolderId = select.value || null;
+      renderVaultList();
+    });
+  }
+}
+
+/** Show a muted notice when some ciphers were skipped because org decryption is unsupported. */
+function renderOrgBanner() {
+  const banner = document.getElementById('orgBanner');
+  if (!banner) return;
+  banner.innerHTML = skippedOrgCount > 0
+    ? `<p class="note muted org-note">${icon('shield')}<span>${skippedOrgCount} organization item${skippedOrgCount === 1 ? '' : 's'} not yet supported</span></p>`
+    : '';
 }
 
 function bindUnlockedControls() {
@@ -295,6 +344,9 @@ function bindUnlockedControls() {
         render({ kind: 'unlocked', error: response.error.message });
       } else {
         vaultItems = [];
+        vaultFolders = [];
+        selectedFolderId = null;
+        skippedOrgCount = 0;
         render({ kind: 'loggedOut' });
       }
     } finally {
@@ -325,7 +377,12 @@ function bindUnlockedControls() {
       if (!response.ok) {
         render({ kind: 'unlocked', error: response.error.message });
       } else {
-        vaultItems = response.data as CipherSummary[];
+        const data = response.data as { items: CipherSummary[]; folders: FolderSummary[] };
+        vaultItems = data.items;
+        vaultFolders = data.folders;
+        await loadSkippedOrgCount();
+        renderFolderFilter();
+        renderOrgBanner();
         renderVaultList();
       }
     } finally {
@@ -347,16 +404,26 @@ function bindUnlockedControls() {
 async function loadCachedList() {
   const response = await sendRequest({ type: 'vault.listItems' });
   if (response.ok) {
-    vaultItems = response.data as CipherSummary[];
+    const data = response.data as { items: CipherSummary[]; folders: FolderSummary[] };
+    vaultItems = data.items;
+    vaultFolders = data.folders;
+    await loadSkippedOrgCount();
+    renderFolderFilter();
+    renderOrgBanner();
     renderVaultList();
   }
+}
+
+async function loadSkippedOrgCount() {
+  const response = await sendRequest({ type: 'vault.getSkippedOrgCount' });
+  skippedOrgCount = response.ok ? (response.data as { count: number }).count : 0;
 }
 
 function renderVaultList() {
   const list = document.getElementById('vaultList');
   if (!list) return;
   const query = (document.getElementById('search') as HTMLInputElement | null)?.value ?? '';
-  const filtered = filterSummaries(vaultItems, query);
+  const filtered = filterSummariesByFolderAndQuery(vaultItems, selectedFolderId, query);
   if (filtered.length === 0) {
     const isSearch = query.trim().length > 0;
     list.innerHTML = `
@@ -367,7 +434,7 @@ function renderVaultList() {
     return;
   }
   list.innerHTML = filtered.map((item) => {
-    const sub = item.username ?? item.uris[0] ?? '';
+    const sub = item.username ?? item.uris[0] ?? item.subtitle ?? '';
     return `
     <button class="item" type="button" data-id="${escapeHtml(item.id)}">
       <span class="monogram" style="--mono-h:${hueFor(item.name)}">${escapeHtml(monogramLetter(item.name))}</span>
@@ -390,20 +457,79 @@ function renderVaultList() {
 function renderDetail(id: string) {
   const item = vaultItems.find((i) => i.id === id);
   if (!item) return;
+  if (item.type === 2) return renderSecureNoteDetail(id, item);
+  if (item.type === 3) return renderStructuredDetail(id, item, 'card');
+  if (item.type === 4) return renderStructuredDetail(id, item, 'identity');
+  return renderLoginDetail(id, item);
+}
+
+/** Standard detail header (back button + title + optional subtitle). */
+function detailHead(item: CipherSummary): string {
+  return `
+    <div class="detail-head">
+      <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
+      <div class="titles">
+        <h1>${escapeHtml(item.name)}</h1>
+        ${item.username ? `<span class="sub">${escapeHtml(item.username)}</span>` : ''}
+      </div>
+    </div>`;
+}
+
+function bindBack(): void {
+  document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
+}
+
+/** Run a detail action with the busy guard, disabling/re-enabling every detail button. */
+async function withDetailBusy(fn: () => Promise<void>): Promise<void> {
+  if (isPending) return;
+  isPending = true;
+  document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = true));
+  try {
+    await fn();
+  } finally {
+    isPending = false;
+    document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = false));
+  }
+}
+
+/** Copy an in-memory non-sensitive value with the 60s clipboard clear. */
+async function copyValue(value: string | undefined, label: string): Promise<void> {
+  if (!value) return setDetailStatus(`${label} is empty`, true);
+  try {
+    await copyWithClear(value);
+    setDetailStatus(`${label} copied. Clipboard clears in 60 s if unchanged and this popup stays open.`, false);
+  } catch {
+    setDetailStatus(`Failed to copy ${label.toLowerCase()} to clipboard`, true);
+  }
+}
+
+/** Fetch a secret field on demand and copy it (never retained in the DOM/closure). */
+async function copyField(id: string, field: 'password' | 'notes' | RevealableField, label: string): Promise<void> {
+  const response = await sendRequest({ type: 'vault.getField', id, field });
+  if (!response.ok) return setDetailStatus(response.error.message, true);
+  await copyValue((response.data as { value?: string }).value, label);
+}
+
+/** Fields sensitive enough to mask behind an on-demand reveal toggle. */
+type RevealableField = 'card.number' | 'card.code' | 'identity.ssn' | 'identity.passportNumber' | 'identity.licenseNumber';
+
+function renderLoginDetail(id: string, item: CipherSummary) {
+  let revealed: string | null = null;
   const uris = item.uris
     .map((u) => `<div class="v is-link"><a href="${safeHref(u)}" target="_blank" rel="noreferrer">${escapeHtml(u)}</a></div>`)
     .join('');
   app.innerHTML = `
     <div class="detail">
-      <div class="detail-head">
-        <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
-        <div class="titles">
-          <h1>${escapeHtml(item.name)}</h1>
-          ${item.username ? `<span class="sub">${escapeHtml(item.username)}</span>` : ''}
-        </div>
-      </div>
+      ${detailHead(item)}
       <div class="detail-body">
         ${uris ? `<div class="readout"><div class="k">${icon('globe')} Website</div><div class="v-row">${uris}</div></div>` : ''}
+        <div class="readout">
+          <div class="k">${icon('lock')} Password</div>
+          <div class="v-row">
+            <code id="passwordReveal" class="v mono">••••••••</code>
+            <button id="togglePassword" class="icon-btn" type="button" aria-pressed="false" title="Show password" aria-label="Show password">${icon('eye')}</button>
+          </div>
+        </div>
         <div class="detail-actions">
           <button id="copyPassword" type="button" class="btn btn-block">${icon('copy')}<span>Copy password</span></button>
           <button id="copyUsername" type="button" class="btn btn-secondary btn-block">${icon('user')}<span>Copy username</span></button>
@@ -411,62 +537,167 @@ function renderDetail(id: string) {
         <div id="detailStatus" class="detail-status"></div>
       </div>
     </div>`;
-  document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
-  document.getElementById('copyPassword')!.addEventListener('click', async () => {
-    if (isPending) return;
-    isPending = true;
-    const passwordBtn = document.getElementById('copyPassword') as HTMLButtonElement;
-    const usernameBtn = document.getElementById('copyUsername') as HTMLButtonElement;
-    passwordBtn.disabled = true;
-    usernameBtn.disabled = true;
-    try {
-      const response = await sendRequest({ type: 'vault.getField', id, field: 'password' });
+  bindBack();
+  document.getElementById('togglePassword')!.addEventListener('click', () => void withDetailBusy(async () => {
+    const codeEl = document.getElementById('passwordReveal')!;
+    const btn = document.getElementById('togglePassword') as HTMLButtonElement;
+    if (revealed !== null) {
+      revealed = null;
+      codeEl.textContent = '••••••••';
+      btn.innerHTML = icon('eye');
+      btn.setAttribute('aria-pressed', 'false');
+      btn.title = btn.ariaLabel = 'Show password';
+      return;
+    }
+    const response = await sendRequest({ type: 'vault.getField', id, field: 'password' });
+    if (!response.ok) return setDetailStatus(response.error.message, true);
+    const value = (response.data as { value?: string }).value;
+    if (!value) return setDetailStatus('Password is empty', true);
+    revealed = value;
+    codeEl.textContent = value; // textContent: real plaintext, auto-escaped, only present once revealed
+    btn.innerHTML = icon('eyeOff');
+    btn.setAttribute('aria-pressed', 'true');
+    btn.title = btn.ariaLabel = 'Hide password';
+  }));
+  document.getElementById('copyPassword')!.addEventListener('click', () => void withDetailBusy(() => copyField(id, 'password', 'Password')));
+  document.getElementById('copyUsername')!.addEventListener('click', () => void withDetailBusy(() => copyValue(item.username, 'Username')));
+}
+
+function renderSecureNoteDetail(id: string, item: CipherSummary) {
+  app.innerHTML = `
+    <div class="detail">
+      ${detailHead(item)}
+      <div class="detail-body">
+        <div class="readout"><div class="k">${icon('note')} Note</div><pre id="noteBody" class="note-body">Loading…</pre></div>
+        <div class="detail-actions"><button id="copyNote" type="button" class="btn btn-block">${icon('copy')}<span>Copy note</span></button></div>
+        <div id="detailStatus" class="detail-status"></div>
+      </div>
+    </div>`;
+  bindBack();
+  void (async () => {
+    const response = await sendRequest({ type: 'vault.getField', id, field: 'notes' });
+    const body = document.getElementById('noteBody');
+    if (!body) return;
+    if (!response.ok) {
+      body.textContent = '';
+      return setDetailStatus(response.error.message, true);
+    }
+    const value = (response.data as { value?: string }).value;
+    body.textContent = value && value.length ? value : 'No note content';
+  })();
+  document.getElementById('copyNote')!.addEventListener('click', () => void withDetailBusy(() => copyField(id, 'notes', 'Note')));
+}
+
+function renderStructuredDetail(id: string, item: CipherSummary, kind: 'card' | 'identity') {
+  app.innerHTML = `
+    <div class="detail">
+      ${detailHead(item)}
+      <div class="detail-body">
+        <div id="structuredFields"><div class="muted center">Loading…</div></div>
+        <div id="detailStatus" class="detail-status"></div>
+      </div>
+    </div>`;
+  bindBack();
+  void (async () => {
+    const response = await sendRequest({ type: 'vault.getCipherDetail', id });
+    const container = document.getElementById('structuredFields');
+    if (!container) return;
+    if (!response.ok) {
+      container.innerHTML = '';
+      return setDetailStatus(response.error.message, true);
+    }
+    const cipher = (response.data as { cipher: DecryptedCipher | null }).cipher;
+    if (!cipher) {
+      container.innerHTML = '';
+      return setDetailStatus('Item is unavailable', true);
+    }
+    if (kind === 'card') renderCardFields(id, container, cipher);
+    else renderIdentityFields(id, container, cipher);
+  })();
+}
+
+/** A non-sensitive readout row with a copy button (value already decrypted, no secrets). */
+function plainRow(label: string, value: string): string {
+  return `<div class="readout"><div class="k">${escapeHtml(label)}</div>
+    <div class="v-row"><span class="v mono">${escapeHtml(value)}</span>
+      <button class="icon-btn" type="button" data-copy="${escapeHtml(value)}" data-label="${escapeHtml(label)}" title="Copy ${escapeHtml(label)}" aria-label="Copy ${escapeHtml(label)}">${icon('copy')}</button>
+    </div></div>`;
+}
+
+/** A masked secret row whose value is fetched on demand (card number/CVV, identity national IDs). */
+function secretRow(label: string, field: RevealableField): string {
+  return `<div class="readout"><div class="k">${escapeHtml(label)}</div>
+    <div class="v-row"><code class="v mono" data-secret="${field}">••••••••</code>
+      <button class="icon-btn" type="button" data-reveal="${field}" aria-pressed="false" title="Show ${escapeHtml(label)}" aria-label="Show ${escapeHtml(label)}">${icon('eye')}</button>
+      <button class="icon-btn" type="button" data-copy-field="${field}" data-label="${escapeHtml(label)}" title="Copy ${escapeHtml(label)}" aria-label="Copy ${escapeHtml(label)}">${icon('copy')}</button>
+    </div></div>`;
+}
+
+function bindStructuredHandlers(id: string, container: HTMLElement): void {
+  const revealed = new Map<string, string>();
+  container.querySelectorAll<HTMLButtonElement>('button[data-copy]').forEach((btn) => {
+    btn.addEventListener('click', () => void withDetailBusy(() => copyValue(btn.dataset.copy, btn.dataset.label ?? 'Value')));
+  });
+  container.querySelectorAll<HTMLButtonElement>('button[data-copy-field]').forEach((btn) => {
+    const field = btn.dataset.copyField as RevealableField;
+    btn.addEventListener('click', () => void withDetailBusy(() => copyField(id, field, btn.dataset.label ?? 'Value')));
+  });
+  container.querySelectorAll<HTMLButtonElement>('button[data-reveal]').forEach((btn) => {
+    const field = btn.dataset.reveal as RevealableField;
+    const codeEl = container.querySelector<HTMLElement>(`[data-secret="${field}"]`)!;
+    btn.addEventListener('click', () => void withDetailBusy(async () => {
+      if (revealed.has(field)) {
+        revealed.delete(field);
+        codeEl.textContent = '••••••••';
+        btn.innerHTML = icon('eye');
+        btn.setAttribute('aria-pressed', 'false');
+        return;
+      }
+      const response = await sendRequest({ type: 'vault.getField', id, field });
       if (!response.ok) return setDetailStatus(response.error.message, true);
-      const { value } = response.data as { value?: string };
-      if (!value) return setDetailStatus('Password is empty', true);
-      try {
-        await copyWithClear(value);
-        setDetailStatus('Password copied. Clipboard clears in 60 s if unchanged and this popup stays open.', false);
-      } catch {
-        setDetailStatus('Failed to copy password to clipboard', true);
-      }
-    } finally {
-      isPending = false;
-      const detailView = document.getElementById('detailStatus');
-      if (detailView) {
-        const livePasswordBtn = document.getElementById('copyPassword') as HTMLButtonElement | null;
-        const liveUsernameBtn = document.getElementById('copyUsername') as HTMLButtonElement | null;
-        if (livePasswordBtn) livePasswordBtn.disabled = false;
-        if (liveUsernameBtn) liveUsernameBtn.disabled = false;
-      }
-    }
+      const value = (response.data as { value?: string }).value;
+      if (!value) return setDetailStatus('Field is empty', true);
+      revealed.set(field, value);
+      codeEl.textContent = value;
+      btn.innerHTML = icon('eyeOff');
+      btn.setAttribute('aria-pressed', 'true');
+    }));
   });
-  document.getElementById('copyUsername')!.addEventListener('click', async () => {
-    if (isPending) return;
-    isPending = true;
-    const passwordBtn = document.getElementById('copyPassword') as HTMLButtonElement;
-    const usernameBtn = document.getElementById('copyUsername') as HTMLButtonElement;
-    passwordBtn.disabled = true;
-    usernameBtn.disabled = true;
-    try {
-      if (!item.username) return setDetailStatus('Username is empty', true);
-      try {
-        await copyWithClear(item.username);
-        setDetailStatus('Username copied. Clipboard clears in 60 s if unchanged and this popup stays open.', false);
-      } catch {
-        setDetailStatus('Failed to copy username to clipboard', true);
-      }
-    } finally {
-      isPending = false;
-      const detailView = document.getElementById('detailStatus');
-      if (detailView) {
-        const livePasswordBtn = document.getElementById('copyPassword') as HTMLButtonElement | null;
-        const liveUsernameBtn = document.getElementById('copyUsername') as HTMLButtonElement | null;
-        if (livePasswordBtn) livePasswordBtn.disabled = false;
-        if (liveUsernameBtn) liveUsernameBtn.disabled = false;
-      }
-    }
-  });
+}
+
+function renderCardFields(id: string, container: HTMLElement, cipher: DecryptedCipher): void {
+  const card = cipher.card ?? {};
+  const expiry = [card.expMonth, card.expYear].filter(Boolean).join(' / ');
+  const rows: string[] = [];
+  if (card.brand) rows.push(plainRow('Brand', card.brand));
+  if (card.cardholderName) rows.push(plainRow('Cardholder name', card.cardholderName));
+  rows.push(secretRow('Number', 'card.number'));
+  if (expiry) rows.push(plainRow('Expires', expiry));
+  rows.push(secretRow('Security code', 'card.code'));
+  container.innerHTML = rows.join('') || `<div class="muted center">No card details</div>`;
+  bindStructuredHandlers(id, container);
+}
+
+function renderIdentityFields(id: string, container: HTMLElement, cipher: DecryptedCipher): void {
+  const i = cipher.identity ?? {};
+  const fullName = [i.title, i.firstName, i.middleName, i.lastName].filter(Boolean).join(' ');
+  const address = [i.address1, i.address2, i.address3, [i.city, i.state, i.postalCode].filter(Boolean).join(', '), i.country]
+    .filter(Boolean).join('\n');
+  const plainFields: Array<[string, string | undefined]> = [
+    ['Name', fullName || undefined],
+    ['Username', i.username],
+    ['Company', i.company],
+    ['Email', i.email],
+    ['Phone', i.phone],
+    ['Address', address || undefined],
+  ];
+  const rows = plainFields.filter(([, v]) => Boolean(v)).map(([label, v]) => plainRow(label, v!));
+  // National-ID numbers are masked and fetched on demand, like a card's number/CVV.
+  rows.push(secretRow('SSN', 'identity.ssn'));
+  rows.push(secretRow('Passport number', 'identity.passportNumber'));
+  rows.push(secretRow('License number', 'identity.licenseNumber'));
+  container.innerHTML = rows.join('') || `<div class="muted center">No identity details</div>`;
+  bindStructuredHandlers(id, container);
 }
 
 async function copyWithClear(value: string): Promise<void> {

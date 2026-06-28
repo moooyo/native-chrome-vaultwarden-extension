@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { decryptCipher } from './decrypt.js';
+import { decryptCipher, decryptFolders } from './decrypt.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import { hexToBytes, bytesToBase64 } from '../crypto/encoding.js';
 import { hmacSha256 } from '../crypto/primitives.js';
 import { FIELD_VECTOR, USER_KEY_VECTOR, TAMPERED_FIELD_ENCSTRING } from '../../../test/vectors.js';
-import type { CipherResponse } from '../api/types.js';
+import type { CipherResponse, FolderResponse } from '../api/types.js';
 
 const userKey = symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex));
 
@@ -131,5 +131,125 @@ describe('decryptCipher', () => {
       uris: ['https://example.com'],
       loginUris: [{ uri: 'https://example.com', match: 0 }],
     });
+  });
+
+  it('decrypts a personal card cipher (all fields are EncStrings)', async () => {
+    const cipher: CipherResponse = {
+      id: 'card-1',
+      type: 3,
+      name: FIELD_VECTOR.encString,
+      favorite: false,
+      organizationId: null,
+      card: {
+        cardholderName: FIELD_VECTOR.encString,
+        brand: FIELD_VECTOR.encString,
+        number: FIELD_VECTOR.encString,
+        expMonth: FIELD_VECTOR.encString,
+        expYear: FIELD_VECTOR.encString,
+        code: FIELD_VECTOR.encString,
+      },
+    };
+    const out = await decryptCipher(cipher, userKey);
+    expect(out?.card).toEqual({
+      cardholderName: FIELD_VECTOR.plaintext,
+      brand: FIELD_VECTOR.plaintext,
+      number: FIELD_VECTOR.plaintext,
+      expMonth: FIELD_VECTOR.plaintext,
+      expYear: FIELD_VECTOR.plaintext,
+      code: FIELD_VECTOR.plaintext,
+    });
+    expect(out?.name).toBe(FIELD_VECTOR.plaintext);
+  });
+
+  it('decrypts a personal identity cipher (all 18 fields are EncStrings)', async () => {
+    const all = FIELD_VECTOR.encString;
+    const cipher: CipherResponse = {
+      id: 'id-1',
+      type: 4,
+      name: all,
+      favorite: false,
+      organizationId: null,
+      identity: {
+        title: all, firstName: all, middleName: all, lastName: all,
+        address1: all, address2: all, address3: all, city: all, state: all,
+        postalCode: all, country: all, company: all, email: all, phone: all,
+        ssn: all, username: all, passportNumber: all, licenseNumber: all,
+      },
+    };
+    const out = await decryptCipher(cipher, userKey);
+    const p = FIELD_VECTOR.plaintext;
+    expect(out?.identity).toEqual({
+      title: p, firstName: p, middleName: p, lastName: p,
+      address1: p, address2: p, address3: p, city: p, state: p,
+      postalCode: p, country: p, company: p, email: p, phone: p,
+      ssn: p, username: p, passportNumber: p, licenseNumber: p,
+    });
+    // identity.username must not leak into the login-only top-level username field
+    expect(out?.username).toBeUndefined();
+  });
+
+  it('omits empty card fields', async () => {
+    const cipher: CipherResponse = {
+      id: 'card-2',
+      type: 3,
+      name: FIELD_VECTOR.encString,
+      favorite: false,
+      organizationId: null,
+      card: { brand: FIELD_VECTOR.encString, number: FIELD_VECTOR.encString },
+    };
+    const out = await decryptCipher(cipher, userKey);
+    expect(out?.card).toEqual({ brand: FIELD_VECTOR.plaintext, number: FIELD_VECTOR.plaintext });
+  });
+
+  it('marks a card cipher undecryptable when a field MAC fails', async () => {
+    const cipher: CipherResponse = {
+      id: 'card-bad',
+      type: 3,
+      name: FIELD_VECTOR.encString,
+      favorite: false,
+      organizationId: null,
+      card: { number: TAMPERED_FIELD_ENCSTRING },
+    };
+    const out = await decryptCipher(cipher, userKey);
+    expect(out).toMatchObject({ id: 'card-bad', type: 3, name: '(error)', undecryptable: true });
+  });
+
+  it('surfaces folderId when present and omits it when absent', async () => {
+    const withFolder = await decryptCipher({
+      id: 'c-folder', type: 1, name: FIELD_VECTOR.encString, favorite: false, organizationId: null, folderId: 'folder-1', login: null,
+    }, userKey);
+    expect(withFolder).toMatchObject({ id: 'c-folder', folderId: 'folder-1' });
+
+    const noFolder = await decryptCipher({
+      id: 'c-nofolder', type: 1, name: FIELD_VECTOR.encString, favorite: false, organizationId: null, login: null,
+    }, userKey);
+    expect(noFolder && 'folderId' in noFolder).toBe(false);
+  });
+});
+
+describe('decryptFolders', () => {
+  it('decrypts folder names into FolderSummary[]', async () => {
+    const folders: FolderResponse[] = [{ id: 'f1', name: FIELD_VECTOR.encString }];
+    await expect(decryptFolders(folders, userKey)).resolves.toEqual([{ id: 'f1', name: FIELD_VECTOR.plaintext }]);
+  });
+
+  it('falls back to (no name) when a folder has no name', async () => {
+    await expect(decryptFolders([{ id: 'f2', name: null }], userKey)).resolves.toEqual([{ id: 'f2', name: '(no name)' }]);
+  });
+
+  it('falls back to (undecryptable) on a tampered folder name without aborting', async () => {
+    const folders: FolderResponse[] = [
+      { id: 'f3', name: TAMPERED_FIELD_ENCSTRING },
+      { id: 'f4', name: FIELD_VECTOR.encString },
+    ];
+    await expect(decryptFolders(folders, userKey)).resolves.toEqual([
+      { id: 'f3', name: '(undecryptable)' },
+      { id: 'f4', name: FIELD_VECTOR.plaintext },
+    ]);
+  });
+
+  it('returns [] for empty or undefined input', async () => {
+    await expect(decryptFolders(undefined, userKey)).resolves.toEqual([]);
+    await expect(decryptFolders([], userKey)).resolves.toEqual([]);
   });
 });

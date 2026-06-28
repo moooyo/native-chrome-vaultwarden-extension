@@ -1,6 +1,6 @@
 import type { AutofillCredentials } from '../messaging/protocol.js';
 import type { DetectedLoginForm } from './form-detection.js';
-import { isFillableInput } from './form-detection.js';
+import { isFillableInput, isNewPasswordField } from './form-detection.js';
 
 export function fillLoginForm(form: DetectedLoginForm, credentials: AutofillCredentials): boolean {
   let filled = false;
@@ -8,7 +8,8 @@ export function fillLoginForm(form: DetectedLoginForm, credentials: AutofillCred
     setInputValue(form.usernameInput, credentials.username);
     filled = true;
   }
-  if (credentials.password && isFillableInput(form.passwordInput)) {
+  // Defense-in-depth: never write the stored password into a new-password field.
+  if (credentials.password && form.passwordInput && isFillableInput(form.passwordInput) && !isNewPasswordField(form.passwordInput)) {
     setInputValue(form.passwordInput, credentials.password);
     filled = true;
   }

@@ -10,4 +10,8 @@ describe('manifest', () => {
       all_frames: true,
     }]);
   });
+
+  it('declares the storage permission required for a trusted-context session store', () => {
+    expect(manifest.permissions).toContain('storage');
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey } from './kdf.js';
+import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey, assertKdfIterationsFloor, MIN_PBKDF2_ITERATIONS } from './kdf.js';
 import { symmetricKeyFromBytes } from './keys.js';
 import { bytesToHex, hexToBytes } from './encoding.js';
 import { KDF_VECTOR, STRETCH_VECTOR } from '../../../test/vectors.js';
@@ -31,5 +31,17 @@ describe('kdf', () => {
     expect(bytesToHex(sk.encKey)).toBe('aa'.repeat(32));
     expect(bytesToHex(sk.macKey)).toBe('bb'.repeat(32));
     expect(() => symmetricKeyFromBytes(hexToBytes('aa'.repeat(32)))).toThrow('symmetric key must be 64 bytes');
+  });
+
+  it('MIN_PBKDF2_ITERATIONS equals 5000', () => {
+    expect(MIN_PBKDF2_ITERATIONS).toBe(5000);
+  });
+
+  it('assertKdfIterationsFloor throws below MIN and on non-integer, passes at/above MIN', () => {
+    expect(() => assertKdfIterationsFloor(4999)).toThrow(/unsafe KDF iteration count/);
+    expect(() => assertKdfIterationsFloor(1.5)).toThrow(/unsafe KDF iteration count/);
+    expect(() => assertKdfIterationsFloor(Number.NaN)).toThrow(/unsafe KDF iteration count/);
+    expect(() => assertKdfIterationsFloor(5000)).not.toThrow();
+    expect(() => assertKdfIterationsFloor(600000)).not.toThrow();
   });
 });

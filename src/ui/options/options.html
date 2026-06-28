@@ -44,6 +44,19 @@
           <span class="help" id="strategyHelp"></span>
         </label>
 
+        <label class="field" for="lockTimeout">
+          <span class="field-label">Auto-lock after inactivity</span>
+          <select id="lockTimeout" class="select">
+            <option value="1">1 minute</option>
+            <option value="5">5 minutes</option>
+            <option value="15">15 minutes</option>
+            <option value="30">30 minutes</option>
+            <option value="onClose">Only when the browser closes</option>
+            <option value="never">Never</option>
+          </select>
+          <span class="help">Locks the vault and clears keys after this much idle time. “Only when the browser closes” keeps the vault unlocked until the browser quits.</span>
+        </label>
+
         <div class="actions">
           <button type="submit" class="btn" id="saveButton"><span>Save settings</span></button>
         </div>

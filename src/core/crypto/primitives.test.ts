@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { pbkdf2Sha256, hkdfExpandSha256, hmacSha256, aesCbc256Decrypt } from './primitives.js';
-import { utf8ToBytes, bytesToHex, hexToBytes } from './encoding.js';
+import { pbkdf2Sha256, hkdfExpandSha256, hmacSha256, aesCbc256Decrypt, rsaOaepDecrypt } from './primitives.js';
+import { utf8ToBytes, bytesToHex, hexToBytes, base64ToBytes, bytesToUtf8 } from './encoding.js';
+import { RSA_VECTOR } from '../../../test/vectors.js';
 
 describe('primitives', () => {
   it('PBKDF2-HMAC-SHA256 matches known answers', async () => {
@@ -34,5 +35,12 @@ describe('primitives', () => {
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv: iv as BufferSource }, subtleKey, plaintext as BufferSource));
     const out = await aesCbc256Decrypt(key, iv, ct);
     expect(bytesToHex(out)).toBe(bytesToHex(plaintext));
+  });
+
+  it('RSA-OAEP-SHA1 decrypts what WebCrypto encrypted (round-trip vector)', async () => {
+    const pkcs8 = base64ToBytes(RSA_VECTOR.privateKeyPkcs8B64);
+    const ct = base64ToBytes(RSA_VECTOR.encType4EncString.slice(2));
+    const out = await rsaOaepDecrypt(pkcs8, ct);
+    expect(bytesToUtf8(out)).toBe(RSA_VECTOR.plaintext);
   });
 });

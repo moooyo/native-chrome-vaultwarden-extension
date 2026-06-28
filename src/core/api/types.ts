@@ -54,6 +54,38 @@ export interface LoginCipherData {
   uris?: LoginUriResponse[] | null;
 }
 
+/** All Card fields are EncStrings (encType=2), including brand/expMonth/expYear. */
+export interface CardCipherData {
+  cardholderName?: string | null;
+  brand?: string | null;
+  number?: string | null;
+  expMonth?: string | null;
+  expYear?: string | null;
+  code?: string | null;
+}
+
+/** All 18 Identity fields are EncStrings (encType=2). */
+export interface IdentityCipherData {
+  title?: string | null;
+  firstName?: string | null;
+  middleName?: string | null;
+  lastName?: string | null;
+  address1?: string | null;
+  address2?: string | null;
+  address3?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+  country?: string | null;
+  company?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  ssn?: string | null;
+  username?: string | null;
+  passportNumber?: string | null;
+  licenseNumber?: string | null;
+}
+
 export interface CipherResponse {
   id: string;
   type: 1 | 2 | 3 | 4 | 5;
@@ -64,6 +96,8 @@ export interface CipherResponse {
   folderId?: string | null;
   key?: string | null;
   login?: LoginCipherData | null;
+  card?: CardCipherData | null;
+  identity?: IdentityCipherData | null;
   revisionDate?: string | null;
 }
 
