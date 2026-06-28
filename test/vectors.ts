@@ -82,4 +82,9 @@ export const ORG_KEY_VECTOR = {
     '0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40',
   encOrgKey:
     '4.YYDcMTZn9NtLrgcRxe/NBIumLQduxhzZHdwlQR7OXIVo34j6oJwXvH6968v3zuq7LQRBRbL7bLhD0VHUnlfBNpSJjcb6WFxjLkYqsRFSK+i4wxMttL8NYtYOEGfKYAewE8+L7kITFU/E921GkK4J7aGsA4MM6OYkmzOPLdibj58GFhBiQUUQYzRN90zQfV6ORdf8Q5x/ja6mXvWKTOgnb/lbM7oxb2guyadJDdzkx9pYN35d37j6ekccGtCw6SEAyVMBvTEgLXLdN1M8dPsvR/FAIZnrWwPTc5PCsd7cxy4dy5Eys8HxUjmKSncmVYlWfyHwAONE5vban4ha6OwkOg==',
+  // The SAME 64-byte org key (orgKeyHex) wrapped under the RSA_VECTOR public key as an
+  // encType=3 RSA-OAEP-SHA256 EncString. Reproduce with tools/gen-vectors.mjs (RSA-OAEP is
+  // randomized, captured once); always decrypts back to orgKeyHex with SHA-256 OAEP.
+  encOrgKeySha256:
+    '3.OpE+c6weTGBUMEDCSLoUG+/dgouuz03rIWTt2kx2Es8LYPfew48invrwH3uUtlWrUouDaD9a1bsLa3C6qtkdzukIDTg0WhKRGmNXxqU1wPGqJ3ZAljEguXWxDyG8yaDuCsXGiX1p62WquZYDXgbQS2maQGHg4C2149UTvPWn/QWZCl9zgdyg8r1pbNjw3ODQwUf9tMmV+yX8FQVpneN1evYeroRqyGBN//g9uA83hSsaDtctjrTDQNd5SO6vXizoblfFuDI4kY7RTDNN6AgwvkbAV+dmAqVolScQbvo5q8rSYmhD9KWbAfHsxKPjMATHtteSUauhX7XzhX9Vl5LJ8g==',
 };

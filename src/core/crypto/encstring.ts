@@ -9,13 +9,19 @@ export interface ParsedEncString {
   mac: Uint8Array;
 }
 
-/** RSA EncStrings are single-segment `encType.data` (encType 3/4/6). */
+/** RSA EncStrings are single-segment `encType.data` (encType 3/4), optionally with a trailing
+ *  `|mac` outer HMAC for the HMAC variants (encType 5/6). */
 export interface ParsedRsaEncString {
   encType: number;
   data: Uint8Array;
+  /** Outer HMAC-SHA256 segment present on encType 5/6. Parsed but not verified — see parseRsaEncString. */
+  mac?: Uint8Array;
 }
 
-const RSA_ENC_TYPES = new Set([3, 4, 6]);
+// Rsa2048_OaepSha256_B64=3, Rsa2048_OaepSha1_B64=4, Rsa2048_OaepSha256_HmacSha256_B64=5,
+// Rsa2048_OaepSha1_HmacSha256_B64=6.
+const RSA_ENC_TYPES = new Set([3, 4, 5, 6]);
+const RSA_HMAC_ENC_TYPES = new Set([5, 6]);
 
 export class UnsupportedEncTypeError extends Error {}
 export class EncStringMacError extends Error {}
@@ -37,9 +43,14 @@ export function parseEncString(value: string): ParsedEncString {
 }
 
 /**
- * Parse an RSA EncString (encType 3/4/6). The body is a single base64 segment (the RSA blob);
- * for encType=6 any trailing `|`-separated outer HMAC is ignored (verification is out of scope
- * until org-key unwrap lands — see docs/tech-debt.md).
+ * Parse an RSA EncString (encType 3/4/5/6). The first segment is the RSA blob; encType 5/6 add a
+ * trailing `|`-separated outer HMAC-SHA256 segment, which is parsed into `mac`.
+ *
+ * The RSA MAC is intentionally NOT verified: asymmetric (public-key) encryption has no shared MAC
+ * key between sender and recipient, so the HMAC cannot be checked the way symmetric Encrypt-then-MAC
+ * is — integrity for RSA EncStrings comes from RSA-OAEP padding. This matches upstream Bitwarden,
+ * which also does not validate the MAC for RSA encryption types. (Vaultwarden wraps the organization
+ * key as encType=4, so the HMAC variants are rare in practice.)
  */
 export function parseRsaEncString(value: string): ParsedRsaEncString {
   const dot = value.indexOf('.');
@@ -48,8 +59,12 @@ export function parseRsaEncString(value: string): ParsedRsaEncString {
   if (Number.isNaN(encType) || !RSA_ENC_TYPES.has(encType)) {
     throw new UnsupportedEncTypeError(`unsupported RSA encType ${value.slice(0, dot)}`);
   }
-  const firstSegment = value.slice(dot + 1).split('|')[0]!;
-  return { encType, data: base64ToBytes(firstSegment) };
+  const segments = value.slice(dot + 1).split('|');
+  const out: ParsedRsaEncString = { encType, data: base64ToBytes(segments[0]!) };
+  if (RSA_HMAC_ENC_TYPES.has(encType) && segments.length > 1) {
+    out.mac = base64ToBytes(segments[1]!);
+  }
+  return out;
 }
 
 export async function decryptToBytes(value: string, key: SymmetricKey): Promise<Uint8Array> {

@@ -33,6 +33,15 @@
   - `getSkippedOrgCount()` 现仅统计**密钥无法解包**的组织条目（如私钥被锁），UI 文案改为
     「N 个组织条目无法解密」。可解密的组织条目直接并入列表。
 
+- **RSA EncString 哈希套件（encType 3/4/5/6）** ✅（本次落地）
+  - `primitives.rsaOaepDecrypt(privateKey, data, hash)` 接受 OAEP 哈希参数；`unwrapRsaWrappedKey`
+    按 encType 选哈希——encType 3/5（`Rsa2048_OaepSha256*`）用 SHA-256，4/6（`Rsa2048_OaepSha1*`）用 SHA-1。
+  - `parseRsaEncString` 现识别 encType 3/4/5/6，对 5/6 把外层 `HMAC-SHA256` 解析进 `mac` 字段。
+  - 以「复用同一 RSA 私钥包裹同一组织密钥」的 encType=3 向量做单测（见 `test/vectors.ts` 与 `tools/gen-vectors.mjs`）。
+  - **边界（按设计）**：RSA EncString 的外层 MAC **有意不验证**——非对称（公钥）加密无收发双方共享的
+    MAC 密钥，完整性来自 RSA-OAEP 填充（与上游 Bitwarden 一致：RSA 类型不校验 MAC）。组织密钥用
+    encType=4，HMAC 变体在 Vaultwarden 中本就罕见。
+
 ## 仍待实现 / 明确超范围
 
 - **集合（Collection）分组与名称**：组织条目本身已可解密，但 `/sync` 的 `collections[]`
@@ -40,10 +49,6 @@
 - **Argon2id KDF**：需引入 WASM KDF。`prelogin`/登录成功两处守卫均抛
   `'Argon2id accounts are not supported in this MVP'`（`src/core/session/auth-service.ts`）。
 - **注册（Registration）**：客户端账户密钥生成 + register 端点尚未实现。
-- **encType=6 外层 HMAC 校验**：`parseRsaEncString` 可识别 encType 3/4/6，但只取 RSA 数据段；
-  encType=6 的外层 `HMAC-SHA256` 暂不验证（组织密钥用 encType=4，不受影响）。
-- **RSA-OAEP-SHA256（encType=3/5）**：`rsaOaepDecrypt` 目前固定 SHA-1（Vaultwarden 对 PrivateKey 包裹
-  的组织密钥用 encType=4=SHA-1）。如遇 encType=3/5 需新增 SHA-256 变体。
 
 ## 路线图指针（按里程碑）
 

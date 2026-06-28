@@ -92,3 +92,14 @@ console.log('encOrgKey =', `4.${b64(orgKeyCt)}`);
 // Sanity round-trip: decrypt back with the private key and confirm it matches orgKeyBytes.
 const orgKeyRound = new Uint8Array(await subtle.decrypt({ name: 'RSA-OAEP' }, orgPriv, orgKeyCt));
 console.log('orgKey round-trip OK =', Buffer.from(orgKeyRound).toString('hex') === Buffer.from(orgKeyBytes).toString('hex'));
+
+// 5) The SAME org key wrapped under the SAME RSA public key but as encType=3 (Rsa2048_OaepSha256_B64).
+//    RSA-OAEP key material is hash-independent, so the committed private key is re-imported with
+//    SHA-256 to encrypt/decrypt. Exercises the SHA-256 OAEP path (encType 3/5).
+const orgPriv256 = await subtle.importKey('pkcs8', orgPkcs8, { name: 'RSA-OAEP', hash: 'SHA-256' }, true, ['decrypt']);
+const orgJwk256 = await subtle.exportKey('jwk', orgPriv256);
+const orgPub256 = await subtle.importKey('jwk', { kty: orgJwk256.kty, n: orgJwk256.n, e: orgJwk256.e, ext: true }, { name: 'RSA-OAEP', hash: 'SHA-256' }, true, ['encrypt']);
+const orgKeyCt256 = new Uint8Array(await subtle.encrypt({ name: 'RSA-OAEP' }, orgPub256, orgKeyBytes));
+console.log('encOrgKeySha256 =', `3.${b64(orgKeyCt256)}`);
+const orgKeyRound256 = new Uint8Array(await subtle.decrypt({ name: 'RSA-OAEP' }, orgPriv256, orgKeyCt256));
+console.log('encOrgKeySha256 round-trip OK =', Buffer.from(orgKeyRound256).toString('hex') === Buffer.from(orgKeyBytes).toString('hex'));

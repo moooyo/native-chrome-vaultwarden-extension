@@ -30,13 +30,17 @@ export async function decryptPrivateKey(
 
 /**
  * Unwrap an RSA-OAEP wrapped symmetric key (e.g. an organization key from
- * `Profile.organizations[].key`, an encType=4 EncString) into a 64-byte SymmetricKey using the
- * account RSA PrivateKey (PKCS8 DER, decrypted via decryptPrivateKey).
+ * `Profile.organizations[].key`) into a 64-byte SymmetricKey using the account RSA PrivateKey
+ * (PKCS8 DER, decrypted via decryptPrivateKey). The OAEP hash follows the encType: SHA-256 for
+ * encType 3/5 (Rsa2048_OaepSha256*), SHA-1 for encType 4/6 (Rsa2048_OaepSha1*).
  */
 export async function unwrapRsaWrappedKey(
   protectedKey: string,
   privateKeyPkcs8: Uint8Array,
 ): Promise<SymmetricKey> {
-  const { data } = parseRsaEncString(protectedKey);
-  return symmetricKeyFromBytes(await rsaOaepDecrypt(privateKeyPkcs8, data));
+  const { encType, data } = parseRsaEncString(protectedKey);
+  const hash = RSA_SHA256_ENC_TYPES.has(encType) ? 'SHA-256' : 'SHA-1';
+  return symmetricKeyFromBytes(await rsaOaepDecrypt(privateKeyPkcs8, data, hash));
 }
+
+const RSA_SHA256_ENC_TYPES = new Set([3, 5]);

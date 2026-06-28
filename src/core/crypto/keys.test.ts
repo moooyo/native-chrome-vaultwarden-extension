@@ -33,6 +33,22 @@ describe('keys.unwrapRsaWrappedKey', () => {
     expect(bytesToHex(orgKey.macKey)).toBe(bytesToHex(expected.macKey));
   });
 
+  it('unwraps an RSA-OAEP-SHA256 (encType=3) wrapped organization symmetric key', async () => {
+    const privateKey = base64ToBytes(RSA_VECTOR.privateKeyPkcs8B64);
+    const orgKey = await unwrapRsaWrappedKey(ORG_KEY_VECTOR.encOrgKeySha256, privateKey);
+    const expected = symmetricKeyFromBytes(hexToBytes(ORG_KEY_VECTOR.orgKeyHex));
+    expect(bytesToHex(orgKey.encKey)).toBe(bytesToHex(expected.encKey));
+    expect(bytesToHex(orgKey.macKey)).toBe(bytesToHex(expected.macKey));
+  });
+
+  it('unwraps an encType=6 (SHA-1 + unverified HMAC) wrapped organization key', async () => {
+    const privateKey = base64ToBytes(RSA_VECTOR.privateKeyPkcs8B64);
+    const enc6 = `6.${ORG_KEY_VECTOR.encOrgKey.slice(2)}|${bytesToBase64(new Uint8Array(32))}`;
+    const orgKey = await unwrapRsaWrappedKey(enc6, privateKey);
+    const expected = symmetricKeyFromBytes(hexToBytes(ORG_KEY_VECTOR.orgKeyHex));
+    expect(bytesToHex(orgKey.encKey)).toBe(bytesToHex(expected.encKey));
+  });
+
   it('rejects a non-RSA EncString', async () => {
     const privateKey = base64ToBytes(RSA_VECTOR.privateKeyPkcs8B64);
     await expect(unwrapRsaWrappedKey(USER_KEY_VECTOR.akey, privateKey)).rejects.toThrow();
