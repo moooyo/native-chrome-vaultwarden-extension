@@ -918,7 +918,20 @@ describe('VaultService', () => {
 
   it('importVault rejects malformed JSON', async () => {
     const { service } = await makeService();
-    await expect(service.importVault('nope')).rejects.toThrow();
+    await expect(service.importVault('{ not valid json')).rejects.toThrow();
+  });
+
+  it('importVault parses a CSV export (logins) and creates a cipher per row', async () => {
+    const { service, api } = await makeService();
+    const csv = 'name,login_username,login_password,login_uri\nGitHub,octocat,s3cret,https://github.com\nGmail,me@example.com,hunter2,https://mail.google.com\n';
+    await expect(service.importVault(csv)).resolves.toBe(2);
+    expect(api.createCipher).toHaveBeenCalledTimes(2);
+  });
+
+  it('importVault requires a password for an encrypted export', async () => {
+    const { service } = await makeService();
+    const encrypted = JSON.stringify({ encrypted: true, passwordProtected: true, salt: 'x', kdfIterations: 600000, data: '2.a|b|c' });
+    await expect(service.importVault(encrypted)).rejects.toThrow(/password-protected/);
   });
 
   it('signs a passkey assertion in the worker without leaking the private key', async () => {

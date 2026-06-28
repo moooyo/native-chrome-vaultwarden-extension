@@ -718,31 +718,7 @@ function bindExportImport(): void {
   };
 
   const exportBtn = document.getElementById('exportVault') as HTMLButtonElement;
-  let exportArmed = false;
-  let armTimer: number | undefined;
-  exportBtn.addEventListener('click', async () => {
-    if (isPending) return;
-    if (!exportArmed) {
-      exportArmed = true;
-      exportBtn.querySelector('span')!.textContent = 'Confirm plaintext export';
-      if (armTimer) clearTimeout(armTimer);
-      armTimer = window.setTimeout(() => { exportArmed = false; exportBtn.querySelector('span')!.textContent = 'Export'; }, 5000);
-      return;
-    }
-    exportArmed = false;
-    if (armTimer) clearTimeout(armTimer);
-    exportBtn.querySelector('span')!.textContent = 'Export';
-    isPending = true;
-    try {
-      const response = await sendRequest({ type: 'vault.export' });
-      if (!response.ok) return setFooterStatus(response.error.message, true);
-      const json = (response.data as { json: string }).json;
-      downloadTextFile(json, `vaultwarden-export-${new Date().toISOString().slice(0, 10)}.json`);
-      setFooterStatus('Exported decrypted vault. Store the file securely.', false);
-    } finally {
-      isPending = false;
-    }
-  });
+  exportBtn.addEventListener('click', () => openExportPanel(setFooterStatus));
 
   const importBtn = document.getElementById('importVault') as HTMLButtonElement;
   const importFile = document.getElementById('importFile') as HTMLInputElement;
@@ -751,23 +727,89 @@ function bindExportImport(): void {
     const file = importFile.files?.[0];
     importFile.value = '';
     if (!file || isPending) return;
-    isPending = true;
+    let text: string;
     try {
-      const text = await file.text();
-      const response = await sendRequest({ type: 'vault.import', json: text });
-      if (!response.ok) return setFooterStatus(response.error.message, true);
-      const imported = (response.data as { imported: number }).imported;
-      await loadCachedList();
-      setFooterStatus(`Imported ${imported} item${imported === 1 ? '' : 's'}.`, false);
+      text = await file.text();
     } catch {
-      setFooterStatus('Could not read the import file', true);
-    } finally {
-      isPending = false;
+      return setFooterStatus('Could not read the import file', true);
+    }
+    // A password-protected export needs its password; collect it first, otherwise import directly.
+    if (/"encrypted"\s*:\s*true/.test(text) && /"passwordProtected"\s*:\s*true/.test(text)) {
+      promptImportPassword(setFooterStatus, (password) => void doImport(text, setFooterStatus, password));
+    } else {
+      void doImport(text, setFooterStatus);
     }
   });
 
   document.getElementById('pinBtn')!.addEventListener('click', () => void openPinEditor(setFooterStatus));
   document.getElementById('accountsBtn')!.addEventListener('click', () => void openAccountSwitcher());
+}
+
+type FooterStatus = (message: string, isError: boolean) => void;
+
+/** Inline export panel: choose a password-protected (encrypted) export, or an explicit plaintext one. */
+function openExportPanel(setFooterStatus: FooterStatus): void {
+  const host = document.getElementById('footerStatus');
+  if (!host) return;
+  host.innerHTML = `
+    <div class="inline-form">
+      <input id="exportPwd" class="input" type="password" autocomplete="new-password" placeholder="Password for encrypted export" />
+      <button id="exportEnc" class="btn btn-sm btn-block" type="button">${icon('lock')}<span>Export encrypted</span></button>
+      <button id="exportPlain" class="btn btn-danger btn-sm btn-block" type="button">${icon('alert')}<span>Export plaintext (unencrypted)</span></button>
+    </div>`;
+  const pwd = document.getElementById('exportPwd') as HTMLInputElement;
+  document.getElementById('exportEnc')!.addEventListener('click', () => {
+    if (!pwd.value) return setFooterStatus('Enter a password, or use plaintext export', true);
+    void doExport(setFooterStatus, pwd.value);
+  });
+  document.getElementById('exportPlain')!.addEventListener('click', () => void doExport(setFooterStatus));
+  pwd.focus();
+}
+
+async function doExport(setFooterStatus: FooterStatus, password?: string): Promise<void> {
+  if (isPending) return;
+  isPending = true;
+  try {
+    const response = await sendRequest(password ? { type: 'vault.export', password } : { type: 'vault.export' });
+    if (!response.ok) return setFooterStatus(response.error.message, true);
+    const json = (response.data as { json: string }).json;
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadTextFile(json, `vaultwarden-export-${password ? 'encrypted-' : ''}${stamp}.json`);
+    setFooterStatus(password ? 'Exported an encrypted vault backup.' : 'Exported decrypted vault. Store the file securely.', false);
+  } finally {
+    isPending = false;
+  }
+}
+
+/** Prompt for an encrypted-export password before importing it. */
+function promptImportPassword(setFooterStatus: FooterStatus, onSubmit: (password: string) => void): void {
+  const host = document.getElementById('footerStatus');
+  if (!host) return;
+  host.innerHTML = `
+    <div class="inline-form">
+      <span class="muted">This export is password-protected.</span>
+      <input id="importPwd" class="input" type="password" autocomplete="off" placeholder="Export password" />
+      <button id="importGo" class="btn btn-sm btn-block" type="button">${icon('unlock')}<span>Import</span></button>
+    </div>`;
+  const pwd = document.getElementById('importPwd') as HTMLInputElement;
+  const go = (): void => { if (pwd.value) onSubmit(pwd.value); else setFooterStatus('Enter the export password', true); };
+  document.getElementById('importGo')!.addEventListener('click', go);
+  pwd.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  pwd.focus();
+}
+
+async function doImport(content: string, setFooterStatus: FooterStatus, password?: string): Promise<void> {
+  if (isPending) return;
+  isPending = true;
+  try {
+    const response = await sendRequest(password ? { type: 'vault.import', content, password } : { type: 'vault.import', content });
+    if (!response.ok) return setFooterStatus(response.error.message, true);
+    const imported = (response.data as { imported: number }).imported;
+    await loadCachedList();
+    setFooterStatus(`Imported ${imported} item${imported === 1 ? '' : 's'}.`, false);
+  } finally {
+    isPending = false;
+  }
 }
 
 /** Account switcher: list logged-in accounts, switch/remove, or add another. Rendered into #footerStatus. */

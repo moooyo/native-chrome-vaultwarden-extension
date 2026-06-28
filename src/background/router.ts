@@ -134,11 +134,11 @@ export function createRouter(deps: RouterDeps) {
           }
           case 'vault.export': {
             if (!deps.vault.exportVault) throw new Error('vault.exportVault is not wired');
-            return { ok: true, data: { json: await deps.vault.exportVault() } };
+            return { ok: true, data: { json: await deps.vault.exportVault(request.password) } };
           }
           case 'vault.import': {
             if (!deps.vault.importVault) throw new Error('vault.importVault is not wired');
-            return { ok: true, data: { imported: await deps.vault.importVault(request.json) } };
+            return { ok: true, data: { imported: await deps.vault.importVault(request.content, request.password) } };
           }
           case 'vault.hasPasskey': {
             if (!deps.vault.hasMatchingPasskey) throw new Error('vault.hasMatchingPasskey is not wired');

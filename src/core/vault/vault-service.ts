@@ -13,7 +13,7 @@ import { encryptToText, decryptToText } from '../crypto/encstring.js';
 import { unwrapSymmetricKey } from '../crypto/keys.js';
 import { base64UrlToBytes } from '../crypto/encoding.js';
 import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealthInput } from './password-health.js';
-import { buildExportJson, parseImportJson } from './vault-io.js';
+import { buildExportJson, buildEncryptedExportJson, parseImport } from './vault-io.js';
 import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
@@ -475,7 +475,7 @@ export class VaultService {
    * Serialize the decrypted vault to a Bitwarden-compatible unencrypted JSON export. This deliberately
    * emits plaintext secrets — an explicit, user-initiated action — so callers must warn the user.
    */
-  async exportVault(): Promise<string> {
+  async exportVault(password?: string): Promise<string> {
     const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
     if (!cache) throw new AppError('sync_required', 'Sync required');
     const userKey = await this.deps.session.loadUserKey();
@@ -488,12 +488,19 @@ export class VaultService {
       const d = await decryptCipher(cipher, userKey, orgKeys);
       if (d && !d.undecryptable) decrypted.push(d);
     }
-    return buildExportJson(decrypted, folders);
+    const plaintext = buildExportJson(decrypted, folders);
+    if (!password) return plaintext;
+    // Password-protected export: wrap the plaintext payload under a password-derived key.
+    const auth = await this.deps.session.getPersistedAuth();
+    return buildEncryptedExportJson(plaintext, password, auth?.kdfIterations ?? 600_000);
   }
 
-  /** Import a Bitwarden unencrypted JSON export: create one cipher per parsed item, then re-sync once. */
-  async importVault(json: string): Promise<number> {
-    const inputs = parseImportJson(json);
+  /**
+   * Import a Bitwarden export (plaintext JSON, password-protected JSON, or CSV): parse, then create one
+   * cipher per item and re-sync once. `password` is required for an encrypted export.
+   */
+  async importVault(content: string, password?: string): Promise<number> {
+    const inputs = await parseImport(content, password);
     const userKey = await this.requireUserKey();
     const token = await this.requireToken();
     let imported = 0;
