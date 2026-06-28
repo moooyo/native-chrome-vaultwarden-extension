@@ -125,6 +125,25 @@ export class AuthService {
     await this.deps.session.removePinProtectedUserKey();
   }
 
+  /**
+   * Verify the master password against the persisted account WITHOUT changing lock state. Re-derives
+   * the master key and confirms it still unwraps the stored UserKey (the unwrap MAC-checks, so a wrong
+   * password fails). Used to satisfy master-password reprompt. Returns false on mismatch or no account;
+   * never throws for a wrong password.
+   */
+  async verifyMasterPassword(masterPassword: string): Promise<boolean> {
+    if (!masterPassword) return false;
+    const auth = await this.deps.session.getPersistedAuth();
+    if (!auth) return false;
+    try {
+      const masterKey = await deriveMasterKey(masterPassword, auth.email, auth.kdfIterations);
+      await unwrapSymmetricKey(auth.protectedKey, await stretchMasterKey(masterKey));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async isPinEnabled(): Promise<boolean> {
     return Boolean(await this.deps.session.getPinProtectedUserKey());
   }

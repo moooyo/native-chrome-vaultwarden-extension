@@ -34,6 +34,8 @@ if (originalGet && window.isSecureContext) {
         origin: location.origin,
         challenge: bytesToBase64Url(toBytes(publicKey.challenge)),
         allowedCredentialIds: (publicKey.allowCredentials ?? []).map((c) => bytesToBase64Url(toBytes(c.id))),
+        // Forward the RP's user-verification requirement so the worker can set the UV flag honestly.
+        ...(publicKey.userVerification ? { userVerification: publicKey.userVerification } : {}),
       });
       if (!assertion) return originalGet(options); // no stored passkey → native authenticator
       return buildCredential(assertion);
@@ -48,6 +50,7 @@ function requestAssertion(payload: {
   origin: string;
   challenge: string;
   allowedCredentialIds: string[];
+  userVerification?: string;
 }): Promise<BridgeAssertion | null> {
   return new Promise((resolve) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;

@@ -78,10 +78,56 @@
   `navigator.credentials.get` + 隔离世界 `webauthn-bridge` 转发至 worker，无匹配则回退原生。
   仍待：`navigator.credentials.create`（注册新 passkey）、严格 `instanceof PublicKeyCredential` 的站点、计数器持久化。
 
+## 安全缺陷（2026-06-28 完整性审计新发现）
+
+> 由多代理完整性审计发现、并经代码核实的两处**安全回归**，不在原登记表内。优先级最高。
+
+- **主密码二次验证（reprompt）解析但从不执行** 🔴 → **本次修复**
+  - 原状：`cipher.reprompt`（0/1）在 `api/types.ts` 解析、`encrypt.ts` 编辑时保留，但
+    `vault-service` 的 `getField`/`getTotpCode`/`getCipherInput`/`getAutofillCredentials` 均不校验，
+    "查看前需主密码"的条目形同虚设。
+  - 修复：worker 端在上述四处强制——reprompt 条目必须通过 `AuthService.verifyMasterPassword`
+    校验主密码才释放机密，否则抛 `AppError('reprompt_required')`；`CipherSummary/DecryptedCipher/
+    CipherInput` 新增 `reprompt` 布尔；编辑器新增「打开前需主密码」勾选；popup 详情/编辑在打开 reprompt
+    条目前用可信扩展上下文（非页面）做主密码门；自动填充对 reprompt 条目**拒绝在页面内释放**，提示去扩展验证。
+- **passkey 断言静默签名 + 谎报 userVerified** 🔴 → **本次修复**
+  - 原状：`getPasskeyAssertion` 一旦匹配立即签名，无任何用户确认；`userVerified` 默认 `true` 且页面 shim
+    不读取 `publicKey.userVerification`，UV 标志被无条件谎报。
+  - 修复：`page-webauthn` 读取并透传 RP 的 `userVerification`；隔离世界 `webauthn-bridge` 在转发前弹出
+    **用户同意确认**（closed shadow DOM），用户取消即回退原生；worker 不再硬编码 `userVerified`，按
+    RP 要求与用户确认结果设置 UV 标志（`discouraged` → false）。
+
 ## 仍待实现 / 明确超范围
 
-- **Argon2id KDF**（按要求暂忽略）：需引入 WASM KDF。`prelogin`/登录成功两处守卫均抛
-  `'Argon2id accounts are not supported in this MVP'`（`src/core/session/auth-service.ts`）。
+- **Argon2id KDF**（2026-06-28 明确决定暂不实现，已写入 `CLAUDE.md`）：需引入 WASM/纯 JS Argon2。
+  `prelogin`/登录成功两处守卫均抛 `'Argon2id accounts are not supported in this MVP'`
+  （`src/core/session/auth-service.ts`）。**这是单项最大的兼容性缺口**——Argon2 账户当前完全无法使用。
+
+### 完整性审计缺口清单（2026-06-28，按优先级）
+
+> 与 Bitwarden 官方客户端功能面对齐后的差距。⬆ 高 / ➖ 中 / ⬇ 低。
+
+- ⬆ **2FA 仅 Authenticator(0)/Email(1)**：硬过滤掉 Duo(2/6)、YubiKey OTP(3)、WebAuthn 硬件密钥(7)；
+  这些账户无法登录。另缺新设备 email OTP、captcha/hCaptcha、SSO + Key Connector、设备批准/TDE、
+  登录设备无密码（passwordless）。
+- ⬆ **保存/更新登录提示条** → **本次落地**：表单提交捕获 + 通知栏 + 页面驱动的 create/update。
+- ⬆ **附件（attachments）**：无模型/无 per-attachment key/无端点；带附件条目编辑有丢数据风险。
+- ⬆ **组织条目编辑 / 移动到组织（share）/ 集合归属**：`updateCipher` 一律用 UserKey 重新加密且不带
+  `organizationId`，编辑组织条目会损坏；缺 `/share`、`/move` 与集合写入。
+- ⬆ **组织策略（policies）拉取与执行**；**改主密码 / 改 KDF / 密钥轮换**；**Sends（文本+文件）**；
+  **加密导出 + CSV/第三方导入**。
+- ➖ **自定义字段（Text/Hidden/Boolean/Linked）**：仅透传保留，从不解密/显示/编辑；Linked 无解析。
+- ➖ **每条目密码历史 + passwordRevisionDate**：改密时不追加历史、不更新修订时间。
+- ➖ 键盘快捷键（manifest `commands`）、右键上下文菜单、**Card/Identity 页面自动填充**、
+  **Passphrase 生成器**、**用户名/转发邮箱别名生成器**、HIBP 泄露检测、超时动作（锁定 vs 登出）、
+  跨服务器多账户、集合 CRUD、i18n/`_locales`、生物识别解锁、徽章计数、账户指纹短语、Firefox 打包、
+  Steam Guard TOTP、passkey 多凭据选择 UI。
+- ➖ **空闲/自动锁定准确性**：靠 1 分钟轮询 `lastActivity`，且仅扩展消息更新它（非真实页面活动）；
+  无 `chrome.idle`、无系统锁联动。**剪贴板自动清除**写死 60s、清除计时器在 popup 上下文（关闭即取消）。
+- ➖ **记住设备 2FA token**：`remember` 传给 API 但返回的 token 从不捕获/回传，popup 也无勾选框。
+- ⬇ passkey 注册（`navigator.credentials.create`）、`instanceof PublicKeyCredential`、WebAuthn 扩展
+  （credProps/prf/largeBlob）、signCount 回写；encType 0/1 旧密文兼容解密；SSH-key(type 5) 编辑；
+  Safari 打包；显式 CSP 收紧；同步 `/sync` profile 字段（securityStamp/策略/紧急访问等）。
 
 ## 路线图指针（按里程碑）
 

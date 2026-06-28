@@ -24,6 +24,9 @@ export interface CipherSummary {
   hasPasskey?: boolean;
   /** Non-sensitive list subtitle (e.g. card brand or identity full name). Never holds secrets. */
   subtitle?: string;
+  /** True when the item is master-password-reprompt protected: secrets are released only after the
+   *  master password is re-verified. The worker enforces this; the UI must gate access accordingly. */
+  reprompt?: boolean;
   /** Soft-delete timestamp; when set, the cipher is in the trash (excluded from the main list & autofill). */
   deletedDate?: string;
   undecryptable?: boolean;
@@ -85,6 +88,8 @@ export interface CipherInput {
   name: string;
   notes?: string;
   favorite?: boolean;
+  /** Require master-password reprompt before this item's secrets are revealed/filled. */
+  reprompt?: boolean;
   folderId?: string | null;
   login?: {
     username?: string;

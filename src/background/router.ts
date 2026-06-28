@@ -57,6 +57,9 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.auth.unlock) throw new Error('auth.unlock is not wired');
             await deps.auth.unlock(request.masterPassword);
             return { ok: true, data: null };
+          case 'auth.verifyMasterPassword':
+            if (!deps.auth.verifyMasterPassword) throw new Error('auth.verifyMasterPassword is not wired');
+            return { ok: true, data: { verified: await deps.auth.verifyMasterPassword(request.masterPassword) } };
           case 'auth.unlockWithPin':
             if (!deps.auth.unlockWithPin) throw new Error('auth.unlockWithPin is not wired');
             await deps.auth.unlockWithPin(request.pin);
@@ -99,7 +102,7 @@ export function createRouter(deps: RouterDeps) {
             return { ok: true, data: await deps.vault.listItems() };
           case 'vault.getField': {
             if (!deps.vault.getField) throw new Error('vault.getField is not wired');
-            const value = await deps.vault.getField(request.id, request.field);
+            const value = await deps.vault.getField(request.id, request.field, request.masterPassword);
             return { ok: true, data: value === undefined ? {} : { value } };
           }
           case 'vault.getCipherDetail': {
@@ -109,7 +112,7 @@ export function createRouter(deps: RouterDeps) {
           }
           case 'vault.getTotp': {
             if (!deps.vault.getTotpCode) throw new Error('vault.getTotpCode is not wired');
-            const totp = await deps.vault.getTotpCode(request.id);
+            const totp = await deps.vault.getTotpCode(request.id, request.masterPassword);
             return { ok: true, data: { totp: totp ?? null } };
           }
           case 'vault.getSkippedOrgCount': {
@@ -127,6 +130,14 @@ export function createRouter(deps: RouterDeps) {
           case 'vault.import': {
             if (!deps.vault.importVault) throw new Error('vault.importVault is not wired');
             return { ok: true, data: { imported: await deps.vault.importVault(request.json) } };
+          }
+          case 'vault.hasPasskey': {
+            if (!deps.vault.hasMatchingPasskey) throw new Error('vault.hasMatchingPasskey is not wired');
+            const matches = await deps.vault.hasMatchingPasskey({
+              rpId: request.rpId,
+              ...(request.allowedCredentialIds ? { allowedCredentialIds: request.allowedCredentialIds } : {}),
+            });
+            return { ok: true, data: { matches } };
           }
           case 'vault.getPasskeyAssertion': {
             if (!deps.vault.getPasskeyAssertion) throw new Error('vault.getPasskeyAssertion is not wired');
@@ -165,7 +176,7 @@ export function createRouter(deps: RouterDeps) {
             return { ok: true, data: await deps.vault.restoreCipher(request.id) };
           case 'vault.getCipherInput': {
             if (!deps.vault.getCipherInput) throw new Error('vault.getCipherInput is not wired');
-            const input = await deps.vault.getCipherInput(request.id);
+            const input = await deps.vault.getCipherInput(request.id, request.masterPassword);
             return { ok: true, data: { input: input ?? null } };
           }
           case 'settings.get': {
@@ -192,6 +203,21 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.vault.getAutofillCredentials) throw new Error('vault.getAutofillCredentials is not wired');
             const defaultStrategy = await deps.settings.getDefaultUriMatchStrategy();
             return { ok: true, data: await deps.vault.getAutofillCredentials(request.cipherId, request.frameUrl, defaultStrategy) };
+          }
+          case 'autofill.checkSaveLogin': {
+            if (!deps.vault.checkSaveLogin) throw new Error('vault.checkSaveLogin is not wired');
+            const defaultStrategy = await deps.settings.getDefaultUriMatchStrategy();
+            const submitted = request.username === undefined ? { password: request.password } : { username: request.username, password: request.password };
+            return { ok: true, data: await deps.vault.checkSaveLogin(request.frameUrl, submitted, defaultStrategy) };
+          }
+          case 'autofill.saveLogin': {
+            if (!deps.vault.saveLogin) throw new Error('vault.saveLogin is not wired');
+            return { ok: true, data: await deps.vault.saveLogin(request.frameUrl, request.username, request.password) };
+          }
+          case 'autofill.updateLogin': {
+            if (!deps.vault.updateLoginPassword) throw new Error('vault.updateLoginPassword is not wired');
+            const defaultStrategy = await deps.settings.getDefaultUriMatchStrategy();
+            return { ok: true, data: await deps.vault.updateLoginPassword(request.cipherId, request.password, request.frameUrl, defaultStrategy) };
           }
         }
       } catch (err) {

@@ -31,6 +31,13 @@ let showTrash = false;
 let skippedOrgCount = 0;
 // Active TOTP countdown interval for the open login detail (cleared on any navigation).
 let totpTimer: number | undefined;
+
+// Master-password reprompt: when the user clears the gate for a protected item, the verified master
+// password is held ONLY in this popup's memory for the duration of that item's detail/editor view and
+// is wiped on any navigation (render()) or when the popup closes. It is passed to the worker so it can
+// enforce the reprompt at the trusted boundary; it is never persisted.
+let repromptMp: string | null = null;
+let repromptForId: string | null = null;
 // Password generator options, persisted while the popup stays open.
 let genOptions: PasswordGenOptions = { ...DEFAULT_PASSWORD_OPTIONS };
 // Generated-password history for this popup session only (never persisted — see core/generator/history).
@@ -55,6 +62,9 @@ async function init() {
 
 function render(view: View) {
   clearTotpTimer();
+  // Navigating away from an item view wipes any retained reprompt master password.
+  repromptMp = null;
+  repromptForId = null;
   currentViewKind = view.kind;
   if (view.kind === 'loading') {
     app.innerHTML = `<div class="center"><span class="spinner"></span><span class="muted">Loading vault…</span></div>`;
@@ -1048,6 +1058,7 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
         <label class="ed-field"><span class="ed-label">Notes</span><textarea id="ed_notes" class="input ed-textarea">${escapeHtml(v.notes ?? '')}</textarea></label>
         <label class="ed-field"><span class="ed-label">Folder</span><select id="ed_folder" class="select">${folderOptions}</select></label>
         <label class="gen-check"><input id="ed_favorite" type="checkbox" ${v.favorite ? 'checked' : ''} /><span>Favorite</span></label>
+        <label class="gen-check"><input id="ed_reprompt" type="checkbox" ${v.reprompt ? 'checked' : ''} /><span>Require master password to view</span></label>
         <div class="detail-actions">
           <button id="ed_save" type="button" class="btn btn-block">${icon('check')}<span>Save</span></button>
           ${mode === 'edit' ? `<button id="ed_delete" type="button" class="btn btn-danger btn-block">${icon('trash')}<span>Delete</span></button>` : ''}
@@ -1083,6 +1094,7 @@ function collectEditorInput(type: 1 | 2 | 3 | 4): CipherInput {
     type,
     name: val('ed_name').trim(),
     favorite: (document.getElementById('ed_favorite') as HTMLInputElement).checked,
+    reprompt: (document.getElementById('ed_reprompt') as HTMLInputElement).checked,
     folderId: val('ed_folder') || null,
   };
   const notes = val('ed_notes'); if (notes) input.notes = notes;
@@ -1135,7 +1147,12 @@ async function saveEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, id?: str
 
 /** Open the editor prefilled from the worker's decrypted plaintext. */
 async function openEditorForEdit(id: string): Promise<void> {
-  const response = await sendRequest({ type: 'vault.getCipherInput', id });
+  // A protected item must clear the master-password gate before the editor can reveal its secrets.
+  const item = vaultItems.find((i) => i.id === id);
+  if (item?.reprompt && repromptForId !== id) {
+    return renderRepromptGate(item, () => void openEditorForEdit(id));
+  }
+  const response = await sendRequest({ type: 'vault.getCipherInput', id, ...mpArg(id) });
   if (!response.ok) return setDetailStatus(response.error.message, true);
   const input = (response.data as { input: CipherInput | null }).input;
   if (!input) return setDetailStatus('This item type cannot be edited yet', true);
@@ -1247,14 +1264,71 @@ function renderVaultList() {
   }
 }
 
+/** Spread the retained reprompt master password for `id` into a request, or nothing when none is held. */
+function mpArg(id: string): { masterPassword: string } | Record<string, never> {
+  return repromptForId === id && repromptMp ? { masterPassword: repromptMp } : {};
+}
+
 function renderDetail(id: string) {
   clearTotpTimer();
   const item = vaultItems.find((i) => i.id === id);
   if (!item) return;
+  // Master-password reprompt gate: protected items require re-verification before any view that can
+  // reveal/copy their secrets. The worker also enforces this, so this gate is the UX, not the boundary.
+  if (item.reprompt && repromptForId !== id) {
+    return renderRepromptGate(item, () => renderDetail(id));
+  }
   if (item.type === 2) return renderSecureNoteDetail(id, item);
   if (item.type === 3) return renderStructuredDetail(id, item, 'card');
   if (item.type === 4) return renderStructuredDetail(id, item, 'identity');
   return renderLoginDetail(id, item);
+}
+
+/**
+ * Render a master-password gate for a reprompt-protected item. On success the verified password is
+ * held in popup memory for this item's view (see repromptMp) and `onPass` re-renders the real view.
+ */
+function renderRepromptGate(item: CipherSummary, onPass: () => void): void {
+  clearTotpTimer();
+  app.innerHTML = `
+    <div class="detail">
+      <div class="detail-head">
+        <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
+        <div class="titles"><h1>${escapeHtml(item.name)}</h1></div>
+      </div>
+      <div class="detail-body">
+        <div class="readout">
+          <div class="k">${icon('lock')} Protected item</div>
+          <div class="v-row"><span class="v">Re-enter your master password to view this item.</span></div>
+        </div>
+        <label class="ed-field"><span class="ed-label">Master password</span>
+          <input id="rp_pw" class="input" type="password" autocomplete="off" /></label>
+        <div class="detail-actions">
+          <button id="rp_go" type="button" class="btn btn-block">${icon('unlock')}<span>Unlock item</span></button>
+        </div>
+        <div id="detailStatus" class="detail-status"></div>
+      </div>
+    </div>`;
+  document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
+  const pwInput = document.getElementById('rp_pw') as HTMLInputElement;
+  const submit = async (): Promise<void> => {
+    if (isPending) return;
+    const pw = pwInput.value;
+    if (!pw) return;
+    await withDetailBusy(async () => {
+      const response = await sendRequest({ type: 'auth.verifyMasterPassword', masterPassword: pw });
+      if (!response.ok) return setDetailStatus(response.error.message, true);
+      if (!(response.data as { verified: boolean }).verified) {
+        return setDetailStatus('Incorrect master password', true);
+      }
+      repromptMp = pw;
+      repromptForId = item.id;
+      onPass();
+    });
+  };
+  document.getElementById('rp_go')!.addEventListener('click', () => void submit());
+  pwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void submit(); } });
+  pwInput.focus();
 }
 
 /** Standard detail header (back button + title + optional subtitle + edit/delete actions). */
@@ -1324,7 +1398,7 @@ async function copyValue(value: string | undefined, label: string): Promise<void
 
 /** Fetch a secret field on demand and copy it (never retained in the DOM/closure). */
 async function copyField(id: string, field: 'password' | 'notes' | RevealableField, label: string): Promise<void> {
-  const response = await sendRequest({ type: 'vault.getField', id, field });
+  const response = await sendRequest({ type: 'vault.getField', id, field, ...mpArg(id) });
   if (!response.ok) return setDetailStatus(response.error.message, true);
   await copyValue((response.data as { value?: string }).value, label);
 }
@@ -1383,7 +1457,7 @@ function renderLoginDetail(id: string, item: CipherSummary) {
       btn.title = btn.ariaLabel = 'Show password';
       return;
     }
-    const response = await sendRequest({ type: 'vault.getField', id, field: 'password' });
+    const response = await sendRequest({ type: 'vault.getField', id, field: 'password', ...mpArg(id) });
     if (!response.ok) return setDetailStatus(response.error.message, true);
     const value = (response.data as { value?: string }).value;
     if (!value) return setDetailStatus('Password is empty', true);
@@ -1403,7 +1477,7 @@ function renderLoginDetail(id: string, item: CipherSummary) {
       const codeEl = document.getElementById('totpCode');
       const countdownEl = document.getElementById('totpCountdown');
       if (!codeEl || !countdownEl) return clearTotpTimer();
-      const response = await sendRequest({ type: 'vault.getTotp', id });
+      const response = await sendRequest({ type: 'vault.getTotp', id, ...mpArg(id) });
       if (!response.ok) {
         clearTotpTimer();
         return setDetailStatus(response.error.message, true);
@@ -1455,7 +1529,7 @@ function renderSecureNoteDetail(id: string, item: CipherSummary) {
   bindBack();
   bindDetailActions(item);
   void (async () => {
-    const response = await sendRequest({ type: 'vault.getField', id, field: 'notes' });
+    const response = await sendRequest({ type: 'vault.getField', id, field: 'notes', ...mpArg(id) });
     const body = document.getElementById('noteBody');
     if (!body) return;
     if (!response.ok) {
@@ -1534,7 +1608,7 @@ function bindStructuredHandlers(id: string, container: HTMLElement): void {
         btn.setAttribute('aria-pressed', 'false');
         return;
       }
-      const response = await sendRequest({ type: 'vault.getField', id, field });
+      const response = await sendRequest({ type: 'vault.getField', id, field, ...mpArg(id) });
       if (!response.ok) return setDetailStatus(response.error.message, true);
       const value = (response.data as { value?: string }).value;
       if (!value) return setDetailStatus('Field is empty', true);

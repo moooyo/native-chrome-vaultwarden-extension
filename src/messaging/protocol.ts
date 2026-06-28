@@ -4,6 +4,7 @@ import type { SessionState, AccountSummary } from '../core/session/session-manag
 import type { CipherInput, CipherSummary, CollectionSummary, DecryptedCipher, FieldName, FolderSummary } from '../core/vault/models.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 import type { TotpResult } from '../core/vault/totp.js';
+import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
 import type { PasswordHealthEntry } from '../core/vault/password-health.js';
 import type { PasskeyAssertion } from '../core/vault/fido2.js';
 import type { LockTimeoutSetting } from '../background/settings.js';
@@ -16,6 +17,8 @@ export interface AutofillCandidate {
   matchedUri: string;
   matchType: UriMatchStrategySetting;
   favorite: boolean;
+  /** True when the item is master-password-reprompt protected; it cannot be filled inline. */
+  reprompt?: boolean;
 }
 
 export interface AutofillCredentials {
@@ -32,6 +35,7 @@ export type RequestMessage =
   | { type: 'auth.submitTwoFactor'; provider: 0 | 1; code: string; remember?: boolean }
   | { type: 'auth.sendEmailCode' }
   | { type: 'auth.unlock'; masterPassword: string }
+  | { type: 'auth.verifyMasterPassword'; masterPassword: string }
   | { type: 'auth.unlockWithPin'; pin: string }
   | { type: 'auth.setPin'; pin: string }
   | { type: 'auth.disablePin' }
@@ -43,13 +47,14 @@ export type RequestMessage =
   | { type: 'auth.removeAccount'; email: string }
   | { type: 'vault.sync' }
   | { type: 'vault.listItems' }
-  | { type: 'vault.getField'; id: string; field: FieldName }
+  | { type: 'vault.getField'; id: string; field: FieldName; masterPassword?: string }
   | { type: 'vault.getCipherDetail'; id: string }
-  | { type: 'vault.getTotp'; id: string }
+  | { type: 'vault.getTotp'; id: string; masterPassword?: string }
   | { type: 'vault.getSkippedOrgCount' }
   | { type: 'vault.getPasswordHealth' }
   | { type: 'vault.export' }
   | { type: 'vault.import'; json: string }
+  | { type: 'vault.hasPasskey'; rpId: string; allowedCredentialIds?: string[] }
   | { type: 'vault.getPasskeyAssertion'; rpId: string; origin: string; challenge: string; allowedCredentialIds?: string[]; userVerified?: boolean }
   | { type: 'vault.createFolder'; name: string }
   | { type: 'vault.renameFolder'; id: string; name: string }
@@ -59,11 +64,14 @@ export type RequestMessage =
   | { type: 'vault.deleteCipher'; id: string }
   | { type: 'vault.softDeleteCipher'; id: string }
   | { type: 'vault.restoreCipher'; id: string }
-  | { type: 'vault.getCipherInput'; id: string }
+  | { type: 'vault.getCipherInput'; id: string; masterPassword?: string }
   | { type: 'settings.get' }
   | { type: 'settings.save'; serverUrl: string; defaultUriMatchStrategy?: UriMatchStrategySetting; lockTimeout?: LockTimeoutSetting }
   | { type: 'autofill.findCandidates'; frameUrl: string; formSignature?: string }
-  | { type: 'autofill.getCredentials'; cipherId: string; frameUrl: string };
+  | { type: 'autofill.getCredentials'; cipherId: string; frameUrl: string }
+  | { type: 'autofill.checkSaveLogin'; frameUrl: string; username?: string; password: string }
+  | { type: 'autofill.saveLogin'; frameUrl: string; username?: string; password: string }
+  | { type: 'autofill.updateLogin'; cipherId: string; frameUrl: string; password: string };
 
 export type ResponseMessage =
   | { ok: true; data: { state: SessionState } }
@@ -78,12 +86,15 @@ export type ResponseMessage =
   | { ok: true; data: { json: string } }
   | { ok: true; data: { imported: number } }
   | { ok: true; data: { enabled: boolean } }
+  | { ok: true; data: { verified: boolean } }
+  | { ok: true; data: { matches: boolean } }
   | { ok: true; data: { assertion: PasskeyAssertion | null } }
   | { ok: true; data: { accounts: AccountSummary[] } }
   | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting; lockTimeout: LockTimeoutSetting } }
   | { ok: true; data: null }
   | { ok: true; data: AutofillCandidate[] }
   | { ok: true; data: AutofillCredentials }
+  | { ok: true; data: SaveLoginPrompt }
   | { ok: false; error: { code: AppErrorCode; message: string } };
 
 export async function sendRequest(request: RequestMessage): Promise<ResponseMessage> {

@@ -17,3 +17,13 @@
   - **客户端服务端 URL**：`http://10.0.1.20:8080`（客户端接受 http，无需 HTTPS）。
   - 健康检查：`curl http://10.0.1.20:8080/alive`；管理后台：`http://10.0.1.20:8080/admin`（token `testadmintoken123`）。
 - **测试账户**：邮箱 `test@winvaultwarden.local` / 主密码 `Test-Master-Password-1!`（KDF = PBKDF2-SHA256，600000 次）。
+
+## 实现范围决策（Scope decisions）
+
+- **Argon2id KDF 暂不实现**（2026-06-28 明确决定）。客户端目前仅支持 PBKDF2-HMAC-SHA256；遇到
+  `kdf != 0`（Argon2id）的账户在 prelogin 与登录成功两处 **fail-close 抛错**
+  （`src/core/session/auth-service.ts`），不静默降级。这是有意的范围边界，不是缺陷。
+  - **影响**：用 Argon2id（Bitwarden 新账户默认值）创建的账户当前无法登录/解锁/注册。
+  - **后续若要纳入**：需引入 WASM 或纯 JS 的 Argon2 实现（如 `hash-wasm`），在 `kdf.ts`
+    增加 `deriveMasterKey` 的 Argon2id 分支，并放开 `auth-service` 的两处守卫。
+  - 其余完整性缺口与优先级见 `docs/tech-debt.md`。

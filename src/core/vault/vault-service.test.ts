@@ -112,9 +112,13 @@ async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8
     softDeleteCipher: vi.fn(async () => {}),
     restoreCipher: vi.fn(async () => {}),
   } as unknown as ApiClient;
-  const auth = { refreshIfNeeded: vi.fn(async () => {}) } as unknown as AuthService;
+  const auth = {
+    refreshIfNeeded: vi.fn(async () => {}),
+    // Reprompt verification: only 'correct-master' is accepted, like a real master-password check.
+    verifyMasterPassword: vi.fn(async (pw: string) => pw === 'correct-master'),
+  } as unknown as AuthService;
   const deps = { api, auth, session: sm, localStore, ...(opts.now ? { now: opts.now } : {}) };
-  return { service: new VaultService(deps), api, session: sm };
+  return { service: new VaultService(deps), api, session: sm, auth };
 }
 
 describe('VaultService', () => {
@@ -286,6 +290,147 @@ describe('VaultService', () => {
     await service.sync();
     await expect(service.getAutofillCredentials('cipher-1', URL_VECTOR.plaintext, UriMatchStrategy.Domain))
       .resolves.toEqual({ username: FIELD_VECTOR.plaintext, password: FIELD_VECTOR.plaintext, totp: '081804' });
+  });
+
+  describe('master-password reprompt enforcement', () => {
+    it('sync surfaces the reprompt flag on the summary', async () => {
+      const sync = makeSync();
+      sync.ciphers[0]!.reprompt = 1;
+      const { service } = await makeService(sync);
+      const list = await service.sync();
+      expect(list.items[0]!.reprompt).toBe(true);
+    });
+
+    it('getField refuses a reprompt item without the master password', async () => {
+      const sync = makeSync();
+      sync.ciphers[0]!.reprompt = 1;
+      const { service, auth } = await makeService(sync);
+      await service.sync();
+      await expect(service.getField('cipher-1', 'password'))
+        .rejects.toMatchObject({ code: 'reprompt_required' });
+      expect(auth.verifyMasterPassword).not.toHaveBeenCalled();
+    });
+
+    it('getField refuses a reprompt item with the wrong master password', async () => {
+      const sync = makeSync();
+      sync.ciphers[0]!.reprompt = 1;
+      const { service } = await makeService(sync);
+      await service.sync();
+      await expect(service.getField('cipher-1', 'password', 'wrong'))
+        .rejects.toMatchObject({ code: 'reprompt_required' });
+    });
+
+    it('getField releases a reprompt item once the master password verifies', async () => {
+      const sync = makeSync();
+      sync.ciphers[0]!.reprompt = 1;
+      const { service, auth } = await makeService(sync);
+      await service.sync();
+      await expect(service.getField('cipher-1', 'password', 'correct-master'))
+        .resolves.toBe(FIELD_VECTOR.plaintext);
+      expect(auth.verifyMasterPassword).toHaveBeenCalledWith('correct-master');
+    });
+
+    it('does not require the master password for a non-reprompt item', async () => {
+      const { service, auth } = await makeService();
+      await service.sync();
+      await expect(service.getField('cipher-1', 'password')).resolves.toBe(FIELD_VECTOR.plaintext);
+      expect(auth.verifyMasterPassword).not.toHaveBeenCalled();
+    });
+
+    it('getCipherInput gates a reprompt item and round-trips the flag once verified', async () => {
+      const sync = makeSync();
+      sync.ciphers[0]!.reprompt = 1;
+      const { service } = await makeService(sync);
+      await service.sync();
+      await expect(service.getCipherInput('cipher-1')).rejects.toMatchObject({ code: 'reprompt_required' });
+      const input = await service.getCipherInput('cipher-1', 'correct-master');
+      expect(input?.reprompt).toBe(true);
+    });
+
+    it('getAutofillCredentials never releases a reprompt item into the page', async () => {
+      const sync = makeSyncUrl();
+      sync.ciphers[0]!.reprompt = 1;
+      const { service } = await makeService(sync);
+      await service.sync();
+      await expect(service.getAutofillCredentials('cipher-1', URL_VECTOR.plaintext, UriMatchStrategy.Domain))
+        .rejects.toMatchObject({ code: 'reprompt_required' });
+    });
+  });
+
+  describe('save / update login capture', () => {
+    const SITE = URL_VECTOR.plaintext;                 // https://example.com
+    const USER = FIELD_VECTOR.plaintext;               // matches the cached cipher's username
+    const PASS = FIELD_VECTOR.plaintext;               // matches the cached cipher's password
+
+    it('checkSaveLogin returns none when the same credential is already stored', async () => {
+      const { service } = await makeService(makeSyncUrl());
+      await service.sync();
+      await expect(service.checkSaveLogin(SITE, { username: USER, password: PASS }, UriMatchStrategy.Domain))
+        .resolves.toEqual({ action: 'none' });
+    });
+
+    it('checkSaveLogin returns update when the username matches but the password changed', async () => {
+      const { service } = await makeService(makeSyncUrl());
+      await service.sync();
+      await expect(service.checkSaveLogin(SITE, { username: USER, password: 'changed-pass' }, UriMatchStrategy.Domain))
+        .resolves.toEqual({ action: 'update', cipherId: 'cipher-1', name: FIELD_VECTOR.plaintext });
+    });
+
+    it('checkSaveLogin returns save for a new username on the site', async () => {
+      const { service } = await makeService(makeSyncUrl());
+      await service.sync();
+      await expect(service.checkSaveLogin(SITE, { username: 'someone-else@example.com', password: 'x' }, UriMatchStrategy.Domain))
+        .resolves.toEqual({ action: 'save', suggestedName: 'example.com' });
+    });
+
+    it('checkSaveLogin never reveals or matches reprompt-protected items', async () => {
+      const sync = makeSyncUrl();
+      sync.ciphers[0]!.reprompt = 1;
+      const { service } = await makeService(sync);
+      await service.sync();
+      // Even the identical stored credential is treated as new, because protected items are skipped.
+      await expect(service.checkSaveLogin(SITE, { username: USER, password: PASS }, UriMatchStrategy.Domain))
+        .resolves.toEqual({ action: 'save', suggestedName: 'example.com' });
+    });
+
+    it('saveLogin creates an encrypted login cipher and re-syncs', async () => {
+      const { service, api } = await makeService(makeSyncUrl());
+      await service.sync();
+      await service.saveLogin('https://example.com/login', 'new@example.com', 'secret-pass');
+      const [token, req] = (api.createCipher as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
+      expect(token).toBe('access');
+      expect((req as { type: number }).type).toBe(1);
+      expect(JSON.stringify(req)).not.toContain('secret-pass'); // password is encrypted, never plaintext
+      expect(api.sync).toHaveBeenCalled();
+    });
+
+    it('updateLoginPassword re-encrypts the password for a matching item and re-syncs', async () => {
+      const { service, api } = await makeService(makeSyncUrl());
+      await service.sync();
+      await service.updateLoginPassword('cipher-1', 'rotated-pass', SITE, UriMatchStrategy.Domain);
+      const [, id, req] = (api.updateCipher as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
+      expect(id).toBe('cipher-1');
+      expect(JSON.stringify(req)).not.toContain('rotated-pass');
+      expect(api.sync).toHaveBeenCalled();
+    });
+
+    it('updateLoginPassword refuses a reprompt-protected item', async () => {
+      const sync = makeSyncUrl();
+      sync.ciphers[0]!.reprompt = 1;
+      const { service, api } = await makeService(sync);
+      await service.sync();
+      await expect(service.updateLoginPassword('cipher-1', 'x', SITE, UriMatchStrategy.Domain))
+        .rejects.toMatchObject({ code: 'reprompt_required' });
+      expect(api.updateCipher).not.toHaveBeenCalled();
+    });
+
+    it('updateLoginPassword refuses an item that does not match the submitting page', async () => {
+      const { service, api } = await makeService(makeSyncUrl());
+      await service.sync();
+      await expect(service.updateLoginPassword('cipher-1', 'x', 'https://evil.example.org', UriMatchStrategy.Domain))
+        .rejects.toMatchObject({ code: 'denied' });
+      expect(api.updateCipher).not.toHaveBeenCalled();
+    });
   });
 
   it('decrypts folders, attaches folderId, and counts skipped org ciphers', async () => {
@@ -514,7 +659,7 @@ describe('VaultService', () => {
     expect((req as { name: string }).name.startsWith('2.')).toBe(true);
   });
 
-  it('updateCipher preserves the passkey, custom fields, reprompt and cipher key the editor does not model', async () => {
+  it('updateCipher preserves the passkey, custom fields and cipher key the editor does not model, and writes the editor reprompt flag', async () => {
     const sync = makeSync();
     sync.ciphers[0]!.login = {
       username: FIELD_VECTOR.encString,
@@ -522,11 +667,11 @@ describe('VaultService', () => {
       fido2Credentials: [{ credentialId: '2.cid==', keyValue: '2.kv==', rpId: '2.rp==', counter: '2.ct==' }],
     };
     sync.ciphers[0]!.fields = [{ type: 0, name: '2.fn==', value: '2.fv==' }];
-    sync.ciphers[0]!.reprompt = 1;
     sync.ciphers[0]!.key = '2.cipherkey==';
     const { service, api } = await makeService(sync);
     await service.sync(); // populate the raw cache the merge reads from
-    await service.updateCipher('cipher-1', { type: 1, name: 'Renamed', login: { password: 'newpass' } });
+    // reprompt is now editor-controlled, so the editor round-trips it explicitly in the input.
+    await service.updateCipher('cipher-1', { type: 1, name: 'Renamed', reprompt: true, login: { password: 'newpass' } });
     const [, id, req] = (api.updateCipher as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(id).toBe('cipher-1');
     const r = req as { login?: { fido2Credentials?: unknown }; fields?: unknown; reprompt?: number; key?: string };
@@ -643,6 +788,56 @@ describe('VaultService', () => {
     const rawSig = derToRawSignature(base64UrlToBytes(assertion!.signature));
     const ok = await subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pair.publicKey, rawSig as BufferSource, signedData as BufferSource);
     expect(ok).toBe(true);
+  });
+
+  it('passkey assertion reports user-verification honestly (default false; true only when asserted)', async () => {
+    const subtle = globalThis.crypto.subtle;
+    const pair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    const pkcs8 = bytesToBase64Url(new Uint8Array(await subtle.exportKey('pkcs8', pair.privateKey)));
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [{
+        id: 'pk', type: 1, name: await encUnder('Acme', testUserKey), favorite: false, organizationId: null,
+        login: { fido2Credentials: [{
+          credentialId: await encUnder('cred-1', testUserKey),
+          keyValue: await encUnder(pkcs8, testUserKey),
+          rpId: await encUnder('acme.com', testUserKey),
+          counter: await encUnder('0', testUserKey),
+        }] },
+      }],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    const challenge = bytesToBase64Url(new TextEncoder().encode('chal'));
+    // authData flags live at byte 32: UP=0x01, UV=0x04.
+    const flags = async (uv?: boolean) => {
+      const a = await service.getPasskeyAssertion({ rpId: 'acme.com', origin: 'https://acme.com', challenge, ...(uv === undefined ? {} : { userVerified: uv }) });
+      return base64UrlToBytes(a!.authenticatorData)[32]!;
+    };
+    expect(await flags()).toBe(0x01);       // default: present, NOT verified (no silent UV)
+    expect(await flags(false)).toBe(0x01);  // explicit false
+    expect(await flags(true)).toBe(0x05);   // UP | UV when the user was actually verified
+  });
+
+  it('hasMatchingPasskey reports whether a stored passkey matches the rpId / allowed credential', async () => {
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [{
+        id: 'pk', type: 1, name: await encUnder('Acme', testUserKey), favorite: false, organizationId: null,
+        login: { fido2Credentials: [{
+          credentialId: await encUnder('cred-1', testUserKey),
+          keyValue: await encUnder('2.kv==', testUserKey),
+          rpId: await encUnder('acme.com', testUserKey),
+          counter: await encUnder('0', testUserKey),
+        }] },
+      }],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    expect(await service.hasMatchingPasskey({ rpId: 'acme.com' })).toBe(true);
+    expect(await service.hasMatchingPasskey({ rpId: 'other.com' })).toBe(false);
+    expect(await service.hasMatchingPasskey({ rpId: 'acme.com', allowedCredentialIds: ['cred-1'] })).toBe(true);
+    expect(await service.hasMatchingPasskey({ rpId: 'acme.com', allowedCredentialIds: ['nope'] })).toBe(false);
   });
 
   it('reports weak and reused passwords without leaking the passwords', async () => {

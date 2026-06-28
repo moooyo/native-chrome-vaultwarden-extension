@@ -202,6 +202,38 @@ describe('AuthService', () => {
     expect(await sm.getState()).toBe('unlocked');
   });
 
+  describe('verifyMasterPassword (reprompt)', () => {
+    const persist = async (sm: SessionManager) => sm.saveUnlocked({
+      email: KDF_VECTOR.email,
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      expiresAt: 1000,
+      protectedKey: USER_KEY_VECTOR.akey,
+      kdf: 0,
+      kdfIterations: KDF_VECTOR.iterations,
+      userKey: { encKey: new Uint8Array(32), macKey: new Uint8Array(32) },
+    });
+
+    it('returns true for the correct master password without changing lock state', async () => {
+      const { auth, sm } = makeService({});
+      await persist(sm);
+      await expect(auth.verifyMasterPassword(KDF_VECTOR.password)).resolves.toBe(true);
+      expect(await sm.getState()).toBe('unlocked'); // verification must not lock/unlock
+    });
+
+    it('returns false for a wrong master password (MAC failure), never throwing', async () => {
+      const { auth, sm } = makeService({});
+      await persist(sm);
+      await expect(auth.verifyMasterPassword('not-the-password')).resolves.toBe(false);
+      await expect(auth.verifyMasterPassword('')).resolves.toBe(false);
+    });
+
+    it('returns false when no account is persisted', async () => {
+      const { auth } = makeService({});
+      await expect(auth.verifyMasterPassword(KDF_VECTOR.password)).resolves.toBe(false);
+    });
+  });
+
   // --- RSA private key path (tech debt ②) ---
   it('decrypts the PrivateKey on successful login and stores PKCS8 only in session', async () => {
     const api: Partial<ApiClient> = {

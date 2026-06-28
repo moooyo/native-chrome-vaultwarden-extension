@@ -4,6 +4,7 @@ export type AppErrorCode =
   | 'sync_required'
   | 'no_match'
   | 'stale_form'
+  | 'reprompt_required'
   | 'denied';
 
 export class AppError extends Error {

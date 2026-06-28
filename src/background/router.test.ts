@@ -298,7 +298,7 @@ describe('router', () => {
       .resolves.toEqual({ ok: true, data: { totp: { code: '081804', period: 30, remaining: 1 } } });
     await expect(router.handle({ type: 'vault.getTotp', id: 'none' }))
       .resolves.toEqual({ ok: true, data: { totp: null } });
-    expect(getTotpCode).toHaveBeenCalledWith('has');
+    expect(getTotpCode).toHaveBeenCalledWith('has', undefined);
   });
 
   it('routes vault folder mutations to the matching VaultService methods', async () => {

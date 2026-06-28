@@ -79,10 +79,17 @@ describe('encryptCipher', () => {
     expect(req.login?.password == null).toBe(true);
     expect(req.login?.uris == null).toBe(true);
   });
+
+  it('writes the master-password reprompt flag from the editor input (1 when set, 0 when not)', async () => {
+    const on = await encryptCipher({ type: 1, name: 'Protected', reprompt: true, login: { password: 'x' } }, userKey);
+    expect(on.reprompt).toBe(1);
+    const off = await encryptCipher({ type: 1, name: 'Open', login: { password: 'x' } }, userKey);
+    expect(off.reprompt).toBe(0);
+  });
 });
 
 describe('mergeServerManagedFields', () => {
-  it('preserves a passkey, custom fields, passwordHistory, reprompt and cipher key from the original on update', async () => {
+  it('preserves a passkey, custom fields, passwordHistory and cipher key from the original on update', async () => {
     const req = await encryptCipher({ type: 1, name: 'GitHub', login: { username: 'octo', password: 's3cret' } }, userKey);
     const original: CipherResponse = {
       id: 'c1', type: 1,
@@ -106,7 +113,9 @@ describe('mergeServerManagedFields', () => {
     // Non-login server-managed metadata is carried forward verbatim.
     expect(merged.fields).toEqual(original.fields);
     expect(merged.passwordHistory).toEqual(original.passwordHistory);
-    expect(merged.reprompt).toBe(1);
+    // reprompt is now editor-controlled (encryptCipher writes it from the input); the merge must NOT
+    // pull it from the original, so this update (input has no reprompt) clears the original's flag.
+    expect(merged.reprompt).toBe(0);
     expect(merged.key).toBe('2.cipherkey==');
   });
 
@@ -116,7 +125,8 @@ describe('mergeServerManagedFields', () => {
     expect(merged.login?.fido2Credentials == null).toBe(true);
     expect(merged.fields == null).toBe(true);
     expect(merged.passwordHistory == null).toBe(true);
-    expect(merged.reprompt == null).toBe(true);
+    // encryptCipher always writes reprompt (0 here); the merge is a no-op on it.
+    expect(merged.reprompt).toBe(0);
     expect(merged.key == null).toBe(true);
   });
 
@@ -129,6 +139,7 @@ describe('mergeServerManagedFields', () => {
     const merged = mergeServerManagedFields(req, original);
     expect(merged.login == null).toBe(true);
     expect(merged.fields).toEqual(original.fields);
-    expect(merged.reprompt).toBe(1);
+    // reprompt is editor-controlled now and not carried from the original.
+    expect(merged.reprompt).toBe(0);
   });
 });

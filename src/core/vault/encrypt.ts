@@ -20,6 +20,7 @@ export async function encryptCipher(input: CipherInput, key: SymmetricKey): Prom
     name: await encryptToText(input.name, key),
     favorite: input.favorite ?? false,
     folderId: input.folderId ?? null,
+    reprompt: input.reprompt ? 1 : 0,
   };
   if (input.notes) req.notes = await encryptToText(input.notes, key);
 
@@ -45,7 +46,8 @@ export function mergeServerManagedFields(request: CipherRequest, original: Ciphe
   if (original.key != null) request.key = original.key;
   if (original.fields != null) request.fields = original.fields;
   if (original.passwordHistory != null) request.passwordHistory = original.passwordHistory;
-  if (original.reprompt != null) request.reprompt = original.reprompt;
+  // NOTE: `reprompt` is intentionally NOT carried forward here — the editor now models it explicitly
+  // (encryptCipher writes it from the input), so the user can toggle the master-password reprompt flag.
   // Login sub-fields the editor cannot represent (a stored passkey, the password-revision timestamp)
   // must ride along, or the wholesale PUT drops them. Only touch login on login ciphers.
   if (request.type === 1) {

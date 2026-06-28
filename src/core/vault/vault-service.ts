@@ -20,7 +20,7 @@ import { buildEquivalentDomainIndex } from './equivalent-domains.js';
 
 export interface VaultServiceDeps {
   api: ApiClient;
-  auth: Pick<AuthService, 'refreshIfNeeded'>;
+  auth: Pick<AuthService, 'refreshIfNeeded' | 'verifyMasterPassword'>;
   session: SessionManager;
   localStore: KeyValueStore;
   now?: () => number;
@@ -39,6 +39,12 @@ export interface VaultListing {
   folders: FolderSummary[];
   collections: CollectionSummary[];
 }
+
+/** The save/update decision for a captured form submission. */
+export type SaveLoginPrompt =
+  | { action: 'none' }
+  | { action: 'save'; suggestedName: string }
+  | { action: 'update'; cipherId: string; name: string };
 
 export class VaultService {
   constructor(private readonly deps: VaultServiceDeps) {}
@@ -170,10 +176,12 @@ export class VaultService {
    * Decrypt a cipher into editable plaintext for the editor. Unlike getCipherDetail this DOES include
    * secrets (password/totp/card number/etc.) because the editor must round-trip them.
    */
-  async getCipherInput(id: string): Promise<CipherInput | undefined> {
+  async getCipherInput(id: string, masterPassword?: string): Promise<CipherInput | undefined> {
     const decrypted = await this.decryptCipherById(id);
     if (!decrypted || decrypted.undecryptable || decrypted.type === 5) return undefined;
+    await this.assertRepromptCleared(decrypted, masterPassword);
     const input: CipherInput = { type: decrypted.type, name: decrypted.name, favorite: decrypted.favorite };
+    if (decrypted.reprompt) input.reprompt = true;
     if (decrypted.notes) input.notes = decrypted.notes;
     if (decrypted.folderId) input.folderId = decrypted.folderId;
     if (decrypted.type === 1) {
@@ -204,9 +212,22 @@ export class VaultService {
     return auth.accessToken;
   }
 
-  async getField(id: string, field: FieldName): Promise<string | undefined> {
+  /**
+   * Enforce master-password reprompt at the worker boundary: a reprompt-flagged cipher releases its
+   * secrets only after the master password is re-verified. Throws 'reprompt_required' when the proof
+   * is missing or wrong. This is the real security gate — UI prompts are convenience on top of it.
+   */
+  private async assertRepromptCleared(cipher: Pick<DecryptedCipher, 'reprompt'> | undefined, masterPassword?: string): Promise<void> {
+    if (!cipher?.reprompt) return;
+    if (!masterPassword || !(await this.deps.auth.verifyMasterPassword(masterPassword))) {
+      throw new AppError('reprompt_required', 'Master password required to access this item');
+    }
+  }
+
+  async getField(id: string, field: FieldName, masterPassword?: string): Promise<string | undefined> {
     const decrypted = await this.decryptCipherById(id);
     if (!decrypted) return undefined;
+    await this.assertRepromptCleared(decrypted, masterPassword);
     if (field === 'card.number') return decrypted.card?.number;
     if (field === 'card.code') return decrypted.card?.code;
     if (field === 'identity.ssn') return decrypted.identity?.ssn;
@@ -241,9 +262,10 @@ export class VaultService {
   }
 
   /** Generate the current TOTP code for a login, decrypting the secret only inside the worker. */
-  async getTotpCode(id: string): Promise<TotpResult | undefined> {
+  async getTotpCode(id: string, masterPassword?: string): Promise<TotpResult | undefined> {
     const decrypted = await this.decryptCipherById(id);
     if (!decrypted?.totp) return undefined;
+    await this.assertRepromptCleared(decrypted, masterPassword);
     return getTotp(decrypted.totp, (this.deps.now ?? Date.now)());
   }
 
@@ -259,29 +281,45 @@ export class VaultService {
     allowedCredentialIds?: string[];
     userVerified?: boolean;
   }): Promise<PasskeyAssertion | undefined> {
+    const cred = await this.findPasskeyCredential(params.rpId, params.allowedCredentialIds);
+    if (!cred) return undefined;
+    const assertion = await signFido2Assertion(base64UrlToBytes(cred.keyValue), {
+      rpId: params.rpId,
+      origin: params.origin,
+      challenge: params.challenge,
+      counter: cred.counter,
+      // Honest user-verification: the caller (content-script bridge) sets this from the RP's
+      // userVerification requirement AND whether the user actually consented. Default false —
+      // we must never assert UV that did not happen (previously this defaulted to true).
+      userVerified: params.userVerified ?? false,
+    });
+    const result: PasskeyAssertion = { credentialId: cred.credentialId, ...assertion };
+    if (cred.userHandle) result.userHandle = cred.userHandle;
+    return result;
+  }
+
+  /** True when an unexpired stored passkey matches the rpId (and allowedCredentialIds, if given).
+   *  Lets the page decide whether to prompt for consent without signing or revealing key material. */
+  async hasMatchingPasskey(params: { rpId: string; allowedCredentialIds?: string[] }): Promise<boolean> {
+    return (await this.findPasskeyCredential(params.rpId, params.allowedCredentialIds)) !== undefined;
+  }
+
+  /** Find a stored passkey for the rpId. Returns the decrypted credential (incl. private key, which
+   *  stays inside the worker) or undefined. Trashed ciphers never authenticate. */
+  private async findPasskeyCredential(rpId: string, allowedCredentialIds?: string[]) {
     const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
     if (!cache) throw new AppError('sync_required', 'Sync required');
     const userKey = await this.deps.session.loadUserKey();
     if (!userKey) throw new AppError('locked', 'Vault is locked');
     const orgKeys = await this.buildOrgKeys(cache.profile);
-    const allowed = params.allowedCredentialIds;
     for (const cipher of cache.ciphers) {
       if (cipher.type !== 1 || !cipher.login?.fido2Credentials?.length) continue;
       if (cipher.deletedDate) continue; // trashed passkeys must not authenticate
       const decrypted = await decryptCipher(cipher, userKey, orgKeys);
       for (const cred of decrypted?.fido2Credentials ?? []) {
-        if (cred.rpId !== params.rpId) continue;
-        if (allowed?.length && !allowed.includes(cred.credentialId)) continue;
-        const assertion = await signFido2Assertion(base64UrlToBytes(cred.keyValue), {
-          rpId: params.rpId,
-          origin: params.origin,
-          challenge: params.challenge,
-          counter: cred.counter,
-          userVerified: params.userVerified ?? true,
-        });
-        const result: PasskeyAssertion = { credentialId: cred.credentialId, ...assertion };
-        if (cred.userHandle) result.userHandle = cred.userHandle;
-        return result;
+        if (cred.rpId !== rpId) continue;
+        if (allowedCredentialIds?.length && !allowedCredentialIds.includes(cred.credentialId)) continue;
+        return cred;
       }
     }
     return undefined;
@@ -387,6 +425,7 @@ export class VaultService {
           favorite: item.favorite,
         };
         if (item.username) candidate.username = item.username;
+        if (item.reprompt) candidate.reprompt = true;
         return [candidate];
       });
 
@@ -418,6 +457,11 @@ export class VaultService {
     if (!decrypted || decrypted.undecryptable || !bestMatch(decrypted.loginUris, frameUrl, defaultStrategy, equivalentIndex)) {
       throw new AppError('denied', 'Autofill item is not allowed for this page');
     }
+    // Reprompt-protected items must not release secrets into the page. We deliberately do NOT collect
+    // the master password inside a page-injected element; the user must verify in the extension popup.
+    if (decrypted.reprompt) {
+      throw new AppError('reprompt_required', 'This item requires master-password verification in the extension');
+    }
     const out: AutofillCredentials = {};
     if (decrypted.username) out.username = decrypted.username;
     if (decrypted.password) out.password = decrypted.password;
@@ -427,6 +471,79 @@ export class VaultService {
       if (totp) out.totp = totp.code;
     }
     return out;
+  }
+
+  /**
+   * Decide whether a just-submitted credential should be offered for save or update. Compares the
+   * submitted username/password against logins that match the page (by URI). Reprompt-protected items
+   * are skipped (never revealed or auto-updated from a page). Returns 'none' when already stored.
+   */
+  async checkSaveLogin(
+    frameUrl: string,
+    submitted: { username?: string; password: string },
+    defaultStrategy: UriMatchStrategySetting,
+  ): Promise<SaveLoginPrompt> {
+    if (!submitted.password) return { action: 'none' };
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    if (!cache) return { action: 'none' };
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) return { action: 'none' };
+    const orgKeys = await this.buildOrgKeys(cache.profile);
+    const equivalentIndex = await this.loadEquivalentIndex();
+    const username = submitted.username?.trim().toLowerCase();
+    for (const cipher of cache.ciphers) {
+      if (cipher.type !== 1 || cipher.deletedDate) continue;
+      const decrypted = await decryptCipher(cipher, userKey, orgKeys);
+      if (!decrypted || decrypted.undecryptable || decrypted.reprompt) continue;
+      if (!bestMatch(decrypted.loginUris, frameUrl, defaultStrategy, equivalentIndex)) continue;
+      const sameUser = username ? decrypted.username?.trim().toLowerCase() === username : !decrypted.username;
+      if (!sameUser) continue;
+      if (decrypted.password === submitted.password) return { action: 'none' }; // already stored
+      return { action: 'update', cipherId: decrypted.id, name: decrypted.name };
+    }
+    // A new credential: offer to save it whether or not other accounts exist for this site.
+    return { action: 'save', suggestedName: hostnameOf(frameUrl) };
+  }
+
+  /** Create a new login cipher from a captured submission, scoped to the submitting page's origin. */
+  async saveLogin(frameUrl: string, username: string | undefined, password: string): Promise<VaultListing> {
+    if (!password) throw new AppError('error', 'A password is required to save a login');
+    const userKey = await this.requireUserKey();
+    const token = await this.requireToken();
+    const origin = originOf(frameUrl);
+    const input: CipherInput = {
+      type: 1,
+      name: hostnameOf(frameUrl),
+      login: { password, ...(username ? { username } : {}), ...(origin ? { uris: [{ uri: origin }] } : {}) },
+    };
+    await this.deps.api.createCipher(token, await encryptCipher(input, userKey));
+    return this.sync();
+  }
+
+  /**
+   * Update an existing login's password from a captured submission. Verifies the target still matches
+   * the submitting page (a page cannot rewrite arbitrary ciphers) and refuses reprompt-protected items.
+   */
+  async updateLoginPassword(
+    cipherId: string,
+    password: string,
+    frameUrl: string,
+    defaultStrategy: UriMatchStrategySetting,
+  ): Promise<VaultListing> {
+    if (!password) throw new AppError('error', 'A password is required');
+    const decrypted = await this.decryptCipherById(cipherId);
+    if (!decrypted || decrypted.undecryptable || decrypted.type !== 1) {
+      throw new AppError('denied', 'Login update is not allowed for this item');
+    }
+    if (decrypted.reprompt) throw new AppError('reprompt_required', 'This item requires master-password verification in the extension');
+    const equivalentIndex = await this.loadEquivalentIndex();
+    if (!bestMatch(decrypted.loginUris, frameUrl, defaultStrategy, equivalentIndex)) {
+      throw new AppError('denied', 'Login update is not allowed for this page');
+    }
+    const input = await this.getCipherInput(cipherId);
+    if (!input) throw new AppError('denied', 'Login update is not allowed for this item');
+    input.login = { ...(input.login ?? {}), password };
+    return this.updateCipher(cipherId, input);
   }
 
   private async decryptSummaries(ciphers: CipherResponse[], userKey: SymmetricKey, orgKeys: Map<string, SymmetricKey>): Promise<CipherSummary[]> {
@@ -462,6 +579,7 @@ export class VaultService {
             if (decrypted.username) summary.username = decrypted.username;
             if (decrypted.totp) summary.hasTotp = true;
             if (decrypted.fido2Credentials?.length) summary.hasPasskey = true;
+            if (decrypted.reprompt) summary.reprompt = true;
             if (decrypted.organizationId) summary.organizationId = decrypted.organizationId;
             if (decrypted.folderId) summary.folderId = decrypted.folderId;
             if (decrypted.collectionIds) summary.collectionIds = decrypted.collectionIds;
@@ -526,4 +644,22 @@ function bestMatch(
 
 function matchScore(matchType: UriMatchStrategySetting): number {
   return AUTOFILL_MATCH_SCORES[matchType] ?? 99;
+}
+
+/** The hostname of a URL (for a default cipher name), falling back to the raw string. */
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname || url;
+  } catch {
+    return url;
+  }
+}
+
+/** The origin of a URL (the saved login's URI), or undefined when it cannot be parsed. */
+function originOf(url: string): string | undefined {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
 }

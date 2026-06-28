@@ -1,7 +1,10 @@
 import { sendRequest, type AutofillCandidate, type AutofillCredentials } from '../messaging/protocol.js';
+import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
 import { fillLoginForm } from './fill.js';
 import { detectLoginForms, type DetectedLoginForm } from './form-detection.js';
 import { createAutofillPopover } from './popover.js';
+import { startSaveCapture, type CapturedLogin } from './capture.js';
+import { createSaveBar } from './save-bar.js';
 
 type FrameUrlProvider = () => string;
 
@@ -12,6 +15,70 @@ export function startAutofill(frameUrlOrProvider: string | FrameUrlProvider = ()
   attach();
   const observer = new MutationObserver(debounce(attach, 250));
   observer.observe(document.documentElement, { childList: true, subtree: true });
+  startSaveCapture((login) => void handleCapture(getFrameUrl, login));
+}
+
+// Track the last credential we acted on (and the ones the user dismissed) so a submit doesn't
+// re-prompt for the same value. Keyed by frame URL + username + password.
+let lastCaptureKey = '';
+const dismissedCaptures = new Set<string>();
+
+function captureKey(frameUrl: string, login: CapturedLogin): string {
+  return `${frameUrl}\n${login.username ?? ''}\n${login.password}`;
+}
+
+async function handleCapture(getFrameUrl: FrameUrlProvider, login: CapturedLogin): Promise<void> {
+  const frameUrl = getFrameUrl();
+  if (!isHttpUrl(frameUrl)) return;
+  const key = captureKey(frameUrl, login);
+  if (key === lastCaptureKey || dismissedCaptures.has(key)) return;
+  lastCaptureKey = key;
+  const response = await sendRequest({
+    type: 'autofill.checkSaveLogin',
+    frameUrl,
+    ...(login.username ? { username: login.username } : {}),
+    password: login.password,
+  });
+  if (!response.ok || !isSaveLoginPrompt(response.data)) return;
+  const prompt = response.data;
+  if (prompt.action === 'none') return;
+  showSaveBar(frameUrl, login, prompt, key);
+}
+
+function showSaveBar(frameUrl: string, login: CapturedLogin, prompt: Exclude<SaveLoginPrompt, { action: 'none' }>, key: string): void {
+  const onDismiss = () => dismissedCaptures.add(key);
+  if (prompt.action === 'save') {
+    createSaveBar({
+      message: `Save this login for ${hostLabel(frameUrl)} in Vaultwarden?`,
+      actionLabel: 'Save',
+      onAction: () => void sendRequest({
+        type: 'autofill.saveLogin',
+        frameUrl,
+        ...(login.username ? { username: login.username } : {}),
+        password: login.password,
+      }),
+      onDismiss,
+    });
+  } else {
+    createSaveBar({
+      message: `Update the saved password for “${prompt.name}”?`,
+      actionLabel: 'Update',
+      onAction: () => void sendRequest({ type: 'autofill.updateLogin', cipherId: prompt.cipherId, frameUrl, password: login.password }),
+      onDismiss,
+    });
+  }
+}
+
+function isSaveLoginPrompt(data: unknown): data is SaveLoginPrompt {
+  return isRecord(data) && typeof data.action === 'string' && ['none', 'save', 'update'].includes(data.action);
+}
+
+function hostLabel(frameUrl: string): string {
+  try {
+    return new URL(frameUrl).hostname || frameUrl;
+  } catch {
+    return frameUrl;
+  }
 }
 
 function attachPopovers(getFrameUrl: FrameUrlProvider): void {
@@ -125,6 +192,8 @@ function messageForError(code: string, fallback: string): string {
       return 'Sync required';
     case 'no_match':
       return 'No matching logins';
+    case 'reprompt_required':
+      return 'Protected item — open the extension to verify';
     case 'denied':
       return 'Autofill denied for this page';
     default:
