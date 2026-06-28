@@ -29,6 +29,16 @@ export function createRouter(deps: RouterDeps) {
           case 'auth.login':
             if (!deps.auth.login) throw new Error('auth.login is not wired');
             return { ok: true, data: await deps.auth.login({ email: request.email, masterPassword: request.masterPassword }) };
+          case 'auth.register':
+            if (!deps.auth.register) throw new Error('auth.register is not wired');
+            return {
+              ok: true,
+              data: await deps.auth.register(
+                request.name === undefined
+                  ? { email: request.email, masterPassword: request.masterPassword }
+                  : { email: request.email, masterPassword: request.masterPassword, name: request.name },
+              ),
+            };
           case 'auth.submitTwoFactor':
             if (!deps.auth.submitTwoFactor) throw new Error('auth.submitTwoFactor is not wired');
             return {

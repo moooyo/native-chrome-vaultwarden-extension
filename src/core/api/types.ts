@@ -36,6 +36,18 @@ export interface RefreshTokenResponse {
   token_type: string;
 }
 
+/** Client-side account registration payload (RegisterData). All key material is derived locally. */
+export interface RegisterRequest {
+  email: string;
+  name?: string;
+  masterPasswordHash: string;
+  masterPasswordHint?: string;
+  key: string;
+  keys: { publicKey: string; encryptedPrivateKey: string };
+  kdf: number;
+  kdfIterations: number;
+}
+
 export interface OrganizationResponse {
   id: string;
   /** RSA-OAEP wrapped organization symmetric key (encType=4), unwrapped with the account private key. */

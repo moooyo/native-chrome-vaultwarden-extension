@@ -50,6 +50,32 @@ describe('AuthService', () => {
     expect(calls[0]?.[0].masterPasswordHash).toBe(KDF_VECTOR_600K.masterPasswordHashB64);
   });
 
+  it('registers with client-derived key material, then auto-logs-in', async () => {
+    const register = vi.fn().mockResolvedValue(undefined);
+    const passwordLogin = vi.fn().mockResolvedValue({
+      kind: 'success' as const,
+      data: {
+        access_token: 'access', expires_in: 3600, refresh_token: 'refresh', token_type: 'Bearer',
+        Key: USER_KEY_VECTOR_600K.akey, Kdf: 0 as const, KdfIterations: KDF_VECTOR_600K.iterations,
+      },
+    });
+    const api: Partial<ApiClient> = {
+      register,
+      prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+      passwordLogin,
+    };
+    const { auth, sm } = makeService(api);
+    await expect(auth.register({ email: KDF_VECTOR_600K.email, masterPassword: KDF_VECTOR_600K.password, name: 'Tester' }))
+      .resolves.toEqual({ kind: 'unlocked' });
+    expect(register).toHaveBeenCalledTimes(1);
+    const payload = (register.mock.calls[0] as [{ masterPasswordHash: string; key: string; keys: { publicKey: string }; name?: string }])[0];
+    expect(payload.masterPasswordHash).toBe(KDF_VECTOR_600K.masterPasswordHashB64);
+    expect(payload.key.startsWith('2.')).toBe(true);
+    expect(payload.keys.publicKey.length).toBeGreaterThan(0);
+    expect(payload.name).toBe('Tester');
+    expect(await sm.getState()).toBe('unlocked');
+  });
+
   it('keeps pending login in memory when 2FA is required', async () => {
     const api: Partial<ApiClient> = {
       prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),

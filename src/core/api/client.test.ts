@@ -343,3 +343,29 @@ describe('ApiClient ciphers', () => {
     });
   });
 });
+
+describe('ApiClient register', () => {
+  it('POSTs /identity/accounts/register with the registration payload', async () => {
+    const fetchFn = vi.fn(async () => textResponse('', 200));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com/', fetchFn, localStore: createMemoryStore() });
+    const data = {
+      email: 'new@example.com', masterPasswordHash: 'hash', key: '2.k',
+      keys: { publicKey: 'pub', encryptedPrivateKey: '2.priv' }, kdf: 0, kdfIterations: 600000,
+    };
+    await expect(api.register(data)).resolves.toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/identity/accounts/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  });
+
+  it('throws ApiHttpError when registration is rejected', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ message: 'taken' }, 400));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com/', fetchFn, localStore: createMemoryStore() });
+    const err = await captureApiHttpError(api.register({
+      email: 'x', masterPasswordHash: 'h', key: '2.k', keys: { publicKey: 'p', encryptedPrivateKey: '2.e' }, kdf: 0, kdfIterations: 600000,
+    }));
+    expect(err.status).toBe(400);
+  });
+});

@@ -9,6 +9,7 @@ import { icon } from '../icons.js';
 type View =
   | { kind: 'loading' }
   | { kind: 'loggedOut'; error?: string }
+  | { kind: 'register'; error?: string }
   | { kind: 'twoFactor'; providers: Array<0 | 1>; error?: string }
   | { kind: 'locked'; error?: string }
   | { kind: 'unlocked'; error?: string };
@@ -58,6 +59,7 @@ function render(view: View) {
     return;
   }
   if (view.kind === 'loggedOut') return renderLogin(view.error);
+  if (view.kind === 'register') return renderRegister(view.error);
   if (view.kind === 'twoFactor') return renderTwoFactor(view.providers, view.error);
   if (view.kind === 'locked') return renderLocked(view.error);
   return renderUnlockedShell(view.error);
@@ -91,9 +93,11 @@ function renderLogin(error?: string) {
           <input id="password" class="input" type="password" autocomplete="current-password" required />
         </label>
         <button type="submit" class="btn btn-block">${icon('unlock')}<span>Log in</span></button>
+        <button id="goRegister" type="button" class="btn btn-secondary btn-block">${icon('user')}<span>Create account</span></button>
         ${errorNote(error)}
       </form>
     </div>`;
+  document.getElementById('goRegister')!.addEventListener('click', () => render({ kind: 'register' }));
   document.getElementById('loginForm')!.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (isPending) return;
@@ -116,6 +120,59 @@ function renderLogin(error?: string) {
           liveButton.disabled = false;
           liveForm.querySelectorAll('input').forEach(input => input.disabled = false);
         }
+      }
+    }
+  });
+}
+
+function renderRegister(error?: string) {
+  app.innerHTML = `
+    <div class="auth">
+      ${authHead('Create account', 'Set up a new vault on your self-hosted server')}
+      <form id="registerForm">
+        <label class="field">
+          <span class="field-label">Email</span>
+          <input id="regEmail" class="input" type="email" autocomplete="username" required />
+        </label>
+        <label class="field">
+          <span class="field-label">Name (optional)</span>
+          <input id="regName" class="input" type="text" autocomplete="name" />
+        </label>
+        <label class="field">
+          <span class="field-label">Master password</span>
+          <input id="regPassword" class="input" type="password" autocomplete="new-password" required />
+        </label>
+        <label class="field">
+          <span class="field-label">Confirm master password</span>
+          <input id="regConfirm" class="input" type="password" autocomplete="new-password" required />
+        </label>
+        <p class="note muted"><span>Your master password can't be recovered. It never leaves this device.</span></p>
+        <button type="submit" class="btn btn-block">${icon('shield')}<span>Create account</span></button>
+        <button id="backToLogin" type="button" class="btn btn-secondary btn-block">${icon('back')}<span>Back to sign in</span></button>
+        ${errorNote(error)}
+      </form>
+    </div>`;
+  document.getElementById('backToLogin')!.addEventListener('click', () => render({ kind: 'loggedOut' }));
+  document.getElementById('registerForm')!.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (isPending) return;
+    const email = (document.getElementById('regEmail') as HTMLInputElement).value.trim();
+    const name = (document.getElementById('regName') as HTMLInputElement).value.trim();
+    const masterPassword = (document.getElementById('regPassword') as HTMLInputElement).value;
+    const confirm = (document.getElementById('regConfirm') as HTMLInputElement).value;
+    if (masterPassword.length < 8) return render({ kind: 'register', error: 'Master password must be at least 8 characters' });
+    if (masterPassword !== confirm) return render({ kind: 'register', error: 'Passwords do not match' });
+    isPending = true;
+    const form = document.getElementById('registerForm') as HTMLFormElement;
+    form.querySelectorAll('input, button').forEach((el) => ((el as HTMLInputElement | HTMLButtonElement).disabled = true));
+    try {
+      const result = await sendRequest(name ? { type: 'auth.register', email, masterPassword, name } : { type: 'auth.register', email, masterPassword });
+      await handleAuthResult(result);
+    } finally {
+      isPending = false;
+      if (currentViewKind === 'register') {
+        const liveForm = document.getElementById('registerForm') as HTMLFormElement | null;
+        liveForm?.querySelectorAll('input, button').forEach((el) => ((el as HTMLInputElement | HTMLButtonElement).disabled = false));
       }
     }
   });
@@ -1276,6 +1333,8 @@ async function handleAuthResult(response: Awaited<ReturnType<typeof sendRequest>
     // user stays in context (e.g. a 2FA failure stays on the 2FA form).
     if (currentViewKind === 'twoFactor') {
       render({ kind: 'twoFactor', providers: twoFactorProviders, error: response.error.message });
+    } else if (currentViewKind === 'register') {
+      render({ kind: 'register', error: response.error.message });
     } else {
       render({ kind: 'loggedOut', error: response.error.message });
     }

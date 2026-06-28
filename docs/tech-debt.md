@@ -66,12 +66,19 @@
     Vaultwarden（2025.12.0）跑通 登录→建→sync→解密往返→改→删。
   - 仍待：个人条目之外的**组织条目编辑 / 软删除回收站 / SshKey(type=5) 编辑 / 多 URI 编辑**。
 
+- **注册（Registration）** ✅（本次落地，真实服务端验证）
+  - `crypto/registration.buildRegistration(email, password, iters)`：客户端零知识生成——随机 64B
+    UserKey（用 stretched master key 包成 `key`）+ 新 RSA-2048 keypair（公钥 SPKI base64、私钥 PKCS8
+    用 UserKey 包成 `encryptedPrivateKey`）+ `masterPasswordHash`。往返单测（UserKey 解包、RSA 公私钥配对）。
+  - `ApiClient.register` → `POST /identity/accounts/register`（RegisterData）；`AuthService.register`
+    生成密钥后注册并**自动登录**；路由 `auth.register`；popup 登录页「Create account」→ 注册表单
+    （邮箱/姓名/主密码/确认，长度与一致性校验）。
+  - **真实服务端验证**：`test/live/crud.live.test.ts` 注册全新账户→登录→建条目并在新账户密钥下解密成功。
+
 ## 仍待实现 / 明确超范围
 
-- **Argon2id KDF**：需引入 WASM KDF。`prelogin`/登录成功两处守卫均抛
+- **Argon2id KDF**（按要求暂忽略）：需引入 WASM KDF。`prelogin`/登录成功两处守卫均抛
   `'Argon2id accounts are not supported in this MVP'`（`src/core/session/auth-service.ts`）。
-- **注册（Registration）**：客户端账户密钥生成 + register 端点尚未实现（对称加密原语已具备，
-  仍需随机 UserKey 生成、RSA keypair 生成与私钥包裹、register 契约）。
 
 ## 路线图指针（按里程碑）
 
@@ -80,6 +87,7 @@
 | M5 | ciphers/folders **CRUD** ✅ + 密码生成器 ✅（含生成历史）|
 | M6 | **TOTP** 验证码生成 / 显示 / **填充** ✅（已完整交付）|
 | M7 | **passkeys**（`fido2Credentials` 私钥，WebAuthn 独立签名）|
+| 注册 | 客户端账户密钥生成 + register 端点 ✅（已交付）|
 | M8 | **Sends** 分享 CRUD + 加密 |
 
 ## 路线图之外、但属 Bitwarden 客户端标配（建议纳入规划）

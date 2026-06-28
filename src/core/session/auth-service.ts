@@ -1,6 +1,7 @@
 import type { ApiClient, PasswordLoginInput, PasswordLoginResult } from '../api/client.js';
 import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey, assertKdfIterationsFloor } from '../crypto/kdf.js';
 import { unwrapSymmetricKey, decryptPrivateKey } from '../crypto/keys.js';
+import { buildRegistration } from '../crypto/registration.js';
 import type { SessionManager, SessionState } from './session-manager.js';
 
 export type AuthResult =
@@ -27,6 +28,22 @@ export class AuthService {
 
   constructor(private readonly deps: AuthServiceDeps) {
     this.now = deps.now ?? (() => Date.now());
+  }
+
+  /** Register a new PBKDF2 account (client-side key generation), then auto-log-in. */
+  async register(input: { email: string; masterPassword: string; name?: string }): Promise<AuthResult> {
+    const email = input.email.trim().toLowerCase();
+    const reg = await buildRegistration(email, input.masterPassword);
+    await this.deps.api.register({
+      email,
+      masterPasswordHash: reg.masterPasswordHash,
+      key: reg.key,
+      keys: reg.keys,
+      kdf: reg.kdf,
+      kdfIterations: reg.kdfIterations,
+      ...(input.name ? { name: input.name } : {}),
+    });
+    return this.login({ email, masterPassword: input.masterPassword });
   }
 
   async login(input: { email: string; masterPassword: string }): Promise<AuthResult> {

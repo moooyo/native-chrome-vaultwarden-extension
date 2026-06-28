@@ -6,6 +6,7 @@ import type {
   LoginSuccessResponse,
   PreloginResponse,
   RefreshTokenResponse,
+  RegisterRequest,
   SyncResponse,
   TwoFactorRequiredResponse,
 } from './types.js';
@@ -94,6 +95,15 @@ export class ApiClient {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ email: email.trim().toLowerCase() }),
+    });
+  }
+
+  /** Register a new account. All key material in `data` is derived client-side (zero-knowledge). */
+  async register(data: RegisterRequest): Promise<void> {
+    await this.noBodyRequest('/identity/accounts/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(data),
     });
   }
 
