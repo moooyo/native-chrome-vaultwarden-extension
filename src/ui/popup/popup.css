@@ -163,6 +163,11 @@ body { width: 360px; }
 .footer-tools { display: flex; gap: var(--s2); margin-bottom: var(--s2); }
 .footer-tools .btn { flex: 1; }
 .pin-unlock { display: grid; gap: var(--s2); margin-top: var(--s2); padding-top: var(--s2); border-top: 1px solid var(--line); }
+.account-list { display: grid; gap: var(--s1); }
+.account-row { display: flex; align-items: center; gap: var(--s2); font-size: 0.8125rem; }
+.account-email { display: flex; align-items: center; gap: var(--s1); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-email svg { width: 0.9rem; height: 0.9rem; flex: none; color: var(--ink-faint); }
+.account-remove { color: var(--danger); }
 
 /* Sync affordance spins while a sync is in flight. */
 .icon-btn.is-spinning svg { animation: spin 0.7s linear infinite; }

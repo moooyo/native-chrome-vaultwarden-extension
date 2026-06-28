@@ -129,6 +129,22 @@ export class AuthService {
     return Boolean(await this.deps.session.getPinProtectedUserKey());
   }
 
+  /** All logged-in accounts (active flagged), for the account switcher. */
+  listAccounts() {
+    return this.deps.session.listAccounts();
+  }
+
+  /** Activate another logged-in account; the vault locks so the user re-unlocks it. */
+  async switchAccount(email: string): Promise<void> {
+    this.pendingLogin = undefined;
+    await this.deps.session.switchAccount(email);
+  }
+
+  async removeAccount(email: string): Promise<void> {
+    this.pendingLogin = undefined;
+    await this.deps.session.removeAccount(email);
+  }
+
   private async derivePinKey(pin: string, email: string, iterations: number): Promise<SymmetricKey> {
     return stretchMasterKey(await deriveMasterKey(pin, email, iterations));
   }

@@ -32,6 +32,12 @@ const AUTH_KEY = 'auth';
 const USER_KEY_KEY = 'userKey';
 const PRIVATE_KEY_KEY = 'privateKey';
 const PIN_KEY = 'pinProtectedUserKey';
+const ACCOUNTS_KEY = 'accounts';
+
+export interface AccountSummary {
+  email: string;
+  active: boolean;
+}
 
 export class SessionManager {
   constructor(private readonly deps: SessionManagerDeps) {}
@@ -46,6 +52,7 @@ export class SessionManager {
   async saveUnlocked(input: SaveUnlockedInput): Promise<void> {
     const { userKey, privateKey, ...auth } = input;
     await this.deps.localStore.set(AUTH_KEY, auth);
+    await this.upsertAccount(auth);
     await this.saveUserKey(userKey);
     if (privateKey) {
       await this.savePrivateKey(privateKey);
@@ -57,7 +64,9 @@ export class SessionManager {
   async saveTokens(tokens: { accessToken: string; refreshToken: string; expiresAt: number }): Promise<void> {
     const auth = await this.getPersistedAuth();
     if (!auth) throw new Error('cannot save tokens without persisted auth');
-    await this.deps.localStore.set(AUTH_KEY, { ...auth, ...tokens });
+    const updated = { ...auth, ...tokens };
+    await this.deps.localStore.set(AUTH_KEY, updated);
+    await this.upsertAccount(updated);
   }
 
   async getPersistedAuth(): Promise<PersistedAuth | undefined> {
@@ -80,11 +89,67 @@ export class SessionManager {
     await this.deps.sessionStore.remove(PRIVATE_KEY_KEY);
   }
 
+  /** Log out the active account: drop it from the registry, falling back to a remaining account
+   *  (left locked) or fully logged out. Always clears the in-memory keys and PIN. */
   async logout(): Promise<void> {
-    await this.deps.sessionStore.remove(USER_KEY_KEY);
-    await this.deps.sessionStore.remove(PRIVATE_KEY_KEY);
-    await this.deps.localStore.remove(AUTH_KEY);
+    await this.lock();
     await this.deps.localStore.remove(PIN_KEY);
+    const active = (await this.getPersistedAuth())?.email;
+    const accounts = await this.loadAccounts();
+    if (active) delete accounts[active];
+    await this.persistAccountsAndActivate(accounts);
+  }
+
+  /** All logged-in accounts (the active one flagged), for the account switcher. */
+  async listAccounts(): Promise<AccountSummary[]> {
+    const accounts = await this.loadAccounts();
+    const active = (await this.getPersistedAuth())?.email;
+    return Object.keys(accounts).map((email) => ({ email, active: email === active }));
+  }
+
+  /** Make another logged-in account active. The vault is locked (PIN cleared) so the user re-unlocks it. */
+  async switchAccount(email: string): Promise<void> {
+    const accounts = await this.loadAccounts();
+    const target = accounts[email];
+    if (!target) throw new Error('unknown account');
+    await this.lock();
+    await this.deps.localStore.remove(PIN_KEY);
+    await this.deps.localStore.set(AUTH_KEY, target);
+  }
+
+  /** Remove an account. If it was active, fall back to a remaining account (locked) or logged out. */
+  async removeAccount(email: string): Promise<void> {
+    const accounts = await this.loadAccounts();
+    const wasActive = (await this.getPersistedAuth())?.email === email;
+    delete accounts[email];
+    if (wasActive) {
+      await this.lock();
+      await this.deps.localStore.remove(PIN_KEY);
+      await this.persistAccountsAndActivate(accounts);
+    } else {
+      await this.deps.localStore.set(ACCOUNTS_KEY, accounts);
+    }
+  }
+
+  private async loadAccounts(): Promise<Record<string, PersistedAuth>> {
+    return (await this.deps.localStore.get<Record<string, PersistedAuth>>(ACCOUNTS_KEY)) ?? {};
+  }
+
+  private async upsertAccount(auth: PersistedAuth): Promise<void> {
+    const accounts = await this.loadAccounts();
+    accounts[auth.email] = auth;
+    await this.deps.localStore.set(ACCOUNTS_KEY, accounts);
+  }
+
+  /** Persist the registry and point AUTH at a remaining account, or clear it when none remain. */
+  private async persistAccountsAndActivate(accounts: Record<string, PersistedAuth>): Promise<void> {
+    await this.deps.localStore.set(ACCOUNTS_KEY, accounts);
+    const remaining = Object.values(accounts)[0];
+    if (remaining) {
+      await this.deps.localStore.set(AUTH_KEY, remaining);
+    } else {
+      await this.deps.localStore.remove(AUTH_KEY);
+    }
   }
 
   /** PIN-protected UserKey (encType=2 wrapped by a PIN-derived key). Persisted to enable PIN unlock. */

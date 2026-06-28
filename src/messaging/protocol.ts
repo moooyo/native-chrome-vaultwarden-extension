@@ -1,6 +1,6 @@
 import browser from 'webextension-polyfill';
 import type { AuthResult } from '../core/session/auth-service.js';
-import type { SessionState } from '../core/session/session-manager.js';
+import type { SessionState, AccountSummary } from '../core/session/session-manager.js';
 import type { CipherInput, CipherSummary, CollectionSummary, DecryptedCipher, FieldName, FolderSummary } from '../core/vault/models.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 import type { TotpResult } from '../core/vault/totp.js';
@@ -38,6 +38,9 @@ export type RequestMessage =
   | { type: 'auth.pinStatus' }
   | { type: 'auth.lock' }
   | { type: 'auth.logout' }
+  | { type: 'auth.listAccounts' }
+  | { type: 'auth.switchAccount'; email: string }
+  | { type: 'auth.removeAccount'; email: string }
   | { type: 'vault.sync' }
   | { type: 'vault.listItems' }
   | { type: 'vault.getField'; id: string; field: FieldName }
@@ -74,6 +77,7 @@ export type ResponseMessage =
   | { ok: true; data: { imported: number } }
   | { ok: true; data: { enabled: boolean } }
   | { ok: true; data: { assertion: PasskeyAssertion | null } }
+  | { ok: true; data: { accounts: AccountSummary[] } }
   | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting; lockTimeout: LockTimeoutSetting } }
   | { ok: true; data: null }
   | { ok: true; data: AutofillCandidate[] }

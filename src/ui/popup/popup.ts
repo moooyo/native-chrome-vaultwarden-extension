@@ -363,6 +363,7 @@ function renderUnlockedShell(error?: string) {
         <button id="exportVault" class="btn btn-secondary btn-sm" type="button">${icon('logout')}<span>Export</span></button>
         <button id="importVault" class="btn btn-secondary btn-sm" type="button">${icon('plus')}<span>Import</span></button>
         <button id="pinBtn" class="btn btn-secondary btn-sm" type="button">${icon('lock')}<span>PIN</span></button>
+        <button id="accountsBtn" class="btn btn-secondary btn-sm" type="button">${icon('user')}<span>Accounts</span></button>
         <input id="importFile" type="file" accept="application/json,.json" hidden />
       </div>
       <div id="footerStatus" class="detail-status"></div>
@@ -705,6 +706,42 @@ function bindExportImport(): void {
   });
 
   document.getElementById('pinBtn')!.addEventListener('click', () => void openPinEditor(setFooterStatus));
+  document.getElementById('accountsBtn')!.addEventListener('click', () => void openAccountSwitcher());
+}
+
+/** Account switcher: list logged-in accounts, switch/remove, or add another. Rendered into #footerStatus. */
+async function openAccountSwitcher(): Promise<void> {
+  const host = document.getElementById('footerStatus');
+  if (!host) return;
+  const response = await sendRequest({ type: 'auth.listAccounts' });
+  if (!response.ok) return;
+  const accounts = (response.data as { accounts: Array<{ email: string; active: boolean }> }).accounts;
+  const rows = accounts.map((a) => `
+    <div class="account-row">
+      <span class="account-email">${a.active ? icon('checkCircle') : icon('user')}<span>${escapeHtml(a.email)}</span></span>
+      ${a.active ? '' : `<button class="link-btn" data-switch="${escapeHtml(a.email)}" type="button">Switch</button>`}
+      <button class="link-btn account-remove" data-remove="${escapeHtml(a.email)}" type="button">Remove</button>
+    </div>`).join('');
+  host.innerHTML = `<div class="account-list">${rows}
+    <button id="accountAdd" class="btn btn-secondary btn-sm btn-block" type="button">${icon('plus')}<span>Add account</span></button></div>`;
+  document.getElementById('accountAdd')!.addEventListener('click', () => render({ kind: 'loggedOut' }));
+  for (const btn of host.querySelectorAll<HTMLButtonElement>('button[data-switch]')) {
+    btn.addEventListener('click', async () => {
+      const r = await sendRequest({ type: 'auth.switchAccount', email: btn.dataset.switch! });
+      if (r.ok) render({ kind: 'locked' });
+    });
+  }
+  for (const btn of host.querySelectorAll<HTMLButtonElement>('button[data-remove]')) {
+    btn.addEventListener('click', async () => {
+      const r = await sendRequest({ type: 'auth.removeAccount', email: btn.dataset.remove! });
+      if (!r.ok) return;
+      const state = await sendRequest({ type: 'auth.getState' });
+      if (state.ok) {
+        vaultItems = []; vaultFolders = []; vaultCollections = []; selectedFolderId = null; selectedCollectionId = null;
+        render({ kind: (state.data as { state: 'loggedOut' | 'locked' | 'unlocked' }).state });
+      }
+    });
+  }
 }
 
 /** Manage the PIN unlock: set a new PIN, or remove an existing one. Rendered into #footerStatus. */

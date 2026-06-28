@@ -170,4 +170,67 @@ describe('SessionManager', () => {
       expect(await sm.loadPrivateKey()).toBeUndefined();
     });
   });
+
+  describe('multi-account', () => {
+    function newSm() {
+      return new SessionManager({ localStore: createMemoryStore(), sessionStore: createMemoryStore() });
+    }
+    async function addAccount(sm: SessionManager, email: string) {
+      await sm.saveUnlocked({
+        email, accessToken: 'a', refreshToken: 'r', expiresAt: 999999,
+        protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 600000, userKey,
+      });
+    }
+
+    it('registers each logged-in account and flags the active one', async () => {
+      const sm = newSm();
+      await addAccount(sm, 'a@x.com');
+      await addAccount(sm, 'b@x.com');
+      const accounts = await sm.listAccounts();
+      expect(accounts.map((a) => a.email).sort()).toEqual(['a@x.com', 'b@x.com']);
+      expect(accounts.find((a) => a.active)?.email).toBe('b@x.com');
+    });
+
+    it('switchAccount activates another account and locks the vault', async () => {
+      const sm = newSm();
+      await addAccount(sm, 'a@x.com');
+      await addAccount(sm, 'b@x.com');
+      await sm.switchAccount('a@x.com');
+      expect(await sm.getState()).toBe('locked');
+      expect((await sm.getPersistedAuth())?.email).toBe('a@x.com');
+    });
+
+    it('switchAccount rejects an unknown account', async () => {
+      const sm = newSm();
+      await addAccount(sm, 'a@x.com');
+      await expect(sm.switchAccount('nope@x.com')).rejects.toThrow('unknown account');
+    });
+
+    it('removeAccount drops a non-active account and keeps the active session', async () => {
+      const sm = newSm();
+      await addAccount(sm, 'a@x.com');
+      await addAccount(sm, 'b@x.com');
+      await sm.removeAccount('a@x.com');
+      expect((await sm.listAccounts()).map((a) => a.email)).toEqual(['b@x.com']);
+      expect(await sm.getState()).toBe('unlocked');
+    });
+
+    it('logout drops the active account and falls back to a remaining one (locked)', async () => {
+      const sm = newSm();
+      await addAccount(sm, 'a@x.com');
+      await addAccount(sm, 'b@x.com');
+      await sm.logout();
+      expect((await sm.listAccounts()).map((a) => a.email)).toEqual(['a@x.com']);
+      expect((await sm.getPersistedAuth())?.email).toBe('a@x.com');
+      expect(await sm.getState()).toBe('locked');
+    });
+
+    it('logout with a single account clears everything', async () => {
+      const sm = newSm();
+      await addAccount(sm, 'a@x.com');
+      await sm.logout();
+      expect(await sm.listAccounts()).toEqual([]);
+      expect(await sm.getState()).toBe('loggedOut');
+    });
+  });
 });

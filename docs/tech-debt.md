@@ -103,7 +103,10 @@
   isPinEnabled`——用 PIN 经 PBKDF2+stretch 派生 key 把 UserKey 包成 `pinProtectedUserKey` 存 local，
   解锁时反解（错误 PIN 触发 MAC 校验失败）。popup 页脚「PIN」设/删、锁屏在已设 PIN 时显示「Unlock with PIN」。
   **安全权衡**（已注释）：PIN 低熵，持久化的包裹块可离线暴力（PBKDF2 抬高成本），与上游 Bitwarden 一致。
-- 多账户切换。
+- 多账户切换 ✅（本次落地）：`SessionManager` 附加账户注册表（`accounts` 映射，AUTH_KEY 仍是活动账户，
+  向后兼容）；`listAccounts/switchAccount/removeAccount`（切换即锁定并清 PIN，由目标账户重新解锁）；
+  `AuthService` 透传 + 路由/协议；popup 页脚「Accounts」列出/切换/移除/新增账户。
+  剩余：跨**不同服务器**的多账户（当前假定同一自托管服务器）、每账户独立 PIN。
 - 密码健康报告 ✅（本次落地）：`vault/password-health.ts`（启发式强度评分 + 重复计数）；
   `VaultService.getPasswordHealth` 在 worker 内解密所有登录密码、只回传「弱/重复次数」标记（密码不过边界）；
   popup 工具栏「健康」按钮列出弱/重复项，点击跳条目。剩余：HIBP 泄露检测（需联网 k-anonymity 查询）。

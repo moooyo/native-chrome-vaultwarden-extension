@@ -80,6 +80,17 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.auth.logout) throw new Error('auth.logout is not wired');
             await deps.auth.logout();
             return { ok: true, data: null };
+          case 'auth.listAccounts':
+            if (!deps.auth.listAccounts) throw new Error('auth.listAccounts is not wired');
+            return { ok: true, data: { accounts: await deps.auth.listAccounts() } };
+          case 'auth.switchAccount':
+            if (!deps.auth.switchAccount) throw new Error('auth.switchAccount is not wired');
+            await deps.auth.switchAccount(request.email);
+            return { ok: true, data: null };
+          case 'auth.removeAccount':
+            if (!deps.auth.removeAccount) throw new Error('auth.removeAccount is not wired');
+            await deps.auth.removeAccount(request.email);
+            return { ok: true, data: null };
           case 'vault.sync':
             if (!deps.vault.sync) throw new Error('vault.sync is not wired');
             return { ok: true, data: await deps.vault.sync() };
