@@ -71,3 +71,14 @@ export async function rsaOaepDecrypt(
   );
   return new Uint8Array(await subtle.decrypt({ name: 'RSA-OAEP' }, key, data as BufferSource));
 }
+
+/** RSA-OAEP encrypt to a public key (SPKI DER). Used to wrap a symmetric key to another party's
+ *  public key — e.g. emergency-access grants or organization key sharing. */
+export async function rsaOaepEncrypt(
+  spkiPublicKey: Uint8Array,
+  data: Uint8Array,
+  hash: 'SHA-1' | 'SHA-256' = 'SHA-1',
+): Promise<Uint8Array> {
+  const key = await subtle.importKey('spki', spkiPublicKey as BufferSource, { name: 'RSA-OAEP', hash }, false, ['encrypt']);
+  return new Uint8Array(await subtle.encrypt({ name: 'RSA-OAEP' }, key, data as BufferSource));
+}

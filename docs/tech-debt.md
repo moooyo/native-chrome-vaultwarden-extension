@@ -113,4 +113,7 @@
 - 等价域名（equivalent domains）✅（本次落地）：`vault/equivalent-domains.ts` 内置常见等价组
   （google/youtube、amazon 各区、microsoft/live 等）+ 合并 `/sync` 的用户自定义组；`uri-match`
   的 Domain 策略在两域名属同一等价组时也算命中；vault-service 在两处 autofill 匹配处构建索引并传入。
-- 紧急访问（emergency access）。
+- 紧急访问（emergency access）：**密码学核心已交付**——`primitives.rsaOaepEncrypt`（解密的对偶）+
+  `session/emergency-access.grantEmergencyKey/recoverEmergencyKey`（授权人把 UserKey 包到受托人 RSA
+  公钥=encType=4，受托人用私钥恢复；往返单测）。**仍待（专门里程碑，需第二账户 + 服务端）**：
+  `/emergency-access` 端点（invite/accept/confirm/initiate/approve/takeover）、等待期状态机、UI。

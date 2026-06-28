@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pbkdf2Sha256, hkdfExpandSha256, hmacSha256, aesCbc256Decrypt, aesCbc256Encrypt, rsaOaepDecrypt } from './primitives.js';
+import { pbkdf2Sha256, hkdfExpandSha256, hmacSha256, aesCbc256Decrypt, aesCbc256Encrypt, rsaOaepDecrypt, rsaOaepEncrypt } from './primitives.js';
 import { utf8ToBytes, bytesToHex, hexToBytes, base64ToBytes, bytesToUtf8 } from './encoding.js';
 import { RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
 
@@ -57,5 +57,16 @@ describe('primitives', () => {
     const ct = base64ToBytes(ORG_KEY_VECTOR.encOrgKeySha256.slice(2));
     const out = await rsaOaepDecrypt(pkcs8, ct, 'SHA-256');
     expect(bytesToHex(out)).toBe(ORG_KEY_VECTOR.orgKeyHex);
+  });
+
+  it('rsaOaepEncrypt round-trips through rsaOaepDecrypt with the matching private key', async () => {
+    const pair = await crypto.subtle.generateKey(
+      { name: 'RSA-OAEP', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-1' }, true, ['encrypt', 'decrypt'],
+    );
+    const spki = new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey));
+    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey));
+    const data = hexToBytes('00112233445566778899aabbccddeeff');
+    const ct = await rsaOaepEncrypt(spki, data);
+    expect(bytesToHex(await rsaOaepDecrypt(pkcs8, ct))).toBe(bytesToHex(data));
   });
 });
