@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../messaging/protocol.js', () => ({
   sendRequest: vi.fn(),
@@ -15,9 +15,14 @@ import { startAutofill } from './autofill.js';
 
 describe('autofill controller', () => {
   beforeEach(() => {
+    document.querySelectorAll('[data-vw-popover-for]').forEach((node) => node.remove());
     document.body.innerHTML = '<form><input type="email"><input type="password"></form>';
     vi.mocked(sendRequest).mockReset();
     vi.mocked(fillLoginForm).mockReset();
+  });
+
+  afterEach(() => {
+    document.querySelectorAll('[data-vw-popover-for]').forEach((node) => node.remove());
   });
 
   it('requests candidates for the current frame URL when popover opens', async () => {
@@ -28,6 +33,17 @@ describe('autofill controller', () => {
     await Promise.resolve();
 
     expect(sendRequest).toHaveBeenCalledWith({ type: 'autofill.findCandidates', frameUrl: 'https://example.com/login' });
+  });
+
+  it('shows no matches when findCandidates returns an empty array', async () => {
+    vi.mocked(sendRequest).mockResolvedValueOnce({ ok: true, data: [] });
+
+    startAutofill('https://example.com/login');
+    const popover = document.querySelector<HTMLElement>('[data-vw-popover-for]');
+    popover?.shadowRoot?.querySelector<HTMLButtonElement>('#open')?.click();
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(popover?.shadowRoot?.textContent).toContain('No matching logins');
   });
 
   it('does not throw when form.id contains CSS selector special characters', () => {

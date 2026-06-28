@@ -69,7 +69,7 @@ async function fillSelected(
 }
 
 function isAutofillCandidates(data: unknown[]): data is import('../messaging/protocol.js').AutofillCandidate[] {
-  return data.length > 0 && (typeof (data[0] as Record<string, unknown>)?.matchedUri === 'string');
+  return data.length === 0 || (typeof (data[0] as Record<string, unknown>)?.matchedUri === 'string');
 }
 
 function isAutofillCredentials(data: unknown): data is { username?: string; password?: string } {
