@@ -507,4 +507,23 @@ describe('VaultService', () => {
     await session.lock();
     await expect(service.createCipher({ type: 1, name: 'x' })).rejects.toThrow();
   });
+
+  it('reports weak and reused passwords without leaking the passwords', async () => {
+    const weak = await encUnder('weakpass', testUserKey);
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [
+        { id: 'a', type: 1, name: await encUnder('A', testUserKey), favorite: false, organizationId: null, login: { password: weak } },
+        { id: 'b', type: 1, name: await encUnder('B', testUserKey), favorite: false, organizationId: null, login: { password: weak } },
+        { id: 'c', type: 1, name: await encUnder('C', testUserKey), favorite: false, organizationId: null, login: { password: await encUnder('Str0ng&Unique!pass', testUserKey) } },
+      ],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    const entries = await service.getPasswordHealth();
+    // 'a' and 'b' share a weak password (reused + weak); 'c' is strong and unique → not reported.
+    expect(entries.map((e) => e.id).sort()).toEqual(['a', 'b']);
+    expect(entries.every((e) => e.weak && e.reuseCount === 2)).toBe(true);
+    expect(JSON.stringify(entries)).not.toContain('weakpass');
+  });
 });

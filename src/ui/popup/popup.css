@@ -94,6 +94,8 @@ body { width: 360px; }
 .item .chevron { color: var(--ink-faint); width: 1rem; height: 1rem; flex: none; }
 .item .chevron svg { width: 100%; height: 100%; }
 .item .tag { font-size: 0.625rem; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; color: var(--danger); background: var(--danger-tint); padding: 0.05rem 0.35rem; border-radius: var(--r-pill); }
+.item .tag-warn { color: #9a6a00; background: color-mix(in srgb, #f5a623 22%, transparent); }
+@media (prefers-color-scheme: dark) { .item .tag-warn { color: #f5c451; } }
 
 /* Empty / loading states */
 .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s2); flex: 1; padding: var(--s6) var(--s4); text-align: center; color: var(--ink-soft); }

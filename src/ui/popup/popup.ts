@@ -317,6 +317,7 @@ function renderUnlockedShell(error?: string) {
     <div class="toolbar">
       <div class="search">${icon('search')}<input id="search" class="input" placeholder="Search vault" autocomplete="off" /></div>
       <button id="addItem" class="icon-btn" type="button" title="Add item" aria-label="Add item">${icon('plus')}</button>
+      <button id="health" class="icon-btn" type="button" title="Password health" aria-label="Password health">${icon('checkCircle')}</button>
       <button id="generate" class="icon-btn" type="button" title="Password generator" aria-label="Password generator">${icon('key')}</button>
       <button id="sync" class="icon-btn" type="button" title="Sync vault" aria-label="Sync vault">${icon('refresh')}</button>
       <button id="lock" class="icon-btn" type="button" title="Lock vault" aria-label="Lock vault">${icon('lock')}</button>
@@ -605,6 +606,7 @@ function bindUnlockedControls() {
   document.getElementById('search')!.addEventListener('input', renderVaultList);
   document.getElementById('generate')!.addEventListener('click', () => renderGenerator());
   document.getElementById('addItem')!.addEventListener('click', () => renderTypePicker());
+  document.getElementById('health')!.addEventListener('click', () => void renderHealthReport());
 }
 
 /** Standalone password generator panel — runs locally; no vault secret involved. */
@@ -714,6 +716,45 @@ function renderGenHistory(): void {
 
 /** Cipher type names for editor headers. */
 const CIPHER_TYPE_NAMES: Record<1 | 2 | 3 | 4, string> = { 1: 'Login', 2: 'Secure note', 3: 'Card', 4: 'Identity' };
+
+/** Password health report: weak and reused login passwords. Secrets stay in the worker. */
+async function renderHealthReport(): Promise<void> {
+  clearTotpTimer();
+  app.innerHTML = `
+    <div class="detail">
+      <div class="detail-head">
+        <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
+        <div class="titles"><h1>Password health</h1></div>
+      </div>
+      <div class="detail-body"><div id="healthBody"><div class="muted center">Checking…</div></div></div>
+    </div>`;
+  document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
+  const body = document.getElementById('healthBody')!;
+  const response = await sendRequest({ type: 'vault.getPasswordHealth' });
+  if (!response.ok) {
+    body.innerHTML = `<p class="note error">${icon('alert')}<span>${escapeHtml(response.error.message)}</span></p>`;
+    return;
+  }
+  const entries = (response.data as { entries: Array<{ id: string; name: string; weak: boolean; reuseCount: number }> }).entries;
+  if (entries.length === 0) {
+    body.innerHTML = `<div class="empty"><span class="glyph">${icon('checkCircle')}</span><span>No weak or reused passwords found.</span></div>`;
+    return;
+  }
+  body.innerHTML = entries.map((e) => {
+    const tags = [
+      e.weak ? '<span class="tag tag-warn">Weak</span>' : '',
+      e.reuseCount > 1 ? `<span class="tag tag-warn">Reused &times;${e.reuseCount}</span>` : '',
+    ].join(' ');
+    return `<button class="item" type="button" data-id="${escapeHtml(e.id)}">
+      <span class="monogram" style="--mono-h:${hueFor(e.name)}">${escapeHtml(monogramLetter(e.name))}</span>
+      <span class="item-body"><span class="item-name"><span class="title">${escapeHtml(e.name)}</span></span><span class="item-sub">${tags}</span></span>
+      <span class="chevron">${icon('chevron')}</span>
+    </button>`;
+  }).join('');
+  for (const row of body.querySelectorAll<HTMLElement>('.item')) {
+    row.addEventListener('click', () => renderDetail(row.dataset.id!));
+  }
+}
 
 interface EditorFieldSpec { key: string; label: string }
 const CARD_FORM: EditorFieldSpec[] = [

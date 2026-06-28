@@ -90,6 +90,10 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.vault.getSkippedOrgCount) throw new Error('vault.getSkippedOrgCount is not wired');
             return { ok: true, data: { count: await deps.vault.getSkippedOrgCount() } };
           }
+          case 'vault.getPasswordHealth': {
+            if (!deps.vault.getPasswordHealth) throw new Error('vault.getPasswordHealth is not wired');
+            return { ok: true, data: { entries: await deps.vault.getPasswordHealth() } };
+          }
           case 'vault.createFolder':
             if (!deps.vault.createFolder) throw new Error('vault.createFolder is not wired');
             return { ok: true, data: await deps.vault.createFolder(request.name) };

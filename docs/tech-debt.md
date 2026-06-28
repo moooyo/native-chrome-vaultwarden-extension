@@ -95,7 +95,9 @@
 - Vault 导出 / 导入。
 - PIN 解锁 / 生物识别解锁。
 - 多账户切换。
-- 密码健康报告 / HIBP 泄露检测。
+- 密码健康报告 ✅（本次落地）：`vault/password-health.ts`（启发式强度评分 + 重复计数）；
+  `VaultService.getPasswordHealth` 在 worker 内解密所有登录密码、只回传「弱/重复次数」标记（密码不过边界）；
+  popup 工具栏「健康」按钮列出弱/重复项，点击跳条目。剩余：HIBP 泄露检测（需联网 k-anonymity 查询）。
 - 等价域名（equivalent domains）✅（本次落地）：`vault/equivalent-domains.ts` 内置常见等价组
   （google/youtube、amazon 各区、microsoft/live 等）+ 合并 `/sync` 的用户自定义组；`uri-match`
   的 Domain 策略在两域名属同一等价组时也算命中；vault-service 在两处 autofill 匹配处构建索引并传入。

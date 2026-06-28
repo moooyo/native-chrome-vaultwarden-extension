@@ -4,6 +4,7 @@ import type { SessionState } from '../core/session/session-manager.js';
 import type { CipherInput, CipherSummary, CollectionSummary, DecryptedCipher, FieldName, FolderSummary } from '../core/vault/models.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 import type { TotpResult } from '../core/vault/totp.js';
+import type { PasswordHealthEntry } from '../core/vault/password-health.js';
 import type { LockTimeoutSetting } from '../background/settings.js';
 import type { AppErrorCode } from '../core/errors.js';
 
@@ -38,6 +39,7 @@ export type RequestMessage =
   | { type: 'vault.getCipherDetail'; id: string }
   | { type: 'vault.getTotp'; id: string }
   | { type: 'vault.getSkippedOrgCount' }
+  | { type: 'vault.getPasswordHealth' }
   | { type: 'vault.createFolder'; name: string }
   | { type: 'vault.renameFolder'; id: string; name: string }
   | { type: 'vault.deleteFolder'; id: string }
@@ -59,6 +61,7 @@ export type ResponseMessage =
   | { ok: true; data: { input: CipherInput | null } }
   | { ok: true; data: { totp: TotpResult | null } }
   | { ok: true; data: { count: number } }
+  | { ok: true; data: { entries: PasswordHealthEntry[] } }
   | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting; lockTimeout: LockTimeoutSetting } }
   | { ok: true; data: null }
   | { ok: true; data: AutofillCandidate[] }

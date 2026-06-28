@@ -9,6 +9,7 @@ import { decryptCipher, decryptFolders, decryptCollections, buildOrgKeyMap } fro
 import { encryptCipher } from './encrypt.js';
 import { getTotp, type TotpResult } from './totp.js';
 import { encryptToText } from '../crypto/encstring.js';
+import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealthInput } from './password-health.js';
 import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
@@ -203,6 +204,27 @@ export class VaultService {
     const decrypted = await this.decryptCipherById(id);
     if (!decrypted?.totp) return undefined;
     return getTotp(decrypted.totp, (this.deps.now ?? Date.now)());
+  }
+
+  /**
+   * Decrypt every login password in the worker and report only the problematic ones (weak or reused).
+   * Passwords never cross the messaging boundary — only the id/name plus weak/reuse flags do.
+   */
+  async getPasswordHealth(): Promise<PasswordHealthEntry[]> {
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    if (!cache) throw new AppError('sync_required', 'Sync required');
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) throw new AppError('locked', 'Vault is locked');
+    const orgKeys = await this.buildOrgKeys(cache.profile);
+    const inputs: PasswordHealthInput[] = [];
+    for (const cipher of cache.ciphers) {
+      if (cipher.type !== 1) continue;
+      const decrypted = await decryptCipher(cipher, userKey, orgKeys);
+      if (decrypted && !decrypted.undecryptable && decrypted.password) {
+        inputs.push({ id: decrypted.id, name: decrypted.name, password: decrypted.password });
+      }
+    }
+    return buildPasswordHealthReport(inputs).filter((entry) => entry.weak || entry.reuseCount > 1);
   }
 
   private async decryptCipherById(id: string): Promise<DecryptedCipher | undefined> {
