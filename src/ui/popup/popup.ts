@@ -11,12 +11,24 @@ type View =
   | { kind: 'loading' }
   | { kind: 'loggedOut'; error?: string }
   | { kind: 'register'; error?: string }
-  | { kind: 'twoFactor'; providers: Array<0 | 1>; error?: string }
+  | { kind: 'twoFactor'; providers: number[]; error?: string }
   | { kind: 'locked'; error?: string }
   | { kind: 'unlocked'; error?: string };
 
 const app = document.getElementById('app')!;
-let twoFactorProviders: Array<0 | 1> = [];
+let twoFactorProviders: number[] = [];
+
+/** Friendly names for Bitwarden two-factor provider ids. */
+const TWO_FACTOR_NAMES: Record<number, string> = {
+  0: 'Authenticator app',
+  1: 'Email',
+  2: 'Duo',
+  3: 'YubiKey OTP',
+  6: 'Duo (organization)',
+  7: 'Security key (FIDO2)',
+};
+// Providers whose token is a code/OTP string the user can type (handled by the shared token path).
+const CODE_BASED_PROVIDERS = [0, 1, 2, 3, 6];
 // Track current view kind so handleAuthResult can route errors correctly.
 let currentViewKind: View['kind'] = 'loading';
 // Track pending operations to prevent double submission.
@@ -193,25 +205,54 @@ function renderRegister(error?: string) {
   });
 }
 
-function renderTwoFactor(providers: Array<0 | 1>, error?: string) {
+/** Per-provider input hint for the code field. */
+function twoFactorHint(provider: number): string {
+  if (provider === 1) return 'Enter the code emailed to you.';
+  if (provider === 3) return 'Touch your YubiKey to emit its one-time code.';
+  if (provider === 2 || provider === 6) return 'Enter a passcode from the Duo Mobile app.';
+  return 'Enter the 6-digit code from your authenticator app.';
+}
+
+function renderTwoFactor(providers: number[], error?: string) {
   twoFactorProviders = providers;
+  const usable = providers.filter((p) => CODE_BASED_PROVIDERS.includes(p));
+  // No code-based method we support (e.g. only a FIDO2 security key, which needs a hosted connector).
+  if (usable.length === 0) {
+    const names = providers.map((p) => TWO_FACTOR_NAMES[p] ?? `Method ${p}`).join(', ');
+    app.innerHTML = `
+      <div class="auth">
+        ${authHead('Two-step login', 'This method is not supported here yet')}
+        <p class="note error">${icon('alert')}<span>Your account requires: ${escapeHtml(names || 'an unsupported method')}. Use a Bitwarden client that supports it, or add an authenticator/email method.</span></p>
+        <button id="tfBack" class="btn btn-secondary btn-block" type="button">${icon('back')}<span>Back to login</span></button>
+        ${errorNote(error)}
+      </div>`;
+    document.getElementById('tfBack')!.addEventListener('click', () => render({ kind: 'loggedOut' }));
+    return;
+  }
+  const first = usable[0]!;
   app.innerHTML = `
     <div class="auth">
       ${authHead('Two-step login', 'Enter your verification code to continue')}
       <form id="twoFactorForm">
         <label class="field">
           <span class="field-label">Provider</span>
-          <select id="provider" class="select">${providers.map((p) => `<option value="${p}">${p === 0 ? 'Authenticator app' : 'Email'}</option>`).join('')}</select>
+          <select id="provider" class="select">${usable.map((p) => `<option value="${p}">${escapeHtml(TWO_FACTOR_NAMES[p] ?? `Method ${p}`)}</option>`).join('')}</select>
         </label>
         <label class="field">
           <span class="field-label">Code</span>
-          <input id="code" class="input mono" inputmode="numeric" autocomplete="one-time-code" required />
+          <input id="code" class="input mono" autocomplete="one-time-code" required />
+          <span id="tfHint" class="field-hint muted">${escapeHtml(twoFactorHint(first))}</span>
         </label>
         <button type="submit" class="btn btn-block">${icon('key')}<span>Continue</span></button>
-        ${providers.includes(1) ? `<button id="sendEmail" class="btn btn-secondary btn-block" type="button">${icon('mail')}<span>Send email code</span></button>` : ''}
+        ${usable.includes(1) ? `<button id="sendEmail" class="btn btn-secondary btn-block" type="button">${icon('mail')}<span>Send email code</span></button>` : ''}
         ${errorNote(error)}
       </form>
     </div>`;
+  const providerSel = document.getElementById('provider') as HTMLSelectElement;
+  providerSel.addEventListener('change', () => {
+    const hint = document.getElementById('tfHint');
+    if (hint) hint.textContent = twoFactorHint(Number(providerSel.value));
+  });
   document.getElementById('twoFactorForm')!.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (isPending) return;
@@ -221,7 +262,7 @@ function renderTwoFactor(providers: Array<0 | 1>, error?: string) {
     button.disabled = true;
     (form.querySelectorAll('input, select') as NodeListOf<HTMLInputElement | HTMLSelectElement>).forEach(el => el.disabled = true);
     try {
-      const provider = Number((document.getElementById('provider') as HTMLSelectElement).value) as 0 | 1;
+      const provider = Number((document.getElementById('provider') as HTMLSelectElement).value);
       const code = (document.getElementById('code') as HTMLInputElement).value;
       await handleAuthResult(await sendRequest({ type: 'auth.submitTwoFactor', provider, code }));
     } finally {

@@ -77,15 +77,36 @@ describe('AuthService', () => {
     expect(await sm.getState()).toBe('unlocked');
   });
 
-  it('keeps pending login in memory when 2FA is required', async () => {
+  it('keeps pending login in memory and surfaces every advertised 2FA provider', async () => {
     const api: Partial<ApiClient> = {
       prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
-      passwordLogin: vi.fn().mockResolvedValue({ kind: 'twoFactor' as const, providers: [0, 1, 7], token: 'tf' }),
+      passwordLogin: vi.fn().mockResolvedValue({ kind: 'twoFactor' as const, providers: [0, 1, 3, 7], token: 'tf' }),
     };
     const { auth, sm } = makeService(api);
+    // All providers pass through (Authenticator, Email, YubiKey, FIDO2); the UI decides how to collect each.
     await expect(auth.login({ email: KDF_VECTOR_600K.email, masterPassword: KDF_VECTOR_600K.password }))
-      .resolves.toEqual({ kind: 'twoFactor', providers: [0, 1], token: 'tf' });
+      .resolves.toEqual({ kind: 'twoFactor', providers: [0, 1, 3, 7], token: 'tf' });
     expect(await sm.getState()).toBe('loggedOut');
+  });
+
+  it('submitTwoFactor forwards an arbitrary provider id and trims the code', async () => {
+    const passwordLogin = vi.fn()
+      .mockResolvedValueOnce({ kind: 'twoFactor' as const, providers: [0, 3], token: 'tf' })
+      .mockResolvedValueOnce({
+        kind: 'success' as const,
+        data: {
+          access_token: 'access', expires_in: 3600, refresh_token: 'refresh', token_type: 'Bearer',
+          Key: USER_KEY_VECTOR_600K.akey, Kdf: 0 as const, KdfIterations: KDF_VECTOR_600K.iterations,
+        },
+      });
+    const api: Partial<ApiClient> = {
+      prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+      passwordLogin,
+    };
+    const { auth } = makeService(api);
+    await auth.login({ email: KDF_VECTOR_600K.email, masterPassword: KDF_VECTOR_600K.password });
+    await auth.submitTwoFactor({ provider: 3, code: '  ccccccmyotp  ' }); // YubiKey OTP
+    expect(passwordLogin.mock.calls[1]![0]).toMatchObject({ twoFactorProvider: 3, twoFactorToken: 'ccccccmyotp' });
   });
 
   // --- KDF iteration floor (audit finding ①) ---

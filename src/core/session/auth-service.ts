@@ -7,7 +7,7 @@ import type { SessionManager, SessionState } from './session-manager.js';
 
 export type AuthResult =
   | { kind: 'unlocked' }
-  | { kind: 'twoFactor'; providers: Array<0 | 1>; token?: string };
+  | { kind: 'twoFactor'; providers: number[]; token?: string };
 
 export interface AuthServiceDeps {
   api: ApiClient;
@@ -62,13 +62,13 @@ export class AuthService {
     });
   }
 
-  async submitTwoFactor(input: { provider: 0 | 1; code: string; remember?: boolean }): Promise<AuthResult> {
+  async submitTwoFactor(input: { provider: number; code: string; remember?: boolean }): Promise<AuthResult> {
     if (!this.pendingLogin) throw new Error('no pending 2FA login');
     const loginInput: PasswordLoginInput = {
       email: this.pendingLogin.email,
       masterPasswordHash: this.pendingLogin.masterPasswordHash,
       twoFactorProvider: input.provider,
-      twoFactorToken: input.code,
+      twoFactorToken: input.code.trim(),
     };
     if (input.remember !== undefined) loginInput.remember = input.remember;
     const result = await this.deps.api.passwordLogin(loginInput);
@@ -198,13 +198,15 @@ export class AuthService {
     pending: PendingLogin;
   }): Promise<AuthResult> {
     if (input.result.kind === 'twoFactor') {
-      const supported = input.result.providers.filter((p): p is 0 | 1 => p === 0 || p === 1);
+      // Surface every provider the server advertises (Authenticator, Email, Duo, YubiKey, FIDO2, …);
+      // the UI picks how to collect each one's token.
+      const providers = input.result.providers;
       this.pendingLogin = input.result.token
         ? { ...input.pending, twoFactorToken: input.result.token }
         : input.pending;
       return input.result.token
-        ? { kind: 'twoFactor', providers: supported, token: input.result.token }
-        : { kind: 'twoFactor', providers: supported };
+        ? { kind: 'twoFactor', providers, token: input.result.token }
+        : { kind: 'twoFactor', providers };
     }
     const data = input.result.data;
     if (data.Kdf !== undefined && data.Kdf !== 0) {

@@ -107,19 +107,23 @@
 
 > 与 Bitwarden 官方客户端功能面对齐后的差距。⬆ 高 / ➖ 中 / ⬇ 低。
 
-- ⬆ **2FA 仅 Authenticator(0)/Email(1)**：硬过滤掉 Duo(2/6)、YubiKey OTP(3)、WebAuthn 硬件密钥(7)；
-  这些账户无法登录。另缺新设备 email OTP、captcha/hCaptcha、SSO + Key Connector、设备批准/TDE、
-  登录设备无密码（passwordless）。
-- ⬆ **保存/更新登录提示条** → **本次落地**：表单提交捕获 + 通知栏 + 页面驱动的 create/update。
+- ✅ **自定义字段（Text/Hidden/Boolean/Linked）**（已交付）：解密/显示（Hidden 按需揭示，reprompt 门控）
+  /创建/编辑；Linked 只读保真。`encryptCipher` 写入、`mergeServerManagedFields` 不再盲带。
+- ✅ **每条目密码历史 + passwordRevisionDate**（已交付）：改密时把旧密码 EncString 原样入史（上限 20）
+  并更新修订时间；登录详情按需揭示（reprompt 门控）。
+- ✅ **组织条目编辑修复 + 移动到组织（share）**（已交付）：`updateCipher` 改用组织密钥/每条目密钥加密并保留
+  `organizationId`（修数据损坏）；`/api/ciphers/{id}/share` + 集合选择；带 passkey/历史的条目拒绝 share 以防丢数据。
+  剩余：集合 CRUD、组织内改集合归属（move-without-org-change）。
+- ✅ **保存/更新登录提示条**（已交付）：表单提交捕获 + 通知栏 + 页面驱动的 create/update。
+- ✅ **Passphrase 生成器**（已交付）：内置词表 + 拒绝采样；生成器面板「Password/Passphrase」切换。
+- ⬆ **2FA 扩展**（本次部分交付）：现支持所有**码型**提供方——Authenticator(0)/Email(1)/Duo passcode(2/6)/
+  YubiKey OTP(3)，popup 提供选择器与按提供方提示。**仍待**：WebAuthn/FIDO2 安全密钥(7)（需托管 connector）、
+  Duo push（异步轮询）、新设备 email OTP 提交、captcha/hCaptcha、SSO + Key Connector、设备批准/TDE、passwordless。
 - ⬆ **附件（attachments）**：无模型/无 per-attachment key/无端点；带附件条目编辑有丢数据风险。
-- ⬆ **组织条目编辑 / 移动到组织（share）/ 集合归属**：`updateCipher` 一律用 UserKey 重新加密且不带
-  `organizationId`，编辑组织条目会损坏；缺 `/share`、`/move` 与集合写入。
 - ⬆ **组织策略（policies）拉取与执行**；**改主密码 / 改 KDF / 密钥轮换**；**Sends（文本+文件）**；
   **加密导出 + CSV/第三方导入**。
-- ➖ **自定义字段（Text/Hidden/Boolean/Linked）**：仅透传保留，从不解密/显示/编辑；Linked 无解析。
-- ➖ **每条目密码历史 + passwordRevisionDate**：改密时不追加历史、不更新修订时间。
 - ➖ 键盘快捷键（manifest `commands`）、右键上下文菜单、**Card/Identity 页面自动填充**、
-  **Passphrase 生成器**、**用户名/转发邮箱别名生成器**、HIBP 泄露检测、超时动作（锁定 vs 登出）、
+  **用户名/转发邮箱别名生成器**、HIBP 泄露检测、超时动作（锁定 vs 登出）、
   跨服务器多账户、集合 CRUD、i18n/`_locales`、生物识别解锁、徽章计数、账户指纹短语、Firefox 打包、
   Steam Guard TOTP、passkey 多凭据选择 UI。
 - ➖ **空闲/自动锁定准确性**：靠 1 分钟轮询 `lastActivity`，且仅扩展消息更新它（非真实页面活动）；

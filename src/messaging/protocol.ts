@@ -32,7 +32,7 @@ export type RequestMessage =
   | { type: 'auth.getState' }
   | { type: 'auth.login'; email: string; masterPassword: string }
   | { type: 'auth.register'; email: string; masterPassword: string; name?: string }
-  | { type: 'auth.submitTwoFactor'; provider: 0 | 1; code: string; remember?: boolean }
+  | { type: 'auth.submitTwoFactor'; provider: number; code: string; remember?: boolean }
   | { type: 'auth.sendEmailCode' }
   | { type: 'auth.unlock'; masterPassword: string }
   | { type: 'auth.verifyMasterPassword'; masterPassword: string }
