@@ -244,6 +244,12 @@ export function createRouter(deps: RouterDeps) {
             if (!serverUrl) throw new AppError('error', 'Server URL is not configured');
             return { ok: true, data: { send: await deps.vault.createFileSend(request.input, request.dataB64, request.fileName, serverUrl) } };
           }
+          case 'sends.update': {
+            if (!deps.vault.updateSend) throw new Error('vault.updateSend is not wired');
+            const serverUrl = await deps.settings.getServerUrl();
+            if (!serverUrl) throw new AppError('error', 'Server URL is not configured');
+            return { ok: true, data: { send: await deps.vault.updateSend(request.id, request.input, serverUrl) } };
+          }
           case 'sends.delete': {
             if (!deps.vault.deleteSend) throw new Error('vault.deleteSend is not wired');
             await deps.vault.deleteSend(request.id);

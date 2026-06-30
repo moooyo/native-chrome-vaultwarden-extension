@@ -5,7 +5,7 @@ import type { CipherInput, CipherSummary, CollectionSummary, DecryptedCipher, Fi
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 import type { TotpResult } from '../core/vault/totp.js';
 import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
-import type { SendInput, SendSummary } from '../core/vault/sends.js';
+import type { SendInput, SendSummary, UpdateSendInput } from '../core/vault/sends.js';
 import type { PasswordHealthEntry } from '../core/vault/password-health.js';
 import type { PasskeyAssertion } from '../core/vault/fido2.js';
 import type { LockTimeoutSetting } from '../background/settings.js';
@@ -138,6 +138,7 @@ export type RequestMessage =
   | { type: 'sends.list' }
   | { type: 'sends.createText'; input: SendInput }
   | { type: 'sends.createFile'; input: SendInput; dataB64: string; fileName: string }
+  | { type: 'sends.update'; id: string; input: UpdateSendInput }
   | { type: 'sends.delete'; id: string }
   | { type: 'autofill.checkSaveLogin'; frameUrl: string; username?: string; password: string }
   | { type: 'autofill.saveLogin'; frameUrl: string; username?: string; password: string }
