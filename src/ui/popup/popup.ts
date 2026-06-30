@@ -7,6 +7,7 @@ import { generatePassphrase, DEFAULT_PASSPHRASE_OPTIONS, type PassphraseGenOptio
 import { addPasswordToHistory } from '../../core/generator/history.js';
 import type { SendInput, SendSummary } from '../../core/vault/sends.js';
 import { icon } from '../icons.js';
+import browser from 'webextension-polyfill';
 
 type View =
   | { kind: 'loading' }
@@ -1004,6 +1005,7 @@ async function renderSends(): Promise<void> {
           </div>
           <button id="send_create" type="button" class="btn btn-block">${icon('plus')}<span>Create Send</span></button>
         </div>
+        <button id="send_receive" type="button" class="btn btn-secondary btn-block">${icon('mail')}<span>Receive a Send</span></button>
         <div id="sendList"><div class="muted center">Loading…</div></div>
         <div id="detailStatus" class="detail-status"></div>
       </div>
@@ -1020,6 +1022,9 @@ async function renderSends(): Promise<void> {
   document.getElementById('send_mode_text')!.addEventListener('click', () => setSendMode('text'));
   document.getElementById('send_mode_file')!.addEventListener('click', () => setSendMode('file'));
   document.getElementById('send_create')!.addEventListener('click', () => void createSend(sendMode));
+  document.getElementById('send_receive')!.addEventListener('click', () => {
+    void browser.tabs.create({ url: browser.runtime.getURL('ui/receive/receive.html') });
+  });
   await loadSends();
 }
 
