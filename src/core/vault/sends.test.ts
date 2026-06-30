@@ -81,4 +81,18 @@ describe('file send', () => {
     expect(summary.fileName).toBe('secret.pdf');
     expect(summary.sizeName).toBe('3 Bytes');
   });
+
+  it('does not surface file fields on a text (type=0) send', async () => {
+    const { request } = await buildTextSendRequest(
+      { name: 'T', text: 'hi', deletionDays: 7 }, userKey, fileDeps);
+    const resp = {
+      id: 's2', accessId: 'acc2', type: 0, name: request.name, key: request.key,
+      text: request.text, file: { sizeName: '9 Bytes' }, // spurious file on a text send
+      deletionDate: new Date(0).toISOString(), accessCount: 0,
+    } as unknown as SendResponse;
+    const summary = await decryptSend(resp, userKey, 'http://localhost:8080');
+    expect(summary.type).toBe(0);
+    expect(summary.fileName).toBeUndefined();
+    expect(summary.sizeName).toBeUndefined();
+  });
 });

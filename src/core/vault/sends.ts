@@ -153,7 +153,7 @@ export async function decryptSend(send: SendResponse, userKey: SymmetricKey, ser
   };
   if (send.type === 0 && send.text?.text) out.text = await safeDecrypt(send.text.text, derived);
   if (send.type === 1 && send.file?.fileName) out.fileName = await safeDecrypt(send.file.fileName, derived);
-  if (send.file?.sizeName) out.sizeName = send.file.sizeName;
+  if (send.type === 1 && send.file?.sizeName) out.sizeName = send.file.sizeName;
   if (send.expirationDate) out.expirationDate = send.expirationDate;
   if (send.maxAccessCount != null) out.maxAccessCount = send.maxAccessCount;
   return out;
