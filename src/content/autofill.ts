@@ -87,8 +87,15 @@ function hostLabel(frameUrl: string): string {
 
 function attachPopovers(getFrameUrl: FrameUrlProvider): void {
   if (!isHttpUrl(getFrameUrl())) return;
+  // Card `code` fields (e.g. a CVC rendered as type="password") must not also spawn a login popover.
+  const cardCodeFields = new Set<Element>();
+  for (const card of detectCardForms(document)) {
+    const code = card.fields.get('code');
+    if (code) cardCodeFields.add(code);
+  }
   const exclude = new Set<Element>();
   for (const form of detectLoginForms()) {
+    if (form.passwordInput && cardCodeFields.has(form.passwordInput)) continue; // a CVC, not a login
     for (const el of [form.usernameInput, form.passwordInput, form.totpInput]) if (el) exclude.add(el);
     attachIfNew(form.id, () => attachPopover(getFrameUrl, form));
   }

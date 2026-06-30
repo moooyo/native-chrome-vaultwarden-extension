@@ -7,6 +7,7 @@ interface FakePopover {
   showCandidates: ReturnType<typeof vi.fn>;
   remove: ReturnType<typeof vi.fn>;
   options: {
+    kind?: 'login' | 'card' | 'identity';
     onOpen(): void;
     onSelect(cipherId: string): void;
   };
@@ -351,6 +352,15 @@ describe('autofill controller', () => {
     expect(sendRequest).toHaveBeenCalledWith({ type: 'autofill.getFillData', cipherId: 'id-1', kind: 'identity' });
     expect((document.getElementById('fn') as HTMLInputElement).value).toBe('Ada');
     expect((document.getElementById('st') as HTMLInputElement).value).toBe('1 Analytical Way');
+  });
+
+  it('does not attach a login popover on a CVC rendered as type=password', async () => {
+    vi.mocked(sendRequest).mockResolvedValue({ ok: true, data: [] });
+    document.body.innerHTML = '<form><input autocomplete="cc-number" id="num"><input autocomplete="cc-csc" type="password" id="cvc"></form>';
+    startAutofill('https://shop.example/checkout');
+    // Only the card popover attaches; the type=password CVC must NOT spawn a login popover.
+    expect(popoverState.instances).toHaveLength(1);
+    expect(popoverState.instances[0]!.options.kind).toBe('card');
   });
 });
 
