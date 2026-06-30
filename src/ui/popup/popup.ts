@@ -983,10 +983,19 @@ async function renderSends(): Promise<void> {
         <div class="titles"><h1>Sends</h1></div>
       </div>
       <div class="detail-body">
-        <div class="ed-field"><span class="ed-label">New text Send</span>
+        <div class="ed-field"><span class="ed-label">New Send</span>
+          <div class="seg" role="tablist">
+            <button id="send_mode_text" type="button" class="seg-btn is-active" role="tab">Text</button>
+            <button id="send_mode_file" type="button" class="seg-btn" role="tab">File</button>
+          </div>
           ${editorTextRow('send_name', 'Name', '')}
-          <label class="ed-field"><span class="ed-label">Text to share</span><textarea id="send_text" class="input ed-textarea"></textarea></label>
-          <label class="gen-check"><input id="send_hidden" type="checkbox" /><span>Hide text by default</span></label>
+          <div id="send_text_fields">
+            <label class="ed-field"><span class="ed-label">Text to share</span><textarea id="send_text" class="input ed-textarea"></textarea></label>
+            <label class="gen-check"><input id="send_hidden" type="checkbox" /><span>Hide text by default</span></label>
+          </div>
+          <div id="send_file_fields" hidden>
+            <label class="ed-field"><span class="ed-label">File to share</span><input id="send_file" type="file" class="input" /></label>
+          </div>
           <input id="send_password" class="input" type="password" placeholder="Password (optional)" autocomplete="new-password" />
           <div class="ed-grid">
             ${editorTextRow('send_expiry', 'Expire in days (optional)', '')}
@@ -1000,7 +1009,17 @@ async function renderSends(): Promise<void> {
       </div>
     </div>`;
   document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
-  document.getElementById('send_create')!.addEventListener('click', () => void createSend());
+  let sendMode: 'text' | 'file' = 'text';
+  const setSendMode = (mode: 'text' | 'file') => {
+    sendMode = mode;
+    document.getElementById('send_text_fields')!.hidden = mode !== 'text';
+    document.getElementById('send_file_fields')!.hidden = mode !== 'file';
+    document.getElementById('send_mode_text')!.classList.toggle('is-active', mode === 'text');
+    document.getElementById('send_mode_file')!.classList.toggle('is-active', mode === 'file');
+  };
+  document.getElementById('send_mode_text')!.addEventListener('click', () => setSendMode('text'));
+  document.getElementById('send_mode_file')!.addEventListener('click', () => setSendMode('file'));
+  document.getElementById('send_create')!.addEventListener('click', () => void createSend(sendMode));
   await loadSends();
 }
 
@@ -1017,7 +1036,7 @@ function renderSendList(list: HTMLElement, sends: SendSummary[]): void {
   list.innerHTML = `<div class="cf-head">Active Sends</div>` + sends.map((s) => `
     <div class="readout">
       <div class="k">${icon('mail')} ${escapeHtml(s.name)}${s.passwordProtected ? ' 🔒' : ''}${s.disabled ? ' (disabled)' : ''}</div>
-      <div class="v-row"><span class="sub">Deletes ${escapeHtml(new Date(s.deletionDate).toLocaleDateString())}${s.maxAccessCount != null ? ` · ${s.accessCount}/${s.maxAccessCount} views` : ''}</span></div>
+      <div class="v-row"><span class="sub">${s.type === 1 && s.fileName ? `📎 ${escapeHtml(s.fileName)}${s.sizeName ? ` · ${escapeHtml(s.sizeName)}` : ''} · ` : ''}Deletes ${escapeHtml(new Date(s.deletionDate).toLocaleDateString())}${s.maxAccessCount != null ? ` · ${s.accessCount}/${s.maxAccessCount} views` : ''}</span></div>
       <div class="v-row">
         <code class="v mono">${escapeHtml(s.url)}</code>
         <button class="icon-btn" type="button" data-send-copy="${escapeHtml(s.url)}" title="Copy link" aria-label="Copy Send link">${icon('copy')}</button>
@@ -1036,29 +1055,36 @@ function renderSendList(list: HTMLElement, sends: SendSummary[]): void {
   });
 }
 
-async function createSend(): Promise<void> {
+async function createSend(mode: 'text' | 'file' = 'text'): Promise<void> {
   if (isPending) return;
   const val = (id: string): string => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement).value;
-  const text = val('send_text');
-  if (!text) return setDetailStatus('Enter the text to share', true);
-  const input: SendInput = {
-    name: val('send_name').trim() || 'Send',
-    text,
-    hidden: (document.getElementById('send_hidden') as HTMLInputElement).checked,
-    deletionDays: Number(val('send_deletion')) || 7,
-  };
-  const pwd = val('send_password'); if (pwd) input.password = pwd;
-  const expiry = Number(val('send_expiry')); if (expiry > 0) input.expirationDays = expiry;
-  const max = Number(val('send_max')); if (max > 0) input.maxAccessCount = max;
+  const baseInput: SendInput = { name: val('send_name').trim() || 'Send', deletionDays: Number(val('send_deletion')) || 7 };
+  const pwd = val('send_password'); if (pwd) baseInput.password = pwd;
+  const expiry = Number(val('send_expiry')); if (expiry > 0) baseInput.expirationDays = expiry;
+  const max = Number(val('send_max')); if (max > 0) baseInput.maxAccessCount = max;
+
+  let request: import('../../messaging/protocol.js').RequestMessage;
+  if (mode === 'file') {
+    const file = (document.getElementById('send_file') as HTMLInputElement).files?.[0];
+    if (!file) return setDetailStatus('Choose a file to share', true);
+    if (file.size > 100 * 1024 * 1024) return setDetailStatus('File is too large (max 100 MB)', true);
+    request = { type: 'sends.createFile', input: { ...baseInput, name: val('send_name').trim() || file.name }, dataB64: await fileToBase64(file), fileName: file.name };
+  } else {
+    const text = val('send_text');
+    if (!text) return setDetailStatus('Enter the text to share', true);
+    request = { type: 'sends.createText', input: { ...baseInput, text, hidden: (document.getElementById('send_hidden') as HTMLInputElement).checked } };
+  }
+
   isPending = true;
   document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = true));
   try {
-    const response = await sendRequest({ type: 'sends.createText', input });
+    const response = await sendRequest(request);
     if (!response.ok) return setDetailStatus(response.error.message, true);
     const send = (response.data as { send: SendSummary }).send;
-    await copyValue(send.url, 'Send link'); // copies the share link to the clipboard
+    await copyValue(send.url, 'Send link');
     (document.getElementById('send_name') as HTMLInputElement).value = '';
-    (document.getElementById('send_text') as HTMLTextAreaElement).value = '';
+    if (mode === 'text') (document.getElementById('send_text') as HTMLTextAreaElement).value = '';
+    else (document.getElementById('send_file') as HTMLInputElement).value = '';
     await loadSends();
   } finally {
     isPending = false;
