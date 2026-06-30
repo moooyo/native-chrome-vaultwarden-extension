@@ -1,8 +1,12 @@
 import { sendRequest, type AutofillCandidate, type AutofillCredentials } from '../messaging/protocol.js';
+import type { FillItemCandidate, CardFillData, IdentityFillData, FillKind } from '../messaging/protocol.js';
 import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
 import { fillLoginForm } from './fill.js';
+import { fillCardForm, fillIdentityForm } from './fill-card-identity.js';
 import { detectLoginForms, type DetectedLoginForm } from './form-detection.js';
+import { detectCardForms, detectIdentityForms, type DetectedFillForm } from './field-detection.js';
 import { createAutofillPopover } from './popover.js';
+import type { PopoverCandidate } from './popover.js';
 import { startSaveCapture, type CapturedLogin } from './capture.js';
 import { createSaveBar } from './save-bar.js';
 
@@ -83,11 +87,20 @@ function hostLabel(frameUrl: string): string {
 
 function attachPopovers(getFrameUrl: FrameUrlProvider): void {
   if (!isHttpUrl(getFrameUrl())) return;
+  const exclude = new Set<Element>();
   for (const form of detectLoginForms()) {
-    const selector = `[data-vw-popover-for="${CSS.escape(form.id)}"]`;
-    if (document.querySelector(selector)) continue;
-    attachPopover(getFrameUrl, form);
+    for (const el of [form.usernameInput, form.passwordInput, form.totpInput]) if (el) exclude.add(el);
+    attachIfNew(form.id, () => attachPopover(getFrameUrl, form));
   }
+  for (const form of [...detectCardForms(document, exclude), ...detectIdentityForms(document, exclude)]) {
+    attachIfNew(form.id, () => attachFillPopover(form));
+  }
+}
+
+function attachIfNew(id: string, attach: () => void): void {
+  const selector = `[data-vw-popover-for="${CSS.escape(id)}"]`;
+  if (document.querySelector(selector)) return;
+  attach();
 }
 
 function attachPopover(getFrameUrl: FrameUrlProvider, form: DetectedLoginForm): void {
@@ -103,6 +116,61 @@ function attachPopover(getFrameUrl: FrameUrlProvider, form: DetectedLoginForm): 
   popover.element.dataset.vwPopoverFor = form.id;
 }
 
+function attachFillPopover(form: DetectedFillForm): void {
+  const popover = createAutofillPopover({
+    anchor: form.anchor,
+    kind: form.kind,
+    onOpen: () => void loadFillCandidates(form.kind, popover),
+    onSelect: (cipherId) => void fillSelectedFillItem(form, cipherId, popover),
+  });
+  popover.element.dataset.vwPopoverFor = form.id;
+}
+
+async function loadFillCandidates(kind: FillKind, popover: ReturnType<typeof createAutofillPopover>): Promise<void> {
+  const response = await sendRequest({ type: 'autofill.findFillItems', kind });
+  if (!response.ok) {
+    popover.showStatus(messageForError(response.error.code, response.error.message));
+    return;
+  }
+  if (Array.isArray(response.data) && isFillItemCandidates(response.data)) {
+    popover.showCandidates(response.data.map(toPopoverCandidate));
+  } else {
+    popover.showStatus('Unexpected autofill response');
+  }
+}
+
+async function fillSelectedFillItem(
+  form: DetectedFillForm,
+  cipherId: string,
+  popover: ReturnType<typeof createAutofillPopover>,
+): Promise<void> {
+  const response = await sendRequest({ type: 'autofill.getFillData', cipherId, kind: form.kind });
+  if (!response.ok) {
+    popover.showStatus(messageForError(response.error.code, response.error.message));
+    return;
+  }
+  if (!isFillData(response.data)) {
+    popover.showStatus('Unexpected autofill response');
+    return;
+  }
+  const filled = form.kind === 'card'
+    ? fillCardForm(form, response.data as CardFillData)
+    : fillIdentityForm(form, response.data as IdentityFillData);
+  popover.showStatus(filled ? 'Filled' : 'No fillable fields');
+}
+
+function toPopoverCandidate(c: FillItemCandidate): PopoverCandidate {
+  return { id: c.id, name: c.name, favorite: c.favorite, ...(c.subtitle ? { sub: c.subtitle } : {}), ...(c.reprompt ? { reprompt: true } : {}) };
+}
+
+function isFillItemCandidates(data: unknown[]): data is FillItemCandidate[] {
+  return data.every((d) => isRecord(d) && typeof d.id === 'string' && typeof d.name === 'string' && typeof d.favorite === 'boolean' && isOptionalString(d.subtitle));
+}
+
+function isFillData(data: unknown): data is CardFillData & IdentityFillData {
+  return isRecord(data) && Object.values(data).every((v) => v === undefined || typeof v === 'string');
+}
+
 async function loadCandidates(frameUrl: string, popover: ReturnType<typeof createAutofillPopover>): Promise<void> {
   const response = await sendRequest({ type: 'autofill.findCandidates', frameUrl });
   if (!response.ok) {
@@ -110,7 +178,11 @@ async function loadCandidates(frameUrl: string, popover: ReturnType<typeof creat
     return;
   }
   if (Array.isArray(response.data) && isAutofillCandidates(response.data)) {
-    popover.showCandidates(response.data);
+    popover.showCandidates(response.data.map((c) => ({
+      id: c.id, name: c.name, favorite: c.favorite,
+      ...(c.username ?? c.matchedUri ? { sub: c.username ?? c.matchedUri } : {}),
+      ...(c.reprompt ? { reprompt: true } : {}),
+    })));
   } else {
     popover.showStatus('Unexpected autofill response');
   }

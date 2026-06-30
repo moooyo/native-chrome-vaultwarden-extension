@@ -314,6 +314,25 @@ describe('autofill controller', () => {
     expect(current.showStatus).not.toHaveBeenCalledWith('Form is no longer available');
     expect(current.showStatus).toHaveBeenCalledWith('Filled');
   });
+
+  it('attaches a card popover and fills the form on selection', async () => {
+    vi.mocked(sendRequest)
+      .mockResolvedValueOnce({ ok: true, data: [{ id: 'card-1', name: 'Visa', subtitle: 'Visa', favorite: false }] }) // findFillItems
+      .mockResolvedValueOnce({ ok: true, data: { number: '4111111111111111', code: '123' } }); // getFillData
+    document.body.innerHTML = '<form><input autocomplete="cc-number" id="num"><input autocomplete="cc-csc" id="csc"></form>';
+
+    startAutofill('https://shop.example/checkout');
+    const cardPopover = popoverState.instances.at(-1)!; // only the card popover is attached for this DOM
+    cardPopover.options.onOpen();
+    await new Promise((r) => setTimeout(r, 0));
+    cardPopover.options.onSelect('card-1');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sendRequest).toHaveBeenCalledWith({ type: 'autofill.findFillItems', kind: 'card' });
+    expect(sendRequest).toHaveBeenCalledWith({ type: 'autofill.getFillData', cipherId: 'card-1', kind: 'card' });
+    expect((document.getElementById('num') as HTMLInputElement).value).toBe('4111111111111111');
+    expect((document.getElementById('csc') as HTMLInputElement).value).toBe('123');
+  });
 });
 
 function popover(): FakePopover {
