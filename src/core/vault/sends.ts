@@ -135,6 +135,60 @@ export async function buildFileSendRequest(
   return { request, sendKey, encryptedFile, encryptedFileName };
 }
 
+/** Plaintext input for editing an existing Send. Omitted day fields keep the existing dates. */
+export interface UpdateSendInput {
+  name: string;
+  text?: string;            // text send only
+  hidden?: boolean;         // text send only
+  disabled?: boolean;
+  maxAccessCount?: number;  // >0 sets; otherwise clears the limit (null)
+  passwordMode?: 'keep' | 'remove' | 'set';
+  newPassword?: string;     // passwordMode === 'set'
+  expirationDays?: number;  // >0 resets from now; blank keeps existing.expirationDate
+  deletionDays?: number;    // >0 resets from now; blank keeps existing.deletionDate
+}
+
+/**
+ * Build a PUT-send request from the existing (encrypted) Send, re-encrypting changed fields under the
+ * EXISTING send key (unwrapped from existing.key). The send key, accessId, key and (for file sends) the
+ * file are unchanged. Password: 'set' → new client hash; 'keep'/'remove' → omit (keep is the server
+ * default; remove is a separate endpoint the worker calls — see vault-service.updateSend).
+ */
+export async function buildUpdateSendRequest(
+  existing: SendResponse,
+  input: UpdateSendInput,
+  userKey: SymmetricKey,
+  deps: SendCryptoDeps = {},
+): Promise<SendRequest> {
+  const now = deps.now ?? Date.now;
+  const sendKey = await decryptToBytes(existing.key, userKey);
+  const derived = await deriveSendKey(sendKey);
+  const request: SendRequest = {
+    type: existing.type,
+    key: existing.key,
+    name: await encryptToText(input.name?.trim() || 'Send', derived),
+    deletionDate: input.deletionDays && input.deletionDays > 0
+      ? new Date(now() + clampDays(input.deletionDays, 1, 31) * DAY_MS).toISOString()
+      : existing.deletionDate,
+    disabled: input.disabled ?? false,
+    hideEmail: existing.hideEmail ?? false,
+  };
+  if (existing.type === 0) {
+    request.text = { text: await encryptToText(input.text ?? '', derived), hidden: input.hidden ?? false };
+  } else if (existing.type === 1 && existing.file?.fileName) {
+    request.file = { fileName: existing.file.fileName };
+  }
+  request.maxAccessCount = input.maxAccessCount && input.maxAccessCount > 0 ? Math.trunc(input.maxAccessCount) : null;
+  request.expirationDate = input.expirationDays && input.expirationDays > 0
+    ? new Date(now() + input.expirationDays * DAY_MS).toISOString()
+    : (existing.expirationDate ?? null);
+  if (input.passwordMode === 'set' && input.newPassword) {
+    request.password = await hashSendPassword(input.newPassword, sendKey);
+  }
+  // 'keep' and 'remove': omit password — keep is the server default; remove uses removeSendPassword.
+  return request;
+}
+
 /** Decrypt a send for display: unwrap the send key, derive the field key, decrypt name/text, build URL. */
 export async function decryptSend(send: SendResponse, userKey: SymmetricKey, serverUrl: string): Promise<SendSummary> {
   const sendKey = await decryptToBytes(send.key, userKey); // raw 16-byte send key

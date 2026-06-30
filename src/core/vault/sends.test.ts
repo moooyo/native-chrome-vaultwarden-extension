@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTextSendRequest, decryptSend, deriveSendKey, hashSendPassword, buildSendAccessUrl, buildFileSendRequest } from './sends.js';
+import { buildTextSendRequest, decryptSend, deriveSendKey, hashSendPassword, buildSendAccessUrl, buildFileSendRequest, buildUpdateSendRequest } from './sends.js';
 import { decryptAttachmentFile } from './attachments.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import { bytesToBase64Url } from '../crypto/encoding.js';
@@ -94,5 +94,47 @@ describe('file send', () => {
     expect(summary.type).toBe(0);
     expect(summary.fileName).toBeUndefined();
     expect(summary.sizeName).toBeUndefined();
+  });
+});
+
+describe('buildUpdateSendRequest', () => {
+  const fileDeps = { randomBytes: (n: number) => new Uint8Array(n).fill(9), now: () => 0 };
+
+  async function makeExisting(): Promise<SendResponse> {
+    const { request } = await buildTextSendRequest({ name: 'Orig', text: 'orig', deletionDays: 7, password: 'pw' }, userKey, fileDeps);
+    // SendResponse echoes the create request + server fields (password is the SERVER hash; here a placeholder).
+    return { id: 's1', accessId: 'a1', type: 0, name: request.name, key: request.key, text: request.text,
+      deletionDate: request.deletionDate, password: 'SERVER_HASH', accessCount: 0 } as unknown as SendResponse;
+  }
+
+  it('re-encrypts name + text under the existing send key, keeping key unchanged', async () => {
+    const existing = await makeExisting();
+    const req = await buildUpdateSendRequest(existing, { name: 'New', text: 'new text', passwordMode: 'keep' }, userKey, fileDeps);
+    expect(req.key).toBe(existing.key);              // send key unchanged
+    expect(req.password).toBeUndefined();            // keep → omit password
+    // round-trip the new name/text by decrypting the resulting SendResponse
+    const summary = await decryptSend({ ...existing, ...req } as unknown as SendResponse, userKey, 'http://x');
+    expect(summary.name).toBe('New');
+    expect(summary.text).toBe('new text');
+  });
+
+  it('set password uses a fresh client hash; remove omits password (handled separately)', async () => {
+    const existing = await makeExisting();
+    const setReq = await buildUpdateSendRequest(existing, { name: 'N', text: 't', passwordMode: 'set', newPassword: 'np' }, userKey, fileDeps);
+    expect(typeof setReq.password).toBe('string');
+    expect(setReq.password).not.toBe('SERVER_HASH');  // not the stored hash
+    const rmReq = await buildUpdateSendRequest(existing, { name: 'N', text: 't', passwordMode: 'remove' }, userKey, fileDeps);
+    expect(rmReq.password).toBeUndefined();           // remove → omit (vault-service calls removeSendPassword)
+  });
+
+  it('keeps the file name + key for a file send (file not re-uploaded), and keeps dates when days blank', async () => {
+    const f = await buildFileSendRequest({ name: 'F', deletionDays: 7 }, 'doc.pdf', new Uint8Array([1]), userKey, fileDeps);
+    const existing = { id: 's2', accessId: 'a2', type: 1, name: f.request.name, key: f.request.key,
+      file: { fileName: f.request.file!.fileName, id: 'fid', sizeName: '1 B' }, deletionDate: f.request.deletionDate,
+      expirationDate: null, accessCount: 0 } as unknown as SendResponse;
+    const req = await buildUpdateSendRequest(existing, { name: 'F2', passwordMode: 'keep' }, userKey, fileDeps);
+    expect(req.type).toBe(1);
+    expect(req.file?.fileName).toBe(existing.file!.fileName);  // file name unchanged
+    expect(req.deletionDate).toBe(existing.deletionDate);      // days blank → keep date
   });
 });
