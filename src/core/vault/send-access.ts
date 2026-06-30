@@ -5,6 +5,7 @@
 import { deriveSendKey, hashSendPassword } from './sends.js';
 import { decryptToText } from '../crypto/encstring.js';
 import { base64UrlToBytes } from '../crypto/encoding.js';
+import { decryptAttachmentFile } from './attachments.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 
 export interface ParsedSendUrl {
@@ -76,3 +77,41 @@ export async function decryptAccessedSend(raw: unknown, sendKey: Uint8Array): Pr
 async function safeDecrypt(value: string, key: SymmetricKey): Promise<string> {
   try { return await decryptToText(value, key); } catch { return '(undecryptable)'; }
 }
+
+/** POST /api/sends/access/{accessId} (anonymous). 401 → password_required. Returns the raw JSON. */
+export async function accessSend(fetchFn: typeof fetch, serverUrl: string, accessId: string, passwordHash?: string): Promise<unknown> {
+  const res = await fetchFn(`${serverUrl}/api/sends/access/${encodeURIComponent(accessId)}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(passwordHash ? { password: passwordHash } : {}),
+  });
+  if (res.status === 401) throw sendAccessError('password_required');
+  if (!res.ok) throw sendAccessError('unavailable');
+  return res.json();
+}
+
+/** POST /api/sends/{sendId}/access/file/{fileId} → the absolute, JWT-protected download URL. */
+export async function requestFileDownloadUrl(fetchFn: typeof fetch, serverUrl: string, sendId: string, fileId: string, passwordHash?: string): Promise<string> {
+  const res = await fetchFn(`${serverUrl}/api/sends/${encodeURIComponent(sendId)}/access/file/${encodeURIComponent(fileId)}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(passwordHash ? { password: passwordHash } : {}),
+  });
+  if (res.status === 401) throw sendAccessError('password_required');
+  if (!res.ok) throw sendAccessError('unavailable');
+  const json = (await res.json()) as { url?: string };
+  if (!json.url) throw sendAccessError('unavailable');
+  return json.url;
+}
+
+/** GET the download URL (absolute from the server; relative is prefixed with serverUrl) and decrypt. */
+export async function downloadAndDecryptFile(fetchFn: typeof fetch, downloadUrl: string, serverUrl: string, sendKey: Uint8Array): Promise<Uint8Array> {
+  const url = /^https?:\/\//.test(downloadUrl) ? downloadUrl : `${serverUrl}${downloadUrl}`;
+  const res = await fetchFn(url);
+  if (!res.ok) throw sendAccessError('unavailable');
+  const buf = new Uint8Array(await res.arrayBuffer());
+  try {
+    return await decryptAttachmentFile(buf, await deriveSendKey(sendKey));
+  } catch {
+    throw sendAccessError('decrypt_failed');
+  }
+}
+
