@@ -5,7 +5,7 @@ import { filterSummariesByFolderCollectionAndQuery, NO_FOLDER } from '../../core
 import { generatePassword, DEFAULT_PASSWORD_OPTIONS, type PasswordGenOptions } from '../../core/generator/password.js';
 import { generatePassphrase, DEFAULT_PASSPHRASE_OPTIONS, type PassphraseGenOptions } from '../../core/generator/passphrase.js';
 import { addPasswordToHistory } from '../../core/generator/history.js';
-import type { SendInput, SendSummary } from '../../core/vault/sends.js';
+import type { SendInput, SendSummary, UpdateSendInput } from '../../core/vault/sends.js';
 import { icon } from '../icons.js';
 import browser from 'webextension-polyfill';
 
@@ -1045,6 +1045,7 @@ function renderSendList(list: HTMLElement, sends: SendSummary[]): void {
       <div class="v-row">
         <code class="v mono">${escapeHtml(s.url)}</code>
         <button class="icon-btn" type="button" data-send-copy="${escapeHtml(s.url)}" title="Copy link" aria-label="Copy Send link">${icon('copy')}</button>
+        <button class="icon-btn" type="button" data-send-edit="${escapeHtml(s.id)}" title="Edit" aria-label="Edit Send">${icon('plus')}</button>
         <button class="icon-btn" type="button" data-send-delete="${escapeHtml(s.id)}" title="Delete" aria-label="Delete Send">${icon('trash')}</button>
       </div>
     </div>`).join('');
@@ -1058,6 +1059,69 @@ function renderSendList(list: HTMLElement, sends: SendSummary[]): void {
       await loadSends();
     }));
   });
+  list.querySelectorAll<HTMLButtonElement>('button[data-send-edit]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const summary = sends.find((s) => s.id === btn.dataset.sendEdit);
+      if (summary) renderSendEdit(summary);
+    });
+  });
+}
+
+function renderSendEdit(s: SendSummary): void {
+  app.innerHTML = `
+    <div class="detail">
+      <div class="detail-head">
+        <button id="back" class="icon-btn" type="button" title="Back" aria-label="Back">${icon('back')}</button>
+        <div class="titles"><h1>Edit Send</h1></div>
+      </div>
+      <div class="detail-body">
+        <div class="ed-field"><span class="ed-label">${s.type === 1 ? 'File Send' : 'Text Send'}${s.fileName ? ` · ${escapeHtml(s.fileName)}` : ''}</span>
+          ${editorTextRow('e_name', 'Name', s.name)}
+          ${s.type === 0 ? `<label class="ed-field"><span class="ed-label">Text</span><textarea id="e_text" class="input ed-textarea">${escapeHtml(s.text ?? '')}</textarea></label>
+          <label class="gen-check"><input id="e_hidden" type="checkbox" ${s.hidden ? 'checked' : ''}/><span>Hide text by default</span></label>` : ''}
+          <label class="gen-check"><input id="e_disabled" type="checkbox" ${s.disabled ? 'checked' : ''}/><span>Disabled</span></label>
+          <input id="e_password" class="input" type="password" placeholder="Leave blank to keep current password" autocomplete="new-password" />
+          ${s.passwordProtected ? `<label class="gen-check"><input id="e_removepw" type="checkbox" /><span>Remove password</span></label>` : ''}
+          <div class="ed-grid">
+            ${editorTextRow('e_expiry', `Expire in days (now: ${s.expirationDate ? new Date(s.expirationDate).toLocaleDateString() : 'none'})`, '')}
+            ${editorTextRow('e_deletion', `Delete in days (now: ${new Date(s.deletionDate).toLocaleDateString()})`, '')}
+            ${editorTextRow('e_max', `Max views (now: ${s.maxAccessCount ?? '∞'})`, s.maxAccessCount != null ? String(s.maxAccessCount) : '')}
+          </div>
+          <button id="e_save" type="button" class="btn btn-block">${icon('plus')}<span>Save changes</span></button>
+        </div>
+        <div id="detailStatus" class="detail-status"></div>
+      </div>
+    </div>`;
+  document.getElementById('back')!.addEventListener('click', () => void renderSends());
+  document.getElementById('e_save')!.addEventListener('click', () => void saveSendEdit(s));
+}
+
+async function saveSendEdit(s: SendSummary): Promise<void> {
+  if (isPending) return;
+  const val = (id: string): string => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null)?.value ?? '';
+  const checked = (id: string): boolean => (document.getElementById(id) as HTMLInputElement | null)?.checked ?? false;
+  const input: UpdateSendInput = {
+    name: val('e_name').trim() || 'Send',
+    disabled: checked('e_disabled'),
+  };
+  if (s.type === 0) { input.text = val('e_text'); input.hidden = checked('e_hidden'); }
+  const max = Number(val('e_max')); input.maxAccessCount = max > 0 ? max : 0; // 0 clears the limit
+  const exp = Number(val('e_expiry')); if (exp > 0) input.expirationDays = exp;
+  const del = Number(val('e_deletion')); if (del > 0) input.deletionDays = del;
+  if (checked('e_removepw')) input.passwordMode = 'remove';
+  else if (val('e_password')) { input.passwordMode = 'set'; input.newPassword = val('e_password'); }
+  else input.passwordMode = 'keep';
+
+  isPending = true;
+  document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = true));
+  try {
+    const response = await sendRequest({ type: 'sends.update', id: s.id, input });
+    if (!response.ok) return setDetailStatus(response.error.message, true);
+    await renderSends();
+  } finally {
+    isPending = false;
+    document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = false));
+  }
 }
 
 async function createSend(mode: 'text' | 'file' = 'text'): Promise<void> {
