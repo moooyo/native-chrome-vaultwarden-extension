@@ -59,7 +59,8 @@ function renderSend(parsed: ParsedSendUrl, send: AccessedSend, passwordHash?: st
 }
 
 async function downloadFile(parsed: ParsedSendUrl, send: AccessedSend, passwordHash?: string): Promise<void> {
-  if (busy || !send.fileId || !send.id) return;
+  if (busy) return;
+  if (!send.fileId || !send.id) { setStatus(MESSAGES.unavailable, true); return; }
   busy = true;
   const button = document.getElementById('downloadButton') as HTMLButtonElement | null;
   if (button) button.disabled = true;

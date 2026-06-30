@@ -100,5 +100,13 @@ describe('downloadAndDecryptFile', () => {
     const fetchFn = (async () => new Response(Buffer.from(new Uint8Array([2, 0, 0])))) as unknown as typeof fetch;
     await expect(downloadAndDecryptFile(fetchFn, 'http://abs/x', 'https://vault.example', sendKey)).rejects.toMatchObject({ code: 'decrypt_failed' });
   });
+  it('resolves a relative download url against the server URL', async () => {
+    const derived = await deriveSendKey(sendKey);
+    const blob = await encryptAttachmentFile(new Uint8Array([1]), derived);
+    let seen = '';
+    const fetchFn = (async (u: string) => { seen = String(u); return new Response(Buffer.from(blob)); }) as unknown as typeof fetch;
+    await downloadAndDecryptFile(fetchFn, '/sends/s/x?t=jwt', 'https://vault.example', sendKey);
+    expect(seen).toBe('https://vault.example/sends/s/x?t=jwt');
+  });
 });
 

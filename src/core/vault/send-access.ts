@@ -104,7 +104,7 @@ export async function requestFileDownloadUrl(fetchFn: typeof fetch, serverUrl: s
 
 /** GET the download URL (absolute from the server; relative is prefixed with serverUrl) and decrypt. */
 export async function downloadAndDecryptFile(fetchFn: typeof fetch, downloadUrl: string, serverUrl: string, sendKey: Uint8Array): Promise<Uint8Array> {
-  const url = /^https?:\/\//.test(downloadUrl) ? downloadUrl : `${serverUrl}${downloadUrl}`;
+  const url = new URL(downloadUrl, serverUrl).toString();
   const res = await fetchFn(url);
   if (!res.ok) throw sendAccessError('unavailable');
   const buf = new Uint8Array(await res.arrayBuffer());
