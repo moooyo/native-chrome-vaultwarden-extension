@@ -1,0 +1,4 @@
+#result { margin-top: 16px; display: grid; gap: 10px; }
+#result .send-name { font-weight: 650; }
+#result .send-text { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, Menlo, Consolas, monospace; background: var(--surface-2, #f3f5fb); padding: 10px 12px; border-radius: 8px; }
+#result .send-file { display: flex; align-items: center; gap: 10px; }

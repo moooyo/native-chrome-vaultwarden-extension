@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="../theme.css" />
+  <link rel="stylesheet" href="receive.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="page-head">
+      <div class="brand"><span class="brand-mark" id="brandMark"></span>
+        <span class="titles"><span class="wordmark">Vaultwarden</span><span class="eyebrow">Receive a Send</span></span></div>
+    </header>
+    <main class="card settings">
+      <div class="settings-head"><h1>Receive a Send</h1>
+        <p class="muted">Paste a Vaultwarden Send link to view its text or download its file. The link's key decrypts it on this device.</p></div>
+      <label class="field" for="link"><span class="field-label">Send link</span>
+        <input id="link" class="input mono" type="url" placeholder="https://vault.example/#/send/…/…" /></label>
+      <label class="field" id="passwordField" hidden for="password"><span class="field-label">Password</span>
+        <input id="password" class="input" type="password" autocomplete="off" /></label>
+      <div class="actions"><button type="button" class="btn" id="accessButton"><span>Access Send</span></button></div>
+      <div id="result"></div>
+      <div id="status" class="status" aria-live="polite"></div>
+    </main>
+  </div>
+  <script type="module" src="receive.js"></script>
+</body>
+</html>
