@@ -8,14 +8,15 @@ import { symmetricKeyFromBytes, type SymmetricKey } from '../crypto/keys.js';
 import { encryptToText, encryptToBytes, decryptToText, decryptToBytes } from '../crypto/encstring.js';
 import { bytesToBase64, bytesToBase64Url, utf8ToBytes } from '../crypto/encoding.js';
 import type { SendRequest, SendResponse } from '../api/types.js';
+import { encryptAttachmentFile } from './attachments.js';
 
 const SEND_PASSWORD_ITERATIONS = 100_000;
 const DAY_MS = 86_400_000;
 
-/** Plaintext input for creating a text send. */
+/** Plaintext input for creating a text or file send. */
 export interface SendInput {
   name: string;
-  text: string;
+  text?: string;
   /** Hide the text behind a reveal on the access page. */
   hidden?: boolean;
   password?: string;
@@ -41,6 +42,10 @@ export interface SendSummary {
   accessCount: number;
   disabled: boolean;
   passwordProtected: boolean;
+  /** Decrypted file name for a file (type=1) send. */
+  fileName?: string;
+  /** Human-readable size (from the server's file.sizeName). */
+  sizeName?: string;
 }
 
 export interface SendCryptoDeps {
@@ -82,7 +87,7 @@ export async function buildTextSendRequest(
     name: await encryptToText(input.name || 'Send', derived),
     key: await encryptToBytes(sendKey, userKey),
     deletionDate: new Date(now() + clampDays(input.deletionDays, 1, 31) * DAY_MS).toISOString(),
-    text: { text: await encryptToText(input.text, derived), hidden: input.hidden ?? false },
+    text: { text: await encryptToText(input.text ?? '', derived), hidden: input.hidden ?? false },
     disabled: false,
     hideEmail: false,
   };
@@ -92,6 +97,42 @@ export async function buildTextSendRequest(
   }
   if (input.password) request.password = await hashSendPassword(input.password, sendKey);
   return { request, sendKey };
+}
+
+/**
+ * Build a create-file-send request: generate a send key, derive the field key, encrypt the file
+ * (EncArrayBuffer, reusing the attachment format) and its name, wrap the send key under the user key,
+ * hash the optional password. Returns the request plus the raw send key, encrypted blob and name.
+ */
+export async function buildFileSendRequest(
+  input: SendInput,
+  fileName: string,
+  fileBytes: Uint8Array,
+  userKey: SymmetricKey,
+  deps: SendCryptoDeps = {},
+): Promise<{ request: SendRequest; sendKey: Uint8Array; encryptedFile: Uint8Array; encryptedFileName: string }> {
+  const randomBytes = deps.randomBytes ?? ((n) => globalThis.crypto.getRandomValues(new Uint8Array(n)));
+  const now = deps.now ?? Date.now;
+  const sendKey = randomBytes(16);
+  const derived = await deriveSendKey(sendKey);
+  const encryptedFile = await encryptAttachmentFile(fileBytes, derived);
+  const encryptedFileName = await encryptToText(fileName, derived);
+  const request: SendRequest = {
+    type: 1,
+    name: await encryptToText(input.name || fileName, derived),
+    key: await encryptToBytes(sendKey, userKey),
+    deletionDate: new Date(now() + clampDays(input.deletionDays, 1, 31) * DAY_MS).toISOString(),
+    file: { fileName: encryptedFileName },
+    fileLength: encryptedFile.length,
+    disabled: false,
+    hideEmail: false,
+  };
+  if (input.maxAccessCount && input.maxAccessCount > 0) request.maxAccessCount = Math.trunc(input.maxAccessCount);
+  if (input.expirationDays && input.expirationDays > 0) {
+    request.expirationDate = new Date(now() + input.expirationDays * DAY_MS).toISOString();
+  }
+  if (input.password) request.password = await hashSendPassword(input.password, sendKey);
+  return { request, sendKey, encryptedFile, encryptedFileName };
 }
 
 /** Decrypt a send for display: unwrap the send key, derive the field key, decrypt name/text, build URL. */
@@ -111,6 +152,8 @@ export async function decryptSend(send: SendResponse, userKey: SymmetricKey, ser
     passwordProtected: Boolean(send.password),
   };
   if (send.type === 0 && send.text?.text) out.text = await safeDecrypt(send.text.text, derived);
+  if (send.type === 1 && send.file?.fileName) out.fileName = await safeDecrypt(send.file.fileName, derived);
+  if (send.file?.sizeName) out.sizeName = send.file.sizeName;
   if (send.expirationDate) out.expirationDate = send.expirationDate;
   if (send.maxAccessCount != null) out.maxAccessCount = send.maxAccessCount;
   return out;
