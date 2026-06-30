@@ -164,7 +164,8 @@ function toPopoverCandidate(c: FillItemCandidate): PopoverCandidate {
 }
 
 function isFillItemCandidates(data: unknown[]): data is FillItemCandidate[] {
-  return data.every((d) => isRecord(d) && typeof d.id === 'string' && typeof d.name === 'string' && typeof d.favorite === 'boolean' && isOptionalString(d.subtitle));
+  return data.every((d) => isRecord(d) && typeof d.id === 'string' && typeof d.name === 'string' && typeof d.favorite === 'boolean' && isOptionalString(d.subtitle)
+      && (d.reprompt === undefined || typeof d.reprompt === 'boolean'));
 }
 
 function isFillData(data: unknown): data is CardFillData & IdentityFillData {

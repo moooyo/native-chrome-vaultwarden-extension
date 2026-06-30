@@ -333,6 +333,25 @@ describe('autofill controller', () => {
     expect((document.getElementById('num') as HTMLInputElement).value).toBe('4111111111111111');
     expect((document.getElementById('csc') as HTMLInputElement).value).toBe('123');
   });
+
+  it('attaches an identity popover and fills the form on selection', async () => {
+    vi.mocked(sendRequest)
+      .mockResolvedValueOnce({ ok: true, data: [{ id: 'id-1', name: 'Ada Lovelace', subtitle: 'Ada Lovelace', favorite: false }] }) // findFillItems
+      .mockResolvedValueOnce({ ok: true, data: { firstName: 'Ada', lastName: 'Lovelace', address1: '1 Analytical Way', postalCode: 'EC1' } }); // getFillData
+    document.body.innerHTML = '<form><input autocomplete="given-name" id="fn"><input autocomplete="family-name" id="ln"><input autocomplete="street-address" id="st"><input autocomplete="postal-code" id="zip"></form>';
+
+    startAutofill('https://shop.example/account');
+    const idPopover = popoverState.instances.at(-1)!;
+    idPopover.options.onOpen();
+    await new Promise((r) => setTimeout(r, 0));
+    idPopover.options.onSelect('id-1');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sendRequest).toHaveBeenCalledWith({ type: 'autofill.findFillItems', kind: 'identity' });
+    expect(sendRequest).toHaveBeenCalledWith({ type: 'autofill.getFillData', cipherId: 'id-1', kind: 'identity' });
+    expect((document.getElementById('fn') as HTMLInputElement).value).toBe('Ada');
+    expect((document.getElementById('st') as HTMLInputElement).value).toBe('1 Analytical Way');
+  });
 });
 
 function popover(): FakePopover {
