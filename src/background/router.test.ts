@@ -486,4 +486,29 @@ describe('router', () => {
       .resolves.toEqual({ ok: true, data: { username: 'me@example.com', password: 'secret' } });
     expect(getAutofillCredentials).toHaveBeenCalledWith('1', 'https://example.com/login', 1);
   });
+
+  const settingsStub = {
+    getServerUrl: vi.fn(),
+    saveServerUrl: vi.fn(),
+    getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+    saveDefaultUriMatchStrategy: vi.fn(),
+    getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+    saveLockTimeout: vi.fn(),
+  };
+
+  it('routes autofill.findFillItems to vault.findFillItems', async () => {
+    const findFillItems = vi.fn(async () => [{ id: 'c1', name: 'Visa', favorite: false }]);
+    const router = createRouter({ auth: {}, vault: { findFillItems }, settings: settingsStub });
+    const res = await router.handle({ type: 'autofill.findFillItems', kind: 'card' });
+    expect(findFillItems).toHaveBeenCalledWith('card');
+    expect(res).toEqual({ ok: true, data: [{ id: 'c1', name: 'Visa', favorite: false }] });
+  });
+
+  it('routes autofill.getFillData to vault.getFillData', async () => {
+    const getFillData = vi.fn(async () => ({ number: '4111' }));
+    const router = createRouter({ auth: {}, vault: { getFillData }, settings: settingsStub });
+    const res = await router.handle({ type: 'autofill.getFillData', cipherId: 'c1', kind: 'card' });
+    expect(getFillData).toHaveBeenCalledWith('c1', 'card');
+    expect(res).toEqual({ ok: true, data: { number: '4111' } });
+  });
 });

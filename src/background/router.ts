@@ -268,6 +268,14 @@ export function createRouter(deps: RouterDeps) {
             const defaultStrategy = await deps.settings.getDefaultUriMatchStrategy();
             return { ok: true, data: await deps.vault.updateLoginPassword(request.cipherId, request.password, request.frameUrl, defaultStrategy) };
           }
+          case 'autofill.findFillItems': {
+            if (!deps.vault.findFillItems) throw new Error('vault.findFillItems is not wired');
+            return { ok: true, data: await deps.vault.findFillItems(request.kind) };
+          }
+          case 'autofill.getFillData': {
+            if (!deps.vault.getFillData) throw new Error('vault.getFillData is not wired');
+            return { ok: true, data: await deps.vault.getFillData(request.cipherId, request.kind) };
+          }
         }
       } catch (err) {
         if (err instanceof AppError) {
