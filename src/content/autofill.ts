@@ -6,7 +6,7 @@ import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
 import { fillLoginForm } from './fill.js';
 import { fillCardForm, fillIdentityForm } from './fill-card-identity.js';
 import { detectLoginForms, type DetectedLoginForm } from './form-detection.js';
-import { detectCardForms, detectIdentityForms, type DetectedFillForm } from './field-detection.js';
+import { detectCardForms, detectIdentityForms, isFillableField, type DetectedFillForm } from './field-detection.js';
 import type { FillFieldElement } from './field-detection.js';
 import { classifyCardField, classifyIdentityField, type CardRole, type IdentityRole } from './field-map.js';
 import { createAutofillPopover } from './popover.js';
@@ -327,6 +327,7 @@ function fillWholeForm(command: FillCommand): void {
 function fillSingleField(command: FillCommand): void {
   const el = lastContextElement;
   if (!el || !el.isConnected || !(el instanceof HTMLInputElement || el instanceof HTMLSelectElement)) return;
+  if (!isFillableField(el)) return;
   const hints = {
     autocomplete: el.getAttribute('autocomplete') ?? '', name: el.getAttribute('name') ?? '', id: el.id,
     ariaLabel: el.getAttribute('aria-label') ?? '', placeholder: el.getAttribute('placeholder') ?? '',

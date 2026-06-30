@@ -15,13 +15,17 @@ export function createAlarmHandlers(deps: AlarmHandlerDeps) {
       await deps.setLastActivity(deps.now());
     },
 
-    async handleAlarm(name: string): Promise<void> {
-      if (name !== IDLE_LOCK_ALARM) return;
+    async handleAlarm(name: string): Promise<boolean> {
+      if (name !== IDLE_LOCK_ALARM) return false;
       const idleMs = await deps.getIdleMs();
-      if (idleMs === null) return;
+      if (idleMs === null) return false;
       const last = await deps.getLastActivity();
-      if (last === undefined) return;
-      if (deps.now() - last > idleMs) await deps.auth.lock();
+      if (last === undefined) return false;
+      if (deps.now() - last > idleMs) {
+        await deps.auth.lock();
+        return true;
+      }
+      return false;
     },
   };
 }

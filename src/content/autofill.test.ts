@@ -380,6 +380,14 @@ describe('autofill controller', () => {
     expect((document.getElementById('num') as HTMLInputElement).value).toBe('');   // number untouched
   });
 
+  it('single-field fill skips a readonly target', () => {
+    document.body.innerHTML = `<form><input autocomplete="cc-number" id="num"><input autocomplete="cc-csc" id="csc" readonly></form>`;
+    const csc = document.getElementById('csc') as HTMLInputElement;
+    csc.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    handleContentCommand({ type: 'autofill.fill', scope: 'field', kind: 'card', data: { code: '123' } });
+    expect((document.getElementById('csc') as HTMLInputElement).value).toBe(''); // readonly not filled
+  });
+
   it('fills the whole detected form on a form-scope command', async () => {
     document.body.innerHTML = `
       <form>

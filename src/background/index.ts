@@ -74,5 +74,8 @@ browser.runtime.onMessage.addListener(async (message: unknown) => {
 });
 
 browser.alarms.onAlarm.addListener((alarm) => {
-  void alarms.handleAlarm(alarm.name);
+  void (async () => {
+    const locked = await alarms.handleAlarm(alarm.name);
+    if (locked) void contextMenu.refresh().catch(() => {});
+  })();
 });
