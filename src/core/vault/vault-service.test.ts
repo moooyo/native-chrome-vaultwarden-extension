@@ -1192,6 +1192,7 @@ describe('VaultService', () => {
     expect(data).toMatchObject({ firstName: 'Ada', lastName: 'Lovelace' });
     expect(JSON.stringify(data)).not.toContain('999-99-9999');
     expect(JSON.stringify(data)).not.toContain('P123');
+    expect(JSON.stringify(data)).not.toContain('L123');
   });
 
   it('getFillData rejects a kind/type mismatch and reprompt items', async () => {
@@ -1206,7 +1207,9 @@ describe('VaultService', () => {
     };
     const { service } = await makeService(sync);
     await service.sync();
-    await expect(service.getFillData('card-1', 'card')).rejects.toMatchObject({ code: 'reprompt_required' });
+    const repromptErr = await service.getFillData('card-1', 'card').then(() => null, (e) => e);
+    expect(repromptErr).toMatchObject({ code: 'reprompt_required' });
+    expect(JSON.stringify(repromptErr)).not.toContain('4111'); // no card number leaks via the thrown value
     await expect(service.getFillData('login-1', 'card')).rejects.toMatchObject({ code: 'denied' });
   });
 });
