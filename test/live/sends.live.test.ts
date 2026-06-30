@@ -6,7 +6,7 @@ vi.mock('webextension-polyfill', () => ({ default: { storage: { local: {}, sessi
 import { ApiClient } from '../../src/core/api/client.js';
 import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey } from '../../src/core/crypto/kdf.js';
 import { unwrapSymmetricKey } from '../../src/core/crypto/keys.js';
-import { buildFileSendRequest, buildSendAccessUrl } from '../../src/core/vault/sends.js';
+import { buildFileSendRequest, buildTextSendRequest, buildUpdateSendRequest, hashSendPassword, buildSendAccessUrl } from '../../src/core/vault/sends.js';
 import { parseSendUrl, accessSend, decryptAccessedSend, requestFileDownloadUrl, downloadAndDecryptFile } from '../../src/core/vault/send-access.js';
 import type { KeyValueStore } from '../../src/platform/store.js';
 
@@ -47,5 +47,40 @@ function memStore(): KeyValueStore {
     expect(Array.from(back)).toEqual([10, 20, 30, 40, 50]);
 
     await api.deleteSend(token, created.sendResponse.id);
+  }, 60_000);
+
+  it('edits a text send: rename + keep password, then remove password', async () => {
+    const api = new ApiClient({ serverUrlProvider: async () => SERVER, fetchFn: fetch, localStore: memStore() });
+    const pre = await api.prelogin(EMAIL);
+    const mk = await deriveMasterKey(PASSWORD, EMAIL, pre.kdfIterations);
+    const login = await api.passwordLogin({ email: EMAIL, masterPasswordHash: await deriveMasterPasswordHash(mk, PASSWORD) });
+    if (login.kind !== 'success') throw new Error('login failed');
+    const token = login.data.access_token;
+    const userKey = await unwrapSymmetricKey(login.data.Key, await stretchMasterKey(mk));
+
+    const built = await buildTextSendRequest({ name: 'Before', text: 'before', deletionDays: 1, password: 'pw123' }, userKey);
+    const created = await api.createSend(token, built.request);
+
+    // EDIT: rename + new text, KEEP password (omit)
+    const editReq = await buildUpdateSendRequest(created, { name: 'After', text: 'after', passwordMode: 'keep' }, userKey);
+    await api.updateSend(token, created.id, editReq);
+
+    // access with password → sees the new name/text
+    const pwHash = await hashSendPassword('pw123', built.sendKey);
+    const parsed = parseSendUrl(buildSendAccessUrl(SERVER, created.accessId, built.sendKey));
+    const raw = await accessSend(fetch, parsed.serverUrl, parsed.accessId, pwHash);
+    const send = await decryptAccessedSend(raw, parsed.sendKey);
+    expect(send.name).toBe('After');
+    expect(send.text).toBe('after');
+    // access without password → rejected (still protected)
+    await expect(accessSend(fetch, parsed.serverUrl, parsed.accessId)).rejects.toMatchObject({ code: 'password_required' });
+
+    // REMOVE password
+    await api.updateSend(token, created.id, await buildUpdateSendRequest(created, { name: 'After', text: 'after', passwordMode: 'remove' }, userKey));
+    await api.removeSendPassword(token, created.id);
+    const raw2 = await accessSend(fetch, parsed.serverUrl, parsed.accessId);  // no password now
+    expect((await decryptAccessedSend(raw2, parsed.sendKey)).name).toBe('After');
+
+    await api.deleteSend(token, created.id);
   }, 60_000);
 });
