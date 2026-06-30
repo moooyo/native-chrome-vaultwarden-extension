@@ -62,14 +62,23 @@ describe('context menu', () => {
     const { deps, sent } = makeDeps('unlocked');
     await createContextMenu(deps).handleClick('vw-fill|form|card|c1', undefined, 0);
     await createContextMenu(deps).handleClick('something-else', { id: 7 }, 0);
+    await createContextMenu(deps).handleClick('vw-fill|bogus|nope|c1', { id: 7 }, 0);
     expect(sent).toHaveLength(0);
     expect(deps.getFillData).not.toHaveBeenCalled();
+  });
+
+  it('builds nothing when logged out, even with items', async () => {
+    const { deps, created } = makeDeps('loggedOut', [{ id: 'c1', name: 'Visa', favorite: false }]);
+    await createContextMenu(deps).refresh();
+    expect(created).toHaveLength(0);
   });
 
   it('shouldRefreshMenu fires for sync/auth/cipher mutations, not for reads', () => {
     expect(shouldRefreshMenu('vault.sync')).toBe(true);
     expect(shouldRefreshMenu('auth.lock')).toBe(true);
     expect(shouldRefreshMenu('vault.createCipher')).toBe(true);
+    expect(shouldRefreshMenu('auth.unlockWithPin')).toBe(true);
+    expect(shouldRefreshMenu('vault.import')).toBe(true);
     expect(shouldRefreshMenu('vault.getField')).toBe(false);
     expect(shouldRefreshMenu('autofill.findFillItems')).toBe(false);
   });

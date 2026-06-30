@@ -44,8 +44,9 @@ function itemId(scope: 'form' | 'field', kind: FillKind, cipherId: string): stri
 function parseItemId(id: string): { scope: 'form' | 'field'; kind: FillKind; cipherId: string } | undefined {
   const parts = id.split('|');
   if (parts.length !== 4 || parts[0] !== 'vw-fill') return undefined;
-  const scope: 'form' | 'field' = parts[1] === 'field' ? 'field' : 'form';
-  const kind: FillKind = parts[2] === 'identity' ? 'identity' : 'card';
+  const scope = parts[1];
+  const kind = parts[2];
+  if ((scope !== 'form' && scope !== 'field') || (kind !== 'card' && kind !== 'identity')) return undefined;
   return { scope, kind, cipherId: parts[3]! };
 }
 
