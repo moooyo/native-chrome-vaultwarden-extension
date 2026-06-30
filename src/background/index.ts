@@ -7,6 +7,7 @@ import { createBrowserStore, hardenSessionAccessLevel } from '../platform/store.
 import { createRouter } from './router.js';
 import { createSettingsService } from './settings.js';
 import { createAlarmHandlers, IDLE_LOCK_ALARM } from './alarms.js';
+import { createContextMenu, shouldRefreshMenu } from './context-menu.js';
 import type { RequestMessage } from '../messaging/protocol.js';
 
 const localStore = createBrowserStore('local');
@@ -24,6 +25,18 @@ const api = new ApiClient({
 const auth = new AuthService({ api, session });
 const vault = new VaultService({ api, auth, session, localStore });
 const router = createRouter({ auth, vault, settings });
+const contextMenu = createContextMenu({
+  getState: () => auth.getState(),
+  findFillItems: (kind) => vault.findFillItems(kind),
+  getFillData: (cipherId, kind) => vault.getFillData(cipherId, kind),
+  menus: {
+    removeAll: () => browser.contextMenus.removeAll(),
+    create: (props) => { browser.contextMenus.create(props as Parameters<typeof browser.contextMenus.create>[0]); },
+  },
+  tabs: {
+    sendMessage: (tabId, message, options) => browser.tabs.sendMessage(tabId, message, options),
+  },
+});
 const alarms = createAlarmHandlers({
   auth,
   getIdleMs: () => settings.getIdleMs(),
@@ -38,14 +51,26 @@ void hardenSessionAccessLevel().catch(() => {
   /* default is already TRUSTED_CONTEXTS; ignore if the API is unsupported */
 });
 
+void contextMenu.refresh().catch(() => {});
+
+browser.contextMenus.onClicked.addListener((info, tab) => {
+  void contextMenu.handleClick(String(info.menuItemId), tab, info.frameId);
+});
+
 browser.runtime.onInstalled.addListener(() => {
   browser.alarms.create(IDLE_LOCK_ALARM, { periodInMinutes: 1 });
   void hardenSessionAccessLevel().catch(() => {});
+  void contextMenu.refresh().catch(() => {});
 });
 
 browser.runtime.onMessage.addListener(async (message: unknown) => {
   await alarms.touch();
-  return router.handle(message as RequestMessage);
+  const response = await router.handle(message as RequestMessage);
+  if (typeof message === 'object' && message !== null && typeof (message as { type?: unknown }).type === 'string'
+      && shouldRefreshMenu((message as { type: string }).type)) {
+    void contextMenu.refresh().catch(() => {});
+  }
+  return response;
 });
 
 browser.alarms.onAlarm.addListener((alarm) => {
