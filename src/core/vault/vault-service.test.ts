@@ -513,6 +513,19 @@ describe('VaultService', () => {
       await service.deleteSend('s1');
       expect(api.deleteSend).toHaveBeenCalledWith('access', 's1');
     });
+
+    it('createFileSend encrypts the file, uploads via v2, and returns a decrypted summary', async () => {
+      const { service, api } = await makeService();
+      (api as any).createSendFile = vi.fn(async (_t: string, req: any) => ({ url: '/sends/s1/file/f1', sendResponse: { ...req, id: 's1', accessId: 'acc1', file: { id: 'f1', fileName: req.file.fileName, sizeName: '3 Bytes' } } }));
+      (api as any).uploadSendFileData = vi.fn(async () => {});
+      const dataB64 = btoa(String.fromCharCode(1, 2, 3));
+      const summary = await service.createFileSend({ name: 'Doc', deletionDays: 7 }, dataB64, 'secret.pdf', 'http://localhost:8080');
+      expect((api as any).createSendFile).toHaveBeenCalled();
+      expect((api as any).uploadSendFileData).toHaveBeenCalledWith('access', '/sends/s1/file/f1', expect.any(Uint8Array), expect.any(String));
+      expect(summary.type).toBe(1);
+      expect(summary.fileName).toBe('secret.pdf');
+      expect(summary.url).toContain('/#/send/acc1/');
+    });
   });
 
   describe('save / update login capture', () => {

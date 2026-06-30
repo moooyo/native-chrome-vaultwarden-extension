@@ -15,7 +15,7 @@ import { base64UrlToBytes, base64ToBytes, bytesToBase64 } from '../crypto/encodi
 import { decryptAttachmentKey, decryptAttachmentFile, encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
 import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealthInput } from './password-health.js';
 import { buildExportJson, buildEncryptedExportJson, parseImport } from './vault-io.js';
-import { buildTextSendRequest, decryptSend, type SendInput, type SendSummary } from './sends.js';
+import { buildTextSendRequest, buildFileSendRequest, decryptSend, type SendInput, type SendSummary } from './sends.js';
 import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials, FillKind, FillItemCandidate, CardFillData, IdentityFillData } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
@@ -254,6 +254,20 @@ export class VaultService {
     const { request } = await buildTextSendRequest(input, userKey, this.deps.now ? { now: this.deps.now } : {});
     const created = await this.deps.api.createSend(token, request);
     return decryptSend(created, userKey, serverUrl);
+  }
+
+  /** Create a file Send: encrypt the file in the worker (EncArrayBuffer), upload via v2, return it
+   *  decrypted with its access URL. The plaintext file never leaves the worker. */
+  async createFileSend(input: SendInput, dataB64: string, fileName: string, serverUrl: string): Promise<SendSummary> {
+    const userKey = await this.requireUserKey();
+    const token = await this.requireToken();
+    const fileBytes = base64ToBytes(dataB64);
+    const { request, encryptedFile, encryptedFileName } = await buildFileSendRequest(
+      input, fileName, fileBytes, userKey, this.deps.now ? { now: this.deps.now } : {},
+    );
+    const { url, sendResponse } = await this.deps.api.createSendFile(token, request);
+    await this.deps.api.uploadSendFileData(token, url, encryptedFile, encryptedFileName);
+    return decryptSend(sendResponse, userKey, serverUrl);
   }
 
   /** Delete a Send. */
