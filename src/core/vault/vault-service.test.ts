@@ -526,6 +526,16 @@ describe('VaultService', () => {
       expect(summary.fileName).toBe('secret.pdf');
       expect(summary.url).toContain('/#/send/acc1/');
     });
+
+    it('createFileSend deletes the orphan send if the blob upload fails', async () => {
+      const { service, api } = await makeService();
+      (api as any).createSendFile = vi.fn(async () => ({ url: '/sends/s9/file/f9', sendResponse: { id: 's9', accessId: 'a9', type: 1, file: { fileName: '2.enc' } } }));
+      (api as any).uploadSendFileData = vi.fn(async () => { throw new Error('upload boom'); });
+      (api as any).deleteSend = vi.fn(async () => {});
+      const dataB64 = btoa(String.fromCharCode(1, 2, 3));
+      await expect(service.createFileSend({ name: 'Doc', deletionDays: 7 }, dataB64, 'f.pdf', 'http://localhost:8080')).rejects.toThrow('upload boom');
+      expect((api as any).deleteSend).toHaveBeenCalledWith('access', 's9');
+    });
   });
 
   describe('save / update login capture', () => {

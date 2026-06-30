@@ -266,10 +266,13 @@ export class VaultService {
       input, fileName, fileBytes, userKey, this.deps.now ? { now: this.deps.now } : {},
     );
     const { url, sendResponse } = await this.deps.api.createSendFile(token, request);
-    // If the blob upload fails the Send record already exists server-side with no file. We do NOT
-    // delete it here on purpose: Vaultwarden reaps unfinished file Sends, and a cleanup delete is
-    // deferred to milestone 2 (where the live round-trip pins the exact failure modes).
-    await this.deps.api.uploadSendFileData(token, url, encryptedFile, encryptedFileName);
+    try {
+      await this.deps.api.uploadSendFileData(token, url, encryptedFile, encryptedFileName);
+    } catch (err) {
+      // The Send record exists but holds no blob — delete the orphan, then surface the original error.
+      await this.deps.api.deleteSend(token, sendResponse.id).catch(() => {});
+      throw err;
+    }
     return decryptSend(sendResponse, userKey, serverUrl);
   }
 
