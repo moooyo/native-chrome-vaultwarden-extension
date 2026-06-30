@@ -69,6 +69,23 @@ export interface IdentityFillData {
   username?: string;
 }
 
+/** Background → content: fill a detected form (scope 'form') or only the last right-clicked field
+ *  (scope 'field') with the chosen card/identity. Sent via tabs.sendMessage from the context menu. */
+export interface FillCommand {
+  type: 'autofill.fill';
+  scope: 'form' | 'field';
+  kind: FillKind;
+  data: CardFillData | IdentityFillData;
+}
+
+/** Background → content: the chosen item could not be released inline (reprompt-protected). */
+export interface FillErrorCommand {
+  type: 'autofill.fillError';
+  code: 'reprompt_required';
+}
+
+export type ContentCommand = FillCommand | FillErrorCommand;
+
 export type RequestMessage =
   | { type: 'auth.getState' }
   | { type: 'auth.login'; email: string; masterPassword: string }
