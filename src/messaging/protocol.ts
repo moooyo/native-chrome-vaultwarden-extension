@@ -137,6 +137,7 @@ export type RequestMessage =
   | { type: 'autofill.getCredentials'; cipherId: string; frameUrl: string }
   | { type: 'sends.list' }
   | { type: 'sends.createText'; input: SendInput }
+  | { type: 'sends.createFile'; input: SendInput; dataB64: string; fileName: string }
   | { type: 'sends.delete'; id: string }
   | { type: 'autofill.checkSaveLogin'; frameUrl: string; username?: string; password: string }
   | { type: 'autofill.saveLogin'; frameUrl: string; username?: string; password: string }

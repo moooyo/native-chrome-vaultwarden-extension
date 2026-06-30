@@ -511,4 +511,13 @@ describe('router', () => {
     expect(getFillData).toHaveBeenCalledWith('c1', 'card');
     expect(res).toEqual({ ok: true, data: { number: '4111' } });
   });
+
+  it('routes sends.createFile to vault.createFileSend with the server URL', async () => {
+    const createFileSend = vi.fn(async () => ({ id: 's1', url: 'u', name: 'Doc', type: 1 }));
+    const settings = { getServerUrl: vi.fn(async () => 'http://localhost:8080'), saveServerUrl: vi.fn(), getDefaultUriMatchStrategy: vi.fn(async () => 0), saveDefaultUriMatchStrategy: vi.fn(), getLockTimeout: vi.fn(async () => '15'), saveLockTimeout: vi.fn() };
+    const router = createRouter({ auth: {}, vault: { createFileSend } as never, settings: settings as never });
+    const res = await router.handle({ type: 'sends.createFile', input: { name: 'Doc', deletionDays: 7 } as never, dataB64: 'AQID', fileName: 'secret.pdf' });
+    expect(createFileSend).toHaveBeenCalledWith({ name: 'Doc', deletionDays: 7 }, 'AQID', 'secret.pdf', 'http://localhost:8080');
+    expect(res).toEqual({ ok: true, data: { send: { id: 's1', url: 'u', name: 'Doc', type: 1 } } });
+  });
 });
