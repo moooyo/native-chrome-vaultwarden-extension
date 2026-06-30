@@ -536,6 +536,30 @@ describe('VaultService', () => {
       await expect(service.createFileSend({ name: 'Doc', deletionDays: 7 }, dataB64, 'f.pdf', 'http://localhost:8080')).rejects.toThrow('upload boom');
       expect((api as any).deleteSend).toHaveBeenCalledWith('access', 's9');
     });
+
+    it('updateSend re-fetches the existing send, PUTs the rebuilt request, and returns the decrypted summary', async () => {
+      const { service, api } = await makeService();
+      const existing = { id: 's1', accessId: 'a1', type: 0, name: FIELD_VECTOR.encString, key: FIELD_VECTOR.encString, text: { text: FIELD_VECTOR.encString }, deletionDate: new Date(0).toISOString(), accessCount: 0 };
+      (api as any).listSends = vi.fn(async () => [existing]);
+      (api as any).updateSend = vi.fn(async () => existing);
+      (api as any).removeSendPassword = vi.fn(async () => {});
+      const summary = await service.updateSend('s1', { name: 'New', text: 'x', passwordMode: 'keep' }, 'http://localhost:8080');
+      expect((api as any).updateSend).toHaveBeenCalledWith('access', 's1', expect.objectContaining({ key: existing.key }));
+      expect((api as any).removeSendPassword).not.toHaveBeenCalled();
+      expect(summary.id).toBe('s1');
+    });
+
+    it('updateSend calls removeSendPassword when passwordMode is remove, and throws when the send is gone', async () => {
+      const { service, api } = await makeService();
+      const existing = { id: 's1', accessId: 'a1', type: 0, name: FIELD_VECTOR.encString, key: FIELD_VECTOR.encString, text: { text: FIELD_VECTOR.encString }, deletionDate: new Date(0).toISOString(), accessCount: 0 };
+      (api as any).listSends = vi.fn(async () => [existing]);
+      (api as any).updateSend = vi.fn(async () => existing);
+      (api as any).removeSendPassword = vi.fn(async () => {});
+      await service.updateSend('s1', { name: 'N', passwordMode: 'remove' }, 'http://x');
+      expect((api as any).removeSendPassword).toHaveBeenCalledWith('access', 's1');
+      (api as any).listSends = vi.fn(async () => []);
+      await expect(service.updateSend('missing', { name: 'N' }, 'http://x')).rejects.toMatchObject({ code: 'error' });
+    });
   });
 
   describe('save / update login capture', () => {

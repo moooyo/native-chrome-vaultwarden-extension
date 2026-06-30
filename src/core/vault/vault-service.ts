@@ -15,7 +15,7 @@ import { base64UrlToBytes, base64ToBytes, bytesToBase64 } from '../crypto/encodi
 import { decryptAttachmentKey, decryptAttachmentFile, encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
 import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealthInput } from './password-health.js';
 import { buildExportJson, buildEncryptedExportJson, parseImport } from './vault-io.js';
-import { buildTextSendRequest, buildFileSendRequest, decryptSend, type SendInput, type SendSummary } from './sends.js';
+import { buildTextSendRequest, buildFileSendRequest, buildUpdateSendRequest, decryptSend, type SendInput, type SendSummary, type UpdateSendInput } from './sends.js';
 import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials, FillKind, FillItemCandidate, CardFillData, IdentityFillData } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
@@ -274,6 +274,20 @@ export class VaultService {
       throw err;
     }
     return decryptSend(sendResponse, userKey, serverUrl);
+  }
+
+  /** Edit an existing Send's metadata: re-encrypt under its existing send key and PUT. Password removal
+   *  uses the dedicated endpoint. Returns the updated, decrypted summary. */
+  async updateSend(id: string, input: UpdateSendInput, serverUrl: string): Promise<SendSummary> {
+    const userKey = await this.requireUserKey();
+    const token = await this.requireToken();
+    const existing = (await this.deps.api.listSends(token)).find((s) => s.id === id);
+    if (!existing) throw new AppError('error', 'Send not found');
+    const request = await buildUpdateSendRequest(existing, input, userKey, this.deps.now ? { now: this.deps.now } : {});
+    await this.deps.api.updateSend(token, id, request);
+    if (input.passwordMode === 'remove') await this.deps.api.removeSendPassword(token, id);
+    const updated = (await this.deps.api.listSends(token)).find((s) => s.id === id) ?? existing;
+    return decryptSend(updated, userKey, serverUrl);
   }
 
   /** Delete a Send. */
