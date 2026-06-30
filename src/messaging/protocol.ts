@@ -29,6 +29,46 @@ export interface AutofillCredentials {
   totp?: string;
 }
 
+export type FillKind = 'card' | 'identity';
+
+/** A card/identity candidate for the fill popover. Carries no secret — subtitle is brand/full name. */
+export interface FillItemCandidate {
+  id: string;
+  name: string;
+  subtitle?: string;
+  favorite: boolean;
+  /** True when reprompt-protected; cannot be filled inline (worker refuses). */
+  reprompt?: boolean;
+}
+
+/** Fillable card fields. Number + code are sensitive; released only on explicit user selection. */
+export interface CardFillData {
+  cardholderName?: string;
+  number?: string;
+  expMonth?: string;
+  expYear?: string;
+  code?: string;
+}
+
+/** Fillable identity fields. National-ID secrets (ssn/passport/license) are intentionally absent. */
+export interface IdentityFillData {
+  title?: string;
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
+  address1?: string;
+  address2?: string;
+  address3?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  country?: string;
+  company?: string;
+  email?: string;
+  phone?: string;
+  username?: string;
+}
+
 export type RequestMessage =
   | { type: 'auth.getState' }
   | { type: 'auth.login'; email: string; masterPassword: string }
@@ -83,7 +123,9 @@ export type RequestMessage =
   | { type: 'sends.delete'; id: string }
   | { type: 'autofill.checkSaveLogin'; frameUrl: string; username?: string; password: string }
   | { type: 'autofill.saveLogin'; frameUrl: string; username?: string; password: string }
-  | { type: 'autofill.updateLogin'; cipherId: string; frameUrl: string; password: string };
+  | { type: 'autofill.updateLogin'; cipherId: string; frameUrl: string; password: string }
+  | { type: 'autofill.findFillItems'; kind: FillKind }
+  | { type: 'autofill.getFillData'; cipherId: string; kind: FillKind };
 
 export type ResponseMessage =
   | { ok: true; data: { state: SessionState } }
@@ -108,6 +150,8 @@ export type ResponseMessage =
   | { ok: true; data: null }
   | { ok: true; data: AutofillCandidate[] }
   | { ok: true; data: AutofillCredentials }
+  | { ok: true; data: FillItemCandidate[] }
+  | { ok: true; data: CardFillData | IdentityFillData }
   | { ok: true; data: SaveLoginPrompt }
   | { ok: true; data: { sends: SendSummary[] } }
   | { ok: true; data: { send: SendSummary } }
