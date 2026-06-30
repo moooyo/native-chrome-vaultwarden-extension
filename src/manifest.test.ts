@@ -23,4 +23,8 @@ describe('manifest', () => {
   it('declares the storage permission required for a trusted-context session store', () => {
     expect(manifest.permissions).toContain('storage');
   });
+
+  it('requests the contextMenus permission for right-click fill', () => {
+    expect(manifest.permissions).toContain('contextMenus');
+  });
 });
