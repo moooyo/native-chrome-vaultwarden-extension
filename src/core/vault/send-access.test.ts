@@ -18,9 +18,14 @@ describe('parseSendUrl', () => {
     expect(() => parseSendUrl('https://vault.example/#/login')).toThrowError(/invalid_link/);
     expect(() => parseSendUrl('not a url')).toThrowError(/invalid_link/);
     expect(() => parseSendUrl('https://vault.example/#/send/acc/')).toThrowError(/invalid_link/);
+    expect(() => parseSendUrl(`https://#/send/acc/${bytesToBase64Url(sendKey)}`)).toThrowError(/invalid_link/);
   });
   it('rejects a key that is not 16 bytes', () => {
     expect(() => parseSendUrl(`https://vault.example/#/send/acc/${bytesToBase64Url(new Uint8Array(8))}`)).toThrowError(/invalid_link/);
+  });
+  it('throws an error carrying code invalid_link', () => {
+    const err = (() => { try { parseSendUrl('nope'); return null; } catch (e) { return e as { code?: string }; } })();
+    expect(err?.code).toBe('invalid_link');
   });
 });
 
@@ -37,6 +42,12 @@ describe('decryptAccessedSend', () => {
     const out = await decryptAccessedSend(raw, sendKey);
     expect(out).toMatchObject({ id: 'send-2', type: 1, name: 'Doc', fileName: 'secret.pdf', fileId: 'f1', sizeName: '3 KB' });
     expect(out.text).toBeUndefined();
+  });
+  it('degrades an undecryptable field to a placeholder rather than throwing', async () => {
+    const raw = { id: 'send-x', type: 0, name: 'not-a-valid-encstring', text: { text: 'also-bad' } };
+    const out = await decryptAccessedSend(raw, sendKey);
+    expect(out.name).toBe('(undecryptable)');
+    expect(out.text).toBe('(undecryptable)');
   });
 });
 

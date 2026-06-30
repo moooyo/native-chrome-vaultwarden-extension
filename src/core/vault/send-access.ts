@@ -37,7 +37,7 @@ export function parseSendUrl(link: string): ParsedSendUrl {
   const at = trimmed.indexOf(marker);
   if (at < 0) throw sendAccessError('invalid_link');
   const serverUrl = trimmed.slice(0, at).replace(/\/$/, '');
-  if (!/^https?:\/\//.test(serverUrl)) throw sendAccessError('invalid_link');
+  if (!/^https?:\/\/[^/]/.test(serverUrl)) throw sendAccessError('invalid_link');
   const [accessId, keyPart, ...extra] = trimmed.slice(at + marker.length).split('/');
   if (!accessId || !keyPart || extra.length) throw sendAccessError('invalid_link');
   let sendKey: Uint8Array;
