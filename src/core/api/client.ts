@@ -232,7 +232,7 @@ export class ApiClient {
   async createSendFile(accessToken: string, send: SendRequest): Promise<SendFileUploadResponse> {
     return this.jsonRequest<SendFileUploadResponse>('/api/sends/file/v2', {
       method: 'POST',
-      headers: { authorization: `Bearer ${accessToken}` },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(send),
     });
   }

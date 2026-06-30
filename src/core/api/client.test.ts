@@ -396,6 +396,7 @@ describe('ApiClient Sends - file uploads', () => {
     const [calledUrl, callInit] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
     expect(String(calledUrl)).toContain('/api/sends/file/v2');
     expect(callInit.method).toBe('POST');
+    expect(callInit.headers).toMatchObject({ 'content-type': 'application/json' });
     expect(res.url).toBe('/sends/s1/file/f1');
   });
 
