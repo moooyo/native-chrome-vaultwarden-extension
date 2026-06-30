@@ -1140,4 +1140,31 @@ describe('VaultService', () => {
     expect(entries.every((e) => e.weak && e.reuseCount === 2)).toBe(true);
     expect(JSON.stringify(entries)).not.toContain('weakpass');
   });
+
+  it('findFillItems lists all cards (no URL match), sorted favorite-then-name, without secrets', async () => {
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [
+        { id: 'card-b', type: 3, name: await encUnder('Visa B', testUserKey), favorite: false, organizationId: null,
+          card: { brand: await encUnder('Visa', testUserKey), number: await encUnder('4111', testUserKey), code: await encUnder('123', testUserKey) } },
+        { id: 'card-a', type: 3, name: await encUnder('Amex A', testUserKey), favorite: true, organizationId: null,
+          card: { brand: await encUnder('Amex', testUserKey), number: await encUnder('3782', testUserKey), code: await encUnder('999', testUserKey) } },
+        { id: 'login-x', type: 1, name: await encUnder('Login', testUserKey), favorite: false, organizationId: null,
+          login: { username: await encUnder('u', testUserKey), password: await encUnder('p', testUserKey) } },
+      ],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    const items = await service.findFillItems('card');
+    expect(items.map((i) => i.id)).toEqual(['card-a', 'card-b']); // favorite first
+    expect(items[0]).toMatchObject({ id: 'card-a', name: 'Amex A', subtitle: 'Amex', favorite: true });
+    expect(JSON.stringify(items)).not.toContain('3782');
+  });
+
+  it('findFillItems throws locked when the vault is locked', async () => {
+    const { service, session } = await makeService();
+    await service.sync();
+    await session.lock();
+    await expect(service.findFillItems('identity')).rejects.toMatchObject({ code: 'locked' });
+  });
 });

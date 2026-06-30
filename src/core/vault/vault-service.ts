@@ -17,7 +17,7 @@ import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealt
 import { buildExportJson, buildEncryptedExportJson, parseImport } from './vault-io.js';
 import { buildTextSendRequest, decryptSend, type SendInput, type SendSummary } from './sends.js';
 import { AppError } from '../errors.js';
-import type { AutofillCandidate, AutofillCredentials } from '../../messaging/protocol.js';
+import type { AutofillCandidate, AutofillCredentials, FillKind, FillItemCandidate, CardFillData, IdentityFillData } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
 import { buildEquivalentDomainIndex } from './equivalent-domains.js';
 
@@ -645,6 +645,29 @@ export class VaultService {
       return (a.username ?? '').localeCompare(b.username ?? '', undefined, { sensitivity: 'base' });
     });
     return candidates;
+  }
+
+  /** List every card (type 3) or identity (type 4) as a fill candidate. No URL match — card/identity
+   *  have no URI; authorization is the user's explicit popover selection. Never returns secrets. */
+  async findFillItems(kind: FillKind): Promise<FillItemCandidate[]> {
+    const summaries = await this.deps.localStore.get<CipherSummary[]>(SUMMARY_CACHE_KEY);
+    if (!summaries) throw new AppError('sync_required', 'Sync required');
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) throw new AppError('locked', 'Vault is locked');
+    const wantType = kind === 'card' ? 3 : 4;
+    const items = summaries
+      .filter((item) => item.type === wantType && !item.undecryptable && !item.deletedDate)
+      .map((item) => {
+        const candidate: FillItemCandidate = { id: item.id, name: item.name, favorite: item.favorite };
+        if (item.subtitle) candidate.subtitle = item.subtitle;
+        if (item.reprompt) candidate.reprompt = true;
+        return candidate;
+      });
+    items.sort((a, b) => {
+      if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
+    return items;
   }
 
   async getAutofillCredentials(
