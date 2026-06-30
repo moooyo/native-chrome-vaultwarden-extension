@@ -247,12 +247,20 @@ export interface SendRequest {
   key: string;
   text?: SendTextData | null;
   file?: SendFileData | null;
+  fileLength?: number | null;
   maxAccessCount?: number | null;
   expirationDate?: string | null;
   deletionDate: string;
   password?: string | null;
   disabled?: boolean;
   hideEmail?: boolean | null;
+}
+
+/** Response of POST /api/sends/file/v2: where to upload the encrypted blob, plus the created Send. */
+export interface SendFileUploadResponse {
+  url: string;
+  fileUploadType?: number;
+  sendResponse: SendResponse;
 }
 
 /** A collection groups organization ciphers. `name` is an EncString encrypted with the org key. */
