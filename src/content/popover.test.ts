@@ -40,13 +40,21 @@ describe('autofill popover', () => {
     trustedClick(popoverRoot(popover).querySelector<HTMLButtonElement>('button')!);
     expect(onSelect).toHaveBeenCalledWith('1');
     expect(popoverRoot(popover).textContent).toContain('me@example.com');
+    expect(popoverRoot(popover).textContent).not.toContain('secret');
   });
 
   it('uses a card header when kind is card', () => {
     const anchor = document.getElementById('pass') as HTMLElement;
     const popover = createAutofillPopover({ anchor, kind: 'card', onOpen: vi.fn(), onSelect: vi.fn() });
-    popover.showCandidates([{ id: '1', name: 'Visa', sub: 'Visa', favorite: false }]);
+    popover.showCandidates([{ id: '1', name: 'Visa', sub: '•••• 4242', favorite: false }]);
     expect(popoverRoot(popover).textContent).toContain('Fill card');
+  });
+
+  it('uses an identity header when kind is identity', () => {
+    const anchor = document.getElementById('pass') as HTMLElement;
+    const popover = createAutofillPopover({ anchor, kind: 'identity', onOpen: vi.fn(), onSelect: vi.fn() });
+    popover.showCandidates([{ id: '1', name: 'Ada Lovelace', sub: '1 Analytical Way', favorite: false }]);
+    expect(popoverRoot(popover).textContent).toContain('Fill identity');
   });
 
   it('ignores untrusted candidate clicks', () => {
