@@ -39,6 +39,24 @@ describe('fillCardForm', () => {
     fillCardForm(form, { number: '4111', expMonth: '09' });
     expect((document.getElementById('mm') as HTMLSelectElement).value).toBe('09');
   });
+
+  it('composes a four-digit MM/YYYY expiry field', () => {
+    document.body.innerHTML = `<form><input autocomplete="cc-number"><input autocomplete="cc-exp" id="exp" placeholder="MM/YYYY"></form>`;
+    const form = detectCardForms()[0]!;
+    fillCardForm(form, { number: '4111', expMonth: '9', expYear: '2030' });
+    expect((document.getElementById('exp') as HTMLInputElement).value).toBe('09/2030');
+  });
+
+  it('matches a <select> by visible option text when value differs', () => {
+    document.body.innerHTML = `
+      <form>
+        <input autocomplete="cc-number">
+        <select autocomplete="cc-exp-month" id="mm"><option value="">--</option><option value="9">September</option></select>
+      </form>`;
+    const form = detectCardForms()[0]!;
+    fillCardForm(form, { number: '4111', expMonth: 'September' });
+    expect((document.getElementById('mm') as HTMLSelectElement).value).toBe('9');
+  });
 });
 
 describe('fillIdentityForm', () => {

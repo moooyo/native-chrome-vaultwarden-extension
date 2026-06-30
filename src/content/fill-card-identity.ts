@@ -56,7 +56,9 @@ function formatExp(el: FillFieldElement, month: string, year: string): string {
   const mm = month.padStart(2, '0').slice(-2);
   const placeholder = el.getAttribute('placeholder') ?? '';
   const wantsFour = /y{4}/i.test(placeholder) || (el instanceof HTMLInputElement && el.maxLength >= 7);
-  const yy = wantsFour ? year.padStart(4, '20').slice(-4) : year.slice(-2);
+  const yy = wantsFour
+    ? (year.length >= 4 ? year.slice(-4) : `20${year.padStart(2, '0').slice(-2)}`)
+    : year.slice(-2);
   return `${mm}/${yy}`;
 }
 
