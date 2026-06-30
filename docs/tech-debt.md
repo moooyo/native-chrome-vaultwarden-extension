@@ -126,8 +126,13 @@
   KDF 迭代有下限保护。剩余：Argon2 目标 KDF（按范围暂忽略）、全库密钥轮换。
 - ✅ **附件（attachments）**（已交付）：per-attachment key（库密钥包裹）+ EncArrayBuffer 文件格式；
   详情展示 + 按需下载解密（reprompt 门控）+ 上传（multipart，Vaultwarden 兼容）+ 删除。
-- ✅ **Sends（文本）**（已交付）：HKDF 多块派生 send key（`derive_shareable_key`）、创建/列表/删除、
-  密码哈希、分享链接（含 send key）。剩余：**文件 Sends**、编辑现有 Send、Send 访问/解密页（接收端）。
+- ✅ **Sends（文本 + 文件 + 接收端）**（已交付）：HKDF 多块派生 send key（`derive_shareable_key`）、文本/文件
+  创建（文件经 send key 加密成 EncArrayBuffer、v2 两步上传）、列表/删除、密码哈希、分享链接（含 send key）。
+  **接收端**（已交付，2026-06-30，里程碑 2；设计/计划见 `docs/superpowers/`）：独立 `ui/receive` 页 +
+  `core/vault/send-access.ts`（parseSendUrl / 匿名 accessSend / decryptAccessedSend / 文件下载解密，注入 fetch、
+  页面内无 vault 机密）；popup「Receive a Send」入口；跨服务器经 `chrome.permissions.request`；上传失败清理孤儿
+  Send。协议经真实服务端实测固定（access 响应 `id`=sendId、下载 url 绝对），并有 `LIVE=1` 端到端往返测试。
+  剩余：**编辑现有 Send**（PUT /api/sends）。
 - ✅ **Card/Identity 自动填充**（已交付，2026-06-30，两个里程碑；设计/计划见 `docs/superpowers/`）：
   - **M1 弹层填充**：`field-map`（autocomplete/name 提示→卡/身份角色，纯函数）+ `field-detection`（卡门槛＝有卡号；
     身份保守门槛＝地址信号或姓+名）+ `fill-card-identity`（合并 exp、月年下拉、`<select>` 匹配、全名合成）；
