@@ -1167,4 +1167,46 @@ describe('VaultService', () => {
     await session.lock();
     await expect(service.findFillItems('identity')).rejects.toMatchObject({ code: 'locked' });
   });
+
+  it('getFillData returns card fields including number/code on explicit fetch', async () => {
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [{ id: 'card-1', type: 3, name: await encUnder('Visa', testUserKey), favorite: false, organizationId: null,
+        card: { number: await encUnder('4111111111111111', testUserKey), code: await encUnder('123', testUserKey), expMonth: await encUnder('9', testUserKey), expYear: await encUnder('2030', testUserKey) } }],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    await expect(service.getFillData('card-1', 'card')).resolves.toEqual({ number: '4111111111111111', code: '123', expMonth: '9', expYear: '2030' });
+  });
+
+  it('getFillData omits identity national-ID secrets (ssn/passport/license)', async () => {
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [{ id: 'id-1', type: 4, name: await encUnder('Me', testUserKey), favorite: false, organizationId: null,
+        identity: { firstName: await encUnder('Ada', testUserKey), lastName: await encUnder('Lovelace', testUserKey),
+          ssn: await encUnder('999-99-9999', testUserKey), passportNumber: await encUnder('P123', testUserKey), licenseNumber: await encUnder('L123', testUserKey) } }],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    const data = await service.getFillData('id-1', 'identity');
+    expect(data).toMatchObject({ firstName: 'Ada', lastName: 'Lovelace' });
+    expect(JSON.stringify(data)).not.toContain('999-99-9999');
+    expect(JSON.stringify(data)).not.toContain('P123');
+  });
+
+  it('getFillData rejects a kind/type mismatch and reprompt items', async () => {
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [
+        { id: 'card-1', type: 3, name: await encUnder('Visa', testUserKey), favorite: false, organizationId: null, reprompt: 1,
+          card: { number: await encUnder('4111', testUserKey) } },
+        { id: 'login-1', type: 1, name: await encUnder('L', testUserKey), favorite: false, organizationId: null,
+          login: { password: await encUnder('p', testUserKey) } },
+      ],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    await expect(service.getFillData('card-1', 'card')).rejects.toMatchObject({ code: 'reprompt_required' });
+    await expect(service.getFillData('login-1', 'card')).rejects.toMatchObject({ code: 'denied' });
+  });
 });

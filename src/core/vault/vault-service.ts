@@ -670,6 +670,44 @@ export class VaultService {
     return items;
   }
 
+  /** Decrypt a card/identity for filling. Refuses kind/type mismatch and reprompt items; strips
+   *  identity national-ID secrets. Card number + code ARE returned (released on explicit selection). */
+  async getFillData(cipherId: string, kind: FillKind): Promise<CardFillData | IdentityFillData> {
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    if (!cache) throw new AppError('sync_required', 'Sync required');
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) throw new AppError('locked', 'Vault is locked');
+    const cipher = cache.ciphers.find((c) => c.id === cipherId);
+    if (!cipher) throw new AppError('denied', 'Autofill item is not allowed');
+    const wantType = kind === 'card' ? 3 : 4;
+    if (cipher.type !== wantType) throw new AppError('denied', 'Autofill item type mismatch');
+    const orgKeys = await this.buildOrgKeys(cache.profile);
+    const decrypted = await decryptCipher(cipher, userKey, orgKeys);
+    if (!decrypted || decrypted.undecryptable) throw new AppError('denied', 'Autofill item is not allowed');
+    if (decrypted.reprompt) throw new AppError('reprompt_required', 'This item requires master-password verification in the extension');
+    if (kind === 'card') {
+      const c = decrypted.card ?? {};
+      const out: CardFillData = {};
+      if (c.cardholderName) out.cardholderName = c.cardholderName;
+      if (c.number) out.number = c.number;
+      if (c.expMonth) out.expMonth = c.expMonth;
+      if (c.expYear) out.expYear = c.expYear;
+      if (c.code) out.code = c.code;
+      return out;
+    }
+    const i = decrypted.identity ?? {};
+    const out: IdentityFillData = {};
+    const fields: Array<keyof IdentityFillData> = [
+      'title', 'firstName', 'middleName', 'lastName', 'address1', 'address2', 'address3',
+      'city', 'state', 'postalCode', 'country', 'company', 'email', 'phone', 'username',
+    ];
+    for (const key of fields) {
+      const value = (i as Record<string, string | undefined>)[key];
+      if (value) out[key] = value;
+    }
+    return out;
+  }
+
   async getAutofillCredentials(
     cipherId: string,
     frameUrl: string,
