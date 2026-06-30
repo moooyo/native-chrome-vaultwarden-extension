@@ -172,13 +172,13 @@ function findTotpInput(
     .at(0);
 }
 
-function isVisibleInTree(input: HTMLInputElement): boolean {
-  if (!input.isConnected) return false;
-  const view = input.ownerDocument.defaultView;
+export function isVisibleInTree(element: HTMLElement): boolean {
+  if (!element.isConnected) return false;
+  const view = element.ownerDocument.defaultView;
   if (!view) return false;
-  for (let element: HTMLElement | null = input; element; element = element.parentElement) {
-    const style = view.getComputedStyle(element);
-    if (element.hidden || style.display === 'none' || style.visibility === 'hidden') return false;
+  for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+    const style = view.getComputedStyle(node);
+    if (node.hidden || style.display === 'none' || style.visibility === 'hidden') return false;
   }
   return true;
 }

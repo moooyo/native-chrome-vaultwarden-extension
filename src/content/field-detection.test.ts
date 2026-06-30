@@ -65,4 +65,14 @@ describe('identity form detection (conservative)', () => {
     expect(forms[0]?.fields.has('email')).toBe(false);
     expect(forms[0]?.fields.has('firstName')).toBe(true);
   });
+
+  it('does not fire on a lone phone field', () => {
+    document.body.innerHTML = `<form><input type="tel" autocomplete="tel"></form>`;
+    expect(detectIdentityForms()).toEqual([]);
+  });
+
+  it('does not fire on a lone full-name field', () => {
+    document.body.innerHTML = `<form><input autocomplete="name"></form>`;
+    expect(detectIdentityForms()).toEqual([]);
+  });
 });

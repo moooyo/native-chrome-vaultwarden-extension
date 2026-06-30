@@ -1,4 +1,4 @@
-import { isFillableInput } from './form-detection.js';
+import { isFillableInput, isVisibleInTree } from './form-detection.js';
 import { classifyCardField, classifyIdentityField, type CardRole, type IdentityRole, type FieldHints } from './field-map.js';
 
 export type FillFieldElement = HTMLInputElement | HTMLSelectElement;
@@ -64,8 +64,7 @@ function anchorFor(kind: 'card' | 'identity', fields: Map<string, FillFieldEleme
 /** Visible + editable input or select; reuses the login detector's input rule for inputs. */
 export function isFillableField(el: FillFieldElement): boolean {
   if (el instanceof HTMLInputElement) return isFillableInput(el);
-  if (el.disabled || el.hidden) return false;
-  return el.offsetParent != null || el.isConnected;
+  return !el.disabled && !el.hidden && isVisibleInTree(el);
 }
 
 function hintsFor(el: FillFieldElement): FieldHints {
