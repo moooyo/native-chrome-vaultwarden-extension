@@ -258,6 +258,24 @@ export class ApiClient {
     });
   }
 
+  /** Update a Send's metadata (PUT). The send key is unchanged; the body carries the existing key. */
+  async updateSend(accessToken: string, id: string, send: SendRequest): Promise<SendResponse> {
+    return this.jsonRequest<SendResponse>(`/api/sends/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(send),
+    });
+  }
+
+  /** Remove a Send's password via the dedicated endpoint (PUT /api/sends/{id}/remove-password). */
+  async removeSendPassword(accessToken: string, id: string): Promise<void> {
+    await this.jsonRequest<SendResponse>(`/api/sends/${encodeURIComponent(id)}/remove-password`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: '{}',
+    });
+  }
+
   /** Download an attachment's encrypted blob from its (absolute) URL. */
   async downloadAttachment(url: string, accessToken: string): Promise<Uint8Array> {
     const response = await this.fetchFn(url, { headers: { authorization: `Bearer ${accessToken}` } });

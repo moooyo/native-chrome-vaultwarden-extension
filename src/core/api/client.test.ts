@@ -409,4 +409,23 @@ describe('ApiClient Sends - file uploads', () => {
     expect(callInit.method).toBe('POST');
     expect(callInit.body).toBeInstanceOf(FormData);
   });
+
+  it('updateSend PUTs the send to /api/sends/{id}', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ id: 's1', type: 0 }));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: createMemoryStore() });
+    await api.updateSend('tok', 's1', { type: 0, name: '2.n', key: '2.k', deletionDate: 'd' } as never);
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain('/api/sends/s1');
+    expect(init.method).toBe('PUT');
+    expect(init.headers).toMatchObject({ 'content-type': 'application/json' });
+  });
+
+  it('removeSendPassword PUTs to /api/sends/{id}/remove-password', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ id: 's1' }));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: createMemoryStore() });
+    await api.removeSendPassword('tok', 's1');
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toContain('/api/sends/s1/remove-password');
+    expect(init.method).toBe('PUT');
+  });
 });
