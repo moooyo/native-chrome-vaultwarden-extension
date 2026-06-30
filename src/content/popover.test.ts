@@ -32,37 +32,28 @@ describe('autofill popover', () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it('renders candidates and calls onSelect when clicked', () => {
+  it('renders candidates (common shape) and calls onSelect when clicked', () => {
     const anchor = document.getElementById('pass') as HTMLElement;
     const onSelect = vi.fn();
     const popover = createAutofillPopover({ anchor, onOpen: vi.fn(), onSelect });
-    popover.showCandidates([{
-      id: '1',
-      name: 'Example',
-      username: 'me@example.com',
-      matchedUri: 'https://example.com',
-      matchType: 0,
-      favorite: false,
-    }]);
-
+    popover.showCandidates([{ id: '1', name: 'Example', sub: 'me@example.com', favorite: false }]);
     trustedClick(popoverRoot(popover).querySelector<HTMLButtonElement>('button')!);
-
     expect(onSelect).toHaveBeenCalledWith('1');
-    expect(popoverRoot(popover).textContent).not.toContain('secret');
+    expect(popoverRoot(popover).textContent).toContain('me@example.com');
+  });
+
+  it('uses a card header when kind is card', () => {
+    const anchor = document.getElementById('pass') as HTMLElement;
+    const popover = createAutofillPopover({ anchor, kind: 'card', onOpen: vi.fn(), onSelect: vi.fn() });
+    popover.showCandidates([{ id: '1', name: 'Visa', sub: 'Visa', favorite: false }]);
+    expect(popoverRoot(popover).textContent).toContain('Fill card');
   });
 
   it('ignores untrusted candidate clicks', () => {
     const anchor = document.getElementById('pass') as HTMLElement;
     const onSelect = vi.fn();
     const popover = createAutofillPopover({ anchor, onOpen: vi.fn(), onSelect });
-    popover.showCandidates([{
-      id: '1',
-      name: 'Example',
-      username: 'me@example.com',
-      matchedUri: 'https://example.com',
-      matchType: 0,
-      favorite: false,
-    }]);
+    popover.showCandidates([{ id: '1', name: 'Example', sub: 'me@example.com', favorite: false }]);
 
     popoverRoot(popover).querySelector<HTMLButtonElement>('button')?.click();
 
@@ -75,9 +66,7 @@ describe('autofill popover', () => {
     popover.showCandidates([{
       id: 'cipher-secret-id',
       name: 'Example',
-      username: 'me@example.com',
-      matchedUri: 'https://example.com',
-      matchType: 0,
+      sub: 'me@example.com',
       favorite: false,
     }]);
 

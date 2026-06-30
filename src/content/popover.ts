@@ -1,15 +1,23 @@
-import type { AutofillCandidate } from '../messaging/protocol.js';
+export interface PopoverCandidate {
+  id: string;
+  name: string;
+  /** username / matched URI (login) or brand / full name (card / identity). */
+  sub?: string;
+  favorite: boolean;
+  reprompt?: boolean;
+}
 
 export interface AutofillPopover {
   element: HTMLElement;
   root: ShadowRoot;
   showStatus(message: string): void;
-  showCandidates(candidates: AutofillCandidate[]): void;
+  showCandidates(candidates: PopoverCandidate[]): void;
   remove(): void;
 }
 
 export interface AutofillPopoverOptions {
   anchor: HTMLElement;
+  kind?: 'login' | 'card' | 'identity';
   onOpen(): void;
   onSelect(cipherId: string): void;
 }
@@ -78,6 +86,10 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
   const shadow = host.attachShadow({ mode: 'closed' });
   document.documentElement.append(host);
 
+  const kind = options.kind ?? 'login';
+  const HEADER = { login: 'Fill from Vaultwarden', card: 'Fill card', identity: 'Fill identity' }[kind];
+  const EMPTY = { login: 'No matching logins', card: 'No saved cards', identity: 'No saved identities' }[kind];
+
   const render = (inner: string) => {
     shadow.innerHTML = `<style>${STYLE}</style><div class="box">${inner}</div>`;
     reposition(host, options.anchor);
@@ -95,9 +107,9 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
     showStatus(message: string) {
       render(`<div class="status">${LOCK}<span>${escapeHtml(message)}</span></div>`);
     },
-    showCandidates(candidates: AutofillCandidate[]) {
+    showCandidates(candidates: PopoverCandidate[]) {
       if (candidates.length === 0) {
-        render(`<div class="status">${LOCK}<span>No matching logins</span></div>`);
+        render(`<div class="status">${LOCK}<span>${EMPTY}</span></div>`);
         return;
       }
       // The brand row must contain no <button> so the first button in the shadow
@@ -107,10 +119,10 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
           <span class="mono-chip" style="background:hsl(${hueFor(candidate.name)} 55% 48%)">${escapeHtml(monogramLetter(candidate.name))}</span>
           <span class="meta">
             <span class="name">${candidate.favorite ? STAR : ''}<span class="t">${escapeHtml(candidate.name)}</span></span>
-            <span class="sub">${escapeHtml(candidate.username ?? candidate.matchedUri)}</span>
+            <span class="sub">${escapeHtml(candidate.sub ?? '')}</span>
           </span>
         </button>`).join('');
-      render(`<div class="brandrow"><span class="mark">${SHIELD}</span><span class="label">Fill from Vaultwarden</span></div><div class="list">${rows}</div>`);
+      render(`<div class="brandrow"><span class="mark">${SHIELD}</span><span class="label">${HEADER}</span></div><div class="list">${rows}</div>`);
       shadow.querySelectorAll<HTMLButtonElement>('button.candidate').forEach((button, index) => {
         button.addEventListener('click', (event) => {
           if (!event.isTrusted) return;
