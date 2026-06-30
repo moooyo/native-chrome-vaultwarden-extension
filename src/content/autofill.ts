@@ -1,14 +1,19 @@
+import browser from 'webextension-polyfill';
 import { sendRequest, type AutofillCandidate, type AutofillCredentials } from '../messaging/protocol.js';
 import type { FillItemCandidate, CardFillData, IdentityFillData, FillKind } from '../messaging/protocol.js';
+import type { ContentCommand, FillCommand } from '../messaging/protocol.js';
 import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
 import { fillLoginForm } from './fill.js';
 import { fillCardForm, fillIdentityForm } from './fill-card-identity.js';
 import { detectLoginForms, type DetectedLoginForm } from './form-detection.js';
 import { detectCardForms, detectIdentityForms, type DetectedFillForm } from './field-detection.js';
+import type { FillFieldElement } from './field-detection.js';
+import { classifyCardField, classifyIdentityField, type CardRole, type IdentityRole } from './field-map.js';
 import { createAutofillPopover } from './popover.js';
 import type { PopoverCandidate } from './popover.js';
 import { startSaveCapture, type CapturedLogin } from './capture.js';
 import { createSaveBar } from './save-bar.js';
+import { showNotice } from './notice.js';
 
 type FrameUrlProvider = () => string;
 
@@ -287,6 +292,71 @@ function debounce(fn: () => void, ms: number): () => void {
     if (timer !== undefined) window.clearTimeout(timer);
     timer = window.setTimeout(fn, ms);
   };
+}
+
+// Remember the most recently right-clicked element so a field-scope context-menu fill knows its target.
+let lastContextElement: Element | null = null;
+document.addEventListener('contextmenu', (event) => { lastContextElement = event.target as Element | null; }, true);
+
+browser.runtime.onMessage.addListener((message: unknown) => {
+  if (isContentCommand(message)) handleContentCommand(message);
+  // No response needed; return nothing (a non-Promise) so the channel closes immediately.
+});
+
+export function handleContentCommand(command: ContentCommand): void {
+  if (command.type === 'autofill.fillError') {
+    showNotice('Protected item — open the extension to verify');
+    return;
+  }
+  if (command.scope === 'field') {
+    fillSingleField(command);
+  } else {
+    fillWholeForm(command);
+  }
+}
+
+function fillWholeForm(command: FillCommand): void {
+  const forms = command.kind === 'card' ? detectCardForms(document) : detectIdentityForms(document);
+  if (forms.length === 0) return;
+  // Prefer the form containing the right-clicked element; otherwise the first detected form.
+  const form = forms.find((f) => lastContextElement && containsField(f, lastContextElement)) ?? forms[0]!;
+  if (command.kind === 'card') fillCardForm(form, command.data as CardFillData);
+  else fillIdentityForm(form, command.data as IdentityFillData);
+}
+
+function fillSingleField(command: FillCommand): void {
+  const el = lastContextElement;
+  if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLSelectElement)) return;
+  const hints = {
+    autocomplete: el.getAttribute('autocomplete') ?? '', name: el.getAttribute('name') ?? '', id: el.id,
+    ariaLabel: el.getAttribute('aria-label') ?? '', placeholder: el.getAttribute('placeholder') ?? '',
+    type: el instanceof HTMLInputElement ? el.type : 'select',
+  };
+  if (command.kind === 'card') {
+    const role = classifyCardField(hints);
+    if (!role) return;
+    const form = { kind: 'card' as const, id: 'vw-ctx', fields: new Map([[role as CardRole, el as FillFieldElement]]), anchor: el };
+    fillCardForm(form, command.data as CardFillData);
+  } else {
+    const role = classifyIdentityField(hints);
+    if (!role) return;
+    const form = { kind: 'identity' as const, id: 'vw-ctx', fields: new Map([[role as IdentityRole, el as FillFieldElement]]), anchor: el };
+    fillIdentityForm(form, command.data as IdentityFillData);
+  }
+}
+
+function containsField(form: DetectedFillForm, el: Element): boolean {
+  for (const field of form.fields.values()) if (field === el) return true;
+  return false;
+}
+
+function isContentCommand(value: unknown): value is ContentCommand {
+  if (!isRecord(value)) return false;
+  if (value.type === 'autofill.fillError') return value.code === 'reprompt_required';
+  return value.type === 'autofill.fill'
+    && (value.scope === 'form' || value.scope === 'field')
+    && (value.kind === 'card' || value.kind === 'identity')
+    && isRecord(value.data);
 }
 
 startAutofill();

@@ -17,6 +17,10 @@ const popoverState = vi.hoisted(() => ({
   instances: [] as FakePopover[],
 }));
 
+vi.mock('webextension-polyfill', () => ({
+  default: { runtime: { onMessage: { addListener: vi.fn() } } },
+}));
+
 vi.mock('../messaging/protocol.js', () => ({
   sendRequest: vi.fn(),
 }));
@@ -43,7 +47,7 @@ vi.mock('./popover.js', () => ({
 
 import { sendRequest, type ResponseMessage } from '../messaging/protocol.js';
 import { fillLoginForm } from './fill.js';
-import { startAutofill } from './autofill.js';
+import { startAutofill, handleContentCommand } from './autofill.js';
 
 describe('autofill controller', () => {
   beforeEach(() => {
@@ -361,6 +365,37 @@ describe('autofill controller', () => {
     // Only the card popover attaches; the type=password CVC must NOT spawn a login popover.
     expect(popoverState.instances).toHaveLength(1);
     expect(popoverState.instances[0]!.options.kind).toBe('card');
+  });
+
+  it('fills only the right-clicked field on a field-scope command', async () => {
+    document.body.innerHTML = `
+      <form>
+        <input autocomplete="cc-number" id="num">
+        <input autocomplete="cc-csc" id="csc">
+      </form>`;
+    const csc = document.getElementById('csc') as HTMLInputElement;
+    csc.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    handleContentCommand({ type: 'autofill.fill', scope: 'field', kind: 'card', data: { number: '4111', code: '123' } });
+    expect((document.getElementById('csc') as HTMLInputElement).value).toBe('123'); // only the CVC
+    expect((document.getElementById('num') as HTMLInputElement).value).toBe('');   // number untouched
+  });
+
+  it('fills the whole detected form on a form-scope command', async () => {
+    document.body.innerHTML = `
+      <form>
+        <input autocomplete="cc-number" id="num">
+        <input autocomplete="cc-csc" id="csc">
+      </form>`;
+    handleContentCommand({ type: 'autofill.fill', scope: 'form', kind: 'card', data: { number: '4111', code: '123' } });
+    expect((document.getElementById('num') as HTMLInputElement).value).toBe('4111');
+    expect((document.getElementById('csc') as HTMLInputElement).value).toBe('123');
+  });
+
+  it('shows a notice (no fill) on a fillError command', async () => {
+    document.body.innerHTML = `<form><input autocomplete="cc-number" id="num"></form>`;
+    handleContentCommand({ type: 'autofill.fillError', code: 'reprompt_required' });
+    expect(document.querySelector('[data-vw-notice]')).toBeTruthy();
+    expect((document.getElementById('num') as HTMLInputElement).value).toBe('');
   });
 });
 
