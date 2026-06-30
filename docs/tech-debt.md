@@ -128,8 +128,17 @@
   详情展示 + 按需下载解密（reprompt 门控）+ 上传（multipart，Vaultwarden 兼容）+ 删除。
 - ✅ **Sends（文本）**（已交付）：HKDF 多块派生 send key（`derive_shareable_key`）、创建/列表/删除、
   密码哈希、分享链接（含 send key）。剩余：**文件 Sends**、编辑现有 Send、Send 访问/解密页（接收端）。
+- ✅ **Card/Identity 自动填充**（已交付，2026-06-30，两个里程碑；设计/计划见 `docs/superpowers/`）：
+  - **M1 弹层填充**：`field-map`（autocomplete/name 提示→卡/身份角色，纯函数）+ `field-detection`（卡门槛＝有卡号；
+    身份保守门槛＝地址信号或姓+名）+ `fill-card-identity`（合并 exp、月年下拉、`<select>` 匹配、全名合成）；
+    worker `findFillItems`（列全部卡/身份，**无 URL 匹配**）/ `getFillData`（reprompt 门 + 剔除 SSN/护照/驾照）；
+    弹层按 `kind` 泛化。CVC 渲染为 `type=password` 时抑制误挂登录弹层。
+  - **M2 右键菜单**：`contextMenus` 权限 + `background/context-menu`（构建/重建、锁定/登出清空、onClicked 分发）+
+    content `runtime.onMessage`（整表单 / 只填此字段，复用 M1 填充逻辑）+ reprompt 提示条；空闲自动锁定时刷新菜单。
+  - **安全**：机密不入 content script、无 URL 匹配靠可信用户手势 + reprompt 门、身份国民 ID allowlist 剔除。
+  - 剩余（小项）：reprompt 弹层锁徽标、菜单/提示文案 i18n、`nearestContainer` 跨模块去重。
 - ⬆ **组织策略（policies）拉取与执行**；**全库密钥轮换**。
-- ➖ 键盘快捷键（manifest `commands`）、右键上下文菜单、**Card/Identity 页面自动填充**、
+- ➖ 键盘快捷键（manifest `commands`）、
   **用户名/转发邮箱别名生成器**、HIBP 泄露检测、超时动作（锁定 vs 登出）、
   跨服务器多账户、集合 CRUD、i18n/`_locales`、生物识别解锁、徽章计数、账户指纹短语、Firefox 打包、
   Steam Guard TOTP、passkey 多凭据选择 UI。
