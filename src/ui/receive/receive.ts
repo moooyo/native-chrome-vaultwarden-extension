@@ -59,8 +59,10 @@ function renderSend(parsed: ParsedSendUrl, send: AccessedSend, passwordHash?: st
 }
 
 async function downloadFile(parsed: ParsedSendUrl, send: AccessedSend, passwordHash?: string): Promise<void> {
-  if (busy || !send.fileId) return;
+  if (busy || !send.fileId || !send.id) return;
   busy = true;
+  const button = document.getElementById('downloadButton') as HTMLButtonElement | null;
+  if (button) button.disabled = true;
   try {
     const url = await requestFileDownloadUrl(fetch, parsed.serverUrl, send.id, send.fileId, passwordHash);
     const bytes = await downloadAndDecryptFile(fetch, url, parsed.serverUrl, parsed.sendKey);
@@ -71,6 +73,7 @@ async function downloadFile(parsed: ParsedSendUrl, send: AccessedSend, passwordH
     setStatus(code ? MESSAGES[code] : 'Download failed.', true);
   } finally {
     busy = false;
+    if (button) button.disabled = false;
   }
 }
 
