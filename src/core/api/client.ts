@@ -7,6 +7,7 @@ import type {
   PreloginResponse,
   RefreshTokenResponse,
   RegisterRequest,
+  SendFileUploadResponse,
   SendRequest,
   SendResponse,
   SyncResponse,
@@ -224,6 +225,28 @@ export class ApiClient {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(send),
+    });
+  }
+
+  /** Create a file Send (v2): POST the metadata, get back where to upload the encrypted blob. */
+  async createSendFile(accessToken: string, send: SendRequest): Promise<SendFileUploadResponse> {
+    return this.jsonRequest<SendFileUploadResponse>('/api/sends/file/v2', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(send),
+    });
+  }
+
+  /** Upload the encrypted Send file blob to the URL returned by createSendFile (multipart, 204). The
+   *  multipart filename is the encrypted file name, mirroring the attachment upload. */
+  async uploadSendFileData(accessToken: string, url: string, data: Uint8Array, encryptedFileName: string): Promise<void> {
+    const form = new FormData();
+    form.append('data', new Blob([data as BlobPart], { type: 'application/octet-stream' }), encryptedFileName);
+    const path = url.startsWith('/api') ? url : `/api${url}`;
+    await this.noBodyRequest(path, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${accessToken}` }, // no content-type: browser sets the multipart boundary
+      body: form,
     });
   }
 

@@ -387,3 +387,25 @@ describe('ApiClient register', () => {
     expect(err.status).toBe(400);
   });
 });
+
+describe('ApiClient Sends - file uploads', () => {
+  it('createSendFile POSTs the send to /api/sends/file/v2 and returns the upload target', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ url: '/sends/s1/file/f1', sendResponse: { id: 's1' } }));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: createMemoryStore() });
+    const res = await api.createSendFile('tok', { type: 1, name: '2.enc', key: '2.k', deletionDate: 'd' } as never);
+    const [calledUrl, callInit] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(calledUrl)).toContain('/api/sends/file/v2');
+    expect(callInit.method).toBe('POST');
+    expect(res.url).toBe('/sends/s1/file/f1');
+  });
+
+  it('uploadSendFileData POSTs multipart data to /api{url}', async () => {
+    const fetchFn = vi.fn(async () => new Response(null, { status: 200 }));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: createMemoryStore() });
+    await api.uploadSendFileData('tok', '/sends/s1/file/f1', new Uint8Array([1, 2, 3]), '2.encname');
+    const [calledUrl, callInit] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(calledUrl)).toContain('/api/sends/s1/file/f1');
+    expect(callInit.method).toBe('POST');
+    expect(callInit.body).toBeInstanceOf(FormData);
+  });
+});
