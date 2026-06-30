@@ -1058,26 +1058,32 @@ function renderSendList(list: HTMLElement, sends: SendSummary[]): void {
 async function createSend(mode: 'text' | 'file' = 'text'): Promise<void> {
   if (isPending) return;
   const val = (id: string): string => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement).value;
-  const baseInput: SendInput = { name: val('send_name').trim() || 'Send', deletionDays: Number(val('send_deletion')) || 7 };
-  const pwd = val('send_password'); if (pwd) baseInput.password = pwd;
-  const expiry = Number(val('send_expiry')); if (expiry > 0) baseInput.expirationDays = expiry;
-  const max = Number(val('send_max')); if (max > 0) baseInput.maxAccessCount = max;
 
-  let request: import('../../messaging/protocol.js').RequestMessage;
+  // Validate inputs first (no side effects) so an invalid submit doesn't disable the buttons.
+  let file: File | undefined;
   if (mode === 'file') {
-    const file = (document.getElementById('send_file') as HTMLInputElement).files?.[0];
+    file = (document.getElementById('send_file') as HTMLInputElement).files?.[0] ?? undefined;
     if (!file) return setDetailStatus('Choose a file to share', true);
     if (file.size > 100 * 1024 * 1024) return setDetailStatus('File is too large (max 100 MB)', true);
-    request = { type: 'sends.createFile', input: { ...baseInput, name: val('send_name').trim() || file.name }, dataB64: await fileToBase64(file), fileName: file.name };
-  } else {
-    const text = val('send_text');
-    if (!text) return setDetailStatus('Enter the text to share', true);
-    request = { type: 'sends.createText', input: { ...baseInput, text, hidden: (document.getElementById('send_hidden') as HTMLInputElement).checked } };
+  } else if (!val('send_text')) {
+    return setDetailStatus('Enter the text to share', true);
   }
 
   isPending = true;
   document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = true));
   try {
+    const baseInput: SendInput = { name: val('send_name').trim() || 'Send', deletionDays: Number(val('send_deletion')) || 7 };
+    const pwd = val('send_password'); if (pwd) baseInput.password = pwd;
+    const expiry = Number(val('send_expiry')); if (expiry > 0) baseInput.expirationDays = expiry;
+    const max = Number(val('send_max')); if (max > 0) baseInput.maxAccessCount = max;
+
+    let request: import('../../messaging/protocol.js').RequestMessage;
+    if (mode === 'file') {
+      request = { type: 'sends.createFile', input: { ...baseInput, name: val('send_name').trim() || file!.name }, dataB64: await fileToBase64(file!), fileName: file!.name };
+    } else {
+      request = { type: 'sends.createText', input: { ...baseInput, text: val('send_text'), hidden: (document.getElementById('send_hidden') as HTMLInputElement).checked } };
+    }
+
     const response = await sendRequest(request);
     if (!response.ok) return setDetailStatus(response.error.message, true);
     const send = (response.data as { send: SendSummary }).send;
