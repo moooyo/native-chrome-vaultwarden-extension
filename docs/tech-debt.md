@@ -132,7 +132,7 @@
   `core/vault/send-access.ts`（parseSendUrl / 匿名 accessSend / decryptAccessedSend / 文件下载解密，注入 fetch、
   页面内无 vault 机密）；popup「Receive a Send」入口；跨服务器经 `chrome.permissions.request`；上传失败清理孤儿
   Send。协议经真实服务端实测固定（access 响应 `id`=sendId、下载 url 绝对），并有 `LIVE=1` 端到端往返测试。
-  剩余：**编辑现有 Send**（PUT /api/sends）。
+  ✅ **编辑现有 Send**（已交付，2026-06-30）：`buildUpdateSendRequest` 复用现有 send key 重新加密改动字段、`PUT /api/sends/{id}`；popup 预填编辑视图。密码语义经真实服务端实测固定——保留＝省略字段、更改＝新客户端哈希、移除＝专用端点 `PUT /api/sends/{id}/remove-password`（`null`/`""` 不清除）；分享链接不变；文件 Send 仅元数据。有 `LIVE=1` 编辑往返测试。**Sends 特性至此全部完成（文本+文件+接收端+编辑）。**
 - ✅ **Card/Identity 自动填充**（已交付，2026-06-30，两个里程碑；设计/计划见 `docs/superpowers/`）：
   - **M1 弹层填充**：`field-map`（autocomplete/name 提示→卡/身份角色，纯函数）+ `field-detection`（卡门槛＝有卡号；
     身份保守门槛＝地址信号或姓+名）+ `fill-card-identity`（合并 exp、月年下拉、`<select>` 匹配、全名合成）；
