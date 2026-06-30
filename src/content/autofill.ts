@@ -326,7 +326,7 @@ function fillWholeForm(command: FillCommand): void {
 
 function fillSingleField(command: FillCommand): void {
   const el = lastContextElement;
-  if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLSelectElement)) return;
+  if (!el || !el.isConnected || !(el instanceof HTMLInputElement || el instanceof HTMLSelectElement)) return;
   const hints = {
     autocomplete: el.getAttribute('autocomplete') ?? '', name: el.getAttribute('name') ?? '', id: el.id,
     ariaLabel: el.getAttribute('aria-label') ?? '', placeholder: el.getAttribute('placeholder') ?? '',

@@ -397,6 +397,16 @@ describe('autofill controller', () => {
     expect(document.querySelector('[data-vw-notice]')).toBeTruthy();
     expect((document.getElementById('num') as HTMLInputElement).value).toBe('');
   });
+
+  it('form-scope fills the form containing the right-clicked element', async () => {
+    document.body.innerHTML = `
+      <form id="f1"><input autocomplete="cc-number" id="num1"><input autocomplete="cc-csc" id="csc1"></form>
+      <form id="f2"><input autocomplete="cc-number" id="num2"><input autocomplete="cc-csc" id="csc2"></form>`;
+    (document.getElementById('num2') as HTMLInputElement).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    handleContentCommand({ type: 'autofill.fill', scope: 'form', kind: 'card', data: { number: '4111', code: '123' } });
+    expect((document.getElementById('num2') as HTMLInputElement).value).toBe('4111'); // clicked form filled
+    expect((document.getElementById('num1') as HTMLInputElement).value).toBe('');     // other form untouched
+  });
 });
 
 function popover(): FakePopover {
