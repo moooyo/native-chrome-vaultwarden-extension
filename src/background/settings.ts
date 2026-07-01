@@ -20,6 +20,26 @@ export function lockTimeoutToIdleMs(value: LockTimeoutSetting): number | null {
   return Number(value) * 60 * 1000;
 }
 
+const ON_IDLE_ACTION_KEY = 'onIdleAction';
+export type OnIdleAction = 'lock' | 'logout';
+export const DEFAULT_ON_IDLE_ACTION: OnIdleAction = 'lock';
+export function isOnIdleAction(value: unknown): value is OnIdleAction {
+  return value === 'lock' || value === 'logout';
+}
+
+const CLIPBOARD_CLEAR_KEY = 'clipboardClearSeconds';
+/** Clipboard auto-clear options. Seconds ≥30 (Chrome clamps alarms to ~30s) plus 'never'. */
+export const CLIPBOARD_CLEAR_VALUES = ['never', '30', '60', '120', '300'] as const;
+export type ClipboardClearSetting = (typeof CLIPBOARD_CLEAR_VALUES)[number];
+export const DEFAULT_CLIPBOARD_CLEAR: ClipboardClearSetting = '60';
+export function isClipboardClearSetting(value: unknown): value is ClipboardClearSetting {
+  return typeof value === 'string' && (CLIPBOARD_CLEAR_VALUES as readonly string[]).includes(value);
+}
+/** Clear delay in seconds, or null when 'never'. */
+export function clipboardClearToSeconds(value: ClipboardClearSetting): number | null {
+  return value === 'never' ? null : Number(value);
+}
+
 export function createSettingsService(store: KeyValueStore) {
   const service = {
     async getServerUrl(): Promise<string | undefined> {
@@ -60,6 +80,26 @@ export function createSettingsService(store: KeyValueStore) {
 
     async getIdleMs(): Promise<number | null> {
       return lockTimeoutToIdleMs(await service.getLockTimeout());
+    },
+
+    async getOnIdleAction(): Promise<OnIdleAction> {
+      const value = await store.get<unknown>(ON_IDLE_ACTION_KEY);
+      return isOnIdleAction(value) ? value : DEFAULT_ON_IDLE_ACTION;
+    },
+    async saveOnIdleAction(value: OnIdleAction): Promise<void> {
+      if (!isOnIdleAction(value)) throw new Error('unsupported idle action');
+      await store.set(ON_IDLE_ACTION_KEY, value);
+    },
+    async getClipboardClearSetting(): Promise<ClipboardClearSetting> {
+      const value = await store.get<unknown>(CLIPBOARD_CLEAR_KEY);
+      return isClipboardClearSetting(value) ? value : DEFAULT_CLIPBOARD_CLEAR;
+    },
+    async saveClipboardClearSetting(value: ClipboardClearSetting): Promise<void> {
+      if (!isClipboardClearSetting(value)) throw new Error('unsupported clipboard clear setting');
+      await store.set(CLIPBOARD_CLEAR_KEY, value);
+    },
+    async getClipboardClearSeconds(): Promise<number | null> {
+      return clipboardClearToSeconds(await service.getClipboardClearSetting());
     },
   };
   return service;

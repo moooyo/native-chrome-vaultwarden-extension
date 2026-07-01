@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createSettingsService } from './settings.js';
 import { createMemoryStore } from '../platform/store.js';
 import { UriMatchStrategy } from '../core/vault/uri-match.js';
+import { isOnIdleAction, isClipboardClearSetting, clipboardClearToSeconds, DEFAULT_ON_IDLE_ACTION, DEFAULT_CLIPBOARD_CLEAR } from './settings.js';
 
 vi.mock('webextension-polyfill', () => ({
   default: { storage: { local: {}, session: {} } },
@@ -67,5 +68,40 @@ describe('settings service', () => {
     await expect(settings.getIdleMs()).resolves.toBeNull();
     await settings.saveLockTimeout('never');
     await expect(settings.getIdleMs()).resolves.toBeNull();
+  });
+});
+
+describe('onIdleAction setting', () => {
+  it('defaults to lock and round-trips lock/logout', async () => {
+    const s = createSettingsService(createMemoryStore());
+    expect(await s.getOnIdleAction()).toBe(DEFAULT_ON_IDLE_ACTION);
+    expect(DEFAULT_ON_IDLE_ACTION).toBe('lock');
+    await s.saveOnIdleAction('logout');
+    expect(await s.getOnIdleAction()).toBe('logout');
+  });
+  it('rejects an unknown action and falls back on a corrupt stored value', async () => {
+    const s = createSettingsService(createMemoryStore());
+    await expect(s.saveOnIdleAction('sleep' as never)).rejects.toThrow();
+    expect(isOnIdleAction('lock')).toBe(true);
+    expect(isOnIdleAction('nope')).toBe(false);
+  });
+});
+
+describe('clipboardClearSeconds setting', () => {
+  it('defaults to 60 and round-trips values', async () => {
+    const s = createSettingsService(createMemoryStore());
+    expect(await s.getClipboardClearSetting()).toBe(DEFAULT_CLIPBOARD_CLEAR);
+    expect(DEFAULT_CLIPBOARD_CLEAR).toBe('60');
+    await s.saveClipboardClearSetting('never');
+    expect(await s.getClipboardClearSetting()).toBe('never');
+    expect(await s.getClipboardClearSeconds()).toBeNull();
+    await s.saveClipboardClearSetting('120');
+    expect(await s.getClipboardClearSeconds()).toBe(120);
+  });
+  it('validates values and maps never to null', () => {
+    expect(isClipboardClearSetting('30')).toBe(true);
+    expect(isClipboardClearSetting('15')).toBe(false);
+    expect(clipboardClearToSeconds('never')).toBeNull();
+    expect(clipboardClearToSeconds('300')).toBe(300);
   });
 });
