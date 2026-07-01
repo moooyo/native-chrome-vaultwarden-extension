@@ -39,4 +39,9 @@ describe('manifest', () => {
     expect(cmd?.suggested_key?.default).toBe('Ctrl+Shift+F');
     expect(cmd?.suggested_key?.mac).toBe('Command+Shift+F');
   });
+
+  it('requests the idle and offscreen permissions', () => {
+    expect(manifest.permissions).toContain('idle');
+    expect(manifest.permissions).toContain('offscreen');
+  });
 });

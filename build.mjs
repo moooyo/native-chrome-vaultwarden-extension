@@ -11,6 +11,7 @@ async function copyStatic() {
   await mkdir(join(outdir, 'ui'), { recursive: true });
   await cp('src/ui/theme.css', join(outdir, 'ui', 'theme.css'));
   await cp('src/icons', join(outdir, 'icons'), { recursive: true });
+  await cp('src/offscreen.html', join(outdir, 'offscreen.html'));
   for (const page of ['popup', 'options', 'receive']) {
     await mkdir(join(outdir, 'ui', page), { recursive: true });
     await cp(`src/ui/${page}/${page}.html`, join(outdir, 'ui', page, `${page}.html`));
@@ -27,6 +28,7 @@ const options = {
     'content/autofill': 'src/content/autofill.ts',
     'content/page-webauthn': 'src/content/page-webauthn.ts',
     'content/webauthn-bridge': 'src/content/webauthn-bridge.ts',
+    offscreen: 'src/offscreen.ts',
   },
   bundle: true,
   format: 'esm',
