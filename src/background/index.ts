@@ -8,6 +8,7 @@ import { createRouter } from './router.js';
 import { createSettingsService } from './settings.js';
 import { createAlarmHandlers, IDLE_LOCK_ALARM } from './alarms.js';
 import { createContextMenu, shouldRefreshMenu } from './context-menu.js';
+import { handleFocusedFillCommand } from './commands.js';
 import type { RequestMessage } from '../messaging/protocol.js';
 
 const localStore = createBrowserStore('local');
@@ -55,6 +56,12 @@ void contextMenu.refresh().catch(() => {});
 
 browser.contextMenus.onClicked.addListener((info, tab) => {
   void contextMenu.handleClick(String(info.menuItemId), tab, info.frameId);
+});
+
+browser.commands.onCommand.addListener((command, tab) => {
+  void handleFocusedFillCommand(command, tab, {
+    tabs: { sendMessage: (tabId, message) => browser.tabs.sendMessage(tabId, message) },
+  });
 });
 
 browser.runtime.onInstalled.addListener(() => {
