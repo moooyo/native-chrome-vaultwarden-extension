@@ -142,12 +142,22 @@
     content `runtime.onMessage`（整表单 / 只填此字段，复用 M1 填充逻辑）+ reprompt 提示条；空闲自动锁定时刷新菜单。
   - **安全**：机密不入 content script、无 URL 匹配靠可信用户手势 + reprompt 门、身份国民 ID allowlist 剔除。
   - 剩余（小项）：reprompt 弹层锁徽标、菜单/提示文案 i18n、`nearestContainer` 跨模块去重。
+- ✅ **焦点字段自动填充键盘快捷键**（已交付，2026-07-01；设计/计划见 `docs/superpowers/`，spec 经 5 维对抗性评审强化）：
+  单条 manifest `command`（`autofill-focused`，默认 `Ctrl+Shift+F` / mac `Command+Shift+F`，`chrome://extensions/shortcuts`
+  可改）→ `background/commands.ts` 薄转发 `{type:'autofill.focusedFill'}`（不含 vault 数据）→ 持焦点叶子帧
+  `content/focused-fill.ts`：`resolveFocusedFill` 按 `computeFillExclusion`（CVC 剔除→login→card→identity）判定焦点字段所属
+  表单，`runFocusedFill`（纯函数、注入 deps）复用现有 worker 请求——单条直填、多条编程式 `popover.open()` 既有选择器、
+  0 条/无识别字段提示。**帧路由**：`hasFocus()` 对祖先帧亦真，靠「activeElement 为真实字段」区分叶子帧；祖先帧
+  （activeElement 为 iframe/frame 元素）与非焦点帧静默、不弹提示。**TOCTOU**：round-trip 后 login 复检 frameUrl+字段连通、
+  card/identity 复检字段连通再填。**安全**：命令消息无机密，机密仅经 `sendRequest` 响应进填充函数（notify 只收字符串）；
+  reprompt 门 / URL 匹配 / 国民 ID 剔除全在 worker 未动（零 `src/core/` 改动、无新增请求类型）；与右键菜单同一可信手势模型。
+  剩余（小项）：Shadow DOM/contenteditable 字段（同现有 autofill 限制）、popover 内每条目 reprompt 徽标、SPA 场景 popover
+  注册表非无界修剪（`openPickerFor` 已自愈）。
 - ⬆ **组织策略（policies）拉取与执行**；**全库密钥轮换**。
 - ✅ **用户名生成器（本地类型）**（已交付，2026-06-30）：`core/generator/username.ts` 加号别名/catch-all/随机词
   （纯函数、注入随机源、复用词表）+ 生成器面板 Username 模式 + 登录编辑器 username 生成按钮。全本地、不联网。
   剩余：**转发邮箱别名**（SimpleLogin/addy.io/Firefox Relay 等外部 provider + token 存储，另起里程碑）。
-- ➖ 键盘快捷键（manifest `commands`）、
-  超时动作（锁定 vs 登出）、
+- ➖ 超时动作（锁定 vs 登出）、
   跨服务器多账户、集合 CRUD、i18n/`_locales`、生物识别解锁、徽章计数、账户指纹短语、Firefox 打包、
   Steam Guard TOTP、passkey 多凭据选择 UI。
 - ➖ **空闲/自动锁定准确性**：靠 1 分钟轮询 `lastActivity`，且仅扩展消息更新它（非真实页面活动）；
