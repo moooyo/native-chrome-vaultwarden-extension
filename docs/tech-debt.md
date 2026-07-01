@@ -147,7 +147,7 @@
   （纯函数、注入随机源、复用词表）+ 生成器面板 Username 模式 + 登录编辑器 username 生成按钮。全本地、不联网。
   剩余：**转发邮箱别名**（SimpleLogin/addy.io/Firefox Relay 等外部 provider + token 存储，另起里程碑）。
 - ➖ 键盘快捷键（manifest `commands`）、
-  HIBP 泄露检测、超时动作（锁定 vs 登出）、
+  超时动作（锁定 vs 登出）、
   跨服务器多账户、集合 CRUD、i18n/`_locales`、生物识别解锁、徽章计数、账户指纹短语、Firefox 打包、
   Steam Guard TOTP、passkey 多凭据选择 UI。
 - ➖ **空闲/自动锁定准确性**：靠 1 分钟轮询 `lastActivity`，且仅扩展消息更新它（非真实页面活动）；
@@ -183,7 +183,15 @@
   剩余：跨**不同服务器**的多账户（当前假定同一自托管服务器）、每账户独立 PIN。
 - 密码健康报告 ✅（本次落地）：`vault/password-health.ts`（启发式强度评分 + 重复计数）；
   `VaultService.getPasswordHealth` 在 worker 内解密所有登录密码、只回传「弱/重复次数」标记（密码不过边界）；
-  popup 工具栏「健康」按钮列出弱/重复项，点击跳条目。剩余：HIBP 泄露检测（需联网 k-anonymity 查询）。
+  popup 工具栏「健康」按钮列出弱/重复项，点击跳条目。
+  ✅ **HIBP 泄露检测**（已交付，2026-07-01；设计/计划见 `docs/superpowers/`）：`core/vault/pwned.ts`
+  在 worker 内 `SHA-1(password)`、按 k-anonymity 只把**前 5 位 hex 前缀**发给
+  `api.pwnedpasswords.com/range/{prefix}`（带 `Add-Padding` 隐藏命中数），后缀仅本地比对；完整密码/哈希/
+  后缀绝不上网。`VaultService.getPwnedReport` 在 worker 内解密登录、按密码去重、并发限 6 查询，跨边界只回
+  `{ id, pwnedCount }`（无密码）。路由 `vault.checkPwned`；manifest `host_permissions` 仅加
+  `https://api.pwnedpasswords.com/*`；健康报告加「Check for breaches」按钮标注「⚠️ Found in N breaches / ✓ Not
+  found」。按需触发、不缓存、不写 storage。有 `LIVE=1` 真实 HIBP 契约测试。
+  剩余：账户级 HIBP（breaches-by-email，需 API key）、结果缓存/定时扫描、密码历史条目泄露检测。
 - 等价域名（equivalent domains）✅（本次落地）：`vault/equivalent-domains.ts` 内置常见等价组
   （google/youtube、amazon 各区、microsoft/live 等）+ 合并 `/sync` 的用户自定义组；`uri-match`
   的 Domain 策略在两域名属同一等价组时也算命中；vault-service 在两处 autofill 匹配处构建索引并传入。
