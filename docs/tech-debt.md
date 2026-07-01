@@ -143,8 +143,11 @@
   - **安全**：机密不入 content script、无 URL 匹配靠可信用户手势 + reprompt 门、身份国民 ID allowlist 剔除。
   - 剩余（小项）：reprompt 弹层锁徽标、菜单/提示文案 i18n、`nearestContainer` 跨模块去重。
 - ⬆ **组织策略（policies）拉取与执行**；**全库密钥轮换**。
+- ✅ **用户名生成器（本地类型）**（已交付，2026-06-30）：`core/generator/username.ts` 加号别名/catch-all/随机词
+  （纯函数、注入随机源、复用词表）+ 生成器面板 Username 模式 + 登录编辑器 username 生成按钮。全本地、不联网。
+  剩余：**转发邮箱别名**（SimpleLogin/addy.io/Firefox Relay 等外部 provider + token 存储，另起里程碑）。
 - ➖ 键盘快捷键（manifest `commands`）、
-  **用户名/转发邮箱别名生成器**、HIBP 泄露检测、超时动作（锁定 vs 登出）、
+  HIBP 泄露检测、超时动作（锁定 vs 登出）、
   跨服务器多账户、集合 CRUD、i18n/`_locales`、生物识别解锁、徽章计数、账户指纹短语、Firefox 打包、
   Steam Guard TOTP、passkey 多凭据选择 UI。
 - ➖ **空闲/自动锁定准确性**：靠 1 分钟轮询 `lastActivity`，且仅扩展消息更新它（非真实页面活动）；
