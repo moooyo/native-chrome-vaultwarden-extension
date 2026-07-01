@@ -33,9 +33,10 @@ describe('manifest', () => {
   });
 
   it('declares the focused-fill keyboard command', () => {
-    const cmd = (manifest as { commands?: Record<string, { description?: string; suggested_key?: { default?: string } }> }).commands?.['autofill-focused'];
+    const cmd = (manifest as { commands?: Record<string, { description?: string; suggested_key?: { default?: string; mac?: string } }> }).commands?.['autofill-focused'];
     expect(cmd).toBeDefined();
     expect(cmd?.description).toBeTruthy();
     expect(cmd?.suggested_key?.default).toBe('Ctrl+Shift+F');
+    expect(cmd?.suggested_key?.mac).toBe('Command+Shift+F');
   });
 });
