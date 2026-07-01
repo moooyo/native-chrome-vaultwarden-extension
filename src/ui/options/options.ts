@@ -11,6 +11,9 @@ const lockTimeoutInput = document.getElementById('lockTimeout') as HTMLSelectEle
 const status = document.getElementById('status')!;
 const strategyHelp = document.getElementById('strategyHelp')!;
 const saveButton = document.getElementById('saveButton') as HTMLButtonElement;
+const onIdleActionInput = document.getElementById('onIdleAction') as HTMLSelectElement;
+const clipboardClearInput = document.getElementById('clipboardClear') as HTMLSelectElement;
+const idleActionWarning = document.getElementById('idleActionWarning')!;
 document.getElementById('brandMark')!.innerHTML = icon('shield');
 
 /** Plain-language description of each match strategy, shown beneath the select. */
@@ -27,20 +30,43 @@ function updateStrategyHelp() {
   strategyHelp.textContent = STRATEGY_HELP[defaultUriMatchStrategyInput.value] ?? '';
 }
 
+function updateIdleWarning() {
+  idleActionWarning.textContent = onIdleActionInput.value === 'logout'
+    ? 'Log out will end your session (and disable PIN unlock) on every idle timeout and system lock.'
+    : '';
+}
+
+async function saveSecurity() {
+  const response = await sendRequest({ type: 'settings.saveSecurity', onIdleAction: onIdleActionInput.value as 'lock' | 'logout', clipboardClearSeconds: clipboardClearInput.value as never });
+  const el = document.getElementById('securityStatus')!;
+  el.innerHTML = response.ok ? '' : `<div class="toast error">${escapeHtml(response.error.message)}</div>`;
+}
+
 void init();
 
 async function init() {
   const response = await sendRequest({ type: 'settings.get' });
   if (response.ok) {
-    const { serverUrl, defaultUriMatchStrategy, lockTimeout } = response.data as { serverUrl?: string; defaultUriMatchStrategy: number; lockTimeout: string };
+    const { serverUrl, defaultUriMatchStrategy, lockTimeout, onIdleAction, clipboardClearSeconds } = response.data as {
+      serverUrl?: string;
+      defaultUriMatchStrategy: number;
+      lockTimeout: string;
+      onIdleAction: string;
+      clipboardClearSeconds: string;
+    };
     if (serverUrl) input.value = serverUrl;
     defaultUriMatchStrategyInput.value = String(defaultUriMatchStrategy);
     lockTimeoutInput.value = lockTimeout;
+    onIdleActionInput.value = onIdleAction;
+    clipboardClearInput.value = clipboardClearSeconds;
   }
   updateStrategyHelp();
+  updateIdleWarning();
 }
 
 defaultUriMatchStrategyInput.addEventListener('change', updateStrategyHelp);
+onIdleActionInput.addEventListener('change', () => { updateIdleWarning(); void saveSecurity(); });
+clipboardClearInput.addEventListener('change', () => void saveSecurity());
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();

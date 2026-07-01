@@ -65,6 +65,34 @@
       <div id="status" class="status" aria-live="polite"></div>
     </main>
 
+    <section class="card settings">
+      <div class="settings-head">
+        <h1>Security</h1>
+      </div>
+
+      <label class="field" for="onIdleAction">
+        <span class="field-label">On idle timeout / system lock</span>
+        <select id="onIdleAction" class="select">
+          <option value="lock">Lock</option>
+          <option value="logout">Log out</option>
+        </select>
+        <p id="idleActionWarning" class="help"></p>
+      </label>
+
+      <label class="field" for="clipboardClear">
+        <span class="field-label">Clear copied values after</span>
+        <select id="clipboardClear" class="select">
+          <option value="never">Never</option>
+          <option value="30">30 seconds</option>
+          <option value="60">1 minute</option>
+          <option value="120">2 minutes</option>
+          <option value="300">5 minutes</option>
+        </select>
+      </label>
+
+      <div id="securityStatus" class="status" aria-live="polite"></div>
+    </section>
+
     <footer class="page-foot">
       <span class="muted">The master password and vault keys never leave this device.</span>
     </footer>
