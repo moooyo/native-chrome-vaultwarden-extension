@@ -1,7 +1,7 @@
 import browser from 'webextension-polyfill';
 import { sendRequest } from '../../messaging/protocol.js';
 import { isUriMatchStrategySetting } from '../../core/vault/uri-match.js';
-import { isLockTimeoutSetting } from '../../background/settings.js';
+import { isLockTimeoutSetting, isOnIdleAction, isClipboardClearSetting } from '../../background/settings.js';
 import { icon } from '../icons.js';
 
 const form = document.getElementById('settingsForm') as HTMLFormElement;
@@ -37,8 +37,14 @@ function updateIdleWarning() {
 }
 
 async function saveSecurity() {
-  const response = await sendRequest({ type: 'settings.saveSecurity', onIdleAction: onIdleActionInput.value as 'lock' | 'logout', clipboardClearSeconds: clipboardClearInput.value as never });
   const el = document.getElementById('securityStatus')!;
+  const action = onIdleActionInput.value;
+  const clip = clipboardClearInput.value;
+  if (!isOnIdleAction(action) || !isClipboardClearSetting(clip)) {
+    el.innerHTML = `<div class="toast error">${escapeHtml('Unsupported security setting.')}</div>`;
+    return;
+  }
+  const response = await sendRequest({ type: 'settings.saveSecurity', onIdleAction: action, clipboardClearSeconds: clip });
   el.innerHTML = response.ok ? '' : `<div class="toast error">${escapeHtml(response.error.message)}</div>`;
 }
 
