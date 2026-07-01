@@ -37,7 +37,11 @@ describe('createIdleLock', () => {
   });
 
   it('is a no-op when already locked (guards double-trigger, esp. logout)', async () => {
-    const deps = makeDeps({ isUnlocked: async () => false, getConfig: async () => ({ idleSeconds: 60, action: 'logout' }) });
+    const deps = makeDeps({
+      isUnlocked: async () => false,
+      getConfig: async () => ({ idleSeconds: 60, action: 'logout' }),
+      queryState: async (_: number): Promise<IdleState> => 'idle', // backstop reaches applyAction, then hits the guard
+    });
     const il = createIdleLock(deps);
     await il.onStateChanged('idle');
     await il.onBackstopAlarm();
