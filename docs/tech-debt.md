@@ -51,6 +51,17 @@
   - `vault-service` 在 sync 时解出集合、缓存、并把 `collectionIds` 带进条目摘要；`VaultListing`
     新增 `collections`。`search.filterByCollection` + `filterSummariesByFolderCollectionAndQuery`
     组合「文件夹 × 集合 × 文本」过滤。popup 新增集合下拉过滤（仅在存在集合时显示），登出即清。
+  - ✅ **集合 CRUD + 条目集合归属编辑**（已交付，2026-07-01；设计/计划见 `docs/superpowers/`，spec 经读 Vaultwarden
+    源码的对抗性评审 + §9 协议由 live 探针钉死）：`core/vault/org-permissions.ts` 解析 sync profile 的 org 角色
+    （`type`/`status`/`permissions`）→ fail-closed `canManageCollections`（Owner/Admin 按 type、Custom 按权限；
+    非 Confirmed/未知 → false；Vaultwarden 把 Manager 重映射为 Custom）。`ApiClient` create/rename/delete collection
+    + `updateCipherCollections`；`VaultService` 集合名用**组织密钥**加密（非 UserKey）、上送、re-sync。
+    **改名保留访问**：`GET .../details` 取现有 groups/users 连新名一起 PUT 回传（name-only PUT 被服务端 422 拒绝且
+    会清空全组织对该集合的访问——已实测证实）。`setCipherCollections` 走专用 `PUT /api/ciphers/{id}/collections`
+    （不碰 cipher 主体加密），worker 校验个人条目拒绝 + collectionId 同 org 守卫。`orgPermissions` 经
+    sync→缓存→listItems→协议响应→popup 全链路贯通（缺一层门控即空）；popup 按可管理 org 门控新建/改名/删除控件、
+    条目编辑器加集合多选。有 `LIVE=1` 端到端测试（建 org→CRUD→删，真实服务端往返）。
+    剩余（小项）：集合的群组/成员访问**分配** UI（仅改名时保留、不编辑）、集合嵌套/树、非 owner 的 `-admin` 端点变体。
 
 - **对称加密原语 + 条目/文件夹（Cipher/Folder）CRUD** ✅（本次落地，原 M5 写入路径）
   - 写入地基：`primitives.aesCbc256Encrypt` + `encstring.encryptToBytes/encryptToText` 构造
@@ -113,7 +124,7 @@
   并更新修订时间；登录详情按需揭示（reprompt 门控）。
 - ✅ **组织条目编辑修复 + 移动到组织（share）**（已交付）：`updateCipher` 改用组织密钥/每条目密钥加密并保留
   `organizationId`（修数据损坏）；`/api/ciphers/{id}/share` + 集合选择；带 passkey/历史的条目拒绝 share 以防丢数据。
-  剩余：集合 CRUD、组织内改集合归属（move-without-org-change）。
+  剩余：集合 CRUD 与组织内改集合归属（move-without-org-change）已由 2026-07-01 的集合特性交付（见上「集合 CRUD + 条目集合归属编辑」）。
 - ✅ **保存/更新登录提示条**（已交付）：表单提交捕获 + 通知栏 + 页面驱动的 create/update。
 - ✅ **Passphrase 生成器**（已交付）：内置词表 + 拒绝采样；生成器面板「Password/Passphrase」切换。
 - ⬆ **2FA 扩展**（本次部分交付）：现支持所有**码型**提供方——Authenticator(0)/Email(1)/Duo passcode(2/6)/
@@ -158,7 +169,7 @@
   （纯函数、注入随机源、复用词表）+ 生成器面板 Username 模式 + 登录编辑器 username 生成按钮。全本地、不联网。
   剩余：**转发邮箱别名**（SimpleLogin/addy.io/Firefox Relay 等外部 provider + token 存储，另起里程碑）。
 - ➖ 超时动作（锁定 vs 登出）、
-  跨服务器多账户、集合 CRUD、i18n/`_locales`、生物识别解锁、徽章计数、账户指纹短语、Firefox 打包、
+  跨服务器多账户、i18n/`_locales`、生物识别解锁、徽章计数、账户指纹短语、Firefox 打包、
   Steam Guard TOTP、passkey 多凭据选择 UI。
 - ➖ **空闲/自动锁定准确性**：靠 1 分钟轮询 `lastActivity`，且仅扩展消息更新它（非真实页面活动）；
   无 `chrome.idle`、无系统锁联动。**剪贴板自动清除**写死 60s、清除计时器在 popup 上下文（关闭即取消）。
