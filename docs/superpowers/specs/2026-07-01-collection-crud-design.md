@@ -175,16 +175,18 @@ setCipherCollections(id: string, collectionIds: string[]): Promise<VaultListing>
 - CRUD 成功后**必须重渲染集合过滤条**（复用 `applyListing`/`renderCollectionFilter`），使删除/改名的选项不残留。删除集合无需额外缓存清理（`sync()` 覆盖集合缓存，且过滤器对失效选中自愈）。
 - 文案英文。
 
-## 9. 待 live 探针钉死的协议细节（planning 阶段先探再写计划）
+## 9. 协议细节（已由 live 探针钉死，Vaultwarden 2025.12.0，2026-07-01）
 
-> 先用一次性 `LIVE=1` 探针对真实 Vaultwarden（`10.0.1.20:8080`，2025.12.0）钉死，再写实现计划。**测试账户当前无组织**——探针需先建组织。
+> 一次性 `LIVE=1` 探针对真实 Vaultwarden（`10.0.1.20:8080`）实测结果如下（探针脚本用后即删）。测试账户原无组织，探针先建 org 再测。
 
-1. **org 创建（测试脚手架）**：`POST /api/organizations` 的 body。org 密钥须用**账户 RSA 公钥**（encType=4）包裹——代码库无处直接取账户公钥（`SyncProfile` 无 publicKey、无 `/api/accounts/keys` 方法）。**方案**：从会话中已解密的 PKCS8 私钥经 WebCrypto 导出 JWK、取 `{n,e}` 构造公钥 SPKI（仅测试脚手架，不动产品代码）。或加一个 `GET /api/accounts/keys` 客户端方法。钉死采用哪种。
-2. **sync profile organization 字段**：`type` / `status` / `permissions` 确切名与取值；**确认 Vaultwarden 从不发 type 3（Manager 已重映射为 Custom 4）**（验证 §3.2）。
-3. **集合创建 body**：`{ name, groups, users, externalId }` 中 groups/users 是否必填、是否可空；**创建者可见性**——门控用户具 access_all，空 users 时创建后 `/sync` 是否即含该集合。
-4. **改名 wipe 语义**：验证 name-only PUT 是否清空 groups/users（§3.3）；`GET …/{id}/details` 的返回形状（groups/users 字段）；确认 resend 能保留访问。
-5. **条目归属**：`PUT /api/ciphers/{id}/collections` 的 body（`{ collectionIds }`，camelCase）与返回；**确认非 owner/manager 用的正确端点变体**（`…/collections` vs `…-admin`）；参考现有 `shareCipher` 的 collectionIds body 作起点。
-6. **删除影响**：删集合后其条目在 `/sync` 的 `collectionIds` 如何变；**验收标准：只属该集合的条目不被孤立/对 owner 隐藏**。
+1. **org 创建（仅 LIVE 测试脚手架，不进产品）**：`POST /api/organizations`，body `{ name, billingEmail, collectionName: <encType2 名 under org 密钥>, key: <encType4 org 密钥 under 账户公钥>, planType: 0, keys: null }` → 200，返回含 `id`。**账户公钥**：从会话已解密的 PKCS8 私钥经 WebCrypto `exportKey('jwk')` 取 `{n,e}` 构造公钥、`exportKey('spki')` 得 SPKI（仅测试用，不动产品代码）。清理：`DELETE /api/organizations/{id}`，body `{ masterPasswordHash }`。
+2. **org 成员字段**（✅ 确认 §3.1 建模）：`type`（Owner=0 实测）、`status`（Confirmed=2 实测）、`permissions.{createNewCollections,editAnyCollection,deleteAnyCollection}`（+ accessEventLogs/manageUsers 等，字段名确认）。**要点**：Owner（type 0）的 `permissions.*` **全为 false** 却仍能建/改/删集合——证实 **Owner/Admin 必须按 type 门控、不看 permissions**（§3.2 已如此）；Custom 用户才靠 permissions 布尔。另有 `organizationUserId`（自身成员 id）、`limitCollectionCreation`/`limitCollectionDeletion`（org 级限制，服务端裁决）。**未见 type 3**（与「Manager→Custom 重映射」一致）。
+3. **集合创建**：`POST /api/organizations/{orgId}/collections`，body `{ name: <encType2 under org 密钥>, groups: [], users: [], externalId: null }` → 200，返回 `{ id, name, organizationId, manage, readOnly, hidePasswords, externalId, object }`。**groups/users 必填**（缺则 422，见 4）。**创建者可见性**：owner 用空 `users` 创建后，`/sync` 即含该集合、`manage:true`——**无需自身授权**（§3.3 假设确认）。
+4. **改名（wipe 确认）**：`PUT …/{id}` **name-only → 422**（拒绝，证实 groups/users 必填）；`PUT …/{id}` body `{ name, groups, users, externalId }` → 200。保留访问：`GET /api/organizations/{orgId}/collections/{id}/details` → 200，返回 `{ groups: [...], users: [...], assigned, manage, readOnly, name, id, organizationId, object:'collectionAccessDetails' }`；改名时把返回的 `groups`/`users` **原样回传**即可保留访问。
+5. **条目归属**：`PUT /api/ciphers/{id}/collections`，body `{ collectionIds }` → 200（owner 用**普通端点即可**，无需 `-admin`；移动生效，实测从 col1 → col2）。org 条目经现有 `share`（`PUT /api/ciphers/{id}/share` body `{ cipher: <org 密钥加密>, collectionIds }`）产生。
+6. **删除影响**（✅ 验收达标）：删除某条目**唯一所属集合**后，该条目在 `/sync` **仍存在**、`collectionIds` 变为 `[]`（不被孤立/删除；对 owner 仍可见）。
+
+> 残余边界：非 owner/manager 用 `PUT /api/ciphers/{id}/collections` 的鉴权（是否需 `-admin` 变体）无法用 owner 测试账户覆盖——按普通端点实现，服务端拒绝时透传错误（§10）。
 
 ## 10. 错误处理
 
