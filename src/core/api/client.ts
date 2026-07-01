@@ -2,6 +2,9 @@ import type { KeyValueStore } from '../../platform/store.js';
 import type {
   CipherRequest,
   CipherResponse,
+  CollectionAccess,
+  CollectionAccessDetails,
+  CollectionResponse,
   FolderResponse,
   LoginSuccessResponse,
   PreloginResponse,
@@ -157,6 +160,49 @@ export class ApiClient {
     await this.noBodyRequest(`/api/folders/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: { authorization: `Bearer ${accessToken}` },
+    });
+  }
+
+  /** Create a collection in an org. `encryptedName` is an encType=2 EncString under the ORG key.
+   *  groups/users are mandatory on Vaultwarden (empty is fine — an access-all manager still sees it). */
+  async createCollection(accessToken: string, orgId: string, encryptedName: string): Promise<CollectionResponse> {
+    return this.jsonRequest<CollectionResponse>(`/api/organizations/${encodeURIComponent(orgId)}/collections`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ name: encryptedName, groups: [], users: [], externalId: null }),
+    });
+  }
+
+  /** Fetch a collection's current group/user access so a rename can preserve it (name-only PUT wipes it). */
+  async getCollectionDetails(accessToken: string, orgId: string, id: string): Promise<CollectionAccessDetails> {
+    return this.jsonRequest<CollectionAccessDetails>(`/api/organizations/${encodeURIComponent(orgId)}/collections/${encodeURIComponent(id)}/details`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+  }
+
+  /** Rename a collection, RESENDING the preserved groups/users so access is not wiped. */
+  async updateCollection(accessToken: string, orgId: string, id: string, encryptedName: string, access: CollectionAccess): Promise<CollectionResponse> {
+    return this.jsonRequest<CollectionResponse>(`/api/organizations/${encodeURIComponent(orgId)}/collections/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ name: encryptedName, groups: access.groups, users: access.users, externalId: null }),
+    });
+  }
+
+  async deleteCollection(accessToken: string, orgId: string, id: string): Promise<void> {
+    await this.noBodyRequest(`/api/organizations/${encodeURIComponent(orgId)}/collections/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+  }
+
+  /** Set a cipher's collection membership. Return ignored; re-sync is the source of truth. */
+  async updateCipherCollections(accessToken: string, id: string, collectionIds: string[]): Promise<void> {
+    await this.noBodyRequest(`/api/ciphers/${encodeURIComponent(id)}/collections`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ collectionIds }),
     });
   }
 

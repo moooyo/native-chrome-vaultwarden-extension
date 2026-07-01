@@ -429,3 +429,65 @@ describe('ApiClient Sends - file uploads', () => {
     expect(init.method).toBe('PUT');
   });
 });
+
+describe('ApiClient collection endpoints', () => {
+  const makeApi = (fetchFn: typeof fetch) => new ApiClient({
+    serverUrlProvider: async () => 'https://vw.example.com',
+    fetchFn,
+    localStore: createMemoryStore(),
+  });
+
+  it('POSTs a create-collection with mandatory empty groups/users', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ id: 'c1', organizationId: 'o1' }));
+    const api = makeApi(fetchFn);
+    await api.createCollection('tok', 'o1', '2.enc==');
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://vw.example.com/api/organizations/o1/collections');
+    expect(init.method).toBe('POST');
+    expect(init.headers).toEqual({ 'content-type': 'application/json', authorization: 'Bearer tok' });
+    expect(JSON.parse(init.body as string)).toEqual({ name: '2.enc==', groups: [], users: [], externalId: null });
+  });
+
+  it('renames by resending preserved groups/users', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ id: 'c1' }));
+    const api = makeApi(fetchFn);
+    await api.updateCollection('tok', 'o1', 'c1', '2.new==', { groups: [{ id: 'g1' }], users: [{ id: 'u1' }] });
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://vw.example.com/api/organizations/o1/collections/c1');
+    expect(init.method).toBe('PUT');
+    expect(init.headers).toEqual({ 'content-type': 'application/json', authorization: 'Bearer tok' });
+    expect(JSON.parse(init.body as string)).toEqual({ name: '2.new==', groups: [{ id: 'g1' }], users: [{ id: 'u1' }], externalId: null });
+  });
+
+  it('PUTs cipher collectionIds', async () => {
+    const fetchFn = vi.fn(async () => new Response('', { status: 200 }));
+    const api = makeApi(fetchFn);
+    await api.updateCipherCollections('tok', 'ci1', ['x', 'y']);
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://vw.example.com/api/ciphers/ci1/collections');
+    expect(init.method).toBe('PUT');
+    expect(init.headers).toEqual({ 'content-type': 'application/json', authorization: 'Bearer tok' });
+    expect(JSON.parse(init.body as string)).toEqual({ collectionIds: ['x', 'y'] });
+  });
+
+  it('GETs a collection with details endpoint', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ id: 'c1', organizationId: 'o1', groups: [], users: [] }));
+    const api = makeApi(fetchFn);
+    const res = await api.getCollectionDetails('tok', 'o1', 'c1');
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/organizations/o1/collections/c1/details', expect.objectContaining({
+      method: 'GET',
+      headers: { authorization: 'Bearer tok' },
+    }));
+    expect(res).toEqual({ id: 'c1', organizationId: 'o1', groups: [], users: [] });
+  });
+
+  it('DELETEs a collection', async () => {
+    const fetchFn = vi.fn(async () => textResponse('', 200));
+    const api = makeApi(fetchFn);
+    await expect(api.deleteCollection('tok', 'o1', 'c1')).resolves.toBeUndefined();
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/organizations/o1/collections/c1', expect.objectContaining({
+      method: 'DELETE',
+      headers: { authorization: 'Bearer tok' },
+    }));
+  });
+});

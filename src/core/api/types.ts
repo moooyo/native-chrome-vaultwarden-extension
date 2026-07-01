@@ -283,6 +283,19 @@ export interface CollectionResponse {
   readOnly?: boolean;
 }
 
+/** A collection's group/user access assignments — opaque to us, preserved verbatim across a rename. */
+export interface CollectionAccess {
+  groups: unknown[];
+  users: unknown[];
+}
+
+/** `GET .../collections/{id}/details` payload (object: collectionAccessDetails). */
+export interface CollectionAccessDetails extends CollectionAccess {
+  id: string;
+  organizationId: string;
+  name?: string | null;
+}
+
 export interface SyncResponse {
   profile: SyncProfile;
   ciphers: CipherResponse[];
