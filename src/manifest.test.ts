@@ -27,4 +27,8 @@ describe('manifest', () => {
   it('requests the contextMenus permission for right-click fill', () => {
     expect(manifest.permissions).toContain('contextMenus');
   });
+
+  it('grants the HIBP host permission for breach checks', () => {
+    expect(manifest.host_permissions).toContain('https://api.pwnedpasswords.com/*');
+  });
 });
