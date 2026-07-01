@@ -1,6 +1,7 @@
 import { sendRequest } from '../../messaging/protocol.js';
 import type { AuthResult } from '../../core/session/auth-service.js';
 import type { CipherInput, CipherSummary, CollectionSummary, CustomFieldType, DecryptedCipher, DecryptedField, FolderSummary } from '../../core/vault/models.js';
+import type { OrgPermission } from '../../core/vault/org-permissions.js';
 import { filterSummariesByFolderCollectionAndQuery, NO_FOLDER } from '../../core/vault/search.js';
 import { generatePassword, DEFAULT_PASSWORD_OPTIONS, type PasswordGenOptions } from '../../core/generator/password.js';
 import { generatePassphrase, DEFAULT_PASSPHRASE_OPTIONS, type PassphraseGenOptions } from '../../core/generator/passphrase.js';
@@ -40,6 +41,8 @@ let isPending = false;
 let vaultItems: CipherSummary[] = [];
 let vaultFolders: FolderSummary[] = [];
 let vaultCollections: CollectionSummary[] = [];
+// Per-organization role summary (gates collection create/rename/delete controls in the popup).
+let vaultOrgPermissions: OrgPermission[] = [];
 let selectedFolderId: string | null = null;
 let selectedCollectionId: string | null = null;
 // When true, the vault list shows trashed (soft-deleted) items instead of active ones.
@@ -421,6 +424,7 @@ function renderUnlockedShell(error?: string) {
     <div id="folderBar" class="folderbar"></div>
     <div id="folderEditor" class="folder-editor"></div>
     <div id="collectionBar" class="folderbar"></div>
+    <div id="collectionEditor" class="folder-editor"></div>
     <div id="orgBanner"></div>
     <div id="vaultList" class="list-wrap"></div>
     <div class="footer">
@@ -491,11 +495,13 @@ function renderFolderFilter() {
 }
 
 /** Apply a fresh listing returned by a folder mutation, then re-render the filtered views. */
-function applyListing(data: { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[] }): void {
+function applyListing(data: { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[]; orgPermissions: OrgPermission[] }): void {
   vaultItems = data.items;
   vaultFolders = data.folders;
   vaultCollections = data.collections;
+  vaultOrgPermissions = data.orgPermissions ?? [];
   closeFolderEditor();
+  closeCollectionEditor();
   renderFolderFilter();
   renderCollectionFilter();
   renderVaultList();
@@ -561,17 +567,30 @@ async function submitFolderMutation(
   try {
     const response = await sendRequest(request);
     if (!response.ok) return setFolderEditStatus(response.error.message);
-    applyListing(response.data as { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[] });
+    applyListing(response.data as { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[]; orgPermissions: OrgPermission[] });
   } finally {
     isPending = false;
   }
 }
 
-/** Build the collection <select> from decrypted org collections, preserving a valid selection. */
+/** Organizations where the current user may create/rename/delete collections. */
+function manageableOrgs(): OrgPermission[] {
+  return vaultOrgPermissions.filter((o) => o.canManageCollections);
+}
+
+/** True when `collection` belongs to an organization the user may manage collections in. */
+function isManageableCollection(collection: CollectionSummary): boolean {
+  return manageableOrgs().some((o) => o.id === collection.organizationId);
+}
+
+/** Build the collection <select> from decrypted org collections, preserving a valid selection.
+ *  Also renders the gated "new collection" affordance and, for a selected manageable collection,
+ *  inline rename/delete affordances — mirroring the folder bar above it. */
 function renderCollectionFilter() {
   const bar = document.getElementById('collectionBar');
   if (!bar) return;
-  if (vaultCollections.length === 0) {
+  const canManageAny = manageableOrgs().length > 0;
+  if (vaultCollections.length === 0 && !canManageAny) {
     bar.innerHTML = '';
     return;
   }
@@ -583,14 +602,111 @@ function renderCollectionFilter() {
     `<option value="">All collections</option>`,
     ...vaultCollections.map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`),
   ].join('');
-  bar.innerHTML = `<div class="folder-select">${icon('shield')}<select id="collectionFilter" class="select" aria-label="Filter by collection">${options}</select></div>`;
+  const selected = vaultCollections.find((c) => c.id === selectedCollectionId);
+  const canManageSelected = Boolean(selected && isManageableCollection(selected));
+  bar.innerHTML = `
+    ${vaultCollections.length
+      ? `<div class="folder-select">${icon('shield')}<select id="collectionFilter" class="select" aria-label="Filter by collection">${options}</select></div>`
+      : `<span class="folder-empty muted">${icon('shield')} No collections</span>`}
+    <div class="folder-actions">
+      ${canManageAny ? `<button id="collectionNew" class="icon-btn" type="button" title="New collection" aria-label="New collection">${icon('plus')}</button>` : ''}
+      ${canManageSelected ? `<button id="collectionRename" class="icon-btn" type="button" title="Rename collection" aria-label="Rename collection">${icon('edit')}</button><button id="collectionDelete" class="icon-btn" type="button" title="Delete collection" aria-label="Delete collection">${icon('trash')}</button>` : ''}
+    </div>`;
   const select = document.getElementById('collectionFilter') as HTMLSelectElement | null;
   if (select) {
     select.value = selectedCollectionId ?? '';
     select.addEventListener('change', () => {
       selectedCollectionId = select.value || null;
+      closeCollectionEditor();
+      renderCollectionFilter(); // refresh Rename/Delete affordances for the new selection
       renderVaultList();
     });
+  }
+  document.getElementById('collectionNew')?.addEventListener('click', () => openCollectionEditor('create'));
+  if (canManageSelected && selected) {
+    document.getElementById('collectionRename')?.addEventListener('click', () => openCollectionEditor('rename', selected));
+    document.getElementById('collectionDelete')?.addEventListener('click', () => openCollectionEditor('delete', selected));
+  }
+}
+
+function closeCollectionEditor(): void {
+  const host = document.getElementById('collectionEditor');
+  if (host) host.innerHTML = '';
+}
+
+/** Inline create/rename/delete editor for collections, rendered under the collection bar.
+ *  Create requires picking a manageable organization first (auto-selected/hidden when there's only one). */
+function openCollectionEditor(mode: 'create' | 'rename' | 'delete', collection?: CollectionSummary): void {
+  const host = document.getElementById('collectionEditor');
+  if (!host) return;
+  if (mode === 'delete' && collection) {
+    host.innerHTML = `
+      <div class="folder-edit-row">
+        <span class="muted">Delete “${escapeHtml(collection.name)}”? Items keep their other collections.</span>
+        <button id="collectionConfirm" class="btn btn-danger btn-sm" type="button">Delete</button>
+        <button id="collectionCancel" class="btn btn-secondary btn-sm" type="button">Cancel</button>
+      </div>
+      <div id="collectionEditStatus" class="folder-edit-status"></div>`;
+    document.getElementById('collectionConfirm')!.addEventListener('click', () => void submitCollectionMutation({ type: 'vault.deleteCollection', organizationId: collection.organizationId, id: collection.id }));
+    document.getElementById('collectionCancel')!.addEventListener('click', closeCollectionEditor);
+    return;
+  }
+  const orgs = mode === 'rename' ? [] : manageableOrgs();
+  const singleOrg = mode === 'create' && orgs.length === 1 ? orgs[0]! : undefined;
+  const orgPicker = mode === 'create' && orgs.length > 1
+    ? `<select id="collectionOrgInput" class="select">${orgs.map((o) => `<option value="${escapeHtml(o.id)}">${escapeHtml(o.name)}</option>`).join('')}</select>`
+    : '';
+  const initial = mode === 'rename' && collection ? collection.name : '';
+  host.innerHTML = `
+    <div class="folder-edit-row">
+      ${orgPicker}
+      <input id="collectionNameInput" class="input" placeholder="Collection name" value="${escapeHtml(initial)}" />
+      <button id="collectionConfirm" class="btn btn-sm" type="button">Save</button>
+      <button id="collectionCancel" class="btn btn-secondary btn-sm" type="button">Cancel</button>
+    </div>
+    <div id="collectionEditStatus" class="folder-edit-status"></div>`;
+  const input = document.getElementById('collectionNameInput') as HTMLInputElement;
+  input.focus();
+  input.select();
+  const submit = () => {
+    const name = input.value.trim();
+    if (!name) return setCollectionEditStatus('Enter a collection name');
+    if (mode === 'rename' && collection) {
+      return void submitCollectionMutation({ type: 'vault.renameCollection', organizationId: collection.organizationId, id: collection.id, name });
+    }
+    const orgId = singleOrg ? singleOrg.id : (document.getElementById('collectionOrgInput') as HTMLSelectElement | null)?.value;
+    if (!orgId) return setCollectionEditStatus('Choose an organization');
+    void submitCollectionMutation({ type: 'vault.createCollection', organizationId: orgId, name });
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    if (e.key === 'Escape') closeCollectionEditor();
+  });
+  document.getElementById('collectionConfirm')!.addEventListener('click', submit);
+  document.getElementById('collectionCancel')!.addEventListener('click', closeCollectionEditor);
+}
+
+function setCollectionEditStatus(message: string): void {
+  const status = document.getElementById('collectionEditStatus');
+  if (status) status.innerHTML = `<span class="error">${escapeHtml(message)}</span>`;
+}
+
+async function submitCollectionMutation(
+  request:
+    | { type: 'vault.createCollection'; organizationId: string; name: string }
+    | { type: 'vault.renameCollection'; organizationId: string; id: string; name: string }
+    | { type: 'vault.deleteCollection'; organizationId: string; id: string },
+): Promise<void> {
+  if (isPending) return;
+  isPending = true;
+  document.querySelectorAll<HTMLButtonElement>('#collectionEditor button').forEach((b) => (b.disabled = true));
+  try {
+    const response = await sendRequest(request);
+    if (!response.ok) return setCollectionEditStatus(response.error.message);
+    if (request.type === 'vault.deleteCollection' && selectedCollectionId === request.id) selectedCollectionId = null;
+    applyListing(response.data as { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[]; orgPermissions: OrgPermission[] });
+  } finally {
+    isPending = false;
   }
 }
 
@@ -655,6 +771,7 @@ function bindUnlockedControls() {
         vaultItems = [];
         vaultFolders = [];
         vaultCollections = [];
+        vaultOrgPermissions = [];
         selectedFolderId = null;
         selectedCollectionId = null;
         skippedOrgCount = 0;
@@ -689,10 +806,11 @@ function bindUnlockedControls() {
       if (!response.ok) {
         render({ kind: 'unlocked', error: response.error.message });
       } else {
-        const data = response.data as { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[] };
+        const data = response.data as { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[]; orgPermissions: OrgPermission[] };
         vaultItems = data.items;
         vaultFolders = data.folders;
         vaultCollections = data.collections;
+        vaultOrgPermissions = data.orgPermissions ?? [];
         await loadSkippedOrgCount();
         renderFolderFilter();
         renderCollectionFilter();
@@ -1542,6 +1660,11 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
     `<option value="">No folder</option>`,
     ...vaultFolders.map((f) => `<option value="${escapeHtml(f.id)}"${v.folderId === f.id ? ' selected' : ''}>${escapeHtml(f.name)}</option>`),
   ].join('');
+  // Organization ciphers get a collection multi-select; personal items show no collection control.
+  const cipherSummary = mode === 'edit' && id ? vaultItems.find((i) => i.id === id) : undefined;
+  const orgId = cipherSummary?.organizationId;
+  const orgCollections = orgId ? vaultCollections.filter((c) => c.organizationId === orgId) : [];
+  const originalCollectionIds = new Set(cipherSummary?.collectionIds ?? []);
 
   let typeFields = '';
   if (type === 1) {
@@ -1590,6 +1713,11 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
           <div id="ed_fields" class="ed-cfields">${(v.fields ?? []).map((f) => customFieldEditorRow(f)).join('')}</div>
           <button id="ed_addField" class="btn btn-secondary btn-sm" type="button">${icon('plus')}<span>Add field</span></button>
         </div>
+        ${orgCollections.length
+          ? `<div class="ed-field"><span class="ed-label">Collections</span>
+          <div id="ed_collections" class="ed-cfields">${orgCollections.map((c) => `<label class="gen-check"><input type="checkbox" class="ed-col" value="${escapeHtml(c.id)}" ${originalCollectionIds.has(c.id) ? 'checked' : ''} /><span>${escapeHtml(c.name)}</span></label>`).join('')}</div>
+        </div>`
+          : ''}
         ${mode === 'edit' && id ? `<label class="ed-field"><span class="ed-label">Add attachment</span>
           <div class="ed-attach"><input id="ed_attachFile" type="file" class="input" />
           <button id="ed_attachAdd" class="btn btn-secondary btn-sm" type="button">${icon('plus')}<span>Upload</span></button></div></label>` : ''}
@@ -1621,7 +1749,7 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
     });
   }
   bindCustomFieldEditor();
-  document.getElementById('ed_save')!.addEventListener('click', () => void saveEditor(mode, type, id));
+  document.getElementById('ed_save')!.addEventListener('click', () => void saveEditor(mode, type, id, orgCollections.length ? originalCollectionIds : undefined));
   if (mode === 'edit' && id) {
     document.getElementById('ed_delete')!.addEventListener('click', () => confirmDeleteCipher(id, v.name));
     document.getElementById('ed_move')?.addEventListener('click', () => renderMoveToOrg(id, v.name));
@@ -1736,7 +1864,10 @@ function collectEditorInput(type: 1 | 2 | 3 | 4): CipherInput {
   return input;
 }
 
-async function saveEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, id?: string): Promise<void> {
+/** Save the cipher fields, then — independently, per spec — persist any collection-assignment change
+ *  for organization items. `originalCollectionIds` is passed only when the editor rendered the
+ *  collection multi-select (i.e. this is an organization item with visible collections). */
+async function saveEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, id?: string, originalCollectionIds?: Set<string>): Promise<void> {
   if (isPending) return;
   const input = collectEditorInput(type);
   if (!input.name) return setDetailStatus('Name is required', true);
@@ -1750,6 +1881,18 @@ async function saveEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, id?: str
       setDetailStatus(response.error.message, true);
       document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = false));
       return;
+    }
+    if (mode === 'edit' && id && originalCollectionIds) {
+      const checked = new Set([...document.querySelectorAll<HTMLInputElement>('.ed-col:checked')].map((el) => el.value));
+      const unchanged = checked.size === originalCollectionIds.size && [...checked].every((cid) => originalCollectionIds.has(cid));
+      if (!unchanged) {
+        const collectionsResponse = await sendRequest({ type: 'vault.setCipherCollections', id, collectionIds: [...checked] });
+        if (!collectionsResponse.ok) {
+          setDetailStatus(collectionsResponse.error.message, true);
+          document.querySelectorAll<HTMLButtonElement>('.detail button').forEach((b) => (b.disabled = false));
+          return;
+        }
+      }
     }
     render({ kind: 'unlocked' });
   } finally {
@@ -1813,10 +1956,11 @@ async function restoreCipherAction(id: string): Promise<void> {
 async function loadCachedList() {
   const response = await sendRequest({ type: 'vault.listItems' });
   if (response.ok) {
-    const data = response.data as { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[] };
+    const data = response.data as { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[]; orgPermissions: OrgPermission[] };
     vaultItems = data.items;
     vaultFolders = data.folders;
     vaultCollections = data.collections;
+    vaultOrgPermissions = data.orgPermissions ?? [];
     await loadSkippedOrgCount();
     renderFolderFilter();
     renderCollectionFilter();
