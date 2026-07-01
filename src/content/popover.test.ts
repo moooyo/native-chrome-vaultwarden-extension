@@ -81,6 +81,15 @@ describe('autofill popover', () => {
     expect(popoverRoot(popover).querySelector('[data-cipher-id]')).toBeNull();
     expect(popoverRoot(popover).innerHTML).not.toContain('cipher-secret-id');
   });
+
+  it('open() invokes onOpen without a DOM event', () => {
+    const anchor = document.createElement('input');
+    document.body.append(anchor);
+    const onOpen = vi.fn();
+    const popover = createAutofillPopover({ anchor, onOpen, onSelect: () => {} });
+    popover.open();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
 });
 
 function popoverRoot(popover: AutofillPopover): ShadowRoot {

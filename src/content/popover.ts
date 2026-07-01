@@ -10,6 +10,8 @@ export interface PopoverCandidate {
 export interface AutofillPopover {
   element: HTMLElement;
   root: ShadowRoot;
+  /** Programmatically open the panel (runs the same onOpen path as a trusted shield click). */
+  open(): void;
   showStatus(message: string): void;
   showCandidates(candidates: PopoverCandidate[]): void;
   remove(): void;
@@ -104,6 +106,9 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
   return {
     element: host,
     root: shadow,
+    open() {
+      options.onOpen();
+    },
     showStatus(message: string) {
       render(`<div class="status">${LOCK}<span>${escapeHtml(message)}</span></div>`);
     },
