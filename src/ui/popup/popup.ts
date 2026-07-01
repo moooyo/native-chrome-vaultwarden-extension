@@ -1369,20 +1369,40 @@ async function renderHealthReport(): Promise<void> {
     body.innerHTML = `<div class="empty"><span class="glyph">${icon('checkCircle')}</span><span>No weak or reused passwords found.</span></div>`;
     return;
   }
-  body.innerHTML = entries.map((e) => {
-    const tags = [
-      e.weak ? '<span class="tag tag-warn">Weak</span>' : '',
-      e.reuseCount > 1 ? `<span class="tag tag-warn">Reused &times;${e.reuseCount}</span>` : '',
-    ].join(' ');
-    return `<button class="item" type="button" data-id="${escapeHtml(e.id)}">
-      <span class="monogram" style="--mono-h:${hueFor(e.name)}">${escapeHtml(monogramLetter(e.name))}</span>
-      <span class="item-body"><span class="item-name"><span class="title">${escapeHtml(e.name)}</span></span><span class="item-sub">${tags}</span></span>
-      <span class="chevron">${icon('chevron')}</span>
-    </button>`;
-  }).join('');
-  for (const row of body.querySelectorAll<HTMLElement>('.item')) {
-    row.addEventListener('click', () => renderDetail(row.dataset.id!));
-  }
+  const pwnedById = new Map<string, number>();
+  const renderEntries = (): void => {
+    body.innerHTML = entries.map((e) => {
+      const pwned = pwnedById.get(e.id);
+      const tags = [
+        e.weak ? '<span class="tag tag-warn">Weak</span>' : '',
+        e.reuseCount > 1 ? `<span class="tag tag-warn">Reused &times;${e.reuseCount}</span>` : '',
+        pwned != null ? (pwned > 0 ? `<span class="tag tag-danger">⚠️ Found in ${pwned} breaches</span>` : `<span class="tag">✓ Not found</span>`) : '',
+      ].filter(Boolean).join(' ');
+      return `<button class="item" type="button" data-id="${escapeHtml(e.id)}">
+        <span class="monogram" style="--mono-h:${hueFor(e.name)}">${escapeHtml(monogramLetter(e.name))}</span>
+        <span class="item-body"><span class="item-name"><span class="title">${escapeHtml(e.name)}</span></span><span class="item-sub">${tags}</span></span>
+        <span class="chevron">${icon('chevron')}</span>
+      </button>`;
+    }).join('') + `<div class="detail-actions"><button id="checkPwned" type="button" class="btn btn-block">${icon('shield')}<span>Check for breaches</span></button></div>`;
+    for (const row of body.querySelectorAll<HTMLElement>('.item')) {
+      row.addEventListener('click', () => renderDetail(row.dataset.id!));
+    }
+    document.getElementById('checkPwned')!.addEventListener('click', () => void checkBreaches());
+  };
+  const checkBreaches = async (): Promise<void> => {
+    const btn = document.getElementById('checkPwned') as HTMLButtonElement;
+    btn.disabled = true; btn.querySelector('span')!.textContent = 'Checking…';
+    const r = await sendRequest({ type: 'vault.checkPwned' });
+    if (!r.ok) {
+      btn.disabled = false; btn.querySelector('span')!.textContent = 'Check for breaches';
+      const note = document.createElement('p'); note.className = 'note error';
+      note.textContent = r.error.message; btn.parentElement!.append(note);
+      return;
+    }
+    for (const p of (r.data as { entries: Array<{ id: string; pwnedCount: number }> }).entries) pwnedById.set(p.id, p.pwnedCount);
+    renderEntries();
+  };
+  renderEntries();
 }
 
 interface EditorFieldSpec { key: string; label: string }
