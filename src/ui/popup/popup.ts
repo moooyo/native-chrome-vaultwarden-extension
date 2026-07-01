@@ -984,9 +984,9 @@ function usernameGenOptionsHtml(): string {
   const t = usernameType;
   return `
     <div class="seg" role="tablist" style="margin-top:8px">
-      <button id="utPlus" type="button" class="seg-btn${t === 'plusAddressed' ? ' is-active' : ''}" role="tab">Plus</button>
-      <button id="utCatch" type="button" class="seg-btn${t === 'catchAll' ? ' is-active' : ''}" role="tab">Catch-all</button>
-      <button id="utWord" type="button" class="seg-btn${t === 'randomWord' ? ' is-active' : ''}" role="tab">Random word</button>
+      <button id="utPlus" type="button" class="seg-btn${t === 'plusAddressed' ? ' is-active' : ''}" role="tab" aria-selected="${t === 'plusAddressed'}">Plus</button>
+      <button id="utCatch" type="button" class="seg-btn${t === 'catchAll' ? ' is-active' : ''}" role="tab" aria-selected="${t === 'catchAll'}">Catch-all</button>
+      <button id="utWord" type="button" class="seg-btn${t === 'randomWord' ? ' is-active' : ''}" role="tab" aria-selected="${t === 'randomWord'}">Random word</button>
     </div>
     ${t === 'plusAddressed' ? `<label class="ed-field"><span class="ed-label">Base email</span><input id="unBase" class="input" type="email" placeholder="you@example.com" value="${escapeHtml(usernameBaseEmail)}" /></label>` : ''}
     ${t === 'catchAll' ? `<label class="ed-field"><span class="ed-label">Catch-all domain</span><input id="unDomain" class="input" type="text" placeholder="example.com" value="${escapeHtml(usernameDomain)}" /></label>` : ''}
@@ -1230,7 +1230,7 @@ function renderGenerator(): void {
   const readOptions = (): void => {
     if (genMode === 'username') {
       const lenEl = document.getElementById('unLen') as HTMLInputElement | null;
-      if (lenEl) usernameGenOptions.randomLength = Math.min(Math.max(Math.trunc(Number(lenEl.value)) || 8, 4), 32);
+      if (lenEl) { const n = Number(lenEl.value); usernameGenOptions.randomLength = Number.isFinite(n) ? Math.min(Math.max(Math.trunc(n), 4), 32) : usernameGenOptions.randomLength; }
       const capEl = document.getElementById('unCap') as HTMLInputElement | null;
       const numEl = document.getElementById('unNum') as HTMLInputElement | null;
       if (capEl) usernameGenOptions.capitalize = capEl.checked;
@@ -1266,8 +1266,8 @@ function renderGenerator(): void {
   const regenerate = (): void => {
     readOptions();
     current = genMode === 'username'
-      ? (usernameType === 'plusAddressed' ? generatePlusAddressedEmail(usernameBaseEmail, usernameGenOptions)
-        : usernameType === 'catchAll' ? generateCatchAllEmail(usernameDomain, usernameGenOptions)
+      ? (usernameType === 'plusAddressed' ? (usernameBaseEmail.trim() ? generatePlusAddressedEmail(usernameBaseEmail, usernameGenOptions) : '')
+        : usernameType === 'catchAll' ? (usernameDomain.trim() ? generateCatchAllEmail(usernameDomain, usernameGenOptions) : '')
         : generateRandomWordUsername(usernameGenOptions))
       : isPass ? generatePassphrase(genPassphraseOptions) : generatePassword(genOptions);
     out.textContent = current || (genMode === 'username' ? 'Enter a base email / domain' : 'Enable at least one character set');

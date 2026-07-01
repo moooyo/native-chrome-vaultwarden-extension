@@ -17,6 +17,9 @@ describe('generatePlusAddressedEmail', () => {
   it('handles a base with no @ (no domain), trimming', () => {
     expect(generatePlusAddressedEmail('  me  ', { ...DEFAULT_USERNAME_OPTIONS, randomLength: 4 }, fixed(0))).toBe('me+aaaa');
   });
+  it('drops a dangling @ when the base has no domain part', () => {
+    expect(generatePlusAddressedEmail('foo@', { ...DEFAULT_USERNAME_OPTIONS, randomLength: 4 }, fixed(0))).toBe('foo+aaaa');
+  });
 });
 
 describe('generateCatchAllEmail', () => {

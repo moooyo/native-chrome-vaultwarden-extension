@@ -36,8 +36,9 @@ export function generatePlusAddressedEmail(
   const trimmed = baseEmail.trim();
   const rand = randomAlphanumeric(clampLen(options.randomLength), randomInt);
   const at = trimmed.indexOf('@');
-  if (at < 0) return `${trimmed}+${rand}`;
-  return `${trimmed.slice(0, at)}+${rand}@${trimmed.slice(at + 1)}`;
+  const domain = at < 0 ? '' : trimmed.slice(at + 1);
+  const local = at < 0 ? trimmed : trimmed.slice(0, at);
+  return domain ? `${local}+${rand}@${domain}` : `${local}+${rand}`;
 }
 
 /** `<random>@domain`. A leading '@' on the domain is stripped; an empty domain yields just the random part. */
