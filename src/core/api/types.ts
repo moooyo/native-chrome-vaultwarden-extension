@@ -53,6 +53,17 @@ export interface OrganizationResponse {
   /** RSA-OAEP wrapped organization symmetric key (encType=4), unwrapped with the account private key. */
   key: string;
   name?: string | null;
+  /** Org user type: 0 Owner, 1 Admin, 2 User, 3 Manager, 4 Custom.
+   *  Vaultwarden remaps Manager→Custom(4) before serialization, so type 3 does not appear on Vaultwarden. */
+  type?: number | null;
+  /** Membership status: 0 Invited, 1 Accepted, 2 Confirmed, -1 Revoked. */
+  status?: number | null;
+  /** Fine-grained permissions (Custom type). Owner/Admin have these all false yet can still manage. */
+  permissions?: {
+    createNewCollections?: boolean | null;
+    editAnyCollection?: boolean | null;
+    deleteAnyCollection?: boolean | null;
+  } | null;
 }
 
 export interface SyncProfile {
