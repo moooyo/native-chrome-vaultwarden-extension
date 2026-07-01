@@ -115,6 +115,11 @@ async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8
     createCipher: vi.fn(async () => ({ id: 'new-cipher', type: 1, name: '2.enc' })),
     updateCipher: vi.fn(async () => ({ id: 'cipher-1', type: 1, name: '2.enc' })),
     shareCipher: vi.fn(async () => ({ id: 'mine', type: 1, name: '2.enc' })),
+    createCollection: vi.fn(async () => ({ id: 'new-collection', name: '2.enc' })),
+    getCollectionDetails: vi.fn(async () => ({ groups: [], users: [] })),
+    updateCollection: vi.fn(async () => ({ id: 'c1', name: '2.enc' })),
+    deleteCollection: vi.fn(async () => {}),
+    updateCipherCollections: vi.fn(async () => {}),
     deleteCipher: vi.fn(async () => {}),
     softDeleteCipher: vi.fn(async () => {}),
     restoreCipher: vi.fn(async () => {}),
@@ -857,6 +862,89 @@ describe('VaultService', () => {
     await service.sync();
     await expect(service.shareCipher('mine', 'org-1', ['col-9'])).rejects.toMatchObject({ code: 'error' });
     expect(api.shareCipher).not.toHaveBeenCalled();
+  });
+
+  describe('collection CRUD + membership', () => {
+    // Seeds a synced cache with: an org cipher ('orgCipherId', org 'o1'), a personal cipher
+    // ('personalCipherId'), a profile org 'o1' the fake private key can unwrap, and cached
+    // collections for org 'o1' (sameOrgCollection) and a different org 'o2' (collectionFromOtherOrg).
+    async function makeCollectionSync(): Promise<SyncResponse> {
+      return {
+        profile: { id: 'u', email: 'u@example.com', organizations: [{ id: 'o1', key: ORG_KEY_VECTOR.encOrgKey }] },
+        ciphers: [
+          {
+            id: 'orgCipherId', type: 1, favorite: false, organizationId: 'o1',
+            name: await encUnder('Org Item', orgKey),
+            login: { username: await encUnder('alice@org.example', orgKey), password: await encUnder('org-s3cret', orgKey) },
+          },
+          {
+            id: 'personalCipherId', type: 1, favorite: false, organizationId: null,
+            name: await encUnder('Personal Item', testUserKey),
+            login: { username: await encUnder('me@example.com', testUserKey), password: await encUnder('p@ss', testUserKey) },
+          },
+        ],
+        collections: [
+          { id: 'sameOrgCollection', organizationId: 'o1', name: await encUnder('C', orgKey) },
+          { id: 'collectionFromOtherOrg', organizationId: 'o2', name: await encUnder('D', orgKey) },
+        ],
+      };
+    }
+
+    it('createCollection encrypts the name under the org key and re-syncs', async () => {
+      const { service, api } = await makeService(await makeCollectionSync(), { privateKey: privateKeyBytes });
+      await service.sync();
+      await service.createCollection('o1', 'Shared');
+      expect(api.createCollection).toHaveBeenCalledTimes(1);
+      const [, orgId, encName] = (api.createCollection as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(orgId).toBe('o1');
+      expect(encName).toMatch(/^2\./); // encType=2 EncString
+      await expect(decryptToText(encName, orgKey)).resolves.toBe('Shared');
+      expect(api.sync).toHaveBeenCalled(); // re-sync after write
+    });
+
+    it('renameCollection fetches details then resends preserved access', async () => {
+      const { service, api } = await makeService(await makeCollectionSync(), { privateKey: privateKeyBytes });
+      await service.sync();
+      (api.getCollectionDetails as ReturnType<typeof vi.fn>).mockResolvedValue({ groups: [{ id: 'g' }], users: [{ id: 'u' }] });
+      await service.renameCollection('o1', 'sameOrgCollection', 'New');
+      expect(api.getCollectionDetails).toHaveBeenCalledWith(expect.any(String), 'o1', 'sameOrgCollection');
+      const call = (api.updateCollection as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(call[4]).toEqual({ groups: [{ id: 'g' }], users: [{ id: 'u' }] });
+      await expect(decryptToText(call[3], orgKey)).resolves.toBe('New');
+    });
+
+    it('createCollection throws when the org key is unavailable', async () => {
+      const { service } = await makeService(await makeCollectionSync(), { privateKey: privateKeyBytes });
+      await service.sync();
+      await expect(service.createCollection('unknown-org', 'X')).rejects.toMatchObject({ message: 'Organization key unavailable' });
+    });
+
+    it('deleteCollection calls the API and re-syncs', async () => {
+      const { service, api } = await makeService(await makeCollectionSync(), { privateKey: privateKeyBytes });
+      await service.sync();
+      await service.deleteCollection('o1', 'sameOrgCollection');
+      expect(api.deleteCollection).toHaveBeenCalledWith(expect.any(String), 'o1', 'sameOrgCollection');
+      expect(api.sync).toHaveBeenCalled();
+    });
+
+    it('setCipherCollections rejects a personal item and a cross-org collection', async () => {
+      const { service } = await makeService(await makeCollectionSync(), { privateKey: privateKeyBytes });
+      await service.sync();
+      // personal cipher (no organizationId) in cache:
+      await expect(service.setCipherCollections('personalCipherId', ['sameOrgCollection']))
+        .rejects.toMatchObject({ message: 'Only organization items can be assigned to collections' });
+      // org cipher but a collectionId from another org:
+      await expect(service.setCipherCollections('orgCipherId', ['collectionFromOtherOrg']))
+        .rejects.toMatchObject({ message: 'Invalid collection for this item' });
+    });
+
+    it('setCipherCollections PUTs collectionIds for a valid org item and re-syncs', async () => {
+      const { service, api } = await makeService(await makeCollectionSync(), { privateKey: privateKeyBytes });
+      await service.sync();
+      await service.setCipherCollections('orgCipherId', ['sameOrgCollection']);
+      expect(api.updateCipherCollections).toHaveBeenCalledWith(expect.any(String), 'orgCipherId', ['sameOrgCollection']);
+      expect(api.sync).toHaveBeenCalled();
+    });
   });
 
   it('marks a login summary with hasTotp without leaking the secret', async () => {

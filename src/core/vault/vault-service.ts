@@ -141,6 +141,56 @@ export class VaultService {
     return this.sync();
   }
 
+  /** Resolve the org symmetric key from the cached profile, or fail closed. */
+  private async requireOrgKey(orgId: string): Promise<SymmetricKey> {
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    const orgKeys = await this.buildOrgKeys(cache?.profile);
+    const key = orgKeys.get(orgId);
+    if (!key) throw new AppError('error', 'Organization key unavailable');
+    return key;
+  }
+
+  /** Create a collection: encrypt the name under the org key, POST it, then re-sync. */
+  async createCollection(orgId: string, name: string): Promise<VaultListing> {
+    await this.requireUserKey();
+    const token = await this.requireToken();
+    const orgKey = await this.requireOrgKey(orgId);
+    await this.deps.api.createCollection(token, orgId, await encryptToText(name, orgKey));
+    return this.sync();
+  }
+
+  /** Rename a collection: fetch its current access, resend it with the new (org-key-encrypted) name. */
+  async renameCollection(orgId: string, id: string, name: string): Promise<VaultListing> {
+    await this.requireUserKey();
+    const token = await this.requireToken();
+    const orgKey = await this.requireOrgKey(orgId);
+    const access = await this.deps.api.getCollectionDetails(token, orgId, id);
+    await this.deps.api.updateCollection(token, orgId, id, await encryptToText(name, orgKey), { groups: access.groups, users: access.users });
+    return this.sync();
+  }
+
+  /** Delete a collection, then re-sync (member ciphers keep existing, with the collection removed). */
+  async deleteCollection(orgId: string, id: string): Promise<VaultListing> {
+    await this.requireUserKey();
+    const token = await this.requireToken();
+    await this.deps.api.deleteCollection(token, orgId, id);
+    return this.sync();
+  }
+
+  /** Assign an organization cipher to collections (all in the cipher's org), then re-sync. */
+  async setCipherCollections(id: string, collectionIds: string[]): Promise<VaultListing> {
+    await this.requireUserKey();
+    const token = await this.requireToken();
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    const orgId = cache?.ciphers.find((c) => c.id === id)?.organizationId ?? undefined;
+    if (!orgId) throw new AppError('error', 'Only organization items can be assigned to collections');
+    const collections = (await this.deps.localStore.get<CollectionSummary[]>(COLLECTION_CACHE_KEY)) ?? [];
+    const validIds = new Set(collections.filter((c) => c.organizationId === orgId).map((c) => c.id));
+    if (!collectionIds.every((cid) => validIds.has(cid))) throw new AppError('error', 'Invalid collection for this item');
+    await this.deps.api.updateCipherCollections(token, id, collectionIds);
+    return this.sync();
+  }
+
   /** Create a personal cipher: encrypt every field under the user key, POST it, then re-sync. */
   async createCipher(input: CipherInput): Promise<VaultListing> {
     const userKey = await this.requireUserKey();
