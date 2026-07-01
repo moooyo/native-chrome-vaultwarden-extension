@@ -44,5 +44,11 @@
       "run_at": "document_start",
       "all_frames": true
     }
-  ]
+  ],
+  "commands": {
+    "autofill-focused": {
+      "suggested_key": { "default": "Ctrl+Shift+F", "mac": "Command+Shift+F" },
+      "description": "Fill the focused login, card, or identity field from Vaultwarden"
+    }
+  }
 }

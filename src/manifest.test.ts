@@ -31,4 +31,11 @@ describe('manifest', () => {
   it('grants the HIBP host permission for breach checks', () => {
     expect(manifest.host_permissions).toContain('https://api.pwnedpasswords.com/*');
   });
+
+  it('declares the focused-fill keyboard command', () => {
+    const cmd = (manifest as { commands?: Record<string, { description?: string; suggested_key?: { default?: string } }> }).commands?.['autofill-focused'];
+    expect(cmd).toBeDefined();
+    expect(cmd?.description).toBeTruthy();
+    expect(cmd?.suggested_key?.default).toBe('Ctrl+Shift+F');
+  });
 });
