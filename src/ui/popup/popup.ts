@@ -50,6 +50,8 @@ let showTrash = false;
 let skippedOrgCount = 0;
 // Active TOTP countdown interval for the open login detail (cleared on any navigation).
 let totpTimer: number | undefined;
+// Configured clipboard auto-clear duration (seconds), or null when the setting is 'never'.
+let clipboardClearSeconds: number | null = 60;
 
 // Master-password reprompt: when the user clears the gate for a protected item, the verified master
 // password is held ONLY in this popup's memory for the duration of that item's detail/editor view and
@@ -445,6 +447,16 @@ function renderUnlockedShell(error?: string) {
   renderCollectionFilter();
   renderOrgBanner();
   void loadCachedList();
+  void loadClipboardClearSetting();
+}
+
+/** Fetch the configured clipboard auto-clear duration so copy status can report it. */
+async function loadClipboardClearSetting() {
+  const response = await sendRequest({ type: 'settings.get' });
+  if (response.ok) {
+    const { clipboardClearSeconds: setting } = response.data as { clipboardClearSeconds: string };
+    clipboardClearSeconds = setting === 'never' ? null : Number(setting);
+  }
 }
 
 /** Rebuild the folder filter + management controls, preserving a valid selection. */
@@ -2141,12 +2153,12 @@ async function withDetailBusy(fn: () => Promise<void>): Promise<void> {
   }
 }
 
-/** Copy an in-memory non-sensitive value with the 60s clipboard clear. */
+/** Copy an in-memory non-sensitive value and schedule the background clipboard clear. */
 async function copyValue(value: string | undefined, label: string): Promise<void> {
   if (!value) return setDetailStatus(`${label} is empty`, true);
   try {
     await copyWithClear(value);
-    setDetailStatus(`${label} copied. Clipboard clears in 60 s if unchanged and this popup stays open.`, false);
+    setDetailStatus(`${label} copied.${clipboardClearSeconds === null ? '' : ` Clipboard clears in ${clipboardClearSeconds} s.`}`, false);
   } catch {
     setDetailStatus(`Failed to copy ${label.toLowerCase()} to clipboard`, true);
   }
@@ -2599,12 +2611,7 @@ function renderIdentityFields(id: string, container: HTMLElement, cipher: Decryp
 
 async function copyWithClear(value: string): Promise<void> {
   await navigator.clipboard.writeText(value);
-  window.setTimeout(() => {
-    void (async () => {
-      const current = await navigator.clipboard.readText().catch(() => '');
-      if (current === value) await navigator.clipboard.writeText('').catch(() => {/* no-op */});
-    })();
-  }, 60_000);
+  void sendRequest({ type: 'clipboard.scheduleClear' }); // background clears via offscreen; survives popup close
 }
 
 function setDetailStatus(message: string, isError: boolean) {
