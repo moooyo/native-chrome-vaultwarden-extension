@@ -754,11 +754,17 @@ describe('VaultService', () => {
 
   it('sync computes orgPermissions only for orgs whose key is available and caches them', async () => {
     const sync = await makeOrgSync();
-    // type: 0 (Owner), status: 2 (Confirmed) => canManageCollections is true for this org.
-    sync.profile!.organizations = [{ id: 'org-1', key: ORG_KEY_VECTOR.encOrgKey, name: 'Org One', type: 0, status: 2 }];
+    // Two orgs: 'org-1' has an unwrappable key (buildOrgKeys yields a key for it); 'org-nokey' has a
+    // key that fails to unwrap (garbage), so it must be excluded — this falsifies the orgKeys filter.
+    // type: 0 (Owner), status: 2 (Confirmed) => canManageCollections is true for the included org.
+    sync.profile!.organizations = [
+      { id: 'org-1', key: ORG_KEY_VECTOR.encOrgKey, name: 'Org One', type: 0, status: 2 },
+      { id: 'org-nokey', key: '4.not-a-real-wrapped-key', name: 'Org No Key', type: 0, status: 2 },
+    ];
     const { service } = await makeService(sync, { privateKey: privateKeyBytes });
     const listing = await service.sync();
     expect(listing.orgPermissions).toEqual([{ id: 'org-1', name: 'Org One', canManageCollections: true }]);
+    expect(listing.orgPermissions.some((p) => p.id === 'org-nokey')).toBe(false);
     // listItems() reads it back from cache without a network sync.
     const cached = await service.listItems();
     expect(cached.orgPermissions).toEqual(listing.orgPermissions);
