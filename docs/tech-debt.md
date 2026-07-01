@@ -168,11 +168,22 @@
 - ✅ **用户名生成器（本地类型）**（已交付，2026-06-30）：`core/generator/username.ts` 加号别名/catch-all/随机词
   （纯函数、注入随机源、复用词表）+ 生成器面板 Username 模式 + 登录编辑器 username 生成按钮。全本地、不联网。
   剩余：**转发邮箱别名**（SimpleLogin/addy.io/Firefox Relay 等外部 provider + token 存储，另起里程碑）。
-- ➖ 超时动作（锁定 vs 登出）、
-  跨服务器多账户、i18n/`_locales`、生物识别解锁、徽章计数、账户指纹短语、Firefox 打包、
+- ➖ 跨服务器多账户、i18n/`_locales`、生物识别解锁、徽章计数、账户指纹短语、Firefox 打包、
   Steam Guard TOTP、passkey 多凭据选择 UI。
-- ➖ **空闲/自动锁定准确性**：靠 1 分钟轮询 `lastActivity`，且仅扩展消息更新它（非真实页面活动）；
-  无 `chrome.idle`、无系统锁联动。**剪贴板自动清除**写死 60s、清除计时器在 popup 上下文（关闭即取消）。
+- ✅ **空闲/自动锁定改进（超时动作 + chrome.idle 准确性 + 剪贴板后台清除）**（已交付，2026-07-01；设计/计划见
+  `docs/superpowers/`，spec 经 MV3 平台对抗性评审强化）：
+  - **超时动作**：设置 `onIdleAction: lock | logout`（默认 lock），空闲超时**与系统锁**都执行；options 页独立
+    「Security」小节 save-on-change（`settings.saveSecurity`，**不耦合 serverUrl/host 权限弹窗**），选 logout 有警示。
+  - **chrome.idle 取代轮询**：`idle-lock.ts`（纯函数）用 `chrome.idle.setDetectionInterval(超时秒)` + `onStateChanged`
+    （idle/locked→动作）+ 低频兜底 alarm `queryState`；退役 `lastActivity`/per-message `touch`（删 `alarms.ts`）。
+    **幂等守卫** `isUnlocked()`——锁定态 no-op，防 onStateChanged 与兜底 alarm 双触发对 logout 级联登出多账户。
+    `never`/`onClose` 关闭空闲与系统锁联动（null 早退，非 sentinel）。manifest 加 `"idle"`。
+  - **剪贴板后台清除**：设置 `clipboardClearSeconds`（never/30/60/120/300，默认 60，≥30s 因 alarm 钳制）；复制后
+    SW 排 alarm，触发时 **offscreen 文档**（`"offscreen"` 权限 + `offscreen.ts/html`）清空——`writeText('')` 为主、
+    execCommand 写**空格**覆盖为回退（空选区是 no-op）；**无条件、不持有明文**；SW onMessage 对 `offscreen.*` 同步
+    return 避免响应竞争。`chrome.offscreen` 无类型 → 窄化 cast，仅在 index.ts。
+  - **残余**：clipboard 清除机制（writeText vs execCommand 哪条真正清空）+ idle/系统锁时机需**真实浏览器人工冒烟**
+    钉死（CI 无法覆盖 offscreen/chrome.idle）；sub-30s 后台清除不支持（Chrome alarm 钳制）。
 - ➖ **记住设备 2FA token**：`remember` 传给 API 但返回的 token 从不捕获/回传，popup 也无勾选框。
 - ⬇ passkey 注册（`navigator.credentials.create`）、`instanceof PublicKeyCredential`、WebAuthn 扩展
   （credProps/prf/largeBlob）、signCount 回写；encType 0/1 旧密文兼容解密；SSH-key(type 5) 编辑；
