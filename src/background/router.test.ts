@@ -529,4 +529,14 @@ describe('router', () => {
     expect(updateSend).toHaveBeenCalledWith('s1', { name: 'New' }, 'http://localhost:8080');
     expect(res).toEqual({ ok: true, data: { send: { id: 's1', url: 'u', name: 'New', type: 0 } } });
   });
+
+  it('routes vault.checkPwned to vault.getPwnedReport', async () => {
+    const getPwnedReport = vi.fn(async () => [{ id: 'a', pwnedCount: 5 }]);
+    const router = createRouter({ auth: {}, vault: { getPwnedReport } as never, settings: {
+      getServerUrl: vi.fn(), saveServerUrl: vi.fn(), getDefaultUriMatchStrategy: vi.fn(async () => 0), saveDefaultUriMatchStrategy: vi.fn(), getLockTimeout: vi.fn(async () => '15'), saveLockTimeout: vi.fn(),
+    } as never });
+    const res = await router.handle({ type: 'vault.checkPwned' });
+    expect(getPwnedReport).toHaveBeenCalled();
+    expect(res).toEqual({ ok: true, data: { entries: [{ id: 'a', pwnedCount: 5 }] } });
+  });
 });

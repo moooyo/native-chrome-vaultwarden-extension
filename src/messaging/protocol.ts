@@ -117,6 +117,7 @@ export type RequestMessage =
   | { type: 'vault.getTotp'; id: string; masterPassword?: string }
   | { type: 'vault.getSkippedOrgCount' }
   | { type: 'vault.getPasswordHealth' }
+  | { type: 'vault.checkPwned' }
   | { type: 'vault.export'; password?: string }
   | { type: 'vault.import'; content: string; password?: string }
   | { type: 'vault.hasPasskey'; rpId: string; allowedCredentialIds?: string[] }
@@ -156,6 +157,7 @@ export type ResponseMessage =
   | { ok: true; data: { totp: TotpResult | null } }
   | { ok: true; data: { count: number } }
   | { ok: true; data: { entries: PasswordHealthEntry[] } }
+  | { ok: true; data: { entries: Array<{ id: string; pwnedCount: number }> } }
   | { ok: true; data: { history: Array<{ password: string; lastUsedDate?: string }> } }
   | { ok: true; data: { fileName: string; dataB64: string } }
   | { ok: true; data: { json: string } }
