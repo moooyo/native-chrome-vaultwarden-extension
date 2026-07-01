@@ -39,7 +39,10 @@ const contextMenu = createContextMenu({
   },
 });
 const idleLock = createIdleLock({
-  getConfig: async () => ({ idleSeconds: (await settings.getIdleMs()) === null ? null : (await settings.getIdleMs())! / 1000, action: await settings.getOnIdleAction() }),
+  getConfig: async () => {
+    const ms = await settings.getIdleMs();
+    return { idleSeconds: ms === null ? null : ms / 1000, action: await settings.getOnIdleAction() };
+  },
   isUnlocked: async () => (await auth.getState()) === 'unlocked',
   lock: () => auth.lock(),
   logout: () => auth.logout(),
