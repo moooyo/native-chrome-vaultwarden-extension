@@ -1376,7 +1376,7 @@ async function renderHealthReport(): Promise<void> {
       const tags = [
         e.weak ? '<span class="tag tag-warn">Weak</span>' : '',
         e.reuseCount > 1 ? `<span class="tag tag-warn">Reused &times;${e.reuseCount}</span>` : '',
-        pwned != null ? (pwned > 0 ? `<span class="tag tag-danger">⚠️ Found in ${pwned} breaches</span>` : `<span class="tag">✓ Not found</span>`) : '',
+        pwned != null ? (pwned > 0 ? `<span class="tag tag-danger">⚠️ Found in ${pwned} breaches</span>` : `<span class="tag tag-ok">✓ Not found</span>`) : '',
       ].filter(Boolean).join(' ');
       return `<button class="item" type="button" data-id="${escapeHtml(e.id)}">
         <span class="monogram" style="--mono-h:${hueFor(e.name)}">${escapeHtml(monogramLetter(e.name))}</span>
