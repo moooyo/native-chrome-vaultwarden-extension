@@ -84,7 +84,12 @@ export interface FillErrorCommand {
   code: 'reprompt_required';
 }
 
-export type ContentCommand = FillCommand | FillErrorCommand;
+/** Background → content: fill the currently-focused field's form via the keyboard shortcut. */
+export interface FocusedFillCommand {
+  type: 'autofill.focusedFill';
+}
+
+export type ContentCommand = FillCommand | FillErrorCommand | FocusedFillCommand;
 
 export type RequestMessage =
   | { type: 'auth.getState' }

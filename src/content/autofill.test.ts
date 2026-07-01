@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 interface FakePopover {
   element: HTMLElement;
+  open: ReturnType<typeof vi.fn>;
   showStatus: ReturnType<typeof vi.fn>;
   showCandidates: ReturnType<typeof vi.fn>;
   remove: ReturnType<typeof vi.fn>;
@@ -35,6 +36,7 @@ vi.mock('./popover.js', () => ({
     document.documentElement.append(element);
     const popover: FakePopover = {
       element,
+      open: vi.fn(),
       showStatus: vi.fn(),
       showCandidates: vi.fn(),
       remove: vi.fn(),
@@ -47,7 +49,8 @@ vi.mock('./popover.js', () => ({
 
 import { sendRequest, type ResponseMessage } from '../messaging/protocol.js';
 import { fillLoginForm } from './fill.js';
-import { startAutofill, handleContentCommand } from './autofill.js';
+import * as noticeModule from './notice.js';
+import { startAutofill, handleContentCommand, handleFocusedFill, openPickerFor, popoverRegistry } from './autofill.js';
 
 describe('autofill controller', () => {
   beforeEach(() => {
@@ -426,3 +429,56 @@ function popover(): FakePopover {
 function malformedOk(data: unknown): ResponseMessage {
   return { ok: true, data } as ResponseMessage;
 }
+
+describe('focused-fill command', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<form><input type="email"><input type="password"></form>';
+    popoverRegistry.clear();
+    vi.mocked(sendRequest).mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does nothing when the frame is not focused', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    await handleFocusedFill(() => 'https://ex.com');
+    expect(sendRequest).not.toHaveBeenCalled();
+  });
+
+  it('does nothing (no notice) when the active element is a nested frame', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const iframe = document.createElement('iframe');
+    document.body.append(iframe);
+    iframe.focus();
+    vi.spyOn(document, 'activeElement', 'get').mockReturnValue(iframe);
+    await handleFocusedFill(() => 'https://ex.com');
+    expect(sendRequest).not.toHaveBeenCalled();
+  });
+
+  it('fills a login when the focused password field has one match', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    document.querySelector<HTMLInputElement>('input[type="password"]')!.focus();
+    vi.mocked(sendRequest)
+      .mockResolvedValueOnce({ ok: true, data: [{ id: 'c1', name: 'A', username: 'u', matchedUri: 'x', matchType: 0, favorite: false }] } as ResponseMessage)
+      .mockResolvedValueOnce({ ok: true, data: { username: 'u', password: 'p' } } as ResponseMessage);
+    await handleFocusedFill(() => 'https://ex.com');
+    expect(vi.mocked(fillLoginForm)).toHaveBeenCalledTimes(1);
+  });
+
+  it('openPickerFor opens a registered, connected popover', () => {
+    const el = document.createElement('div');
+    document.documentElement.append(el);
+    const open = vi.fn();
+    popoverRegistry.set('f1', { element: el, open } as never);
+    openPickerFor(() => 'https://ex.com', 'f1');
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it('openPickerFor notices when no popover can be found after re-attach', () => {
+    const notice = vi.spyOn(noticeModule, 'showNotice');
+    openPickerFor(() => 'https://ex.com', 'missing');
+    expect(notice).toHaveBeenCalledWith("Multiple matches — click the field's Vaultwarden icon to choose");
+  });
+});

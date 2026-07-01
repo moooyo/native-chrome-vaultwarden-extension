@@ -9,7 +9,7 @@ import type { DetectedLoginForm } from './form-detection.js';
 import { detectCardForms, detectIdentityForms, isFillableField, type DetectedFillForm } from './field-detection.js';
 import type { FillFieldElement } from './field-detection.js';
 import { classifyCardField, classifyIdentityField, type CardRole, type IdentityRole } from './field-map.js';
-import { computeFillExclusion } from './focused-fill.js';
+import { computeFillExclusion, resolveFocusedFill, runFocusedFill, type FocusedFillDeps } from './focused-fill.js';
 import { createAutofillPopover } from './popover.js';
 import type { PopoverCandidate } from './popover.js';
 import { startSaveCapture, type CapturedLogin } from './capture.js';
@@ -119,6 +119,7 @@ function attachPopover(getFrameUrl: FrameUrlProvider, form: DetectedLoginForm): 
     },
   });
   popover.element.dataset.vwPopoverFor = form.id;
+  popoverRegistry.set(form.id, popover);
 }
 
 function attachFillPopover(form: DetectedFillForm): void {
@@ -129,6 +130,7 @@ function attachFillPopover(form: DetectedFillForm): void {
     onSelect: (cipherId) => void fillSelectedFillItem(form, cipherId, popover),
   });
   popover.element.dataset.vwPopoverFor = form.id;
+  popoverRegistry.set(form.id, popover);
 }
 
 async function loadFillCandidates(kind: FillKind, popover: ReturnType<typeof createAutofillPopover>): Promise<void> {
@@ -291,12 +293,16 @@ function debounce(fn: () => void, ms: number): () => void {
 let lastContextElement: Element | null = null;
 document.addEventListener('contextmenu', (event) => { lastContextElement = event.target as Element | null; }, true);
 
+/** form.id → its hover popover, so the keyboard shortcut can open the right picker on a multi-match. */
+export const popoverRegistry = new Map<string, ReturnType<typeof createAutofillPopover>>();
+
 browser.runtime.onMessage.addListener((message: unknown) => {
   if (isContentCommand(message)) handleContentCommand(message);
   // No response needed; return nothing (a non-Promise) so the channel closes immediately.
 });
 
 export function handleContentCommand(command: ContentCommand): void {
+  if (command.type === 'autofill.focusedFill') { void handleFocusedFill(); return; }
   if (command.type === 'autofill.fillError') {
     showNotice('Protected item — open the extension to verify');
     return;
@@ -306,6 +312,57 @@ export function handleContentCommand(command: ContentCommand): void {
   } else {
     fillWholeForm(command);
   }
+}
+
+export function openPickerFor(getFrameUrl: FrameUrlProvider, formId: string): void {
+  let pop = popoverRegistry.get(formId);
+  if (pop && pop.element.isConnected) { pop.open(); return; }
+  popoverRegistry.delete(formId);
+  attachPopovers(getFrameUrl); // idempotent (attachIfNew de-dupes) — re-attach for the current form
+  pop = popoverRegistry.get(formId);
+  if (pop && pop.element.isConnected) pop.open();
+  else showNotice("Multiple matches — click the field's Vaultwarden icon to choose");
+}
+
+function focusedFillDeps(getFrameUrl: FrameUrlProvider): FocusedFillDeps {
+  return {
+    frameUrl: () => getFrameUrl(),
+    loginCandidates: async (frameUrl) => {
+      const r = await sendRequest({ type: 'autofill.findCandidates', frameUrl });
+      if (!r.ok) return { ok: false, message: messageForError(r.error.code, r.error.message) };
+      return Array.isArray(r.data) && isAutofillCandidates(r.data) ? { ok: true, data: r.data } : { ok: false, message: 'Unexpected autofill response' };
+    },
+    loginCredentials: async (cipherId, frameUrl) => {
+      const r = await sendRequest({ type: 'autofill.getCredentials', cipherId, frameUrl });
+      if (!r.ok) return { ok: false, message: messageForError(r.error.code, r.error.message) };
+      return isAutofillCredentials(r.data) ? { ok: true, data: r.data } : { ok: false, message: 'Unexpected autofill response' };
+    },
+    fillItems: async (kind) => {
+      const r = await sendRequest({ type: 'autofill.findFillItems', kind });
+      if (!r.ok) return { ok: false, message: messageForError(r.error.code, r.error.message) };
+      return Array.isArray(r.data) && isFillItemCandidates(r.data) ? { ok: true, data: r.data } : { ok: false, message: 'Unexpected autofill response' };
+    },
+    fillData: async (cipherId, kind) => {
+      const r = await sendRequest({ type: 'autofill.getFillData', cipherId, kind });
+      if (!r.ok) return { ok: false, message: messageForError(r.error.code, r.error.message) };
+      return isFillData(r.data) ? { ok: true, data: r.data } : { ok: false, message: 'Unexpected autofill response' };
+    },
+    fillLogin: (form, creds) => { fillLoginForm(form, creds); },
+    fillCard: (form, data) => { fillCardForm(form, data); },
+    fillIdentity: (form, data) => { fillIdentityForm(form, data); },
+    openPicker: (formId) => openPickerFor(getFrameUrl, formId),
+    notify: (message) => showNotice(message),
+  };
+}
+
+export async function handleFocusedFill(getFrameUrl: FrameUrlProvider = () => window.location.href): Promise<void> {
+  if (!document.hasFocus()) return;                                   // non-focused frame
+  const el = document.activeElement;
+  // Ancestor frame — focus is in a child. HTMLFrameElement is obsolete (no <frameset> in modern
+  // pages) and isn't defined in every DOM implementation (e.g. happy-dom in tests), so guard it.
+  if (el instanceof HTMLIFrameElement || (typeof HTMLFrameElement !== 'undefined' && el instanceof HTMLFrameElement)) return;
+  const target = resolveFocusedFill(el, document);
+  await runFocusedFill(target, focusedFillDeps(getFrameUrl));
 }
 
 function fillWholeForm(command: FillCommand): void {
@@ -346,6 +403,7 @@ function containsField(form: DetectedFillForm, el: Element): boolean {
 
 function isContentCommand(value: unknown): value is ContentCommand {
   if (!isRecord(value)) return false;
+  if (value.type === 'autofill.focusedFill') return true;
   if (value.type === 'autofill.fillError') return value.code === 'reprompt_required';
   return value.type === 'autofill.fill'
     && (value.scope === 'form' || value.scope === 'field')
