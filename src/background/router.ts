@@ -1,7 +1,7 @@
 import type { AuthService } from '../core/session/auth-service.js';
 import type { VaultService } from '../core/vault/vault-service.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
-import type { LockTimeoutSetting } from './settings.js';
+import type { LockTimeoutSetting, OnIdleAction, ClipboardClearSetting } from './settings.js';
 import type { RequestMessage, ResponseMessage } from '../messaging/protocol.js';
 import { AppError } from '../core/errors.js';
 
@@ -15,7 +15,12 @@ export interface RouterDeps {
     saveDefaultUriMatchStrategy(strategy: UriMatchStrategySetting): Promise<void>;
     getLockTimeout(): Promise<LockTimeoutSetting>;
     saveLockTimeout(value: LockTimeoutSetting): Promise<void>;
+    getOnIdleAction(): Promise<OnIdleAction>;
+    saveOnIdleAction(value: OnIdleAction): Promise<void>;
+    getClipboardClearSetting(): Promise<ClipboardClearSetting>;
+    saveClipboardClearSetting(value: ClipboardClearSetting): Promise<void>;
   };
+  clipboard?: { scheduleClear(): Promise<void> };
 }
 
 export function createRouter(deps: RouterDeps) {
@@ -231,7 +236,10 @@ export function createRouter(deps: RouterDeps) {
             const serverUrl = await deps.settings.getServerUrl();
             const defaultUriMatchStrategy = await deps.settings.getDefaultUriMatchStrategy();
             const lockTimeout = await deps.settings.getLockTimeout();
-            return { ok: true, data: serverUrl === undefined ? { defaultUriMatchStrategy, lockTimeout } : { serverUrl, defaultUriMatchStrategy, lockTimeout } };
+            const onIdleAction = await deps.settings.getOnIdleAction();
+            const clipboardClearSeconds = await deps.settings.getClipboardClearSetting();
+            const base = { defaultUriMatchStrategy, lockTimeout, onIdleAction, clipboardClearSeconds };
+            return { ok: true, data: serverUrl === undefined ? base : { serverUrl, ...base } };
           }
           case 'settings.save':
             await deps.settings.saveServerUrl(request.serverUrl);
@@ -241,6 +249,14 @@ export function createRouter(deps: RouterDeps) {
             if (request.lockTimeout !== undefined) {
               await deps.settings.saveLockTimeout(request.lockTimeout);
             }
+            return { ok: true, data: null };
+          case 'settings.saveSecurity':
+            await deps.settings.saveOnIdleAction(request.onIdleAction);
+            await deps.settings.saveClipboardClearSetting(request.clipboardClearSeconds);
+            return { ok: true, data: null };
+          case 'clipboard.scheduleClear':
+            if (!deps.clipboard) throw new Error('clipboard is not wired');
+            await deps.clipboard.scheduleClear();
             return { ok: true, data: null };
           case 'sends.list': {
             if (!deps.vault.listSends) throw new Error('vault.listSends is not wired');

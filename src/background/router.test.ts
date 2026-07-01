@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SessionState } from '../core/session/session-manager.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
-import type { LockTimeoutSetting } from './settings.js';
+import type { LockTimeoutSetting, OnIdleAction, ClipboardClearSetting } from './settings.js';
 import { AppError } from '../core/errors.js';
 import { createRouter } from './router.js';
 
@@ -16,7 +16,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.getState' })).resolves.toEqual({ ok: true, data: { state: 'locked' } });
@@ -32,7 +32,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.login', email: 'u', masterPassword: 'p' }))
@@ -49,7 +49,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'vault.getField', id: '1', field: 'password' }))
@@ -66,7 +66,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'vault.getField', id: 'missing', field: 'password' }))
@@ -83,11 +83,11 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'settings.get' }))
-      .resolves.toEqual({ ok: true, data: { serverUrl: 'https://vault.example.com', defaultUriMatchStrategy: 0, lockTimeout: '15' } });
+      .resolves.toEqual({ ok: true, data: { serverUrl: 'https://vault.example.com', defaultUriMatchStrategy: 0, lockTimeout: '15', onIdleAction: 'lock', clipboardClearSeconds: '60' } });
   });
 
   it('routes settings.get when serverUrl is undefined', async () => {
@@ -100,11 +100,11 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'settings.get' }))
-      .resolves.toEqual({ ok: true, data: { defaultUriMatchStrategy: 0, lockTimeout: '15' } });
+      .resolves.toEqual({ ok: true, data: { defaultUriMatchStrategy: 0, lockTimeout: '15', onIdleAction: 'lock', clipboardClearSeconds: '60' } });
   });
 
   it('routes settings.save', async () => {
@@ -118,7 +118,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'settings.save', serverUrl: 'https://vault.example.com' }))
@@ -136,11 +136,11 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'settings.get' }))
-      .resolves.toEqual({ ok: true, data: { serverUrl: 'https://vault.example.com', defaultUriMatchStrategy: 0, lockTimeout: '15' } });
+      .resolves.toEqual({ ok: true, data: { serverUrl: 'https://vault.example.com', defaultUriMatchStrategy: 0, lockTimeout: '15', onIdleAction: 'lock', clipboardClearSeconds: '60' } });
   });
 
   it('routes settings.save with default autofill strategy', async () => {
@@ -155,7 +155,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy,
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'settings.save', serverUrl: 'https://vault.example.com', defaultUriMatchStrategy: 1 }))
@@ -176,6 +176,10 @@ describe('router', () => {
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
         saveLockTimeout,
+        getOnIdleAction: vi.fn(async () => 'lock' as const),
+        saveOnIdleAction: vi.fn(),
+        getClipboardClearSetting: vi.fn(async () => '60' as const),
+        saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'settings.save', serverUrl: 'https://vault.example.com', lockTimeout: '30' }))
@@ -195,6 +199,10 @@ describe('router', () => {
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
         saveLockTimeout,
+        getOnIdleAction: vi.fn(async () => 'lock' as const),
+        saveOnIdleAction: vi.fn(),
+        getClipboardClearSetting: vi.fn(async () => '60' as const),
+        saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'settings.save', serverUrl: 'https://vault.example.com' }))
@@ -213,7 +221,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.lock' })).resolves.toEqual({ ok: true, data: null });
@@ -231,7 +239,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.logout' })).resolves.toEqual({ ok: true, data: null });
@@ -249,7 +257,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'vault.listItems' }))
@@ -270,7 +278,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'vault.getCipherDetail', id: 'card-1' }))
@@ -291,7 +299,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'vault.getTotp', id: 'has' }))
@@ -315,7 +323,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'vault.createFolder', name: 'Work' })).resolves.toEqual({ ok: true, data: listing });
@@ -341,7 +349,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'vault.createCollection', organizationId: 'o1', name: 'C' })).resolves.toEqual({ ok: true, data: listing });
@@ -372,7 +380,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'vault.createCipher', input })).resolves.toEqual({ ok: true, data: listing });
@@ -399,7 +407,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.lock' }))
@@ -417,7 +425,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.submitTwoFactor', provider: 0, code: '123456' }))
@@ -437,7 +445,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.submitTwoFactor', provider: 0, code: '123456', remember: true }))
@@ -456,7 +464,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'auth.lock' }))
@@ -481,7 +489,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'autofill.findCandidates', frameUrl: 'https://example.com/login' }))
@@ -507,7 +515,7 @@ describe('router', () => {
         getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 1),
         saveDefaultUriMatchStrategy: vi.fn(),
         getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-        saveLockTimeout: vi.fn(),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
       },
     });
     await expect(router.handle({ type: 'autofill.getCredentials', cipherId: '1', frameUrl: 'https://example.com/login' }))
@@ -521,7 +529,7 @@ describe('router', () => {
     getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
     saveDefaultUriMatchStrategy: vi.fn(),
     getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
-    saveLockTimeout: vi.fn(),
+    saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
   };
 
   it('routes autofill.findFillItems to vault.findFillItems', async () => {
@@ -561,10 +569,37 @@ describe('router', () => {
   it('routes vault.checkPwned to vault.getPwnedReport', async () => {
     const getPwnedReport = vi.fn(async () => [{ id: 'a', pwnedCount: 5 }]);
     const router = createRouter({ auth: {}, vault: { getPwnedReport } as never, settings: {
-      getServerUrl: vi.fn(), saveServerUrl: vi.fn(), getDefaultUriMatchStrategy: vi.fn(async () => 0), saveDefaultUriMatchStrategy: vi.fn(), getLockTimeout: vi.fn(async () => '15'), saveLockTimeout: vi.fn(),
+      getServerUrl: vi.fn(), saveServerUrl: vi.fn(), getDefaultUriMatchStrategy: vi.fn(async () => 0), saveDefaultUriMatchStrategy: vi.fn(), getLockTimeout: vi.fn(async () => '15'), saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
     } as never });
     const res = await router.handle({ type: 'vault.checkPwned' });
     expect(getPwnedReport).toHaveBeenCalled();
     expect(res).toEqual({ ok: true, data: { entries: [{ id: 'a', pwnedCount: 5 }] } });
+  });
+
+  it('saves security settings and schedules a clipboard clear', async () => {
+    const settings = {
+      getServerUrl: async () => 'https://x', getDefaultUriMatchStrategy: async () => 0,
+      getLockTimeout: async () => '15', getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'),
+      getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveOnIdleAction: vi.fn(async () => {}),
+      saveClipboardClearSetting: vi.fn(async () => {}), saveServerUrl: vi.fn(), saveDefaultUriMatchStrategy: vi.fn(), saveLockTimeout: vi.fn(),
+    };
+    const clipboard = { scheduleClear: vi.fn(async () => {}) };
+    const router = createRouter({ auth: {} as never, vault: {} as never, settings: settings as never, clipboard } as never);
+
+    const got = await router.handle({ type: 'settings.get' } as never);
+    expect(got).toMatchObject({ ok: true, data: { onIdleAction: 'lock', clipboardClearSeconds: '60' } });
+
+    await router.handle({ type: 'settings.saveSecurity', onIdleAction: 'logout', clipboardClearSeconds: '120' } as never);
+    expect(settings.saveOnIdleAction).toHaveBeenCalledWith('logout');
+    expect(settings.saveClipboardClearSetting).toHaveBeenCalledWith('120');
+
+    await router.handle({ type: 'clipboard.scheduleClear' } as never);
+    expect(clipboard.scheduleClear).toHaveBeenCalledTimes(1);
+  });
+
+  it('clipboard.scheduleClear throws when clipboard dep is not wired', async () => {
+    const router = createRouter({ auth: {}, vault: {}, settings: settingsStub });
+    const res = await router.handle({ type: 'clipboard.scheduleClear' });
+    expect(res).toEqual({ ok: false, error: { code: 'error', message: 'clipboard is not wired' } });
   });
 });

@@ -8,7 +8,7 @@ import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
 import type { SendInput, SendSummary, UpdateSendInput } from '../core/vault/sends.js';
 import type { PasswordHealthEntry } from '../core/vault/password-health.js';
 import type { PasskeyAssertion } from '../core/vault/fido2.js';
-import type { LockTimeoutSetting } from '../background/settings.js';
+import type { LockTimeoutSetting, OnIdleAction, ClipboardClearSetting } from '../background/settings.js';
 import type { AppErrorCode } from '../core/errors.js';
 import type { OrgPermission } from '../core/vault/org-permissions.js';
 
@@ -144,6 +144,8 @@ export type RequestMessage =
   | { type: 'vault.getCipherInput'; id: string; masterPassword?: string }
   | { type: 'settings.get' }
   | { type: 'settings.save'; serverUrl: string; defaultUriMatchStrategy?: UriMatchStrategySetting; lockTimeout?: LockTimeoutSetting }
+  | { type: 'settings.saveSecurity'; onIdleAction: OnIdleAction; clipboardClearSeconds: ClipboardClearSetting }
+  | { type: 'clipboard.scheduleClear' }
   | { type: 'autofill.findCandidates'; frameUrl: string; formSignature?: string }
   | { type: 'autofill.getCredentials'; cipherId: string; frameUrl: string }
   | { type: 'sends.list' }
@@ -177,7 +179,7 @@ export type ResponseMessage =
   | { ok: true; data: { matches: boolean } }
   | { ok: true; data: { assertion: PasskeyAssertion | null } }
   | { ok: true; data: { accounts: AccountSummary[] } }
-  | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting; lockTimeout: LockTimeoutSetting } }
+  | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting; lockTimeout: LockTimeoutSetting; onIdleAction: OnIdleAction; clipboardClearSeconds: ClipboardClearSetting } }
   | { ok: true; data: null }
   | { ok: true; data: AutofillCandidate[] }
   | { ok: true; data: AutofillCredentials }
