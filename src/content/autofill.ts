@@ -5,10 +5,11 @@ import type { ContentCommand, FillCommand } from '../messaging/protocol.js';
 import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
 import { fillLoginForm } from './fill.js';
 import { fillCardForm, fillIdentityForm } from './fill-card-identity.js';
-import { detectLoginForms, type DetectedLoginForm } from './form-detection.js';
+import type { DetectedLoginForm } from './form-detection.js';
 import { detectCardForms, detectIdentityForms, isFillableField, type DetectedFillForm } from './field-detection.js';
 import type { FillFieldElement } from './field-detection.js';
 import { classifyCardField, classifyIdentityField, type CardRole, type IdentityRole } from './field-map.js';
+import { computeFillExclusion } from './focused-fill.js';
 import { createAutofillPopover } from './popover.js';
 import type { PopoverCandidate } from './popover.js';
 import { startSaveCapture, type CapturedLogin } from './capture.js';
@@ -92,16 +93,8 @@ function hostLabel(frameUrl: string): string {
 
 function attachPopovers(getFrameUrl: FrameUrlProvider): void {
   if (!isHttpUrl(getFrameUrl())) return;
-  // Card `code` fields (e.g. a CVC rendered as type="password") must not also spawn a login popover.
-  const cardCodeFields = new Set<Element>();
-  for (const card of detectCardForms(document)) {
-    const code = card.fields.get('code');
-    if (code) cardCodeFields.add(code);
-  }
-  const exclude = new Set<Element>();
-  for (const form of detectLoginForms()) {
-    if (form.passwordInput && cardCodeFields.has(form.passwordInput)) continue; // a CVC, not a login
-    for (const el of [form.usernameInput, form.passwordInput, form.totpInput]) if (el) exclude.add(el);
+  const { loginForms, exclude } = computeFillExclusion(document);
+  for (const form of loginForms) {
     attachIfNew(form.id, () => attachPopover(getFrameUrl, form));
   }
   for (const form of [...detectCardForms(document, exclude), ...detectIdentityForms(document, exclude)]) {
