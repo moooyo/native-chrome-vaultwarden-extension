@@ -4,6 +4,7 @@ import type { CipherInput, CipherSummary, CollectionSummary, CustomFieldType, De
 import { filterSummariesByFolderCollectionAndQuery, NO_FOLDER } from '../../core/vault/search.js';
 import { generatePassword, DEFAULT_PASSWORD_OPTIONS, type PasswordGenOptions } from '../../core/generator/password.js';
 import { generatePassphrase, DEFAULT_PASSPHRASE_OPTIONS, type PassphraseGenOptions } from '../../core/generator/passphrase.js';
+import { generatePlusAddressedEmail, generateCatchAllEmail, generateRandomWordUsername, DEFAULT_USERNAME_OPTIONS, type UsernameType, type UsernameGenOptions } from '../../core/generator/username.js';
 import { addPasswordToHistory } from '../../core/generator/history.js';
 import type { SendInput, SendSummary, UpdateSendInput } from '../../core/vault/sends.js';
 import { icon } from '../icons.js';
@@ -55,8 +56,12 @@ let repromptMp: string | null = null;
 let repromptForId: string | null = null;
 // Password generator options, persisted while the popup stays open.
 let genOptions: PasswordGenOptions = { ...DEFAULT_PASSWORD_OPTIONS };
-let genMode: 'password' | 'passphrase' = 'password';
+let genMode: 'password' | 'passphrase' | 'username' = 'password';
 let genPassphraseOptions: PassphraseGenOptions = { ...DEFAULT_PASSPHRASE_OPTIONS };
+let usernameType: UsernameType = 'plusAddressed';
+let usernameGenOptions: UsernameGenOptions = { ...DEFAULT_USERNAME_OPTIONS };
+let usernameBaseEmail = '';
+let usernameDomain = '';
 // Generated-password history for this popup session only (never persisted — see core/generator/history).
 let genHistory: string[] = [];
 
@@ -974,6 +979,23 @@ function passphraseGenOptionsHtml(): string {
     </div>`;
 }
 
+/** Username options block markup for the generator panel: type sub-selector + type-specific inputs. */
+function usernameGenOptionsHtml(): string {
+  const t = usernameType;
+  return `
+    <div class="seg" role="tablist" style="margin-top:8px">
+      <button id="utPlus" type="button" class="seg-btn${t === 'plusAddressed' ? ' is-active' : ''}" role="tab">Plus</button>
+      <button id="utCatch" type="button" class="seg-btn${t === 'catchAll' ? ' is-active' : ''}" role="tab">Catch-all</button>
+      <button id="utWord" type="button" class="seg-btn${t === 'randomWord' ? ' is-active' : ''}" role="tab">Random word</button>
+    </div>
+    ${t === 'plusAddressed' ? `<label class="ed-field"><span class="ed-label">Base email</span><input id="unBase" class="input" type="email" placeholder="you@example.com" value="${escapeHtml(usernameBaseEmail)}" /></label>` : ''}
+    ${t === 'catchAll' ? `<label class="ed-field"><span class="ed-label">Catch-all domain</span><input id="unDomain" class="input" type="text" placeholder="example.com" value="${escapeHtml(usernameDomain)}" /></label>` : ''}
+    ${t === 'randomWord' ? `
+      <label class="gen-check"><input id="unCap" type="checkbox" ${usernameGenOptions.capitalize ? 'checked' : ''}/><span>Capitalize</span></label>
+      <label class="gen-check"><input id="unNum" type="checkbox" ${usernameGenOptions.includeNumber ? 'checked' : ''}/><span>Include number</span></label>` : ''}
+    ${t !== 'randomWord' ? `<label class="ed-field"><span class="ed-label">Random length</span><input id="unLen" class="input" type="number" min="4" max="32" value="${usernameGenOptions.randomLength}" /></label>` : ''}`;
+}
+
 /** Sends panel: create text Sends and list/copy/delete existing ones. */
 async function renderSends(): Promise<void> {
   clearTotpTimer();
@@ -1181,15 +1203,16 @@ function renderGenerator(): void {
         <div class="seg" role="tablist">
           <button id="modePassword" type="button" class="seg-btn${isPass ? '' : ' is-active'}" role="tab" aria-selected="${!isPass}">Password</button>
           <button id="modePassphrase" type="button" class="seg-btn${isPass ? ' is-active' : ''}" role="tab" aria-selected="${isPass}">Passphrase</button>
+          <button id="modeUsername" type="button" class="seg-btn${genMode === 'username' ? ' is-active' : ''}" role="tab" aria-selected="${genMode === 'username'}">Username</button>
         </div>
         <div class="readout">
-          <div class="k">${icon('key')} Generated ${isPass ? 'passphrase' : 'password'}</div>
+          <div class="k">${icon('key')} Generated ${genMode === 'username' ? 'username' : isPass ? 'passphrase' : 'password'}</div>
           <div class="v-row">
             <code id="genOut" class="v mono"></code>
             <button id="genRegen" class="icon-btn" type="button" title="Regenerate" aria-label="Regenerate">${icon('refresh')}</button>
           </div>
         </div>
-        ${isPass ? passphraseGenOptionsHtml() : passwordGenOptionsHtml()}
+        ${genMode === 'username' ? usernameGenOptionsHtml() : isPass ? passphraseGenOptionsHtml() : passwordGenOptionsHtml()}
         <div class="detail-actions">
           <button id="genCopy" type="button" class="btn btn-block">${icon('copy')}<span>Copy</span></button>
         </div>
@@ -1200,10 +1223,24 @@ function renderGenerator(): void {
   document.getElementById('back')!.addEventListener('click', () => render({ kind: 'unlocked' }));
   document.getElementById('modePassword')!.addEventListener('click', () => { genMode = 'password'; renderGenerator(); });
   document.getElementById('modePassphrase')!.addEventListener('click', () => { genMode = 'passphrase'; renderGenerator(); });
+  document.getElementById('modeUsername')!.addEventListener('click', () => { genMode = 'username'; renderGenerator(); });
 
   const out = document.getElementById('genOut')!;
   let current = '';
   const readOptions = (): void => {
+    if (genMode === 'username') {
+      const lenEl = document.getElementById('unLen') as HTMLInputElement | null;
+      if (lenEl) usernameGenOptions.randomLength = Math.min(Math.max(Math.trunc(Number(lenEl.value)) || 8, 4), 32);
+      const capEl = document.getElementById('unCap') as HTMLInputElement | null;
+      const numEl = document.getElementById('unNum') as HTMLInputElement | null;
+      if (capEl) usernameGenOptions.capitalize = capEl.checked;
+      if (numEl) usernameGenOptions.includeNumber = numEl.checked;
+      const baseEl = document.getElementById('unBase') as HTMLInputElement | null;
+      if (baseEl) usernameBaseEmail = baseEl.value;
+      const domEl = document.getElementById('unDomain') as HTMLInputElement | null;
+      if (domEl) usernameDomain = domEl.value;
+      return;
+    }
     if (isPass) {
       const numWords = Number((document.getElementById('genWords') as HTMLInputElement).value);
       genPassphraseOptions = {
@@ -1228,8 +1265,12 @@ function renderGenerator(): void {
   // Update the displayed value (on option changes) without touching history.
   const regenerate = (): void => {
     readOptions();
-    current = isPass ? generatePassphrase(genPassphraseOptions) : generatePassword(genOptions);
-    out.textContent = current || 'Enable at least one character set';
+    current = genMode === 'username'
+      ? (usernameType === 'plusAddressed' ? generatePlusAddressedEmail(usernameBaseEmail, usernameGenOptions)
+        : usernameType === 'catchAll' ? generateCatchAllEmail(usernameDomain, usernameGenOptions)
+        : generateRandomWordUsername(usernameGenOptions))
+      : isPass ? generatePassphrase(genPassphraseOptions) : generatePassword(genOptions);
+    out.textContent = current || (genMode === 'username' ? 'Enter a base email / domain' : 'Enable at least one character set');
   };
   // Generate a fresh value AND record the previous one in history (explicit Regenerate / open).
   const regenerateAndRecord = (): void => {
@@ -1237,11 +1278,28 @@ function renderGenerator(): void {
     regenerate();
     renderGenHistory();
   };
-  const optionIds = isPass
-    ? ['genWords', 'genSep', 'genCap', 'genNum']
-    : ['genLength', 'genLower', 'genUpper', 'genNumbers', 'genSpecial', 'genAmbiguous'];
+  const optionIds = genMode === 'username'
+    ? ['unLen', 'unCap', 'unNum', 'unBase', 'unDomain']
+    : isPass
+      ? ['genWords', 'genSep', 'genCap', 'genNum']
+      : ['genLength', 'genLower', 'genUpper', 'genNumbers', 'genSpecial', 'genAmbiguous'];
   for (const id of optionIds) {
-    document.getElementById(id)!.addEventListener('input', regenerate);
+    document.getElementById(id)?.addEventListener('input', regenerate);
+  }
+  if (genMode === 'username') {
+    for (const [id, t] of [['utPlus', 'plusAddressed'], ['utCatch', 'catchAll'], ['utWord', 'randomWord']] as const) {
+      document.getElementById(id)!.addEventListener('click', () => { usernameType = t; renderGenerator(); });
+    }
+    // Best-effort prefill of the base email from the active account (only if the user hasn't typed one).
+    if (usernameType === 'plusAddressed' && !usernameBaseEmail) {
+      void sendRequest({ type: 'auth.listAccounts' }).then((r) => {
+        if (!r.ok) return;
+        const accounts = (r.data as { accounts?: Array<{ email: string; active?: boolean }> }).accounts ?? [];
+        const email = (accounts.find((a) => a.active) ?? accounts[0])?.email;
+        const el = document.getElementById('unBase') as HTMLInputElement | null;
+        if (email && el && !el.value) { el.value = email; usernameBaseEmail = email; regenerate(); }
+      });
+    }
   }
   document.getElementById('genRegen')!.addEventListener('click', regenerateAndRecord);
   document.getElementById('genCopy')!.addEventListener('click', () => void withDetailBusy(async () => {
@@ -1249,7 +1307,7 @@ function renderGenerator(): void {
       genHistory = addPasswordToHistory(genHistory, current);
       renderGenHistory();
     }
-    await copyValue(current, isPass ? 'Passphrase' : 'Password');
+    await copyValue(current, genMode === 'username' ? 'Username' : isPass ? 'Passphrase' : 'Password');
   }));
   regenerate();
   renderGenHistory();
@@ -1469,7 +1527,12 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
   if (type === 1) {
     const login = v.login ?? {};
     typeFields = `
-      ${editorTextRow('ed_username', 'Username', login.username ?? '')}
+      <label class="ed-field"><span class="ed-label">Username</span>
+        <div class="ed-password">
+          <input id="ed_username" class="input" type="text" value="${escapeHtml(login.username ?? '')}" />
+          <button id="ed_userGen" class="icon-btn" type="button" title="Generate username" aria-label="Generate username">${icon('refresh')}</button>
+        </div>
+      </label>
       <label class="ed-field"><span class="ed-label">Password</span>
         <div class="ed-password">
           <input id="ed_password" class="input mono" type="password" value="${escapeHtml(login.password ?? '')}" />
@@ -1529,6 +1592,9 @@ function renderEditor(mode: 'create' | 'edit', type: 1 | 2 | 3 | 4, input?: Ciph
     });
     document.getElementById('ed_pwGen')!.addEventListener('click', () => {
       (document.getElementById('ed_password') as HTMLInputElement).value = generatePassword(genOptions);
+    });
+    document.getElementById('ed_userGen')?.addEventListener('click', () => {
+      (document.getElementById('ed_username') as HTMLInputElement).value = generateRandomWordUsername({ ...DEFAULT_USERNAME_OPTIONS, capitalize: true });
     });
     document.getElementById('ed_addUri')!.addEventListener('click', () => {
       document.getElementById('ed_uris')!.insertAdjacentHTML('beforeend', uriEditorRow(''));
