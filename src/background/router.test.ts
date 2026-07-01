@@ -326,6 +326,34 @@ describe('router', () => {
     expect(deleteFolder).toHaveBeenCalledWith('f1');
   });
 
+  it('routes collection CRUD + membership to the vault service', async () => {
+    const listing = { items: [], folders: [], collections: [], orgPermissions: [] };
+    const createCollection = vi.fn(async () => listing);
+    const renameCollection = vi.fn(async () => listing);
+    const deleteCollection = vi.fn(async () => listing);
+    const setCipherCollections = vi.fn(async () => listing);
+    const router = createRouter({
+      auth: {},
+      vault: { createCollection, renameCollection, deleteCollection, setCipherCollections },
+      settings: {
+        getServerUrl: vi.fn(),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(),
+      },
+    });
+    await expect(router.handle({ type: 'vault.createCollection', organizationId: 'o1', name: 'C' })).resolves.toEqual({ ok: true, data: listing });
+    expect(createCollection).toHaveBeenCalledWith('o1', 'C');
+    await expect(router.handle({ type: 'vault.renameCollection', organizationId: 'o1', id: 'c1', name: 'N' })).resolves.toEqual({ ok: true, data: listing });
+    expect(renameCollection).toHaveBeenCalledWith('o1', 'c1', 'N');
+    await expect(router.handle({ type: 'vault.deleteCollection', organizationId: 'o1', id: 'c1' })).resolves.toEqual({ ok: true, data: listing });
+    expect(deleteCollection).toHaveBeenCalledWith('o1', 'c1');
+    await expect(router.handle({ type: 'vault.setCipherCollections', id: 'ci1', collectionIds: ['c1'] })).resolves.toEqual({ ok: true, data: listing });
+    expect(setCipherCollections).toHaveBeenCalledWith('ci1', ['c1']);
+  });
+
   it('routes vault cipher mutations and getCipherInput', async () => {
     const listing = { items: [], folders: [], collections: [], orgPermissions: [] };
     const input = { type: 1 as const, name: 'GitHub', login: { username: 'octo' } };

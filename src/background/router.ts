@@ -192,6 +192,18 @@ export function createRouter(deps: RouterDeps) {
           case 'vault.deleteFolder':
             if (!deps.vault.deleteFolder) throw new Error('vault.deleteFolder is not wired');
             return { ok: true, data: await deps.vault.deleteFolder(request.id) };
+          case 'vault.createCollection':
+            if (!deps.vault.createCollection) throw new Error('vault.createCollection is not wired');
+            return { ok: true, data: await deps.vault.createCollection(request.organizationId, request.name) };
+          case 'vault.renameCollection':
+            if (!deps.vault.renameCollection) throw new Error('vault.renameCollection is not wired');
+            return { ok: true, data: await deps.vault.renameCollection(request.organizationId, request.id, request.name) };
+          case 'vault.deleteCollection':
+            if (!deps.vault.deleteCollection) throw new Error('vault.deleteCollection is not wired');
+            return { ok: true, data: await deps.vault.deleteCollection(request.organizationId, request.id) };
+          case 'vault.setCipherCollections':
+            if (!deps.vault.setCipherCollections) throw new Error('vault.setCipherCollections is not wired');
+            return { ok: true, data: await deps.vault.setCipherCollections(request.id, request.collectionIds) };
           case 'vault.createCipher':
             if (!deps.vault.createCipher) throw new Error('vault.createCipher is not wired');
             return { ok: true, data: await deps.vault.createCipher(request.input) };

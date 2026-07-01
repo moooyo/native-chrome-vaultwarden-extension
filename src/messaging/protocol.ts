@@ -131,6 +131,10 @@ export type RequestMessage =
   | { type: 'vault.createFolder'; name: string }
   | { type: 'vault.renameFolder'; id: string; name: string }
   | { type: 'vault.deleteFolder'; id: string }
+  | { type: 'vault.createCollection'; organizationId: string; name: string }
+  | { type: 'vault.renameCollection'; organizationId: string; id: string; name: string }
+  | { type: 'vault.deleteCollection'; organizationId: string; id: string }
+  | { type: 'vault.setCipherCollections'; id: string; collectionIds: string[] }
   | { type: 'vault.createCipher'; input: CipherInput }
   | { type: 'vault.updateCipher'; id: string; input: CipherInput }
   | { type: 'vault.deleteCipher'; id: string }
