@@ -21,6 +21,8 @@ import { AppError } from '../errors.js';
 import type { AutofillCandidate, AutofillCredentials, FillKind, FillItemCandidate, CardFillData, IdentityFillData } from '../../messaging/protocol.js';
 import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResult, type UriMatchStrategySetting } from './uri-match.js';
 import { buildEquivalentDomainIndex } from './equivalent-domains.js';
+import { toOrgPermission } from './org-permissions.js';
+import type { OrgPermission } from './org-permissions.js';
 
 export interface VaultServiceDeps {
   api: ApiClient;
@@ -37,6 +39,7 @@ const COLLECTION_CACHE_KEY = 'vaultCollections';
 const EQUIV_DOMAINS_KEY = 'vaultEquivalentDomains';
 const EQUIV_EXCLUDED_KEY = 'vaultExcludedDomains';
 const SKIPPED_ORG_KEY = 'vaultSkippedOrgCount';
+const ORG_PERMISSIONS_KEY = 'vaultOrgPermissions';
 /** Cap on retained prior passwords (the server may trim further). Keeps the audit trail bounded. */
 const MAX_PASSWORD_HISTORY = 20;
 
@@ -44,6 +47,7 @@ export interface VaultListing {
   items: CipherSummary[];
   folders: FolderSummary[];
   collections: CollectionSummary[];
+  orgPermissions: OrgPermission[];
 }
 
 /** The save/update decision for a captured form submission. */
@@ -80,7 +84,11 @@ export class VaultService {
       .flatMap((g) => g.domains ?? []);
     await this.deps.localStore.set(EQUIV_EXCLUDED_KEY, excludedDomains);
     await this.deps.localStore.set(SKIPPED_ORG_KEY, skippedOrgCount);
-    return { items, folders, collections };
+    const orgPermissions = (response.profile?.organizations ?? [])
+      .filter((o) => orgKeys.has(o.id))
+      .map(toOrgPermission);
+    await this.deps.localStore.set(ORG_PERMISSIONS_KEY, orgPermissions);
+    return { items, folders, collections, orgPermissions };
   }
 
   /** Build the equivalent-domain index from the built-in list plus any cached user-defined groups,
@@ -102,6 +110,7 @@ export class VaultService {
       items: (await this.deps.localStore.get<CipherSummary[]>(SUMMARY_CACHE_KEY)) ?? [],
       folders: (await this.deps.localStore.get<FolderSummary[]>(FOLDER_CACHE_KEY)) ?? [],
       collections: (await this.deps.localStore.get<CollectionSummary[]>(COLLECTION_CACHE_KEY)) ?? [],
+      orgPermissions: (await this.deps.localStore.get<OrgPermission[]>(ORG_PERMISSIONS_KEY)) ?? [],
     };
   }
 
@@ -671,6 +680,7 @@ export class VaultService {
     await this.deps.localStore.remove(EQUIV_DOMAINS_KEY);
     await this.deps.localStore.remove(EQUIV_EXCLUDED_KEY);
     await this.deps.localStore.remove(SKIPPED_ORG_KEY);
+    await this.deps.localStore.remove(ORG_PERMISSIONS_KEY);
   }
 
   async findAutofillCandidates(

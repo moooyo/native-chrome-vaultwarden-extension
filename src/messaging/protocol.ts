@@ -10,6 +10,7 @@ import type { PasswordHealthEntry } from '../core/vault/password-health.js';
 import type { PasskeyAssertion } from '../core/vault/fido2.js';
 import type { LockTimeoutSetting } from '../background/settings.js';
 import type { AppErrorCode } from '../core/errors.js';
+import type { OrgPermission } from '../core/vault/org-permissions.js';
 
 export interface AutofillCandidate {
   id: string;
@@ -155,7 +156,7 @@ export type RequestMessage =
 export type ResponseMessage =
   | { ok: true; data: { state: SessionState } }
   | { ok: true; data: AuthResult }
-  | { ok: true; data: { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[] } }
+  | { ok: true; data: { items: CipherSummary[]; folders: FolderSummary[]; collections: CollectionSummary[]; orgPermissions: OrgPermission[] } }
   | { ok: true; data: { value?: string } }
   | { ok: true; data: { cipher: DecryptedCipher | null } }
   | { ok: true; data: { input: CipherInput | null } }

@@ -239,7 +239,7 @@ describe('router', () => {
   });
 
   it('routes vault.listItems', async () => {
-    const envelope = { items: [{ id: '1', name: 'item', uris: [], loginUris: [], type: 1 as const, favorite: false }], folders: [], collections: [] };
+    const envelope = { items: [{ id: '1', name: 'item', uris: [], loginUris: [], type: 1 as const, favorite: false }], folders: [], collections: [], orgPermissions: [] };
     const router = createRouter({
       auth: {},
       vault: { listItems: vi.fn(async () => envelope) },
@@ -302,7 +302,7 @@ describe('router', () => {
   });
 
   it('routes vault folder mutations to the matching VaultService methods', async () => {
-    const listing = { items: [], folders: [{ id: 'f1', name: 'Work' }], collections: [] };
+    const listing = { items: [], folders: [{ id: 'f1', name: 'Work' }], collections: [], orgPermissions: [] };
     const createFolder = vi.fn(async () => listing);
     const renameFolder = vi.fn(async () => listing);
     const deleteFolder = vi.fn(async () => listing);
@@ -327,7 +327,7 @@ describe('router', () => {
   });
 
   it('routes vault cipher mutations and getCipherInput', async () => {
-    const listing = { items: [], folders: [], collections: [] };
+    const listing = { items: [], folders: [], collections: [], orgPermissions: [] };
     const input = { type: 1 as const, name: 'GitHub', login: { username: 'octo' } };
     const createCipher = vi.fn(async () => listing);
     const updateCipher = vi.fn(async () => listing);
