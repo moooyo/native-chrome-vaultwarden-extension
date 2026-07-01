@@ -14,6 +14,7 @@ import { unwrapSymmetricKey } from '../crypto/keys.js';
 import { base64UrlToBytes, base64ToBytes, bytesToBase64 } from '../crypto/encoding.js';
 import { decryptAttachmentKey, decryptAttachmentFile, encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
 import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealthInput } from './password-health.js';
+import { pwnedCount } from './pwned.js';
 import { buildExportJson, buildEncryptedExportJson, parseImport } from './vault-io.js';
 import { buildTextSendRequest, buildFileSendRequest, buildUpdateSendRequest, decryptSend, type SendInput, type SendSummary, type UpdateSendInput } from './sends.js';
 import { AppError } from '../errors.js';
@@ -579,6 +580,35 @@ export class VaultService {
       }
     }
     return buildPasswordHealthReport(inputs).filter((entry) => entry.weak || entry.reuseCount > 1);
+  }
+
+  /** Check each login password against HIBP (k-anonymity). Decrypts in the worker, dedupes by password,
+   *  looks up unique passwords (concurrency-limited), and returns only per-id breach counts. */
+  async getPwnedReport(): Promise<Array<{ id: string; pwnedCount: number }>> {
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    if (!cache) throw new AppError('sync_required', 'Sync required');
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) throw new AppError('locked', 'Vault is locked');
+    const orgKeys = await this.buildOrgKeys(cache.profile);
+    const logins: Array<{ id: string; password: string }> = [];
+    for (const cipher of cache.ciphers) {
+      if (cipher.type !== 1 || cipher.deletedDate) continue;
+      const decrypted = await decryptCipher(cipher, userKey, orgKeys);
+      if (decrypted && !decrypted.undecryptable && decrypted.password) logins.push({ id: decrypted.id, password: decrypted.password });
+    }
+    const unique = [...new Set(logins.map((l) => l.password))];
+    const byPassword = new Map<string, number>();
+    const LIMIT = 6;
+    try {
+      for (let i = 0; i < unique.length; i += LIMIT) {
+        const batch = unique.slice(i, i + LIMIT);
+        const counts = await Promise.all(batch.map((pw) => pwnedCount(pw)));
+        batch.forEach((pw, j) => byPassword.set(pw, counts[j]!));
+      }
+    } catch {
+      throw new AppError('error', 'Could not reach the breach service');
+    }
+    return logins.map((l) => ({ id: l.id, pwnedCount: byPassword.get(l.password) ?? 0 }));
   }
 
   /**

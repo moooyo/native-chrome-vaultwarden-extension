@@ -9,6 +9,10 @@ import { UriMatchStrategy } from './uri-match.js';
 vi.mock('webextension-polyfill', () => ({
   default: { storage: { local: {}, session: {} } },
 }));
+// HIBP lookups are network calls; stub the module so getPwnedReport tests never hit the network.
+vi.mock('./pwned.js', () => ({
+  pwnedCount: vi.fn(async (pw: string) => (pw === 'reused-weak' ? 42 : 0)),
+}));
 import { createMemoryStore } from '../../platform/store.js';
 import { SessionManager } from '../session/session-manager.js';
 import type { ApiClient } from '../api/client.js';
@@ -1186,6 +1190,25 @@ describe('VaultService', () => {
     expect(entries.map((e) => e.id).sort()).toEqual(['a', 'b']);
     expect(entries.every((e) => e.weak && e.reuseCount === 2)).toBe(true);
     expect(JSON.stringify(entries)).not.toContain('weakpass');
+  });
+
+  it('getPwnedReport dedupes by password, maps counts back per id, and returns no passwords', async () => {
+    const enc = async (s: string) => encUnder(s, testUserKey); // existing helper
+    const sync: SyncResponse = {
+      profile: { id: 'u', email: 'u@example.com' },
+      ciphers: [
+        { id: 'a', type: 1, name: await enc('A'), favorite: false, organizationId: null, login: { password: await enc('reused-weak') } },
+        { id: 'b', type: 1, name: await enc('B'), favorite: false, organizationId: null, login: { password: await enc('reused-weak') } },
+        { id: 'c', type: 1, name: await enc('C'), favorite: false, organizationId: null, login: { password: await enc('unique-safe') } },
+      ],
+    };
+    const { service } = await makeService(sync);
+    await service.sync();
+    const entries = await service.getPwnedReport();
+    expect(entries).toEqual([{ id: 'a', pwnedCount: 42 }, { id: 'b', pwnedCount: 42 }, { id: 'c', pwnedCount: 0 }]);
+    const { pwnedCount } = await import('./pwned.js');
+    expect((pwnedCount as any).mock.calls.length).toBe(2); // deduped: 'reused-weak' + 'unique-safe'
+    expect(JSON.stringify(entries)).not.toContain('reused-weak'); // no password crosses the boundary
   });
 
   it('findFillItems lists all cards (no URL match), sorted favorite-then-name, without secrets', async () => {
