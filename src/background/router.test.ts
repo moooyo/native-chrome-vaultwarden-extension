@@ -602,4 +602,11 @@ describe('router', () => {
     const res = await router.handle({ type: 'clipboard.scheduleClear' });
     expect(res).toEqual({ ok: false, error: { code: 'error', message: 'clipboard is not wired' } });
   });
+
+  it('routes auth.rotateAccountKey', async () => {
+    const auth = { rotateAccountKey: vi.fn(async () => {}) };
+    const router = createRouter({ auth: auth as never, vault: {} as never, settings: {} as never } as never);
+    expect(await router.handle({ type: 'auth.rotateAccountKey', masterPassword: 'pw' } as never)).toEqual({ ok: true, data: null });
+    expect(auth.rotateAccountKey).toHaveBeenCalledWith('pw');
+  });
 });

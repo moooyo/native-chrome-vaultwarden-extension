@@ -102,6 +102,7 @@ export type RequestMessage =
   | { type: 'auth.verifyMasterPassword'; masterPassword: string }
   | { type: 'auth.changePassword'; currentPassword: string; newPassword: string }
   | { type: 'auth.changeKdf'; currentPassword: string; iterations: number }
+  | { type: 'auth.rotateAccountKey'; masterPassword: string }
   | { type: 'auth.unlockWithPin'; pin: string }
   | { type: 'auth.setPin'; pin: string }
   | { type: 'auth.disablePin' }

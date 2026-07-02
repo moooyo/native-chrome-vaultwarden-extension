@@ -4,6 +4,7 @@ import { unwrapSymmetricKey, decryptPrivateKey, type SymmetricKey } from '../cry
 import { encryptToBytes } from '../crypto/encstring.js';
 import { buildRegistration } from '../crypto/registration.js';
 import type { SessionManager, SessionState } from './session-manager.js';
+import { rotateAccountKey as runRotation } from './key-rotation.js';
 
 export type AuthResult =
   | { kind: 'unlocked' }
@@ -141,6 +142,23 @@ export class AuthService {
       key: newProtectedKey,
     });
     await this.deps.session.updateMasterKeyMaterial({ protectedKey: newProtectedKey });
+  }
+
+  /**
+   * Rotate the account UserKey (re-encrypts the whole vault server-side and logs out on success).
+   * Delegates to the `rotateAccountKey` orchestrator; see `./key-rotation.js` for the full flow.
+   */
+  async rotateAccountKey(masterPassword: string): Promise<void> {
+    await runRotation(masterPassword, {
+      api: this.deps.api,
+      session: {
+        getPersistedAuth: () => this.deps.session.getPersistedAuth(),
+        loadUserKey: () => this.deps.session.loadUserKey(),
+        loadPrivateKey: () => this.deps.session.loadPrivateKey(),
+        logout: () => this.deps.session.logout(),
+      },
+      verifyMasterPassword: (pw) => this.verifyMasterPassword(pw),
+    });
   }
 
   /**

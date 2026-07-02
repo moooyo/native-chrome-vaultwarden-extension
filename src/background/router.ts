@@ -73,6 +73,10 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.auth.changeKdfIterations) throw new Error('auth.changeKdfIterations is not wired');
             await deps.auth.changeKdfIterations(request.currentPassword, request.iterations);
             return { ok: true, data: null };
+          case 'auth.rotateAccountKey':
+            if (!deps.auth.rotateAccountKey) throw new Error('auth.rotateAccountKey is not wired');
+            await deps.auth.rotateAccountKey(request.masterPassword);
+            return { ok: true, data: null };
           case 'auth.unlockWithPin':
             if (!deps.auth.unlockWithPin) throw new Error('auth.unlockWithPin is not wired');
             await deps.auth.unlockWithPin(request.pin);
