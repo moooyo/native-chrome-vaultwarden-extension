@@ -106,6 +106,13 @@ export interface DecryptedFido2Credential {
   rpName?: string;
 }
 
+/** A candidate login item a new passkey can be saved into (display-only; carries no secrets). */
+export interface PasskeyTarget {
+  id: string;
+  name: string;
+  username?: string;
+}
+
 /** Plaintext cipher form input from the editor, before encryption into a write request. */
 export interface CipherInput {
   type: 1 | 2 | 3 | 4;

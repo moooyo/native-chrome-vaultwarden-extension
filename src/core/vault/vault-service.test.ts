@@ -26,7 +26,7 @@ import { derToRawSignature } from './fido2.js';
 import { encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
 import { buildTextSendRequest } from './sends.js';
 import { FIELD_VECTOR, URL_VECTOR, USER_KEY_VECTOR, RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
-import type { SyncResponse } from '../api/types.js';
+import type { CipherRequest, CipherResponse, SyncResponse } from '../api/types.js';
 
 const orgKey = symmetricKeyFromBytes(hexToBytes(ORG_KEY_VECTOR.orgKeyHex));
 const privateKeyBytes = base64ToBytes(RSA_VECTOR.privateKeyPkcs8B64);
@@ -162,6 +162,75 @@ async function makeServiceWithPasskey(opts: { rpId: string }) {
   const { service } = await makeService(sync);
   await service.sync();
   return { service };
+}
+
+/** Seeds one personal login cipher per entry (encrypted name/username/uris under the account key),
+ *  syncs so both VAULT_CACHE_KEY and SUMMARY_CACHE_KEY are populated, and returns the service. */
+async function makeServiceWithLogins(logins: Array<{ id: string; name: string; username?: string; uris: string[] }>) {
+  const ciphers = await Promise.all(logins.map(async (l) => ({
+    id: l.id, type: 1 as const, favorite: false, organizationId: null,
+    name: await encUnder(l.name, testUserKey),
+    login: {
+      ...(l.username ? { username: await encUnder(l.username, testUserKey) } : {}),
+      uris: await Promise.all(l.uris.map(async (u) => ({ uri: await encUnder(u, testUserKey) }))),
+    },
+  })));
+  const sync: SyncResponse = { profile: { id: 'u', email: 'u@example.com' }, ciphers };
+  const { service, api } = await makeService(sync);
+  await service.sync();
+  return { service, api };
+}
+
+/** An already-unlocked service with no vault synced yet (for createPasskey 'new item' tests). Lets the
+ *  caller override individual api methods (e.g. createCipher) to capture the request shape. */
+async function makeUnlockedService(opts: { api?: Record<string, unknown> } = {}) {
+  const { service, api } = await makeService();
+  if (opts.api) Object.assign(api, opts.api);
+  return { service, api };
+}
+
+/** A locked service (persisted auth exists, but the session UserKey has been cleared). */
+async function makeLockedService() {
+  const { service, session } = await makeService();
+  await session.lock();
+  return { service };
+}
+
+/** Seeds a personal login cipher (id `opts.id`) that already carries one encrypted fido2Credential at
+ *  `opts.rpId`, plus a password/uri, and syncs so the raw CipherResponse is cached. Returns the service
+ *  and a snapshot of the fixture's own EncStrings to compare the PUT request against verbatim. */
+async function makeServiceWithExistingPasskeyLogin(opts: { id: string; rpId: string; api?: Record<string, unknown> }) {
+  const subtle = globalThis.crypto.subtle;
+  const pair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const pkcs8 = new Uint8Array(await subtle.exportKey('pkcs8', pair.privateKey));
+  const keyValueB64url = bytesToBase64Url(pkcs8);
+  const existingCred = {
+    credentialId: await encUnder('old-cred', testUserKey),
+    keyType: await encUnder('public-key', testUserKey),
+    keyAlgorithm: await encUnder('ECDSA', testUserKey),
+    keyCurve: await encUnder('P-256', testUserKey),
+    keyValue: await encUnder(keyValueB64url, testUserKey),
+    rpId: await encUnder(opts.rpId, testUserKey),
+    counter: await encUnder('0', testUserKey),
+  };
+  const cipher = {
+    id: opts.id, type: 1 as const, favorite: false, organizationId: null,
+    name: await encUnder('Existing Login', testUserKey),
+    login: {
+      password: await encUnder('old-pass', testUserKey),
+      uris: [{ uri: await encUnder(`https://${opts.rpId}`, testUserKey) }],
+      fido2Credentials: [existingCred],
+    },
+  };
+  const sync: SyncResponse = { profile: { id: 'u', email: 'u@example.com' }, ciphers: [cipher] };
+  const { service, api } = await makeService(sync);
+  if (opts.api) Object.assign(api, opts.api);
+  await service.sync();
+  const originalRequestSnapshot = {
+    name: cipher.name,
+    login: { password: cipher.login.password, fido2Credentials: cipher.login.fido2Credentials },
+  };
+  return { service, originalRequestSnapshot };
 }
 
 describe('VaultService', () => {
@@ -1435,5 +1504,68 @@ describe('VaultService', () => {
     expect(repromptErr).toMatchObject({ code: 'reprompt_required' });
     expect(JSON.stringify(repromptErr)).not.toContain('4111'); // no card number leaks via the thrown value
     await expect(service.getFillData('login-1', 'card')).rejects.toMatchObject({ code: 'denied' });
+  });
+
+  describe('passkey registration', () => {
+    it('getPasskeyTargets returns same-domain personal logins as {id,name,username} only', async () => {
+      const { service } = await makeServiceWithLogins([
+        { id: 'c1', name: 'Example', username: 'me', uris: ['https://example.com/login'] },
+        { id: 'c2', name: 'Other', username: 'x', uris: ['https://other.com'] },
+      ]);
+      const targets = await service.getPasskeyTargets({ rpId: 'example.com', origin: 'https://example.com' });
+      expect(targets).toEqual([{ id: 'c1', name: 'Example', username: 'me' }]);
+    });
+
+    it('getPasskeyTargets rejects a cross-origin rpId', async () => {
+      const { service } = await makeServiceWithLogins([]);
+      await expect(service.getPasskeyTargets({ rpId: 'example.com', origin: 'https://evil.com' })).rejects.toThrow(/rpId is not valid/i);
+    });
+
+    it('createPasskey (new item) POSTs a login with an encrypted fido2Credential and returns an attestation', async () => {
+      const createCipher = vi.fn(async (_t: string, req: CipherRequest): Promise<CipherResponse> => ({ id: 'new1', ...req }));
+      const { service } = await makeUnlockedService({ api: { createCipher } });
+      const reg = await service.createPasskey({ rpId: 'example.com', rpName: 'Example', userHandle: 'dXNlcg', userName: 'me', challenge: 'AAAA', origin: 'https://example.com', userVerified: true });
+      expect(reg.publicKeyAlgorithm).toBe(-7);
+      expect(reg.credentialId && reg.attestationObject && reg.clientDataJSON && reg.authData && reg.publicKeySpki).toBeTruthy();
+      const [, req] = createCipher.mock.calls[0]!;
+      expect(req.type).toBe(1);
+      expect(req.login?.fido2Credentials).toHaveLength(1);
+      expect(req.login?.fido2Credentials?.[0]?.keyValue).toMatch(/^2\./); // an EncString
+    });
+
+    it('createPasskey (append) PUTs the original cipher verbatim + [old, new] passkeys, without re-encrypting old fields', async () => {
+      const updateCipher = vi.fn(async (_t: string, id: string, req: CipherRequest): Promise<CipherResponse> => ({ id, ...req }));
+      const { service, originalRequestSnapshot } = await makeServiceWithExistingPasskeyLogin({ id: 'c1', rpId: 'example.com', api: { updateCipher } });
+      const reg = await service.createPasskey({ rpId: 'example.com', userHandle: 'dXNlcg', userName: 'me', challenge: 'AAAA', origin: 'https://example.com', targetCipherId: 'c1' });
+      expect(reg.credentialId).toBeTruthy();
+      const [, id, req] = updateCipher.mock.calls[0]!;
+      expect(id).toBe('c1');
+      expect(req.login?.fido2Credentials).toHaveLength(2);
+      // old passkey EncStrings are byte-identical to the original (no re-encryption)
+      expect(req.login?.fido2Credentials?.[0]).toEqual(originalRequestSnapshot.login.fido2Credentials[0]);
+      // other fields carried verbatim from the original CipherResponse
+      expect(req.name).toBe(originalRequestSnapshot.name);
+      expect(req.login?.password).toBe(originalRequestSnapshot.login.password);
+    });
+
+    it('createPasskey rejects a targetCipherId that is not a same-domain personal login', async () => {
+      const { service } = await makeServiceWithLogins([{ id: 'c2', name: 'Other', username: 'x', uris: ['https://other.com'] }]);
+      await expect(service.createPasskey({ rpId: 'example.com', challenge: 'AAAA', origin: 'https://example.com', targetCipherId: 'c2' })).rejects.toThrow(/not a valid target/i);
+    });
+
+    it('createPasskey throws when locked', async () => {
+      const { service } = await makeLockedService();
+      await expect(service.createPasskey({ rpId: 'example.com', challenge: 'AAAA', origin: 'https://example.com' })).rejects.toThrow();
+    });
+
+    it('after createPasskey the new passkey is immediately assertable (cache merged, not full sync)', async () => {
+      const createCipher = vi.fn(async (_t: string, req: CipherRequest): Promise<CipherResponse> => ({ id: 'new1', ...req }));
+      const { service, api } = await makeUnlockedService({ api: { createCipher } });
+      await service.sync(); // seed VAULT_CACHE_KEY, as a real caller would have done before offering to register
+      const syncCallsBefore = (api.sync as ReturnType<typeof vi.fn>).mock.calls.length;
+      await service.createPasskey({ rpId: 'example.com', userHandle: 'dXNlcg', challenge: 'AAAA', origin: 'https://example.com', userVerified: true });
+      expect((api.sync as ReturnType<typeof vi.fn>).mock.calls.length).toBe(syncCallsBefore); // no re-sync
+      expect(await service.hasMatchingPasskey({ rpId: 'example.com', origin: 'https://example.com' })).toBe(true);
+    });
   });
 });

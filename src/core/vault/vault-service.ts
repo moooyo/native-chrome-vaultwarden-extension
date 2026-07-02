@@ -4,14 +4,15 @@ import type { SessionManager } from '../session/session-manager.js';
 import type { AuthService } from '../session/auth-service.js';
 import type { KeyValueStore } from '../../platform/store.js';
 import type { SymmetricKey } from '../crypto/keys.js';
-import type { CipherSummary, CipherInput, CollectionSummary, DecryptedCipher, FieldName, FolderSummary } from './models.js';
+import type { CipherSummary, CipherInput, CollectionSummary, DecryptedCipher, FieldName, FolderSummary, PasskeyTarget } from './models.js';
 import { decryptCipher, decryptFolders, decryptCollections, buildOrgKeyMap } from './decrypt.js';
 import { encryptCipher, mergeServerManagedFields } from './encrypt.js';
 import { getTotp, type TotpResult } from './totp.js';
 import { signFido2Assertion, type PasskeyAssertion } from './fido2.js';
+import { generateFido2Keypair, buildAttestationObject, buildCreateClientDataJSON, encryptFido2Credential } from './fido2-create.js';
 import { encryptToText, decryptToText } from '../crypto/encstring.js';
 import { unwrapSymmetricKey } from '../crypto/keys.js';
-import { base64UrlToBytes, base64ToBytes, bytesToBase64 } from '../crypto/encoding.js';
+import { base64UrlToBytes, base64ToBytes, bytesToBase64, bytesToBase64Url } from '../crypto/encoding.js';
 import { decryptAttachmentKey, decryptAttachmentFile, encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
 import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealthInput } from './password-health.js';
 import { pwnedCount } from './pwned.js';
@@ -23,7 +24,7 @@ import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResu
 import { buildEquivalentDomainIndex } from './equivalent-domains.js';
 import { toOrgPermission } from './org-permissions.js';
 import type { OrgPermission } from './org-permissions.js';
-import { isRegistrableRpId } from './domain.js';
+import { getHostAndPort, isRegistrableRpId } from './domain.js';
 
 export interface VaultServiceDeps {
   api: ApiClient;
@@ -56,6 +57,17 @@ export type SaveLoginPrompt =
   | { action: 'none' }
   | { action: 'save'; suggestedName: string }
   | { action: 'update'; cipherId: string; name: string };
+
+/** The public attestation returned to the page after registering a new passkey. The private key
+ *  (keyValue) never leaves the worker — only these public/opaque values cross the boundary. */
+export interface Fido2Registration {
+  credentialId: string;
+  attestationObject: string;
+  clientDataJSON: string;
+  authData: string;
+  publicKeySpki: string;
+  publicKeyAlgorithm: -7;
+}
 
 export class VaultService {
   constructor(private readonly deps: VaultServiceDeps) {}
@@ -608,6 +620,127 @@ export class VaultService {
   async hasMatchingPasskey(params: { rpId: string; origin: string; allowedCredentialIds?: string[] }): Promise<boolean> {
     this.assertRpIdForOrigin(params.rpId, params.origin);
     return (await this.findPasskeyCredential(params.rpId, params.allowedCredentialIds)) !== undefined;
+  }
+
+  /** Same-domain personal login items a new passkey could be saved into (for the create picker).
+   *  Reads the decrypted summary cache — carries only id/name/username, never secrets. */
+  async getPasskeyTargets(params: { rpId: string; origin: string }): Promise<PasskeyTarget[]> {
+    this.assertRpIdForOrigin(params.rpId, params.origin);
+    const summaries = (await this.deps.localStore.get<CipherSummary[]>(SUMMARY_CACHE_KEY)) ?? [];
+    const out: PasskeyTarget[] = [];
+    for (const s of summaries) {
+      if (s.type !== 1 || s.organizationId || s.deletedDate || s.undecryptable) continue;
+      const matches = s.loginUris.some((u) => {
+        const host = getHostAndPort(u.uri)?.host;
+        return host ? isRegistrableRpId(params.rpId, host) : false;
+      });
+      if (!matches) continue;
+      out.push(s.username ? { id: s.id, name: s.name, username: s.username } : { id: s.id, name: s.name });
+    }
+    return out;
+  }
+
+  /** Generate an ES256 passkey, build its attestation, store it (new personal login OR appended to a
+   *  same-domain personal login the picker offered), merge the returned cipher into the cache, and
+   *  return the attestation. The private key never leaves the worker. */
+  async createPasskey(params: {
+    rpId: string; rpName?: string; userHandle?: string; userName?: string; userDisplayName?: string;
+    challenge: string; origin: string; userVerified?: boolean; targetCipherId?: string;
+  }): Promise<Fido2Registration> {
+    this.assertRpIdForOrigin(params.rpId, params.origin);
+    const userKey = await this.requireUserKey();
+    const token = await this.requireToken();
+
+    const keypair = await generateFido2Keypair();
+    const credentialIdB64 = bytesToBase64Url(keypair.credentialId);
+    const { attestationObject, authData } = await buildAttestationObject({
+      rpId: params.rpId, coseKey: keypair.coseKey, credentialId: keypair.credentialId,
+      userVerified: params.userVerified ?? false,
+    });
+    const clientDataJSON = buildCreateClientDataJSON(params.challenge, params.origin);
+    const newCredPlain = {
+      credentialId: credentialIdB64,
+      keyValue: bytesToBase64Url(keypair.pkcs8),
+      rpId: params.rpId,
+      counter: 0,
+      ...(params.userHandle ? { userHandle: params.userHandle } : {}),
+      ...(params.userName ? { userName: params.userName } : {}),
+      ...(params.rpName ? { rpName: params.rpName } : {}),
+      ...(params.userDisplayName ? { userDisplayName: params.userDisplayName } : {}),
+    };
+
+    let saved: CipherResponse;
+    if (params.targetCipherId) {
+      // Re-resolve the target through the same domain match — never trust the caller-supplied id.
+      const allowed = await this.getPasskeyTargets({ rpId: params.rpId, origin: params.origin });
+      if (!allowed.some((t) => t.id === params.targetCipherId)) throw new AppError('error', 'Target is not a valid target for this passkey');
+      const original = await this.findCachedCipher(params.targetCipherId);
+      if (!original || original.type !== 1 || original.organizationId || original.deletedDate) throw new AppError('error', 'Target is not a valid target for this passkey');
+      // Append under the TARGET cipher's own field key (its per-cipher key, or the org/account key that
+      // owns it) — NEVER the account UserKey. Encrypting under the wrong key would make an org or
+      // per-cipher-keyed item's passkey (and everything else read with that field key) undecryptable.
+      const fieldKey = await this.cipherFieldKey(original);
+      const newCred = await encryptFido2Credential(newCredPlain, fieldKey);
+      // Build the PUT body verbatim from the original CipherResponse (bypassing encryptCipher/
+      // mergeServerManagedFields entirely) so every other field — and the OLD passkey EncStrings —
+      // survive byte-for-byte. mergeServerManagedFields only carries a fixed allowlist of fields onto a
+      // freshly-encrypted editor request; it was never meant to preserve an unedited item wholesale, and
+      // using it here would still leave the new passkey dropped since it copies from `original`, not `request`.
+      const request = this.cipherResponseToRequest(original);
+      request.login = { ...(request.login ?? {}), fido2Credentials: [...(original.login?.fido2Credentials ?? []), newCred] };
+      saved = await this.deps.api.updateCipher(token, params.targetCipherId, request);
+    } else {
+      const newCred = await encryptFido2Credential(newCredPlain, userKey);
+      const request = await encryptCipher({
+        type: 1, name: params.rpName || params.rpId,
+        login: { ...(params.userName ? { username: params.userName } : {}), uris: [{ uri: `https://${params.rpId}` }] },
+      }, userKey);
+      request.login = { ...(request.login ?? {}), fido2Credentials: [newCred] };
+      saved = await this.deps.api.createCipher(token, request);
+    }
+
+    // Best-effort cache merge so the new passkey is immediately assertable; a merge failure must NOT
+    // fail the (already-succeeded) server write — the attestation is returned regardless, and the next
+    // sync() will reconcile the cache. Deliberately NOT sync(): a failed post-write sync must not orphan
+    // an already-saved cipher from the caller's point of view.
+    try { await this.mergeCipherIntoCache(saved); } catch { /* next sync will reconcile */ }
+
+    return {
+      credentialId: credentialIdB64,
+      attestationObject: bytesToBase64Url(attestationObject),
+      clientDataJSON: bytesToBase64Url(new TextEncoder().encode(clientDataJSON)),
+      authData: bytesToBase64Url(authData),
+      publicKeySpki: bytesToBase64Url(keypair.publicKeySpki),
+      publicKeyAlgorithm: -7,
+    };
+  }
+
+  /** Build a wholesale CipherRequest from an existing CipherResponse, carrying every field verbatim
+   *  (all already EncStrings). Used by the passkey-append path to avoid re-encrypting/dropping fields. */
+  private cipherResponseToRequest(c: CipherResponse): CipherRequest {
+    const req: CipherRequest = { type: c.type, name: c.name ?? '' };
+    if (c.notes != null) req.notes = c.notes;
+    if (c.favorite != null) req.favorite = c.favorite;
+    if (c.folderId != null) req.folderId = c.folderId;
+    if (c.organizationId != null) req.organizationId = c.organizationId;
+    if (c.login != null) req.login = { ...c.login };
+    if (c.card != null) req.card = c.card;
+    if (c.identity != null) req.identity = c.identity;
+    if (c.key != null) req.key = c.key;
+    if (c.fields != null) req.fields = c.fields;
+    if (c.passwordHistory != null) req.passwordHistory = c.passwordHistory;
+    if (c.reprompt != null) req.reprompt = c.reprompt;
+    return req;
+  }
+
+  /** Replace-or-insert a server cipher representation into the raw sync cache (so findPasskeyCredential
+   *  sees it immediately). Does not rebuild the decrypted summary caches — the popup re-syncs. */
+  private async mergeCipherIntoCache(cipher: CipherResponse): Promise<void> {
+    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    if (!cache) return;
+    const idx = cache.ciphers.findIndex((c) => c.id === cipher.id);
+    if (idx >= 0) cache.ciphers[idx] = cipher; else cache.ciphers.push(cipher);
+    await this.deps.localStore.set(VAULT_CACHE_KEY, cache);
   }
 
   /** Find a stored passkey for the rpId. Returns the decrypted credential (incl. private key, which
