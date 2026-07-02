@@ -21,7 +21,7 @@ import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import { hexToBytes, base64ToBytes, bytesToBase64, bytesToBase64Url, base64UrlToBytes } from '../crypto/encoding.js';
 import { hmacSha256 } from '../crypto/primitives.js';
-import { decryptToText } from '../crypto/encstring.js';
+import { decryptToText, EncStringMacError } from '../crypto/encstring.js';
 import { derToRawSignature } from './fido2.js';
 import { encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
 import { buildTextSendRequest } from './sends.js';
@@ -1546,6 +1546,68 @@ describe('VaultService', () => {
       // other fields carried verbatim from the original CipherResponse
       expect(req.name).toBe(originalRequestSnapshot.name);
       expect(req.login?.password).toBe(originalRequestSnapshot.login.password);
+    });
+
+    it('createPasskey (append) encrypts the NEW passkey under the target cipher\'s own per-cipher key (cipherFieldKey), not the raw account UserKey', async () => {
+      // Regression coverage for the append branch's key choice. The existing append test above uses a
+      // KEYLESS personal cipher, where cipherFieldKey(original) and the account UserKey are the SAME
+      // key — it cannot distinguish "encrypted under cipherFieldKey" from "encrypted under UserKey".
+      // This fixture gives the target cipher its OWN wrapped per-cipher key, so the assertion below
+      // actually pins that cipherFieldKey (the unwrapped per-cipher key), not the raw UserKey, was used.
+      const subtle = globalThis.crypto.subtle;
+      const pair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+      const pkcs8 = new Uint8Array(await subtle.exportKey('pkcs8', pair.privateKey));
+      const keyValueB64url = bytesToBase64Url(pkcs8);
+
+      // c2's own per-cipher key: a random 64-byte symmetric key, wrapped under the account UserKey the
+      // same way a cipher's `key` field is wrapped by its owning key (decrypt.ts:
+      // `cipher.key ? unwrapSymmetricKey(cipher.key, baseKey) : baseKey`). wrapAttachmentKey is just
+      // `encryptToBytes(raw64Bytes, wrappingKey)` — the same generic wrap operation, reused verbatim.
+      const perCipherKey = generateAttachmentKey(() => new Uint8Array(64).fill(0x42));
+      const wrappedCipherKey = await wrapAttachmentKey(perCipherKey, testUserKey);
+
+      const existingCred = {
+        credentialId: await encUnder('old-cred', perCipherKey),
+        keyType: await encUnder('public-key', perCipherKey),
+        keyAlgorithm: await encUnder('ECDSA', perCipherKey),
+        keyCurve: await encUnder('P-256', perCipherKey),
+        keyValue: await encUnder(keyValueB64url, perCipherKey),
+        rpId: await encUnder('example.com', perCipherKey),
+        counter: await encUnder('0', perCipherKey),
+      };
+      const cipher = {
+        id: 'c2', type: 1 as const, favorite: false, organizationId: null,
+        key: wrappedCipherKey,
+        name: await encUnder('Keyed Login', perCipherKey),
+        login: {
+          uris: [{ uri: await encUnder('https://example.com', perCipherKey) }],
+          fido2Credentials: [existingCred],
+        },
+      };
+      const updateCipher = vi.fn(async (_t: string, id: string, req: CipherRequest): Promise<CipherResponse> => ({ id, ...req }));
+      const sync: SyncResponse = { profile: { id: 'u', email: 'u@example.com' }, ciphers: [cipher] };
+      const { service, api } = await makeService(sync);
+      Object.assign(api, { updateCipher });
+      // sync() populates both VAULT_CACHE_KEY (raw, read by cipherFieldKey) and SUMMARY_CACHE_KEY
+      // (decrypted, read by getPasskeyTargets) for c2 — decryption succeeds because decryptCipher
+      // itself unwraps cipher.key with the owning (User) key, exactly mirroring what this test seeds.
+      await service.sync();
+
+      const reg = await service.createPasskey({ rpId: 'example.com', userHandle: 'dXNlcg', challenge: 'AAAA', origin: 'https://example.com', targetCipherId: 'c2' });
+      expect(reg.credentialId).toBeTruthy();
+
+      const [, id, req] = updateCipher.mock.calls[0]!;
+      expect(id).toBe('c2');
+      expect(req.login?.fido2Credentials).toHaveLength(2);
+      // The old credential rides along byte-identical (verbatim carry, no re-encryption).
+      expect(req.login?.fido2Credentials?.[0]).toEqual(existingCred);
+
+      const newCred = req.login!.fido2Credentials![1]!;
+      // Pins cipherFieldKey: the NEW credential decrypts under the unwrapped per-cipher key...
+      await expect(decryptToText(newCred.keyValue!, perCipherKey)).resolves.toMatch(/^[A-Za-z0-9_-]+$/); // base64url PKCS#8
+      // ...and FAILS to decrypt under the raw account UserKey — proving the append path did NOT fall
+      // back to (or accidentally use) the account key, which would silently corrupt this item.
+      await expect(decryptToText(newCred.keyValue!, testUserKey)).rejects.toThrow(EncStringMacError);
     });
 
     it('createPasskey rejects a targetCipherId that is not a same-domain personal login', async () => {
