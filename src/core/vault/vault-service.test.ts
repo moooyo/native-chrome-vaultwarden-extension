@@ -1248,14 +1248,15 @@ describe('VaultService', () => {
     const { service } = await makeService(sync);
     await service.sync();
     const challenge = bytesToBase64Url(new TextEncoder().encode('chal'));
-    // authData flags live at byte 32: UP=0x01, UV=0x04.
+    // authData flags live at byte 32: UP=0x01, UV=0x04, BE=0x08, BS=0x10 (vault passkeys are
+    // cloud-synced, so BE|BS are always set alongside UP).
     const flags = async (uv?: boolean) => {
       const a = await service.getPasskeyAssertion({ rpId: 'acme.com', origin: 'https://acme.com', challenge, ...(uv === undefined ? {} : { userVerified: uv }) });
       return base64UrlToBytes(a!.authenticatorData)[32]!;
     };
-    expect(await flags()).toBe(0x01);       // default: present, NOT verified (no silent UV)
-    expect(await flags(false)).toBe(0x01);  // explicit false
-    expect(await flags(true)).toBe(0x05);   // UP | UV when the user was actually verified
+    expect(await flags()).toBe(0x19);       // default: present + BE|BS, NOT verified (no silent UV)
+    expect(await flags(false)).toBe(0x19);  // explicit false
+    expect(await flags(true)).toBe(0x1d);   // UP | UV | BE | BS when the user was actually verified
   });
 
   it('hasMatchingPasskey reports whether a stored passkey matches the rpId / allowed credential', async () => {

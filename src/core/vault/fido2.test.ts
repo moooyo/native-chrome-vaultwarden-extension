@@ -49,4 +49,9 @@ describe('signFido2Assertion', () => {
     expect(base64UrlToBytes(noUv.authenticatorData)[32]! & 0x04).toBe(0);
     expect(base64UrlToBytes(noUv.authenticatorData)[32]! & 0x01).toBe(0x01); // UP always set
   });
+
+  it('assertion authData carries BE|BS (and UP), UV only when requested', async () => {
+    const up = await buildAuthenticatorData('example.com', 0x01 | 0x08 | 0x10, 0);
+    expect(up[32]).toBe(0x19); // UP|BE|BS, no UV
+  });
 });

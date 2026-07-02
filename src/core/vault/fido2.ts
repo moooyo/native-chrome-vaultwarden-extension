@@ -27,9 +27,12 @@ export interface PasskeyAssertion extends AssertionResult {
   userHandle?: string;  // base64url
 }
 
-// Authenticator data flags (WebAuthn §6.1): UP = user present, UV = user verified.
+// Authenticator data flags (WebAuthn §6.1): UP=user present, UV=user verified, BE=backup eligible,
+// BS=backup state. Vault passkeys are synced (cloud-backed) → BE and BS are set on every ceremony.
 const FLAG_UP = 0x01;
 const FLAG_UV = 0x04;
+const FLAG_BE = 0x08;
+const FLAG_BS = 0x10;
 
 async function sha256(data: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await subtle.digest('SHA-256', data as BufferSource));
@@ -56,7 +59,7 @@ function buildClientDataJSON(challenge: string, origin: string): string {
 /** Sign a WebAuthn assertion with a stored passkey private key (PKCS#8, ECDSA P-256). */
 export async function signFido2Assertion(pkcs8: Uint8Array, params: AssertionParams): Promise<AssertionResult> {
   const key = await subtle.importKey('pkcs8', pkcs8 as BufferSource, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
-  const flags = FLAG_UP | (params.userVerified ? FLAG_UV : 0);
+  const flags = FLAG_UP | FLAG_BE | FLAG_BS | (params.userVerified ? FLAG_UV : 0);
   const authData = await buildAuthenticatorData(params.rpId, flags, params.counter ?? 0);
   const clientDataJSON = buildClientDataJSON(params.challenge, params.origin);
   const clientDataBytes = utf8ToBytes(clientDataJSON);
