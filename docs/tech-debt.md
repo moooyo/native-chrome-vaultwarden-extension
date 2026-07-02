@@ -180,7 +180,7 @@
 - ✅ **用户名生成器（本地类型）**（已交付，2026-06-30）：`core/generator/username.ts` 加号别名/catch-all/随机词
   （纯函数、注入随机源、复用词表）+ 生成器面板 Username 模式 + 登录编辑器 username 生成按钮。全本地、不联网。
   剩余：**转发邮箱别名**（SimpleLogin/addy.io/Firefox Relay 等外部 provider + token 存储，另起里程碑）。
-- ➖ 跨服务器多账户、i18n/`_locales`、生物识别解锁、徽章计数、账户指纹短语、Firefox 打包、
+- ➖ 跨服务器多账户、i18n/`_locales`、徽章计数、账户指纹短语、Firefox 打包、
   Steam Guard TOTP、passkey 多凭据选择 UI。
 - ✅ **空闲/自动锁定改进（超时动作 + chrome.idle 准确性 + 剪贴板后台清除）**（已交付，2026-07-01；设计/计划见
   `docs/superpowers/`，spec 经 MV3 平台对抗性评审强化）：
@@ -217,10 +217,16 @@
   / `parseImportJson`）；`VaultService.exportVault`（worker 内全量解密→明文 JSON，**显式用户操作**）
   / `importVault`（解析→逐条 createCipher→一次 sync）；popup 页脚「Export（二次确认明文）/ Import（选文件）」。
   剩余：加密导出（.json with password）、组织条目与文件夹关系的完整保真。
-- PIN 解锁 ✅（本次落地）/ 生物识别解锁（仍待）：`AuthService.setPin/unlockWithPin/disablePin/
+- PIN 解锁 ✅（本次落地）/ 生物识别解锁（🚫 **判定为纯扩展不可行，2026-07-02**）：`AuthService.setPin/unlockWithPin/disablePin/
   isPinEnabled`——用 PIN 经 PBKDF2+stretch 派生 key 把 UserKey 包成 `pinProtectedUserKey` 存 local，
   解锁时反解（错误 PIN 触发 MAC 校验失败）。popup 页脚「PIN」设/删、锁屏在已设 PIN 时显示「Unlock with PIN」。
   **安全权衡**（已注释）：PIN 低熵，持久化的包裹块可离线暴力（PBKDF2 抬高成本），与上游 Bitwarden 一致。
+  **生物识别解锁——可行性阻断**：浏览器原生生物识别唯一路径是 WebAuthn 平台认证器（+PRF 派生密钥），但**扩展不能以自身
+  `chrome-extension://` 源作为 WebAuthn RP ID**（MDN 明确：扩展只能对其 host_permissions 覆盖的**外部**域断言 WebAuthn，
+  即代表外部站点填 passkey——本项目已做）。用 Vaultwarden **服务端域**作 RP 的代理路径对常见自托管场景失效（WebAuthn 要求
+  https + 可注册域，Vaultwarden 常为 `http://<IP>`），且语义混乱 + 有「弹出生物识别提示时 popup 关闭」的已知问题。真实密码
+  管理器（如 Bitwarden）的扩展生物识别靠**原生消息到桌面伴侣 app**——本项目无桌面 app。故**纯扩展无法交付生物识别解锁**；
+  如需，须另做原生桌面伴侣（超出扩展范围）。参考：MDN Use the WebAuthn API in web extensions；w3c/webauthn #1158。
 - 多账户切换 ✅（本次落地）：`SessionManager` 附加账户注册表（`accounts` 映射，AUTH_KEY 仍是活动账户，
   向后兼容）；`listAccounts/switchAccount/removeAccount`（切换即锁定并清 PIN，由目标账户重新解锁）；
   `AuthService` 透传 + 路由/协议；popup 页脚「Accounts」列出/切换/移除/新增账户。
