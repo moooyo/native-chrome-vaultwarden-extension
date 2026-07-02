@@ -64,6 +64,7 @@ export interface OrganizationResponse {
     editAnyCollection?: boolean | null;
     deleteAnyCollection?: boolean | null;
   } | null;
+  resetPasswordEnrolled?: boolean | null;
 }
 
 export interface SyncProfile {
@@ -314,4 +315,49 @@ export interface GlobalEquivalentDomainsGroup {
   type?: number;
   domains?: string[] | null;
   excluded?: boolean;
+}
+
+export interface RotateMasterPasswordUnlockData {
+  kdfType: number;
+  kdfIterations: number;
+  kdfParallelism: number | null;
+  kdfMemory: number | null;
+  email: string;
+  masterKeyAuthenticationHash: string;
+  masterKeyEncryptedUserKey: string;
+}
+
+export interface RotateOrgRecoveryData {
+  organizationId: string;
+  resetPasswordKey: string;
+}
+
+export interface RotateKeyData {
+  oldMasterKeyAuthenticationHash: string;
+  accountUnlockData: {
+    masterPasswordUnlockData: RotateMasterPasswordUnlockData;
+    emergencyAccessUnlockData: unknown[];
+    organizationAccountRecoveryUnlockData: RotateOrgRecoveryData[];
+  };
+  accountKeys: {
+    userKeyEncryptedAccountPrivateKey: string;
+    accountPublicKey: string;
+  };
+  accountData: {
+    ciphers: unknown[];
+    folders: unknown[];
+    sends: unknown[];
+  };
+}
+
+export interface OrgPublicKeyResponse {
+  publicKey: string;
+}
+
+export interface UserPublicKeyResponse {
+  publicKey: string;
+}
+
+export interface EmergencyAccessGrant {
+  id: string;
 }

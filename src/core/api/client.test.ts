@@ -491,3 +491,20 @@ describe('ApiClient collection endpoints', () => {
     }));
   });
 });
+
+describe('key-rotation endpoints', () => {
+  it('POSTs the rotate payload', async () => {
+    const fetchFn = vi.fn(async () => new Response('', { status: 200 }));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn: fetchFn as never, localStore: createMemoryStore() });
+    await api.rotateAccountKey('tok', { oldMasterKeyAuthenticationHash: 'h' } as never);
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/accounts/key-management/rotate-user-account-keys', expect.objectContaining({ method: 'POST' }));
+  });
+
+  it('GETs the trusted emergency-access list, org public key, and account public key', async () => {
+    const fetchFn = vi.fn(async (u: string) => u.includes('trusted') ? jsonResponse({ data: [{ id: 'e1' }] }) : jsonResponse({ publicKey: 'PUB' }));
+    const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn: fetchFn as never, localStore: createMemoryStore() });
+    expect(await api.getTrustedEmergencyAccess('t')).toEqual([{ id: 'e1' }]);
+    expect((await api.getOrganizationPublicKey('t', 'o1')).publicKey).toBe('PUB');
+    expect((await api.getAccountPublicKey('t')).publicKey).toBe('PUB');
+  });
+});

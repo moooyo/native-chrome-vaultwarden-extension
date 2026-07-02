@@ -5,16 +5,20 @@ import type {
   CollectionAccess,
   CollectionAccessDetails,
   CollectionResponse,
+  EmergencyAccessGrant,
   FolderResponse,
   LoginSuccessResponse,
+  OrgPublicKeyResponse,
   PreloginResponse,
   RefreshTokenResponse,
   RegisterRequest,
+  RotateKeyData,
   SendFileUploadResponse,
   SendRequest,
   SendResponse,
   SyncResponse,
   TwoFactorRequiredResponse,
+  UserPublicKeyResponse,
 } from './types.js';
 
 export interface PasswordLoginInput {
@@ -366,6 +370,28 @@ export class ApiClient {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(body),
     });
+  }
+
+  async rotateAccountKey(accessToken: string, body: RotateKeyData): Promise<void> {
+    await this.noBodyRequest('/api/accounts/key-management/rotate-user-account-keys', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** Grants where THIS user is the grantor (people who can access my vault). Non-empty => rotation fails closed. */
+  async getTrustedEmergencyAccess(accessToken: string): Promise<EmergencyAccessGrant[]> {
+    const res = await this.jsonRequest<{ data?: EmergencyAccessGrant[] }>('/api/emergency-access/trusted', { method: 'GET', headers: { authorization: `Bearer ${accessToken}` } });
+    return res.data ?? [];
+  }
+
+  async getOrganizationPublicKey(accessToken: string, orgId: string): Promise<OrgPublicKeyResponse> {
+    return this.jsonRequest<OrgPublicKeyResponse>(`/api/organizations/${encodeURIComponent(orgId)}/keys`, { method: 'GET', headers: { authorization: `Bearer ${accessToken}` } });
+  }
+
+  async getAccountPublicKey(accessToken: string): Promise<UserPublicKeyResponse> {
+    return this.jsonRequest<UserPublicKeyResponse>('/api/accounts/keys', { method: 'GET', headers: { authorization: `Bearer ${accessToken}` } });
   }
 
   /** Send a request that may return an empty body (DELETE endpoints); throws on a non-OK status. */
