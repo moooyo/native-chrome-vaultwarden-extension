@@ -111,6 +111,13 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.auth.removeAccount) throw new Error('auth.removeAccount is not wired');
             await deps.auth.removeAccount(request.email);
             return { ok: true, data: null };
+          case 'auth.forgetDevice':
+            if (!deps.auth.forgetDevice) throw new Error('auth.forgetDevice is not wired');
+            await deps.auth.forgetDevice(request.email);
+            return { ok: true, data: null };
+          case 'auth.isDeviceRemembered':
+            if (!deps.auth.isDeviceRemembered) throw new Error('auth.isDeviceRemembered is not wired');
+            return { ok: true, data: { remembered: await deps.auth.isDeviceRemembered(request.email) } };
           case 'vault.sync':
             if (!deps.vault.sync) throw new Error('vault.sync is not wired');
             return { ok: true, data: await deps.vault.sync() };
