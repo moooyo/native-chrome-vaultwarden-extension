@@ -210,9 +210,27 @@
   - **残余/待定**：popup 三处 UI（勾选框 + 两处 Forget）需**真实浏览器人工冒烟**（CI 无法覆盖）；新增 3 个 CSS 类未
     加样式（控件用已有 `.link-btn`，仅装饰性）。**spec 级待定**（human decision）：复用抛错时**一律清 token**（含瞬时
     5xx）——当前行为 fail-safe（最坏多做一次 2FA）且与 spec 一致，评审建议瞬时错误保留 token，未改，留待定。
-- ⬇ passkey 注册（`navigator.credentials.create`）、`instanceof PublicKeyCredential`、WebAuthn 扩展
-  （credProps/prf/largeBlob）、signCount 回写；encType 0/1 旧密文兼容解密；SSH-key(type 5) 编辑；
-  Safari 打包；显式 CSP 收紧；同步 `/sync` profile 字段（securityStamp/策略/紧急访问等）。
+- ✅ **Passkey 注册（`navigator.credentials.create`）**（已交付，2026-07-02；设计/计划见 `docs/superpowers/`，spec v2 经
+  4 维对抗性评审（读真源码 + WebAuthn/CTAP2，1M+ token）+ opus 整分支评审）：闭合已交付的 passkey **断言**能力。
+  MAIN-world 包 `create` → 隔离世界桥中转（候选查询 + **关闭式 shadow DOM 选择器**：新建登录条目 或 加到同域个人条目 或
+  取消回退原生）→ worker 生成 **ES256/P-256** 密钥对 + 造 attestationObject（COSE 公钥 + attested authData，`fmt:"none"`，
+  flags `0x5D`/`0x59` 含 AT\|BE\|BS）+ 极简 CBOR 编码器（`core/crypto/cbor.ts`）+ 加密成 `Fido2CredentialData` 存 cipher →
+  回传 attestation 给页面构造 duck-typed `PublicKeyCredential`（含 `getAuthenticatorData/getPublicKey(SPKI)/getPublicKeyAlgorithm(-7)/getTransports`）。
+  单测含 attestation 结构解码回验 + **密钥对往返**（生成→用私钥签断言→用 attested 公钥验签）。
+  - **连带安全加固（评审逮到的既有漏洞）**：passkey **rpId/origin 信任边界移到 worker**——桥从自身 `location.origin` 盖
+    origin，worker 用 PSL（tldts）`isRegistrableRpId` 校验 rpId ⊆ origin.host（拒绝公共后缀 `github.io`/`co.uk`）。修复了
+    **已交付断言(get)路径的跨域伪造漏洞**（恶意页面直发桥消息即可让 worker 为任意 rpId/origin 签名）。断言 authData 补 BE\|BS（与
+    注册一致，WebAuthn L3 §6.1.3）；`findPasskeyCredential` 加 per-cipher try/catch（一个坏条目不毒化所有断言）。
+  - **数据完整性**：追加**仅个人条目**、新凭据用 `cipherFieldKey(original)` 加密（非 UserKey——否则 org/per-cipher 条目不可解密并
+    毒化所有断言，有专门的 keyed-cipher pin 测试）、从原始 CipherResponse **逐字构造 PUT** + `fido2Credentials=[...旧(字节不变),新]`
+    绕开会丢 passkey 的 `mergeServerManagedFields`；`targetCipherId` 在 worker **重解析**（不信 caller）；写成功后**合并 CipherResponse
+    进缓存**（非单独 sync，避免孤儿）。私钥永不出 worker；选择器候选仅 id/name/username。
+  - **残余/待定**（均 Minor）：clientDataJSON 的 `crossOrigin` 恒 `false`——跨源 iframe 里严格校验的 RP 可能拒（get 路径本就如此、场景少）；
+    abort signal 仅入口检查、选择器展示期间不响应；`instanceof PublicKeyCredential` 仍不成立（duck-typed）。**真实浏览器对真实 RP
+    （webauthn.io）的端到端 attestation-接受冒烟未在 CI 覆盖**——合并后需真机跑一次闭环。
+- ⬇ `instanceof PublicKeyCredential`、WebAuthn 扩展（credProps/prf/largeBlob）、signCount 回写；encType 0/1 旧密文兼容解密；
+  SSH-key(type 5) 编辑；Safari 打包；显式 CSP 收紧；同步 `/sync` profile 字段（securityStamp/策略/紧急访问等）；
+  passkey 跨源 iframe `crossOrigin`、注册期 abort。
 
 ## 路线图指针（按里程碑）
 
@@ -220,7 +238,7 @@
 |---|---|
 | M5 | ciphers/folders **CRUD** ✅ + 密码生成器 ✅（含生成历史）|
 | M6 | **TOTP** 验证码生成 / 显示 / **填充** ✅（已完整交付）|
-| M7 | **passkeys** ✅（已交付）：`fido2Credentials` 私钥解密 + WebAuthn 断言独立签名 |
+| M7 | **passkeys** ✅（已交付）：`fido2Credentials` 私钥解密 + WebAuthn 断言独立签名 + **注册（create，2026-07-02）** |
 | 注册 | 客户端账户密钥生成 + register 端点 ✅（已交付）|
 | M8 | **Sends** 分享 CRUD + 加密 |
 
