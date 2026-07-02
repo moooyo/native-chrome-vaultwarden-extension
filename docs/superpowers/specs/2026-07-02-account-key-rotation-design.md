@@ -74,8 +74,12 @@
 - 无 reprompt 门（主密码已在 §4.1 验证一次；重加密走底层 rewrap，不经 service 的 reprompt 门）。
 - 组织**条目**不重加密（org 密钥不受影响）；**恢复登记**重登记。
 
-## 8. 需 plan 阶段 live 探针钉死（SSH 隧道已备）
-1. **核心轮换端到端**（throwaway 单账户）：注册→建 keyless 条目（本客户端创建，含 login+card+自定义字段）+ 文件夹→**通用 rewrap** 重加密→POST→重登录→新 UserKey 严格解密验证往返、旧 key 失效。确认 `CipherData` 精确形状（id/key/deletedDate/attachments2）与「omit=拒绝非删除」。
+## 8. Live 探针（核心已钉死；其余待 SDD 阶段）
+
+> **核心轮换已 live 验证通过（2026-07-02，throwaway 账户，经 SSH 隧道 localhost:18080）**：注册→建 keyless login 条目 + 文件夹→新 UserKey 重加密→`POST rotate` **返回 200**→重登录（同密码解开新 Key）→**新 UserKey 严格解密往返成功**、旧 UserKey 解密报 `(error)`（正确失效）→删账户。**确认 payload 形状**：`accountData.ciphers` 项 = **既有 `CipherRequest` 形状 + `id`**；`folders` 项 = `{ id, name }`；`sends` 项待 SDD 验证（`SendData + id`，key 重包）；空 `emergencyAccessUnlockData`/`organizationAccountRecoveryUnlockData` 数组被接受。**网络注意**：当前直连 `10.0.1.20:8080` 被阻断，LIVE 测试须经 SSH 隧道（`ssh -L 18080:localhost:8080 test-env`）并把 SERVER 指向 `localhost:18080`（或 env 可配）。
+
+待 SDD 阶段 LIVE 补验：
+1. **keyed 条目 + attachments2 + deletedDate** 精确字段（带附件/软删条目的往返）。
 2. **trashed 条目**：建条目→软删→轮换须含之且保持 trashed。
 3. **组织恢复**：throwaway 建 org + 登记恢复 → 取 org 公钥 → 轮换含 recovery → 验证。
 4. **附件**（若可）：建带附件条目→轮换→下载解密验证附件 key 重包（`attachments2`）。否则记为部分 + 单测。
