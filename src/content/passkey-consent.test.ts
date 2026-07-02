@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest';
-import { renderConsentInto } from './passkey-consent.js';
+import { renderConsentInto, renderPasskeyPickerInto } from './passkey-consent.js';
 
 afterEach(() => { document.body.innerHTML = ''; });
 
@@ -51,5 +51,37 @@ describe('passkey consent dialog', () => {
     trustedClick(root.querySelector('#vw-pk-confirm'));
     trustedClick(root.querySelector('#vw-pk-cancel'));
     expect(count).toBe(1);
+  });
+});
+
+describe('renderPasskeyPickerInto', () => {
+  function setup(targets: Array<{ id: string; name: string; username?: string }>) {
+    const root = document.createElement('div');
+    document.body.append(root);
+    let result: { cancelled: true } | { targetCipherId?: string } | undefined;
+    renderPasskeyPickerInto(root, 'example.com', targets, (r) => { result = r; });
+    return { root, get: () => result };
+  }
+  it('picking "New login item" resolves with no targetCipherId', () => {
+    const { root, get } = setup([{ id: 'c1', name: 'Example', username: 'me' }]);
+    trustedClick(root.querySelector('#vw-pk-new'));
+    expect(get()).toEqual({});
+  });
+  it('picking an existing target resolves with its id', () => {
+    const { root, get } = setup([{ id: 'c1', name: 'Example', username: 'me' }]);
+    trustedClick(root.querySelector('[data-target="c1"]'));
+    expect(get()).toEqual({ targetCipherId: 'c1' });
+  });
+  it('cancel resolves cancelled', () => {
+    const { root, get } = setup([]);
+    trustedClick(root.querySelector('#vw-pk-cancel'));
+    expect(get()).toEqual({ cancelled: true });
+  });
+  it('ignores untrusted (synthetic) clicks only when isTrusted is enforced', () => {
+    // renderPasskeyPickerInto gates on e.isTrusted; happy-dom MouseEvent has isTrusted=false, so the
+    // production dialog would ignore it. This test documents the guard by asserting the handler checks it.
+    const { root, get } = setup([{ id: 'c1', name: 'Example' }]);
+    (root.querySelector('#vw-pk-new') as HTMLButtonElement).click(); // .click() → isTrusted false in happy-dom
+    expect(get()).toBeUndefined();
   });
 });

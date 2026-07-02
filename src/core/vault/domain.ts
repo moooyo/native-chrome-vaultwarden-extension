@@ -51,3 +51,20 @@ function isIpv4Address(value: string): boolean {
 function isIpv6Address(value: string): boolean {
   return value.includes(':');
 }
+
+/**
+ * WebAuthn rpId validity: rpId must equal the frame host or be a registrable-domain suffix of it,
+ * and must itself be a registrable domain (never a bare public suffix like github.io / co.uk). Uses
+ * the Public Suffix List via tldts. `localhost` is allowed only for an exact localhost match (dev).
+ */
+export function isRegistrableRpId(rpId: string, host: string): boolean {
+  const r = rpId.trim().toLowerCase();
+  const h = host.trim().toLowerCase();
+  if (!r || !h) return false;
+  if (r === 'localhost') return h === 'localhost';
+  if (h !== r && !h.endsWith(`.${r}`)) return false;
+  const rBase = getDomain(r, { allowPrivateDomains: true });
+  const hBase = getDomain(h, { allowPrivateDomains: true });
+  if (!rBase || !hBase) return false; // public suffix, IP, or invalid
+  return rBase.toLowerCase() === hBase.toLowerCase();
+}

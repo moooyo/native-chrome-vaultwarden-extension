@@ -184,6 +184,7 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.vault.hasMatchingPasskey) throw new Error('vault.hasMatchingPasskey is not wired');
             const matches = await deps.vault.hasMatchingPasskey({
               rpId: request.rpId,
+              origin: request.origin,
               ...(request.allowedCredentialIds ? { allowedCredentialIds: request.allowedCredentialIds } : {}),
             });
             return { ok: true, data: { matches } };
@@ -198,6 +199,25 @@ export function createRouter(deps: RouterDeps) {
               ...(request.userVerified !== undefined ? { userVerified: request.userVerified } : {}),
             });
             return { ok: true, data: { assertion: assertion ?? null } };
+          }
+          case 'vault.getPasskeyTargets': {
+            if (!deps.vault.getPasskeyTargets) throw new Error('vault.getPasskeyTargets is not wired');
+            return { ok: true, data: { targets: await deps.vault.getPasskeyTargets({ rpId: request.rpId, origin: request.origin }) } };
+          }
+          case 'vault.createPasskey': {
+            if (!deps.vault.createPasskey) throw new Error('vault.createPasskey is not wired');
+            const registration = await deps.vault.createPasskey({
+              rpId: request.rpId,
+              challenge: request.challenge,
+              origin: request.origin,
+              ...(request.rpName ? { rpName: request.rpName } : {}),
+              ...(request.userHandle ? { userHandle: request.userHandle } : {}),
+              ...(request.userName ? { userName: request.userName } : {}),
+              ...(request.userDisplayName ? { userDisplayName: request.userDisplayName } : {}),
+              ...(request.userVerified !== undefined ? { userVerified: request.userVerified } : {}),
+              ...(request.targetCipherId ? { targetCipherId: request.targetCipherId } : {}),
+            });
+            return { ok: true, data: { registration } };
           }
           case 'vault.createFolder':
             if (!deps.vault.createFolder) throw new Error('vault.createFolder is not wired');
