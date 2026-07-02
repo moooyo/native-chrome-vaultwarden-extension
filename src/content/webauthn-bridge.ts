@@ -19,7 +19,6 @@ const CREATE_RESPONSE = 'vw-webauthn-create-response';
 
 interface AssertionPayload {
   rpId: string;
-  origin: string;
   challenge: string;
   allowedCredentialIds: string[];
   /** RP's UserVerificationRequirement: 'required' | 'preferred' | 'discouraged'. */

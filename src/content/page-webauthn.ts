@@ -34,7 +34,6 @@ if (originalGet && window.isSecureContext) {
     try {
       const assertion = await requestAssertion({
         rpId,
-        origin: location.origin,
         challenge: bytesToBase64Url(toBytes(publicKey.challenge)),
         allowedCredentialIds: (publicKey.allowCredentials ?? []).map((c) => bytesToBase64Url(toBytes(c.id))),
         // Forward the RP's user-verification requirement so the worker can set the UV flag honestly.
@@ -134,7 +133,6 @@ function buildAttestationCredential(reg: BridgeRegistration): Credential {
 
 function requestAssertion(payload: {
   rpId: string;
-  origin: string;
   challenge: string;
   allowedCredentialIds: string[];
   userVerification?: string;
