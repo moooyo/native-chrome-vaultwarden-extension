@@ -4,8 +4,11 @@
 //
 // Registers a throwaway account, enables authenticator (TOTP) 2FA, then proves the server contract
 // this feature relies on: (1) a 2FA success with remember returns a TwoFactorToken; (2) replaying it
-// with two_factor_provider=5 skips the 2FA challenge; (3) each successful reuse ROTATES the token
-// (returns a new one). The throwaway account is deleted in a `finally`.
+// with two_factor_provider=5 skips the 2FA challenge and the token remains usable on further reuse;
+// (3) an INVALID device token falls back to the real 2FA challenge (providers list is the real methods,
+// never the virtual Remember=5). Observed contract: the token is a signed JWT valid until expiry — the
+// server does NOT rotate to a fresh random token per reuse — and our capture-on-presence design is
+// robust either way. The throwaway account is deleted in a `finally`.
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('webextension-polyfill', () => ({ default: { storage: { local: {}, session: {} } } }));
@@ -36,9 +39,19 @@ async function totpNow(): Promise<string> {
   return generateTotpCode(parseTotp(TOTP_SECRET)!, Math.floor(Date.now() / 1000));
 }
 
-/** Enable authenticator 2FA on the account via raw fetch. Vaultwarden 1.35.0 expects the secret key,
- *  a CURRENT code from that key, and the master-password hash. If the server rejects with 400, inspect
- *  the response and switch the field casing to PascalCase (Key/Token/MasterPasswordHash). */
+/** Wait until the next 30s TOTP window begins (+0.5s cushion). Vaultwarden enforces TOTP replay
+ *  protection (a code's time-step must be strictly greater than the last one used), so enrolment and
+ *  the subsequent login challenge must fall in DIFFERENT windows or the reused code is rejected. */
+async function waitForNextTotpWindow(): Promise<void> {
+  const period = 30;
+  const nowSec = Date.now() / 1000;
+  const msToNext = (period - (nowSec % period)) * 1000 + 500;
+  await new Promise((resolve) => setTimeout(resolve, msToNext));
+}
+
+/** Enable authenticator 2FA on the account via raw fetch. The test server (v2025.12.0, core 1.35.0)
+ *  expects the secret key, a CURRENT code from that key, and the master-password hash. If the server
+ *  rejects with 400, inspect the response and switch the field casing to PascalCase (Key/Token/MasterPasswordHash). */
 async function enableAuthenticator(token: string, masterPasswordHash: string): Promise<void> {
   const res = await fetch(`${SERVER}/api/two-factor/authenticator`, {
     method: 'POST',
@@ -87,6 +100,10 @@ async function deleteAccount(token: string, masterPasswordHash: string): Promise
       const challenged = await api.passwordLogin({ email, masterPasswordHash: hash });
       expect(challenged.kind, 'login now requires 2FA').toBe('twoFactor');
 
+      // Enrolment consumed the current TOTP window; wait for a fresh one so the login code is not
+      // rejected as a replay of the enrolment code.
+      await waitForNextTotpWindow();
+
       // Submit the TOTP code WITH remember → success carries a TwoFactorToken (device-remember token).
       const submitted = await api.passwordLogin({
         email, masterPasswordHash: hash, twoFactorProvider: 0, twoFactorToken: await totpNow(), remember: true,
@@ -96,27 +113,37 @@ async function deleteAccount(token: string, masterPasswordHash: string): Promise
       const t1 = submitted.data.TwoFactorToken;
       expect(t1, 'success returns a device-remember token').toBeTruthy();
 
-      // Reuse with provider=5 skips the 2FA challenge and ROTATES the token (returns a new one).
+      // Reuse with provider=5 skips the 2FA challenge and returns a token again.
       const reuse1 = await api.passwordLogin({
         email, masterPasswordHash: hash, twoFactorProvider: 5, twoFactorToken: t1!, remember: true,
       });
       expect(reuse1.kind, 'provider=5 reuse skips 2FA').toBe('success');
       if (reuse1.kind !== 'success') throw new Error('unreachable');
       const t2 = reuse1.data.TwoFactorToken;
-      expect(t2, 'reuse returns a rotated token').toBeTruthy();
-      expect(t2, 'rotated token differs from the first').not.toBe(t1);
+      expect(t2, 'reuse returns a device-remember token').toBeTruthy();
+      // NOTE (server contract, observed on v2025.12.0): the token is a signed JWT that stays valid until
+      // expiry — the server does NOT mint a fresh random token per reuse, so t2 may equal t1. Our
+      // capture-on-presence design is robust either way: it re-saves whatever the server returns, so it
+      // stays in sync whether the token is stable OR rotated. We therefore do NOT assert t2 !== t1.
 
-      // The rotated token also works (proves the client MUST sync each rotation).
+      // The returned token still skips 2FA on a further reuse (it is not single-use).
       const reuse2 = await api.passwordLogin({
         email, masterPasswordHash: hash, twoFactorProvider: 5, twoFactorToken: t2!, remember: true,
       });
-      expect(reuse2.kind, 'rotated token still skips 2FA').toBe('success');
+      expect(reuse2.kind, 'returned token still skips 2FA').toBe('success');
 
-      // The stale first token no longer skips 2FA (server rotated away from it).
-      const stale = await api.passwordLogin({
-        email, masterPasswordHash: hash, twoFactorProvider: 5, twoFactorToken: t1!, remember: true,
+      // A provider=5 attempt with an INVALID/expired device token falls back to the real 2FA challenge.
+      // This is the contract our stale-token fallback (clear + drive 2FA from this same result) relies on.
+      const invalid = await api.passwordLogin({
+        email, masterPasswordHash: hash, twoFactorProvider: 5, twoFactorToken: 'not-a-valid-remember-token', remember: true,
       });
-      expect(stale.kind, 'stale token falls back to 2FA').toBe('twoFactor');
+      expect(invalid.kind, 'invalid device token falls back to 2FA').toBe('twoFactor');
+      if (invalid.kind === 'twoFactor') {
+        // The fallback providers are the REAL enabled methods (Authenticator=0), never the virtual
+        // Remember provider (5) — so the client can drive 2FA straight from this result, no re-send.
+        expect(invalid.providers, 'real providers returned, not the virtual Remember=5').toContain(0);
+        expect(invalid.providers, 'Remember=5 is virtual and never advertised').not.toContain(5);
+      }
     } finally {
       await deleteAccount(adminToken, hash);
     }
