@@ -196,7 +196,20 @@
     return 避免响应竞争。`chrome.offscreen` 无类型 → 窄化 cast，仅在 index.ts。
   - **残余**：clipboard 清除机制（writeText vs execCommand 哪条真正清空）+ idle/系统锁时机需**真实浏览器人工冒烟**
     钉死（CI 无法覆盖 offscreen/chrome.idle）；sub-30s 后台清除不支持（Chrome alarm 钳制）。
-- ➖ **记住设备 2FA token**：`remember` 传给 API 但返回的 token 从不捕获/回传，popup 也无勾选框。
+- ✅ **记住设备 2FA token**（已交付，2026-07-02；设计/计划见 `docs/superpowers/`，spec 经 4 维对抗性评审（读
+  Vaultwarden 真源码）+ 真实服务端 LIVE 验证）：2FA 登录「记住本设备」勾选后捕获服务端 device-remember
+  token（`SessionManager` 按 **`${serverUrl}\n${email}`** 存 localStore，跨登出/锁定存活），下次登录以
+  `two_factor_provider=5` 自动带上跳过 2FA。捕获点在 `finishPasswordLogin` 成功分支、**按 token 存在与否**
+  （非 remember 标记）捕获——对服务端轮换与稳定 token 皆健壮，且为 best-effort（存储失败不致登录失败）。复用
+  best-effort：`twoFactor` 结果→清 token + **用同一结果**驱动 2FA（不重发、不重复发邮件）；抛错→清 token + 不带
+  token 重试一次。撤销双入口（登录屏按**已输入 email** 揭示 Forget，不枚举；账户区当前账户 Forget）+ `removeAccount`
+  连带清。`auth.forgetDevice`/`auth.isDeviceRemembered` 协议。
+  - **LIVE 发现**：真实服务端（v2025.12.0）的 `TwoFactorToken` 是**签名 JWT、有效期内不换**（不按次轮换随机 token），
+    与 spec 依据的源码「每次轮换」premise 不符——但 capture-on-presence 对稳定/轮换两种行为都正确，无需改码；无效
+    token→回退真实 2FA（providers=[0]，从不含虚拟 Remember=5）已 LIVE 验证。
+  - **残余/待定**：popup 三处 UI（勾选框 + 两处 Forget）需**真实浏览器人工冒烟**（CI 无法覆盖）；新增 3 个 CSS 类未
+    加样式（控件用已有 `.link-btn`，仅装饰性）。**spec 级待定**（human decision）：复用抛错时**一律清 token**（含瞬时
+    5xx）——当前行为 fail-safe（最坏多做一次 2FA）且与 spec 一致，评审建议瞬时错误保留 token，未改，留待定。
 - ⬇ passkey 注册（`navigator.credentials.create`）、`instanceof PublicKeyCredential`、WebAuthn 扩展
   （credProps/prf/largeBlob）、signCount 回写；encType 0/1 旧密文兼容解密；SSH-key(type 5) 编辑；
   Safari 打包；显式 CSP 收紧；同步 `/sync` profile 字段（securityStamp/策略/紧急访问等）。
