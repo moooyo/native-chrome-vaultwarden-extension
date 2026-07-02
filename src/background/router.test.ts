@@ -657,4 +657,21 @@ describe('router', () => {
     expect(await router.handle({ type: 'auth.rotateAccountKey', masterPassword: 'pw' } as never)).toEqual({ ok: true, data: null });
     expect(auth.rotateAccountKey).toHaveBeenCalledWith('pw');
   });
+
+  it('vault.getPasskeyTargets forwards rpId+origin and returns targets', async () => {
+    const getPasskeyTargets = vi.fn(async () => [{ id: 'c1', name: 'Example', username: 'me' }]);
+    const router = createRouter({ auth: {}, vault: { getPasskeyTargets }, settings: settingsStub });
+    await expect(router.handle({ type: 'vault.getPasskeyTargets', rpId: 'example.com', origin: 'https://example.com' }))
+      .resolves.toEqual({ ok: true, data: { targets: [{ id: 'c1', name: 'Example', username: 'me' }] } });
+    expect(getPasskeyTargets).toHaveBeenCalledWith({ rpId: 'example.com', origin: 'https://example.com' });
+  });
+
+  it('vault.createPasskey forwards params (threading optional targetCipherId) and returns registration', async () => {
+    const reg = { credentialId: 'c', attestationObject: 'a', clientDataJSON: 'j', authData: 'd', publicKeySpki: 's', publicKeyAlgorithm: -7 as const };
+    const createPasskey = vi.fn(async () => reg);
+    const router = createRouter({ auth: {}, vault: { createPasskey }, settings: settingsStub });
+    await expect(router.handle({ type: 'vault.createPasskey', rpId: 'example.com', challenge: 'AAAA', origin: 'https://example.com', userVerified: true }))
+      .resolves.toEqual({ ok: true, data: { registration: reg } });
+    expect(createPasskey).toHaveBeenCalledWith({ rpId: 'example.com', challenge: 'AAAA', origin: 'https://example.com', userVerified: true });
+  });
 });

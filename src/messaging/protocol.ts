@@ -1,10 +1,10 @@
 import browser from 'webextension-polyfill';
 import type { AuthResult } from '../core/session/auth-service.js';
 import type { SessionState, AccountSummary } from '../core/session/session-manager.js';
-import type { CipherInput, CipherSummary, CollectionSummary, DecryptedCipher, FieldName, FolderSummary } from '../core/vault/models.js';
+import type { CipherInput, CipherSummary, CollectionSummary, DecryptedCipher, FieldName, FolderSummary, PasskeyTarget } from '../core/vault/models.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 import type { TotpResult } from '../core/vault/totp.js';
-import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
+import type { SaveLoginPrompt, Fido2Registration } from '../core/vault/vault-service.js';
 import type { SendInput, SendSummary, UpdateSendInput } from '../core/vault/sends.js';
 import type { PasswordHealthEntry } from '../core/vault/password-health.js';
 import type { PasskeyAssertion } from '../core/vault/fido2.js';
@@ -131,6 +131,8 @@ export type RequestMessage =
   | { type: 'vault.import'; content: string; password?: string }
   | { type: 'vault.hasPasskey'; rpId: string; origin: string; allowedCredentialIds?: string[] }
   | { type: 'vault.getPasskeyAssertion'; rpId: string; origin: string; challenge: string; allowedCredentialIds?: string[]; userVerified?: boolean }
+  | { type: 'vault.getPasskeyTargets'; rpId: string; origin: string }
+  | { type: 'vault.createPasskey'; rpId: string; rpName?: string; userHandle?: string; userName?: string; userDisplayName?: string; challenge: string; origin: string; userVerified?: boolean; targetCipherId?: string }
   | { type: 'vault.createFolder'; name: string }
   | { type: 'vault.renameFolder'; id: string; name: string }
   | { type: 'vault.deleteFolder'; id: string }
@@ -182,6 +184,8 @@ export type ResponseMessage =
   | { ok: true; data: { verified: boolean } }
   | { ok: true; data: { matches: boolean } }
   | { ok: true; data: { assertion: PasskeyAssertion | null } }
+  | { ok: true; data: { targets: PasskeyTarget[] } }
+  | { ok: true; data: { registration: Fido2Registration } }
   | { ok: true; data: { accounts: AccountSummary[] } }
   | { ok: true; data: { serverUrl?: string; defaultUriMatchStrategy: UriMatchStrategySetting; lockTimeout: LockTimeoutSetting; onIdleAction: OnIdleAction; clipboardClearSeconds: ClipboardClearSetting } }
   | { ok: true; data: null }
