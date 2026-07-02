@@ -63,11 +63,53 @@ export class AuthService {
     const masterKey = await deriveMasterKey(input.masterPassword, email, prelogin.kdfIterations);
     const masterPasswordHash = await deriveMasterPasswordHash(masterKey, input.masterPassword);
     const stretchedMasterKey = await stretchMasterKey(masterKey);
+    const pending: PendingLogin = { email, masterPasswordHash, stretchedMasterKey, kdfIterations: prelogin.kdfIterations };
+
+    // If this (server, email) has a remembered device token, try to reuse it to skip 2FA.
+    const serverUrl = await this.currentServerUrl();
+    const remembered = serverUrl ? await this.deps.session.getRememberDeviceToken(serverUrl, email) : undefined;
+    if (serverUrl && remembered) {
+      return this.loginWithRememberToken({ email, masterPasswordHash, serverUrl, token: remembered, pending });
+    }
+
     const result = await this.deps.api.passwordLogin({ email, masterPasswordHash });
-    return this.finishPasswordLogin({
-      result,
-      pending: { email, masterPasswordHash, stretchedMasterKey, kdfIterations: prelogin.kdfIterations },
-    });
+    return this.finishPasswordLogin({ result, pending });
+  }
+
+  /**
+   * Reuse a stored device-remember token (two_factor_provider=5) to skip the 2FA challenge. Best-effort:
+   *  - success  → finishPasswordLogin (which captures the server's freshly ROTATED token)
+   *  - twoFactor → the token is stale; the server already returned the REAL providers, so clear the
+   *               token and drive the normal 2FA screen from THIS SAME result (no second round-trip,
+   *               and no duplicate email for email-2FA accounts)
+   *  - throws    → any other rejection (non-2FA 400, 5xx): clear the token and retry ONCE without it,
+   *               guaranteeing the fallback to the normal login/2FA flow regardless of error shape
+   */
+  private async loginWithRememberToken(args: {
+    email: string;
+    masterPasswordHash: string;
+    serverUrl: string;
+    token: string;
+    pending: PendingLogin;
+  }): Promise<AuthResult> {
+    let result: PasswordLoginResult;
+    try {
+      result = await this.deps.api.passwordLogin({
+        email: args.email,
+        masterPasswordHash: args.masterPasswordHash,
+        twoFactorProvider: 5,
+        twoFactorToken: args.token,
+        remember: true,
+      });
+    } catch {
+      await this.deps.session.removeRememberDeviceToken(args.serverUrl, args.email);
+      const retry = await this.deps.api.passwordLogin({ email: args.email, masterPasswordHash: args.masterPasswordHash });
+      return this.finishPasswordLogin({ result: retry, pending: args.pending });
+    }
+    if (result.kind === 'twoFactor') {
+      await this.deps.session.removeRememberDeviceToken(args.serverUrl, args.email);
+    }
+    return this.finishPasswordLogin({ result, pending: args.pending });
   }
 
   async submitTwoFactor(input: { provider: number; code: string; remember?: boolean }): Promise<AuthResult> {

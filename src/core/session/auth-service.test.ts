@@ -625,4 +625,85 @@ describe('AuthService', () => {
       expect(await sm.getRememberDeviceToken('https://vault.example', email)).toBeUndefined();
     });
   });
+
+  describe('remember-device: reuse on login', () => {
+    const SERVER_URL = 'https://vault.example';
+    const email = KDF_VECTOR_600K.email.trim().toLowerCase();
+
+    function successData(twoFactorToken?: string) {
+      return {
+        kind: 'success' as const,
+        data: {
+          access_token: 'access', expires_in: 3600, refresh_token: 'refresh', token_type: 'Bearer',
+          Key: USER_KEY_VECTOR_600K.akey, Kdf: 0 as const, KdfIterations: KDF_VECTOR_600K.iterations,
+          ...(twoFactorToken ? { TwoFactorToken: twoFactorToken } : {}),
+        },
+      };
+    }
+
+    it('valid stored token → sends provider=5 and skips the 2FA screen; captures the rotated token', async () => {
+      const passwordLogin = vi.fn().mockResolvedValueOnce(successData('rotated-T2'));
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth, sm } = makeService(api);
+      await sm.saveRememberDeviceToken(SERVER_URL, email, 'stored-T1');
+      await expect(auth.login({ email, masterPassword: KDF_VECTOR_600K.password }))
+        .resolves.toEqual({ kind: 'unlocked' });
+      // Exactly one passwordLogin call, and it carried the Remember provider + stored token.
+      expect(passwordLogin).toHaveBeenCalledTimes(1);
+      expect(passwordLogin.mock.calls[0]![0]).toMatchObject({
+        twoFactorProvider: 5, twoFactorToken: 'stored-T1', remember: true,
+      });
+      // Rotation synced: the stored token is now the server's new one.
+      expect(await sm.getRememberDeviceToken(SERVER_URL, email)).toBe('rotated-T2');
+    });
+
+    it('stale stored token → clears it and drives 2FA from the SAME result (no re-send)', async () => {
+      const passwordLogin = vi.fn().mockResolvedValueOnce({ kind: 'twoFactor' as const, providers: [0, 1], token: 'tf' });
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth, sm } = makeService(api);
+      await sm.saveRememberDeviceToken(SERVER_URL, email, 'stale-T1');
+      await expect(auth.login({ email, masterPassword: KDF_VECTOR_600K.password }))
+        .resolves.toEqual({ kind: 'twoFactor', providers: [0, 1], token: 'tf' });
+      // Only ONE passwordLogin call — the stale-token attempt already returned the real providers.
+      expect(passwordLogin).toHaveBeenCalledTimes(1);
+      expect(await sm.getRememberDeviceToken(SERVER_URL, email)).toBeUndefined();
+    });
+
+    it('reuse attempt throws → clears the token and retries once WITHOUT it', async () => {
+      const passwordLogin = vi.fn()
+        .mockRejectedValueOnce(new Error('boom 500'))
+        .mockResolvedValueOnce(successData(undefined));
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth, sm } = makeService(api);
+      await sm.saveRememberDeviceToken(SERVER_URL, email, 'stale-T1');
+      await expect(auth.login({ email, masterPassword: KDF_VECTOR_600K.password }))
+        .resolves.toEqual({ kind: 'unlocked' });
+      expect(passwordLogin).toHaveBeenCalledTimes(2);
+      // First call carried provider=5; the retry carried no 2FA fields.
+      expect(passwordLogin.mock.calls[0]![0]).toMatchObject({ twoFactorProvider: 5 });
+      expect(passwordLogin.mock.calls[1]![0].twoFactorProvider).toBeUndefined();
+      expect(await sm.getRememberDeviceToken(SERVER_URL, email)).toBeUndefined();
+    });
+
+    it('no stored token → ordinary login (no provider=5 attempt)', async () => {
+      const passwordLogin = vi.fn().mockResolvedValueOnce(successData(undefined));
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth } = makeService(api);
+      await auth.login({ email, masterPassword: KDF_VECTOR_600K.password });
+      expect(passwordLogin).toHaveBeenCalledTimes(1);
+      expect(passwordLogin.mock.calls[0]![0].twoFactorProvider).toBeUndefined();
+    });
+  });
 });
