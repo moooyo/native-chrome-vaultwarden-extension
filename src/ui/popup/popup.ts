@@ -902,6 +902,8 @@ function openSecurityEditor(setFooterStatus: FooterStatus): void {
       <span class="muted">Or change KDF iterations (PBKDF2)</span>
       <input id="secIters" class="input" type="number" min="600000" step="100000" placeholder="KDF iterations (e.g. 600000)" />
       <button id="secKdf" class="btn btn-secondary btn-sm btn-block" type="button">${icon('refresh')}<span>Change KDF iterations</span></button>
+      <span class="muted">Danger zone</span>
+      <button id="secRotateKey" class="btn btn-danger btn-sm btn-block" type="button">${icon('key')}<span>Rotate encryption key</span></button>
     </div>`;
   document.getElementById('secSave')!.addEventListener('click', () => void (async () => {
     if (isPending) return;
@@ -933,7 +935,56 @@ function openSecurityEditor(setFooterStatus: FooterStatus): void {
       isPending = false;
     }
   })());
+  document.getElementById('secRotateKey')!.addEventListener('click', () => confirmRotateKey(setFooterStatus));
   (document.getElementById('secCurrent') as HTMLInputElement).focus();
+}
+
+/** Two-step confirm for rotating the account encryption key: a strong warning plus the current
+ *  master password. On success the worker has already logged out every session for this account,
+ *  so this returns straight to the login view instead of the security editor. */
+function confirmRotateKey(setFooterStatus: FooterStatus): void {
+  const host = document.getElementById('footerStatus');
+  if (!host) return;
+  host.innerHTML = `
+    <div class="inline-form">
+      <p class="note error">${icon('alert')}<span>This generates a new encryption key and re-encrypts your entire vault. You and all other signed-in devices will need to sign in again. This can't be undone.</span></p>
+      <input id="rotateCurrent" class="input" type="password" autocomplete="current-password" placeholder="Current master password" />
+      <div class="confirm-row">
+        <button id="rotateConfirm" class="btn btn-danger btn-sm" type="button">${icon('key')}<span>Rotate encryption key</span></button>
+        <button id="rotateCancel" class="btn btn-secondary btn-sm" type="button">Cancel</button>
+      </div>
+    </div>`;
+  const input = document.getElementById('rotateCurrent') as HTMLInputElement;
+  input.focus();
+  document.getElementById('rotateCancel')!.addEventListener('click', () => openSecurityEditor(setFooterStatus));
+  document.getElementById('rotateConfirm')!.addEventListener('click', () => void (async () => {
+    if (isPending) return;
+    const masterPassword = input.value;
+    if (!masterPassword) return setFooterStatus('Enter your current master password', true);
+    isPending = true;
+    const confirmBtn = document.getElementById('rotateConfirm') as HTMLButtonElement;
+    const cancelBtn = document.getElementById('rotateCancel') as HTMLButtonElement;
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
+    input.disabled = true;
+    confirmBtn.querySelector('span')!.textContent = 'Rotating…';
+    try {
+      const r = await sendRequest({ type: 'auth.rotateAccountKey', masterPassword });
+      if (!r.ok) return setFooterStatus(r.error.message, true);
+      // The worker has already logged out this and every other signed-in session for the account.
+      vaultItems = [];
+      vaultFolders = [];
+      vaultCollections = [];
+      vaultOrgPermissions = [];
+      selectedFolderId = null;
+      selectedCollectionId = null;
+      skippedOrgCount = 0;
+      genHistory = [];
+      render({ kind: 'loggedOut', error: 'Encryption key rotated — please sign in again.' });
+    } finally {
+      isPending = false;
+    }
+  })());
 }
 
 /** Inline export panel: choose a password-protected (encrypted) export, or an explicit plaintext one. */
