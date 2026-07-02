@@ -33,6 +33,7 @@ const USER_KEY_KEY = 'userKey';
 const PRIVATE_KEY_KEY = 'privateKey';
 const PIN_KEY = 'pinProtectedUserKey';
 const ACCOUNTS_KEY = 'accounts';
+const REMEMBER_TOKENS_KEY = 'rememberDeviceTokens';
 
 export interface AccountSummary {
   email: string;
@@ -182,6 +183,33 @@ export class SessionManager {
     await this.deps.localStore.remove(PIN_KEY);
   }
 
+  /**
+   * Device-remember 2FA tokens, keyed by (serverUrl, email). This is a 2FA-bypass credential of the
+   * same sensitivity as refreshToken; it is intentionally NOT cleared on lock/logout (that is what
+   * makes "remember this device" outlive a logout). Cleared only via removeRememberDeviceToken.
+   */
+  async getRememberDeviceToken(serverUrl: string, email: string): Promise<string | undefined> {
+    const map = await this.loadRememberTokens();
+    return map[rememberKey(serverUrl, email)];
+  }
+
+  async saveRememberDeviceToken(serverUrl: string, email: string, token: string): Promise<void> {
+    const map = await this.loadRememberTokens();
+    map[rememberKey(serverUrl, email)] = token;
+    await this.deps.localStore.set(REMEMBER_TOKENS_KEY, map);
+  }
+
+  async removeRememberDeviceToken(serverUrl: string, email: string): Promise<void> {
+    const map = await this.loadRememberTokens();
+    if (!(rememberKey(serverUrl, email) in map)) return;
+    delete map[rememberKey(serverUrl, email)];
+    await this.deps.localStore.set(REMEMBER_TOKENS_KEY, map);
+  }
+
+  private async loadRememberTokens(): Promise<Record<string, string>> {
+    return (await this.deps.localStore.get<Record<string, string>>(REMEMBER_TOKENS_KEY)) ?? {};
+  }
+
   private async saveUserKey(userKey: SymmetricKey): Promise<void> {
     const raw = new Uint8Array(64);
     raw.set(userKey.encKey, 0);
@@ -192,4 +220,9 @@ export class SessionManager {
   private async savePrivateKey(privateKey: Uint8Array): Promise<void> {
     await this.deps.sessionStore.set(PRIVATE_KEY_KEY, bytesToBase64(privateKey));
   }
+}
+
+/** Compose the per-(server,email) storage key. Newline separates the two (absent from URLs/emails). */
+function rememberKey(serverUrl: string, email: string): string {
+  return `${serverUrl}\n${email}`;
 }
