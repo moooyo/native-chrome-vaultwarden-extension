@@ -35,10 +35,14 @@ function fallback(id: string): void {
 
 async function relay(id: string, payload: AssertionPayload): Promise<void> {
   try {
+    if (!window.isSecureContext) return fallback(id);
+    const origin = location.origin; // trust boundary: never use page-supplied origin
+
     // 1) Only engage when the vault actually holds a matching passkey (no signing, no key material).
     const probe = await sendRequest({
       type: 'vault.hasPasskey',
       rpId: payload.rpId,
+      origin,
       allowedCredentialIds: payload.allowedCredentialIds,
     });
     if (!(probe.ok && probe.data && 'matches' in probe.data && probe.data.matches)) return fallback(id);
@@ -52,7 +56,7 @@ async function relay(id: string, payload: AssertionPayload): Promise<void> {
     const response = await sendRequest({
       type: 'vault.getPasskeyAssertion',
       rpId: payload.rpId,
-      origin: payload.origin,
+      origin,
       challenge: payload.challenge,
       allowedCredentialIds: payload.allowedCredentialIds,
       userVerified,

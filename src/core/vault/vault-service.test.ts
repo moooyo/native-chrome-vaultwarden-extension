@@ -139,6 +139,31 @@ async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8
   return { service: new VaultService(deps), api, session: sm, auth };
 }
 
+/** Seeds a personal login cipher with one fido2Credential at `opts.rpId`, backed by a real ECDSA
+ *  key pair so a signing test can verify the returned assertion. Mirrors the fixture used by the
+ *  existing "signs a passkey assertion" test above. */
+async function makeServiceWithPasskey(opts: { rpId: string }) {
+  const subtle = globalThis.crypto.subtle;
+  const pair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const pkcs8 = new Uint8Array(await subtle.exportKey('pkcs8', pair.privateKey));
+  const keyValueB64url = bytesToBase64Url(pkcs8);
+  const sync: SyncResponse = {
+    profile: { id: 'u', email: 'u@example.com' },
+    ciphers: [{
+      id: 'pk', type: 1, name: await encUnder('Acme', testUserKey), favorite: false, organizationId: null,
+      login: { fido2Credentials: [{
+        credentialId: await encUnder('cred-1', testUserKey),
+        keyValue: await encUnder(keyValueB64url, testUserKey),
+        rpId: await encUnder(opts.rpId, testUserKey),
+        counter: await encUnder('0', testUserKey),
+      }] },
+    }],
+  };
+  const { service } = await makeService(sync);
+  await service.sync();
+  return { service };
+}
+
 describe('VaultService', () => {
   it('syncs, caches encrypted response, and returns summaries without password', async () => {
     const { service, api } = await makeService();
@@ -1274,10 +1299,32 @@ describe('VaultService', () => {
     };
     const { service } = await makeService(sync);
     await service.sync();
-    expect(await service.hasMatchingPasskey({ rpId: 'acme.com' })).toBe(true);
-    expect(await service.hasMatchingPasskey({ rpId: 'other.com' })).toBe(false);
-    expect(await service.hasMatchingPasskey({ rpId: 'acme.com', allowedCredentialIds: ['cred-1'] })).toBe(true);
-    expect(await service.hasMatchingPasskey({ rpId: 'acme.com', allowedCredentialIds: ['nope'] })).toBe(false);
+    const origin = 'https://acme.com';
+    expect(await service.hasMatchingPasskey({ rpId: 'acme.com', origin })).toBe(true);
+    // 'other.com' is a registrable rpId valid for its own origin, but has no stored passkey.
+    expect(await service.hasMatchingPasskey({ rpId: 'other.com', origin: 'https://other.com' })).toBe(false);
+    expect(await service.hasMatchingPasskey({ rpId: 'acme.com', allowedCredentialIds: ['cred-1'], origin })).toBe(true);
+    expect(await service.hasMatchingPasskey({ rpId: 'acme.com', allowedCredentialIds: ['nope'], origin })).toBe(false);
+  });
+
+  describe('passkey rpId/origin trust boundary', () => {
+    it('getPasskeyAssertion rejects an rpId that is not valid for the origin', async () => {
+      const { service } = await makeServiceWithPasskey({ rpId: 'example.com' });
+      await expect(service.getPasskeyAssertion({ rpId: 'example.com', origin: 'https://evil.com', challenge: 'AAAA' }))
+        .rejects.toThrow(/rpId is not valid/i);
+    });
+
+    it('hasMatchingPasskey rejects a public-suffix rpId', async () => {
+      const { service } = await makeServiceWithPasskey({ rpId: 'github.io' });
+      await expect(service.hasMatchingPasskey({ rpId: 'github.io', origin: 'https://a.github.io' }))
+        .rejects.toThrow(/rpId is not valid/i);
+    });
+
+    it('getPasskeyAssertion still signs for a valid rpId/origin', async () => {
+      const { service } = await makeServiceWithPasskey({ rpId: 'example.com' });
+      const res = await service.getPasskeyAssertion({ rpId: 'example.com', origin: 'https://app.example.com', challenge: 'AAAA' });
+      expect(res?.credentialId).toBeTruthy();
+    });
   });
 
   it('reports weak and reused passwords without leaking the passwords', async () => {

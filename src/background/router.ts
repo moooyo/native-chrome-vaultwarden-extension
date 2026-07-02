@@ -184,6 +184,7 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.vault.hasMatchingPasskey) throw new Error('vault.hasMatchingPasskey is not wired');
             const matches = await deps.vault.hasMatchingPasskey({
               rpId: request.rpId,
+              origin: request.origin,
               ...(request.allowedCredentialIds ? { allowedCredentialIds: request.allowedCredentialIds } : {}),
             });
             return { ok: true, data: { matches } };

@@ -614,6 +614,16 @@ describe('router', () => {
     expect(res).toEqual({ ok: true, data: { entries: [{ id: 'a', pwnedCount: 5 }] } });
   });
 
+  it('vault.hasPasskey forwards origin and allowedCredentialIds', async () => {
+    const hasMatchingPasskey = vi.fn(async () => true);
+    const router = createRouter({ auth: {}, vault: { hasMatchingPasskey } as never, settings: {
+      getServerUrl: vi.fn(), saveServerUrl: vi.fn(), getDefaultUriMatchStrategy: vi.fn(async () => 0), saveDefaultUriMatchStrategy: vi.fn(), getLockTimeout: vi.fn(async () => '15'), saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
+    } as never });
+    await expect(router.handle({ type: 'vault.hasPasskey', rpId: 'example.com', origin: 'https://example.com', allowedCredentialIds: ['a'] }))
+      .resolves.toEqual({ ok: true, data: { matches: true } });
+    expect(hasMatchingPasskey).toHaveBeenCalledWith({ rpId: 'example.com', origin: 'https://example.com', allowedCredentialIds: ['a'] });
+  });
+
   it('saves security settings and schedules a clipboard clear', async () => {
     const settings = {
       getServerUrl: async () => 'https://x', getDefaultUriMatchStrategy: async () => 0,

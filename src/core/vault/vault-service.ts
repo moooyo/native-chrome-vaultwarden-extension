@@ -23,6 +23,7 @@ import { compareMatchResults, matchLoginUri, UriMatchStrategy, type UriMatchResu
 import { buildEquivalentDomainIndex } from './equivalent-domains.js';
 import { toOrgPermission } from './org-permissions.js';
 import type { OrgPermission } from './org-permissions.js';
+import { isRegistrableRpId } from './domain.js';
 
 export interface VaultServiceDeps {
   api: ApiClient;
@@ -238,6 +239,15 @@ export class VaultService {
     const orgKey = orgKeys.get(original.organizationId);
     if (!orgKey) throw new AppError('error', 'Organization key is unavailable; cannot edit this item');
     return orgKey;
+  }
+
+  /** Enforce the passkey trust boundary in the worker: the rpId must be a registrable-domain suffix of
+   *  the frame origin's host (PSL-checked). The content-script bridge supplies `origin` from its own
+   *  location, so the page cannot forge a cross-origin rpId. */
+  private assertRpIdForOrigin(rpId: string, origin: string): void {
+    let host: string;
+    try { host = new URL(origin).hostname; } catch { throw new AppError('error', 'Invalid origin'); }
+    if (!isRegistrableRpId(rpId, host)) throw new AppError('error', 'rpId is not valid for this origin');
   }
 
   /** Prepend the previous (still-encrypted) password to history and stamp passwordRevisionDate when the
@@ -575,6 +585,7 @@ export class VaultService {
     allowedCredentialIds?: string[];
     userVerified?: boolean;
   }): Promise<PasskeyAssertion | undefined> {
+    this.assertRpIdForOrigin(params.rpId, params.origin);
     const cred = await this.findPasskeyCredential(params.rpId, params.allowedCredentialIds);
     if (!cred) return undefined;
     const assertion = await signFido2Assertion(base64UrlToBytes(cred.keyValue), {
@@ -594,7 +605,8 @@ export class VaultService {
 
   /** True when an unexpired stored passkey matches the rpId (and allowedCredentialIds, if given).
    *  Lets the page decide whether to prompt for consent without signing or revealing key material. */
-  async hasMatchingPasskey(params: { rpId: string; allowedCredentialIds?: string[] }): Promise<boolean> {
+  async hasMatchingPasskey(params: { rpId: string; origin: string; allowedCredentialIds?: string[] }): Promise<boolean> {
+    this.assertRpIdForOrigin(params.rpId, params.origin);
     return (await this.findPasskeyCredential(params.rpId, params.allowedCredentialIds)) !== undefined;
   }
 
@@ -609,7 +621,12 @@ export class VaultService {
     for (const cipher of cache.ciphers) {
       if (cipher.type !== 1 || !cipher.login?.fido2Credentials?.length) continue;
       if (cipher.deletedDate) continue; // trashed passkeys must not authenticate
-      const decrypted = await decryptCipher(cipher, userKey, orgKeys);
+      let decrypted;
+      try {
+        decrypted = await decryptCipher(cipher, userKey, orgKeys);
+      } catch {
+        continue; // a single undecryptable cipher must not poison passkey lookup for all rpIds
+      }
       for (const cred of decrypted?.fido2Credentials ?? []) {
         if (cred.rpId !== rpId) continue;
         if (allowedCredentialIds?.length && !allowedCredentialIds.includes(cred.credentialId)) continue;

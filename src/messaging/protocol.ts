@@ -129,7 +129,7 @@ export type RequestMessage =
   | { type: 'vault.checkPwned' }
   | { type: 'vault.export'; password?: string }
   | { type: 'vault.import'; content: string; password?: string }
-  | { type: 'vault.hasPasskey'; rpId: string; allowedCredentialIds?: string[] }
+  | { type: 'vault.hasPasskey'; rpId: string; origin: string; allowedCredentialIds?: string[] }
   | { type: 'vault.getPasskeyAssertion'; rpId: string; origin: string; challenge: string; allowedCredentialIds?: string[]; userVerified?: boolean }
   | { type: 'vault.createFolder'; name: string }
   | { type: 'vault.renameFolder'; id: string; name: string }
