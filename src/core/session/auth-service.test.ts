@@ -706,4 +706,70 @@ describe('AuthService', () => {
       expect(passwordLogin.mock.calls[0]![0].twoFactorProvider).toBeUndefined();
     });
   });
+
+  describe('remember-device: forget / query / removeAccount cleanup', () => {
+    const SERVER_URL = 'https://vault.example';
+
+    async function persist(sm: SessionManager, email: string) {
+      await sm.saveUnlocked({
+        email, accessToken: 'a', refreshToken: 'r', expiresAt: 999999,
+        protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 600000,
+        userKey: symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex)),
+      });
+    }
+
+    it('isDeviceRemembered(email) reflects whether a token is stored', async () => {
+      const { auth, sm } = makeService({});
+      expect(await auth.isDeviceRemembered('u@x.com')).toBe(false);
+      await sm.saveRememberDeviceToken(SERVER_URL, 'u@x.com', 'tok');
+      expect(await auth.isDeviceRemembered('u@x.com')).toBe(true);
+    });
+
+    it('isDeviceRemembered() defaults to the current account', async () => {
+      const { auth, sm } = makeService({});
+      await persist(sm, 'active@x.com');
+      expect(await auth.isDeviceRemembered()).toBe(false);
+      await sm.saveRememberDeviceToken(SERVER_URL, 'active@x.com', 'tok');
+      expect(await auth.isDeviceRemembered()).toBe(true);
+    });
+
+    it('forgetDevice(email) removes the stored token', async () => {
+      const { auth, sm } = makeService({});
+      await sm.saveRememberDeviceToken(SERVER_URL, 'u@x.com', 'tok');
+      await auth.forgetDevice('u@x.com');
+      expect(await sm.getRememberDeviceToken(SERVER_URL, 'u@x.com')).toBeUndefined();
+    });
+
+    it('forgetDevice() defaults to the current account', async () => {
+      const { auth, sm } = makeService({});
+      await persist(sm, 'active@x.com');
+      await sm.saveRememberDeviceToken(SERVER_URL, 'active@x.com', 'tok');
+      await auth.forgetDevice();
+      expect(await sm.getRememberDeviceToken(SERVER_URL, 'active@x.com')).toBeUndefined();
+    });
+
+    it('forgetDevice normalizes the email', async () => {
+      const { auth, sm } = makeService({});
+      await sm.saveRememberDeviceToken(SERVER_URL, 'u@x.com', 'tok');
+      await auth.forgetDevice('  U@X.COM  ');
+      expect(await sm.getRememberDeviceToken(SERVER_URL, 'u@x.com')).toBeUndefined();
+    });
+
+    it('removeAccount clears that account’s remember token', async () => {
+      const { auth, sm } = makeService({});
+      await persist(sm, 'u@x.com');
+      await sm.saveRememberDeviceToken(SERVER_URL, 'u@x.com', 'tok');
+      await auth.removeAccount('u@x.com');
+      expect(await sm.getRememberDeviceToken(SERVER_URL, 'u@x.com')).toBeUndefined();
+      expect((await sm.listAccounts()).map((a) => a.email)).toEqual([]);
+    });
+
+    it('query methods return false / no-op when no server is configured', async () => {
+      const { auth, sm } = makeService({}, async () => undefined);
+      await sm.saveRememberDeviceToken(SERVER_URL, 'u@x.com', 'tok');
+      expect(await auth.isDeviceRemembered('u@x.com')).toBe(false);
+      await auth.forgetDevice('u@x.com'); // no throw
+      expect(await sm.getRememberDeviceToken(SERVER_URL, 'u@x.com')).toBe('tok'); // untouched
+    });
+  });
 });

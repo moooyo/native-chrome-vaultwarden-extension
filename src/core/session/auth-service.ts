@@ -289,7 +289,34 @@ export class AuthService {
 
   async removeAccount(email: string): Promise<void> {
     this.pendingLogin = undefined;
+    const serverUrl = await this.currentServerUrl();
+    if (serverUrl) await this.deps.session.removeRememberDeviceToken(serverUrl, email.trim().toLowerCase());
     await this.deps.session.removeAccount(email);
+  }
+
+  /** Forget this device's remembered-2FA token for `email` (defaults to the current account). No-op
+   *  when no server is configured or no account/email is resolvable. */
+  async forgetDevice(email?: string): Promise<void> {
+    const serverUrl = await this.currentServerUrl();
+    if (!serverUrl) return;
+    const target = await this.resolveRememberEmail(email);
+    if (!target) return;
+    await this.deps.session.removeRememberDeviceToken(serverUrl, target);
+  }
+
+  /** Whether a remembered-2FA token is stored for `email` (defaults to the current account). */
+  async isDeviceRemembered(email?: string): Promise<boolean> {
+    const serverUrl = await this.currentServerUrl();
+    if (!serverUrl) return false;
+    const target = await this.resolveRememberEmail(email);
+    if (!target) return false;
+    return Boolean(await this.deps.session.getRememberDeviceToken(serverUrl, target));
+  }
+
+  /** Normalize an explicit email, or fall back to the current persisted account's email. */
+  private async resolveRememberEmail(email?: string): Promise<string | undefined> {
+    if (email) return email.trim().toLowerCase();
+    return (await this.deps.session.getPersistedAuth())?.email;
   }
 
   private async derivePinKey(pin: string, email: string, iterations: number): Promise<SymmetricKey> {
