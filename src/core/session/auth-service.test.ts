@@ -624,6 +624,22 @@ describe('AuthService', () => {
       await auth.submitTwoFactor({ provider: 0, code: '123456', remember: true });
       expect(await sm.getRememberDeviceToken('https://vault.example', email)).toBeUndefined();
     });
+
+    it('a failed token save does NOT fail an already-unlocked login', async () => {
+      const passwordLogin = vi.fn()
+        .mockResolvedValueOnce({ kind: 'twoFactor' as const, providers: [0], token: 'tf' })
+        .mockResolvedValueOnce(successData('remember-tok-1'));
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth, sm } = makeService(api);
+      vi.spyOn(sm, 'saveRememberDeviceToken').mockRejectedValue(new Error('storage write failed'));
+      await auth.login({ email, masterPassword: KDF_VECTOR_600K.password });
+      await expect(auth.submitTwoFactor({ provider: 0, code: '123456', remember: true }))
+        .resolves.toEqual({ kind: 'unlocked' });
+      expect(await sm.getState()).toBe('unlocked');
+    });
   });
 
   describe('remember-device: reuse on login', () => {

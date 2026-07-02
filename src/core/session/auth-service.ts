@@ -391,15 +391,21 @@ export class AuthService {
     await this.deps.session.saveUnlocked(
       privateKey ? { ...saveInput, privateKey } : saveInput,
     );
+    this.pendingLogin = undefined;
     // Capture the device-remember token whenever the server returns one. The server only includes it
     // when remember was in play — a first-time opt-in, or a reuse that auto-rotated it — so
     // capture-on-presence covers both first capture and every subsequent rotation. Keyed by (server,
-    // email); undefined server (none configured) skips silently.
-    const rememberServerUrl = await this.currentServerUrl();
-    if (rememberServerUrl && data.TwoFactorToken) {
-      await this.deps.session.saveRememberDeviceToken(rememberServerUrl, input.pending.email, data.TwoFactorToken);
+    // email); undefined server (none configured) skips silently. This is a best-effort convenience:
+    // the login already succeeded and is persisted unlocked above, so a storage-write failure here
+    // (e.g. chrome.storage.local rejecting) must never surface as a login failure. Swallow errors.
+    try {
+      const rememberServerUrl = await this.currentServerUrl();
+      if (rememberServerUrl && data.TwoFactorToken) {
+        await this.deps.session.saveRememberDeviceToken(rememberServerUrl, input.pending.email, data.TwoFactorToken);
+      }
+    } catch {
+      /* best-effort token capture; never fail the login over it */
     }
-    this.pendingLogin = undefined;
     return { kind: 'unlocked' };
   }
 }
