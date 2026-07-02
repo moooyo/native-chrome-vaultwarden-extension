@@ -1,7 +1,7 @@
 import { decryptToBytes, encryptToBytes } from '../crypto/encstring.js';
-import { rewrapDeep } from './rotate-crypto.js';
+import { rewrapDeep, rewrapEncString } from './rotate-crypto.js';
 import type { SymmetricKey } from '../crypto/keys.js';
-import type { CipherResponse } from '../api/types.js';
+import type { CipherResponse, FolderResponse, SendResponse } from '../api/types.js';
 
 export type RotatedCipher = Record<string, unknown> & { id: string };
 
@@ -33,4 +33,19 @@ export async function rotateCipher(raw: CipherResponse, oldKey: SymmetricKey, ne
     (rotated as Record<string, unknown>).attachments = rotatedAttachments;
   }
   return rotated;
+}
+
+export async function rotateFolder(raw: FolderResponse, oldKey: SymmetricKey, newKey: SymmetricKey): Promise<{ id: string; name: string }> {
+  if (!raw.name) throw new Error('folder has no name to rotate');
+  return { id: raw.id, name: await rewrapEncString(raw.name, oldKey, newKey) };
+}
+
+export type RotatedSend = Record<string, unknown> & { id: string };
+
+/** Re-wrap ONLY the send key EncString; the name/text/file ciphertext is under the HKDF-derived send key,
+ *  which does not change, so it is left byte-identical. */
+export async function rotateSend(raw: SendResponse, oldKey: SymmetricKey, newKey: SymmetricKey): Promise<RotatedSend> {
+  const r = raw as unknown as Record<string, unknown> & { id: string; key?: string };
+  if (!r.key || typeof r.key !== 'string') throw new Error('send has no key to rotate');
+  return { ...r, key: await rewrapEncString(r.key, oldKey, newKey) } as RotatedSend;
 }

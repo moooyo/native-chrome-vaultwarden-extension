@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { rotateCipher } from './rotate.js';
+import { rotateCipher, rotateFolder, rotateSend } from './rotate.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import { encryptToText, encryptToBytes, decryptToBytes } from '../crypto/encstring.js';
 import type { CipherResponse } from '../api/types.js';
@@ -41,4 +41,19 @@ it('keyless cipher with attachments: re-wraps attachment keys into attachments2'
 it('throws (fail-close) when a personal cipher field cannot be decrypted with the old key', async () => {
   const raw = { id: 'c4', type: 1, name: await encryptToText('n', newK) /* wrong key */ } as unknown as CipherResponse;
   await expect(rotateCipher(raw, oldK, newK)).rejects.toBeTruthy();
+});
+
+it('rotateFolder re-wraps the name and preserves id', async () => {
+  const raw = { id: 'f1', name: await encryptToText('Work', oldK) } as any;
+  const out = await rotateFolder(raw, oldK, newK);
+  expect(out.id).toBe('f1');
+  expect(dec.decode(await decryptToBytes(out.name, newK))).toBe('Work');
+});
+
+it('rotateSend re-wraps the send key and leaves derived-field ciphertext unchanged', async () => {
+  const raw = { id: 's1', key: await encryptToText('sendkeybytes', oldK), name: '2.derived-name==', text: { text: '2.derived-text==' } } as any;
+  const out = await rotateSend(raw, oldK, newK) as any;
+  expect(out.id).toBe('s1');
+  expect(out.name).toBe('2.derived-name=='); // derived-key ciphertext untouched
+  expect(dec.decode(await decryptToBytes(out.key, newK))).toBe('sendkeybytes');
 });
