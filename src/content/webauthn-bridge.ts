@@ -1,10 +1,13 @@
 // Isolated-world content script bridging the MAIN-world page-webauthn shim to the worker. It relays
-// passkey assertion requests to the background service (which holds the unlocked vault and signs) and
-// posts the result back to the page. Only assertion (get) is bridged; creation falls back to native.
+// passkey assertion (get) AND registration (create) requests to the background service (which holds the
+// unlocked vault, signs, and stores) and posts the result back to the page.
 //
-// Security: before any assertion is signed, the user must (1) have a matching stored passkey and
-// (2) explicitly consent via a dialog in a closed shadow root the page cannot reach. We never sign
-// silently, and we report user-verification (UV) honestly from the RP's requirement + that consent.
+// Security: this bridge — not the MAIN world — is the trust boundary. It derives `origin` from its own
+// `location.origin` (never the page-supplied payload) so the worker binds the ceremony to the real
+// frame; the worker re-validates rpId against that origin via the Public Suffix List. Before any
+// assertion is signed or passkey is created, the user must explicitly consent via a dialog in a closed
+// shadow root the page cannot reach. We never sign/create silently, and report user-verification (UV)
+// honestly from the RP's requirement + that consent.
 
 import { sendRequest } from '../messaging/protocol.js';
 import { confirmPasskeyUse, choosePasskeyTarget } from './passkey-consent.js';
