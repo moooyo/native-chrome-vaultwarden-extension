@@ -134,7 +134,19 @@
   格式）+ 加密导入（验证 MAC）；CSV 导入（Bitwarden CSV + 通用浏览器导出）；`parseImport` 自动识别 JSON/CSV。
   剩余：第三方专有格式（LastPass/1Password/KeePass 等）、CSV 卡/身份/自定义字段映射。
 - ✅ **改主密码 / 改 KDF 迭代**（已交付）：重新包裹 UserKey（库不重新加密）+ 更新服务端与本地材料；
-  KDF 迭代有下限保护。剩余：Argon2 目标 KDF（按范围暂忽略）、全库密钥轮换。
+  KDF 迭代有下限保护。剩余：Argon2 目标 KDF（按范围暂忽略）。
+- ✅ **全库密钥轮换（account key rotation）**（已交付，2026-07-02；设计/计划见 `docs/superpowers/`，spec 经 2 轮对抗性评审
+  + 服务端源码钉死 + throwaway 账户 live 端到端验证）：生成**全新 UserKey**，用 **EncString/密钥层重包**（绝不走
+  `decryptCipher→encryptCipher` 明文往返——那会损坏 per-item key/passkey/历史/附件）重加密所有个人条目（keyed 只重包
+  item key、字段密文原样；keyless 逐 EncString 重包 + attachment key 入 `attachments2`）、文件夹名、Send key、账户私钥；
+  组织账户恢复重登记（RSA encType=4）；单一原子端点 `POST /api/accounts/key-management/rotate-user-account-keys`
+  （旧 `/api/accounts/key` 404）；成功后**全量重登录**（服务端 security stamp 轮换）。**fail-close**：紧急访问授权
+  （`/emergency-access/trusted` 非空）、不可解条目、legacy UserKey 包裹的附件 key、严格发送前自校验失败一律中止、绝不发
+  部分/损坏轮换；破坏性 POST 在任一 abort 路径上不可达（已核）。popup Security 编辑器「Rotate encryption key」（主密码
+  确认 + 警示）。有单元 + `LIVE=1` 端到端往返测试。
+  剩余：紧急访问授权**重包**（端点套件未建，故 fail-close）、组织密钥轮换、Argon2 账户、附件/org-recovery 的 live 覆盖
+  （单元覆盖 + fail-close 兜底）。
+- ⬆ **组织策略（policies）拉取与执行**。
 - ✅ **附件（attachments）**（已交付）：per-attachment key（库密钥包裹）+ EncArrayBuffer 文件格式；
   详情展示 + 按需下载解密（reprompt 门控）+ 上传（multipart，Vaultwarden 兼容）+ 删除。
 - ✅ **Sends（文本 + 文件 + 接收端）**（已交付）：HKDF 多块派生 send key（`derive_shareable_key`）、文本/文件
@@ -164,7 +176,7 @@
   reprompt 门 / URL 匹配 / 国民 ID 剔除全在 worker 未动（零 `src/core/` 改动、无新增请求类型）；与右键菜单同一可信手势模型。
   剩余（小项）：Shadow DOM/contenteditable 字段（同现有 autofill 限制）、popover 内每条目 reprompt 徽标、SPA 场景 popover
   注册表非无界修剪（`openPickerFor` 已自愈）。
-- ⬆ **组织策略（policies）拉取与执行**；**全库密钥轮换**。
+- ⬆ **组织策略（policies）拉取与执行**。
 - ✅ **用户名生成器（本地类型）**（已交付，2026-06-30）：`core/generator/username.ts` 加号别名/catch-all/随机词
   （纯函数、注入随机源、复用词表）+ 生成器面板 Username 模式 + 登录编辑器 username 生成按钮。全本地、不联网。
   剩余：**转发邮箱别名**（SimpleLogin/addy.io/Firefox Relay 等外部 provider + token 存储，另起里程碑）。
