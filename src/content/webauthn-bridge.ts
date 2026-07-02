@@ -7,10 +7,12 @@
 // silently, and we report user-verification (UV) honestly from the RP's requirement + that consent.
 
 import { sendRequest } from '../messaging/protocol.js';
-import { confirmPasskeyUse } from './passkey-consent.js';
+import { confirmPasskeyUse, choosePasskeyTarget } from './passkey-consent.js';
 
 const REQUEST = 'vw-webauthn-request';
 const RESPONSE = 'vw-webauthn-response';
+const CREATE_REQUEST = 'vw-webauthn-create-request';
+const CREATE_RESPONSE = 'vw-webauthn-create-response';
 
 interface AssertionPayload {
   rpId: string;
@@ -26,6 +28,13 @@ window.addEventListener('message', (event) => {
   const data = event.data as { source?: string; id?: string; payload?: AssertionPayload };
   if (data?.source !== REQUEST || typeof data.id !== 'string' || !data.payload) return;
   void relay(data.id, data.payload);
+});
+
+window.addEventListener('message', (event) => {
+  if (event.source !== window) return;
+  const data = event.data as { source?: string; id?: string; payload?: CreatePayload };
+  if (data?.source !== CREATE_REQUEST || typeof data.id !== 'string' || !data.payload) return;
+  void relayCreate(data.id, data.payload);
 });
 
 function fallback(id: string): void {
@@ -68,5 +77,50 @@ async function relay(id: string, payload: AssertionPayload): Promise<void> {
     }
   } catch {
     fallback(id);
+  }
+}
+
+interface CreatePayload {
+  rpId: string; rpName?: string; userHandle?: string; userName?: string; userDisplayName?: string;
+  challenge: string; excludeCredentialIds: string[]; userVerification?: string;
+}
+
+function createFallback(id: string): void {
+  window.postMessage({ source: CREATE_RESPONSE, id, error: true }, location.origin);
+}
+
+async function relayCreate(id: string, payload: CreatePayload): Promise<void> {
+  try {
+    if (!window.isSecureContext) return createFallback(id);
+    const origin = location.origin; // trust boundary
+    // Best-effort duplicate avoidance: if the RP excludes a credential we already hold, defer to native.
+    if (payload.excludeCredentialIds.length) {
+      const probe = await sendRequest({ type: 'vault.hasPasskey', rpId: payload.rpId, origin, allowedCredentialIds: payload.excludeCredentialIds });
+      if (probe.ok && probe.data && 'matches' in probe.data && probe.data.matches) return createFallback(id);
+    }
+    const targetsResp = await sendRequest({ type: 'vault.getPasskeyTargets', rpId: payload.rpId, origin });
+    if (!(targetsResp.ok && targetsResp.data && 'targets' in targetsResp.data)) return createFallback(id);
+    const choice = await choosePasskeyTarget(payload.rpId, targetsResp.data.targets);
+    if ('cancelled' in choice) return createFallback(id);
+    const userVerified = payload.userVerification !== 'discouraged';
+    const resp = await sendRequest({
+      type: 'vault.createPasskey',
+      rpId: payload.rpId,
+      challenge: payload.challenge,
+      origin,
+      userVerified,
+      ...(payload.rpName ? { rpName: payload.rpName } : {}),
+      ...(payload.userHandle ? { userHandle: payload.userHandle } : {}),
+      ...(payload.userName ? { userName: payload.userName } : {}),
+      ...(payload.userDisplayName ? { userDisplayName: payload.userDisplayName } : {}),
+      ...(choice.targetCipherId ? { targetCipherId: choice.targetCipherId } : {}),
+    });
+    if (resp.ok && resp.data && 'registration' in resp.data) {
+      window.postMessage({ source: CREATE_RESPONSE, id, registration: resp.data.registration }, location.origin);
+    } else {
+      createFallback(id);
+    }
+  } catch {
+    createFallback(id);
   }
 }

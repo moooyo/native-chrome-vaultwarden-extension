@@ -26,6 +26,7 @@ const STYLE = `
   p { margin: 0 0 14px; color: #5b647a; }
   .rp { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: #181d2b; word-break: break-all; }
   .row { display: flex; gap: 8px; }
+  .col { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; } .target { text-align: left; }
   button { font: inherit; flex: 1; padding: 9px 12px; border-radius: 9px; cursor: pointer; border: 1px solid transparent; font-weight: 620; }
   .confirm { background: #4f46e5; color: #fff; }
   .confirm:hover { background: #4338ca; }
@@ -102,5 +103,68 @@ export function confirmPasskeyUse(rpId: string): Promise<boolean> {
     };
     window.addEventListener('keydown', onKey, true);
     renderConsentInto(shadow, rpId, done);
+  });
+}
+
+export type PasskeyPickerResult = { cancelled: true } | { targetCipherId?: string };
+
+/** Render the registration picker (New item + existing same-domain items + Cancel) into `root`.
+ *  `onResult` fires exactly once. Only trusted clicks count. Mirrors renderConsentInto. */
+export function renderPasskeyPickerInto(
+  root: ShadowRoot | HTMLElement,
+  rpId: string,
+  targets: Array<{ id: string; name: string; username?: string }>,
+  onResult: (result: PasskeyPickerResult) => void,
+): void {
+  let settled = false;
+  const finish = (r: PasskeyPickerResult): void => { if (!settled) { settled = true; onResult(r); } };
+  const rows = targets.map((t) => `
+    <button type="button" class="cancel target" data-target="${escapeHtml(t.id)}">
+      ${escapeHtml(t.name)}${t.username ? ` <span class="rp">${escapeHtml(t.username)}</span>` : ''}
+    </button>`).join('');
+  root.innerHTML = `
+    <style>${STYLE}</style>
+    <div class="overlay">
+      <div class="card" role="dialog" aria-modal="true" aria-label="Save passkey">
+        <div class="head"><span class="mark">${SHIELD}</span><h1>Save a passkey for <span class="rp">${escapeHtml(rpId)}</span>?</h1></div>
+        <p>Choose where to store this passkey in your vault.</p>
+        <div class="col">
+          <button type="button" class="confirm" id="vw-pk-new">New login item</button>
+          ${rows}
+        </div>
+        <div class="row"><button type="button" class="cancel" id="vw-pk-cancel">Cancel</button></div>
+      </div>
+    </div>`;
+  root.querySelector('#vw-pk-new')?.addEventListener('click', (e) => { if (e.isTrusted) finish({}); });
+  root.querySelector('#vw-pk-cancel')?.addEventListener('click', (e) => { if (e.isTrusted) finish({ cancelled: true }); });
+  for (const btn of root.querySelectorAll<HTMLButtonElement>('button[data-target]')) {
+    btn.addEventListener('click', (e) => { if (e.isTrusted) finish({ targetCipherId: btn.dataset.target! }); });
+  }
+  root.querySelector('.overlay')?.addEventListener('click', (e) => {
+    if (e.isTrusted && e.target === e.currentTarget) finish({ cancelled: true });
+  });
+}
+
+/** Prompt the user to choose where to save a new passkey. Resolves cancelled on Cancel/Esc/outside click.
+ *  Lives in a closed shadow root the page cannot reach. */
+export function choosePasskeyTarget(
+  rpId: string,
+  targets: Array<{ id: string; name: string; username?: string }>,
+): Promise<PasskeyPickerResult> {
+  return new Promise((resolve) => {
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'closed' });
+    (document.body ?? document.documentElement).append(host);
+    let settled = false;
+    const done = (r: PasskeyPickerResult): void => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('keydown', onKey, true);
+      host.remove();
+      resolve(r);
+    };
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.preventDefault(); done({ cancelled: true }); } };
+    window.addEventListener('keydown', onKey, true);
+    renderPasskeyPickerInto(shadow, rpId, targets, done);
   });
 }
