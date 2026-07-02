@@ -18,9 +18,12 @@ import { symmetricKeyFromBytes, unwrapSymmetricKey } from '../crypto/keys.js';
 import { deriveMasterKey, stretchMasterKey } from '../crypto/kdf.js';
 import { KDF_VECTOR, KDF_VECTOR_600K, USER_KEY_VECTOR, USER_KEY_VECTOR_600K, RSA_PRIVATE_KEY_VECTOR } from '../../../test/vectors.js';
 
-function makeService(api: Partial<ApiClient>) {
+function makeService(
+  api: Partial<ApiClient>,
+  serverUrlProvider: () => Promise<string | undefined> = async () => 'https://vault.example',
+) {
   const sm = new SessionManager({ localStore: createMemoryStore(), sessionStore: createMemoryStore() });
-  return { sm, auth: new AuthService({ api: api as ApiClient, session: sm, now: () => 1000 }) };
+  return { sm, auth: new AuthService({ api: api as ApiClient, session: sm, now: () => 1000, serverUrlProvider }) };
 }
 
 // Happy-path login tests use the 600000-iteration vector because the KDF floor (5000) forbids
@@ -563,5 +566,226 @@ describe('AuthService', () => {
     await auth.setPin('1357');
     await auth.disablePin();
     expect(await auth.isPinEnabled()).toBe(false);
+  });
+
+  describe('remember-device: capture on success', () => {
+    const SERVER_URL = 'https://vault.example';
+    const email = KDF_VECTOR_600K.email.trim().toLowerCase();
+
+    function successData(twoFactorToken?: string) {
+      return {
+        kind: 'success' as const,
+        data: {
+          access_token: 'access', expires_in: 3600, refresh_token: 'refresh', token_type: 'Bearer',
+          Key: USER_KEY_VECTOR_600K.akey, Kdf: 0 as const, KdfIterations: KDF_VECTOR_600K.iterations,
+          ...(twoFactorToken ? { TwoFactorToken: twoFactorToken } : {}),
+        },
+      };
+    }
+
+    it('saves the token when a 2FA success returns TwoFactorToken (remember opt-in)', async () => {
+      const passwordLogin = vi.fn()
+        .mockResolvedValueOnce({ kind: 'twoFactor' as const, providers: [0], token: 'tf' })
+        .mockResolvedValueOnce(successData('remember-tok-1'));
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth, sm } = makeService(api);
+      await auth.login({ email, masterPassword: KDF_VECTOR_600K.password });
+      await auth.submitTwoFactor({ provider: 0, code: '123456', remember: true });
+      expect(await sm.getRememberDeviceToken(SERVER_URL, email)).toBe('remember-tok-1');
+    });
+
+    it('does NOT save when the success response carries no TwoFactorToken', async () => {
+      const passwordLogin = vi.fn()
+        .mockResolvedValueOnce({ kind: 'twoFactor' as const, providers: [0], token: 'tf' })
+        .mockResolvedValueOnce(successData(undefined));
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth, sm } = makeService(api);
+      await auth.login({ email, masterPassword: KDF_VECTOR_600K.password });
+      await auth.submitTwoFactor({ provider: 0, code: '123456', remember: false });
+      expect(await sm.getRememberDeviceToken(SERVER_URL, email)).toBeUndefined();
+    });
+
+    it('does not save when no serverUrl is configured', async () => {
+      const passwordLogin = vi.fn()
+        .mockResolvedValueOnce({ kind: 'twoFactor' as const, providers: [0], token: 'tf' })
+        .mockResolvedValueOnce(successData('remember-tok-1'));
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth, sm } = makeService(api, async () => undefined);
+      await auth.login({ email, masterPassword: KDF_VECTOR_600K.password });
+      await auth.submitTwoFactor({ provider: 0, code: '123456', remember: true });
+      expect(await sm.getRememberDeviceToken('https://vault.example', email)).toBeUndefined();
+    });
+
+    it('a failed token save does NOT fail an already-unlocked login', async () => {
+      const passwordLogin = vi.fn()
+        .mockResolvedValueOnce({ kind: 'twoFactor' as const, providers: [0], token: 'tf' })
+        .mockResolvedValueOnce(successData('remember-tok-1'));
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth, sm } = makeService(api);
+      vi.spyOn(sm, 'saveRememberDeviceToken').mockRejectedValue(new Error('storage write failed'));
+      await auth.login({ email, masterPassword: KDF_VECTOR_600K.password });
+      await expect(auth.submitTwoFactor({ provider: 0, code: '123456', remember: true }))
+        .resolves.toEqual({ kind: 'unlocked' });
+      expect(await sm.getState()).toBe('unlocked');
+    });
+  });
+
+  describe('remember-device: reuse on login', () => {
+    const SERVER_URL = 'https://vault.example';
+    const email = KDF_VECTOR_600K.email.trim().toLowerCase();
+
+    function successData(twoFactorToken?: string) {
+      return {
+        kind: 'success' as const,
+        data: {
+          access_token: 'access', expires_in: 3600, refresh_token: 'refresh', token_type: 'Bearer',
+          Key: USER_KEY_VECTOR_600K.akey, Kdf: 0 as const, KdfIterations: KDF_VECTOR_600K.iterations,
+          ...(twoFactorToken ? { TwoFactorToken: twoFactorToken } : {}),
+        },
+      };
+    }
+
+    it('valid stored token → sends provider=5 and skips the 2FA screen; captures the rotated token', async () => {
+      const passwordLogin = vi.fn().mockResolvedValueOnce(successData('rotated-T2'));
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth, sm } = makeService(api);
+      await sm.saveRememberDeviceToken(SERVER_URL, email, 'stored-T1');
+      await expect(auth.login({ email, masterPassword: KDF_VECTOR_600K.password }))
+        .resolves.toEqual({ kind: 'unlocked' });
+      // Exactly one passwordLogin call, and it carried the Remember provider + stored token.
+      expect(passwordLogin).toHaveBeenCalledTimes(1);
+      expect(passwordLogin.mock.calls[0]![0]).toMatchObject({
+        twoFactorProvider: 5, twoFactorToken: 'stored-T1', remember: true,
+      });
+      // Rotation synced: the stored token is now the server's new one.
+      expect(await sm.getRememberDeviceToken(SERVER_URL, email)).toBe('rotated-T2');
+    });
+
+    it('stale stored token → clears it and drives 2FA from the SAME result (no re-send)', async () => {
+      const passwordLogin = vi.fn().mockResolvedValueOnce({ kind: 'twoFactor' as const, providers: [0, 1], token: 'tf' });
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth, sm } = makeService(api);
+      await sm.saveRememberDeviceToken(SERVER_URL, email, 'stale-T1');
+      await expect(auth.login({ email, masterPassword: KDF_VECTOR_600K.password }))
+        .resolves.toEqual({ kind: 'twoFactor', providers: [0, 1], token: 'tf' });
+      // Only ONE passwordLogin call — the stale-token attempt already returned the real providers.
+      expect(passwordLogin).toHaveBeenCalledTimes(1);
+      expect(await sm.getRememberDeviceToken(SERVER_URL, email)).toBeUndefined();
+    });
+
+    it('reuse attempt throws → clears the token and retries once WITHOUT it', async () => {
+      const passwordLogin = vi.fn()
+        .mockRejectedValueOnce(new Error('boom 500'))
+        .mockResolvedValueOnce(successData(undefined));
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth, sm } = makeService(api);
+      await sm.saveRememberDeviceToken(SERVER_URL, email, 'stale-T1');
+      await expect(auth.login({ email, masterPassword: KDF_VECTOR_600K.password }))
+        .resolves.toEqual({ kind: 'unlocked' });
+      expect(passwordLogin).toHaveBeenCalledTimes(2);
+      // First call carried provider=5; the retry carried no 2FA fields.
+      expect(passwordLogin.mock.calls[0]![0]).toMatchObject({ twoFactorProvider: 5 });
+      expect(passwordLogin.mock.calls[1]![0].twoFactorProvider).toBeUndefined();
+      expect(await sm.getRememberDeviceToken(SERVER_URL, email)).toBeUndefined();
+    });
+
+    it('no stored token → ordinary login (no provider=5 attempt)', async () => {
+      const passwordLogin = vi.fn().mockResolvedValueOnce(successData(undefined));
+      const api: Partial<ApiClient> = {
+        prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
+        passwordLogin,
+      };
+      const { auth } = makeService(api);
+      await auth.login({ email, masterPassword: KDF_VECTOR_600K.password });
+      expect(passwordLogin).toHaveBeenCalledTimes(1);
+      expect(passwordLogin.mock.calls[0]![0].twoFactorProvider).toBeUndefined();
+    });
+  });
+
+  describe('remember-device: forget / query / removeAccount cleanup', () => {
+    const SERVER_URL = 'https://vault.example';
+
+    async function persist(sm: SessionManager, email: string) {
+      await sm.saveUnlocked({
+        email, accessToken: 'a', refreshToken: 'r', expiresAt: 999999,
+        protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 600000,
+        userKey: symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex)),
+      });
+    }
+
+    it('isDeviceRemembered(email) reflects whether a token is stored', async () => {
+      const { auth, sm } = makeService({});
+      expect(await auth.isDeviceRemembered('u@x.com')).toBe(false);
+      await sm.saveRememberDeviceToken(SERVER_URL, 'u@x.com', 'tok');
+      expect(await auth.isDeviceRemembered('u@x.com')).toBe(true);
+    });
+
+    it('isDeviceRemembered() defaults to the current account', async () => {
+      const { auth, sm } = makeService({});
+      await persist(sm, 'active@x.com');
+      expect(await auth.isDeviceRemembered()).toBe(false);
+      await sm.saveRememberDeviceToken(SERVER_URL, 'active@x.com', 'tok');
+      expect(await auth.isDeviceRemembered()).toBe(true);
+    });
+
+    it('forgetDevice(email) removes the stored token', async () => {
+      const { auth, sm } = makeService({});
+      await sm.saveRememberDeviceToken(SERVER_URL, 'u@x.com', 'tok');
+      await auth.forgetDevice('u@x.com');
+      expect(await sm.getRememberDeviceToken(SERVER_URL, 'u@x.com')).toBeUndefined();
+    });
+
+    it('forgetDevice() defaults to the current account', async () => {
+      const { auth, sm } = makeService({});
+      await persist(sm, 'active@x.com');
+      await sm.saveRememberDeviceToken(SERVER_URL, 'active@x.com', 'tok');
+      await auth.forgetDevice();
+      expect(await sm.getRememberDeviceToken(SERVER_URL, 'active@x.com')).toBeUndefined();
+    });
+
+    it('forgetDevice normalizes the email', async () => {
+      const { auth, sm } = makeService({});
+      await sm.saveRememberDeviceToken(SERVER_URL, 'u@x.com', 'tok');
+      await auth.forgetDevice('  U@X.COM  ');
+      expect(await sm.getRememberDeviceToken(SERVER_URL, 'u@x.com')).toBeUndefined();
+    });
+
+    it('removeAccount clears that account’s remember token', async () => {
+      const { auth, sm } = makeService({});
+      await persist(sm, 'u@x.com');
+      await sm.saveRememberDeviceToken(SERVER_URL, 'u@x.com', 'tok');
+      await auth.removeAccount('u@x.com');
+      expect(await sm.getRememberDeviceToken(SERVER_URL, 'u@x.com')).toBeUndefined();
+      expect((await sm.listAccounts()).map((a) => a.email)).toEqual([]);
+    });
+
+    it('query methods return false / no-op when no server is configured', async () => {
+      const { auth, sm } = makeService({}, async () => undefined);
+      await sm.saveRememberDeviceToken(SERVER_URL, 'u@x.com', 'tok');
+      expect(await auth.isDeviceRemembered('u@x.com')).toBe(false);
+      await auth.forgetDevice('u@x.com'); // no throw
+      expect(await sm.getRememberDeviceToken(SERVER_URL, 'u@x.com')).toBe('tok'); // untouched
+    });
   });
 });

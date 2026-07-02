@@ -24,7 +24,7 @@ const api = new ApiClient({
   },
   localStore,
 });
-const auth = new AuthService({ api, session });
+const auth = new AuthService({ api, session, serverUrlProvider: () => settings.getServerUrl() });
 const vault = new VaultService({ api, auth, session, localStore });
 const contextMenu = createContextMenu({
   getState: () => auth.getState(),

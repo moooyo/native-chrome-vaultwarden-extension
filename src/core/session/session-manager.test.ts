@@ -233,4 +233,61 @@ describe('SessionManager', () => {
       expect(await sm.getState()).toBe('loggedOut');
     });
   });
+
+  describe('remember-device tokens', () => {
+    const SERVER_A = 'https://a.example';
+    const SERVER_B = 'https://b.example';
+    function newSm() {
+      return new SessionManager({ localStore: createMemoryStore(), sessionStore: createMemoryStore() });
+    }
+
+    it('saves, reads, and removes a token keyed by (server, email)', async () => {
+      const sm = newSm();
+      expect(await sm.getRememberDeviceToken(SERVER_A, 'u@x.com')).toBeUndefined();
+      await sm.saveRememberDeviceToken(SERVER_A, 'u@x.com', 'tok-1');
+      expect(await sm.getRememberDeviceToken(SERVER_A, 'u@x.com')).toBe('tok-1');
+      await sm.removeRememberDeviceToken(SERVER_A, 'u@x.com');
+      expect(await sm.getRememberDeviceToken(SERVER_A, 'u@x.com')).toBeUndefined();
+    });
+
+    it('isolates tokens by server and by email', async () => {
+      const sm = newSm();
+      await sm.saveRememberDeviceToken(SERVER_A, 'u@x.com', 'tok-A');
+      await sm.saveRememberDeviceToken(SERVER_B, 'u@x.com', 'tok-B');
+      await sm.saveRememberDeviceToken(SERVER_A, 'other@x.com', 'tok-O');
+      expect(await sm.getRememberDeviceToken(SERVER_A, 'u@x.com')).toBe('tok-A');
+      expect(await sm.getRememberDeviceToken(SERVER_B, 'u@x.com')).toBe('tok-B');
+      expect(await sm.getRememberDeviceToken(SERVER_A, 'other@x.com')).toBe('tok-O');
+      // Removing one leaves the others intact.
+      await sm.removeRememberDeviceToken(SERVER_A, 'u@x.com');
+      expect(await sm.getRememberDeviceToken(SERVER_A, 'u@x.com')).toBeUndefined();
+      expect(await sm.getRememberDeviceToken(SERVER_B, 'u@x.com')).toBe('tok-B');
+      expect(await sm.getRememberDeviceToken(SERVER_A, 'other@x.com')).toBe('tok-O');
+    });
+
+    it('overwrites the token on re-save (rotation)', async () => {
+      const sm = newSm();
+      await sm.saveRememberDeviceToken(SERVER_A, 'u@x.com', 'tok-old');
+      await sm.saveRememberDeviceToken(SERVER_A, 'u@x.com', 'tok-new');
+      expect(await sm.getRememberDeviceToken(SERVER_A, 'u@x.com')).toBe('tok-new');
+    });
+
+    it('survives logout and lock (the token is not a session secret)', async () => {
+      const sm = newSm();
+      await sm.saveUnlocked({
+        email: 'u@x.com', accessToken: 'a', refreshToken: 'r', expiresAt: 999999,
+        protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 600000, userKey,
+      });
+      await sm.saveRememberDeviceToken(SERVER_A, 'u@x.com', 'tok-1');
+      await sm.lock();
+      expect(await sm.getRememberDeviceToken(SERVER_A, 'u@x.com')).toBe('tok-1');
+      await sm.logout();
+      expect(await sm.getRememberDeviceToken(SERVER_A, 'u@x.com')).toBe('tok-1');
+    });
+
+    it('removing a token that was never saved is a no-op', async () => {
+      const sm = newSm();
+      await expect(sm.removeRememberDeviceToken(SERVER_A, 'nobody@x.com')).resolves.toBeUndefined();
+    });
+  });
 });

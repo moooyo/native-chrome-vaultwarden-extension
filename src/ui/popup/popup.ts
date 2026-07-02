@@ -135,8 +135,23 @@ function renderLogin(error?: string) {
         <button id="goRegister" type="button" class="btn btn-secondary btn-block">${icon('user')}<span>Create account</span></button>
         ${errorNote(error)}
       </form>
+      <div id="rememberForgetSlot" class="remember-forget"></div>
     </div>`;
   document.getElementById('goRegister')!.addEventListener('click', () => render({ kind: 'register' }));
+  const emailInput = document.getElementById('email') as HTMLInputElement;
+  const forgetSlot = document.getElementById('rememberForgetSlot')!;
+  emailInput.addEventListener('change', async () => {
+    const email = emailInput.value.trim();
+    forgetSlot.innerHTML = '';
+    if (!email) return;
+    const status = await sendRequest({ type: 'auth.isDeviceRemembered', email });
+    if (!status.ok || !(status.data as { remembered: boolean }).remembered) return;
+    forgetSlot.innerHTML = `<button id="forgetRemembered" class="link-btn" type="button">This device is remembered for 2-step login — Forget</button>`;
+    document.getElementById('forgetRemembered')!.addEventListener('click', async () => {
+      const forgotten = await sendRequest({ type: 'auth.forgetDevice', email });
+      if (forgotten.ok) forgetSlot.innerHTML = '<span class="muted">This device is no longer remembered.</span>';
+    });
+  });
   document.getElementById('loginForm')!.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (isPending) return;
@@ -255,6 +270,7 @@ function renderTwoFactor(providers: number[], error?: string) {
           <input id="code" class="input mono" autocomplete="one-time-code" required />
           <span id="tfHint" class="field-hint muted">${escapeHtml(twoFactorHint(first))}</span>
         </label>
+        <label class="tf-remember"><input id="tfRemember" type="checkbox" /><span>Remember this device</span></label>
         <button type="submit" class="btn btn-block">${icon('key')}<span>Continue</span></button>
         ${usable.includes(1) ? `<button id="sendEmail" class="btn btn-secondary btn-block" type="button">${icon('mail')}<span>Send email code</span></button>` : ''}
         ${errorNote(error)}
@@ -276,7 +292,8 @@ function renderTwoFactor(providers: number[], error?: string) {
     try {
       const provider = Number((document.getElementById('provider') as HTMLSelectElement).value);
       const code = (document.getElementById('code') as HTMLInputElement).value;
-      await handleAuthResult(await sendRequest({ type: 'auth.submitTwoFactor', provider, code }));
+      const remember = (document.getElementById('tfRemember') as HTMLInputElement | null)?.checked ?? false;
+      await handleAuthResult(await sendRequest({ type: 'auth.submitTwoFactor', provider, code, remember }));
     } finally {
       isPending = false;
       if (currentViewKind === 'twoFactor') {
@@ -1066,6 +1083,7 @@ async function openAccountSwitcher(): Promise<void> {
       <button class="link-btn account-remove" data-remove="${escapeHtml(a.email)}" type="button">Remove</button>
     </div>`).join('');
   host.innerHTML = `<div class="account-list">${rows}
+    <div id="forgetDeviceSlot" class="forget-device"></div>
     <button id="accountAdd" class="btn btn-secondary btn-sm btn-block" type="button">${icon('plus')}<span>Add account</span></button></div>`;
   document.getElementById('accountAdd')!.addEventListener('click', () => render({ kind: 'loggedOut' }));
   for (const btn of host.querySelectorAll<HTMLButtonElement>('button[data-switch]')) {
@@ -1083,6 +1101,15 @@ async function openAccountSwitcher(): Promise<void> {
         vaultItems = []; vaultFolders = []; vaultCollections = []; selectedFolderId = null; selectedCollectionId = null;
         render({ kind: (state.data as { state: 'loggedOut' | 'locked' | 'unlocked' }).state });
       }
+    });
+  }
+  const remembered = await sendRequest({ type: 'auth.isDeviceRemembered' });
+  const forgetSlot = document.getElementById('forgetDeviceSlot');
+  if (forgetSlot && remembered.ok && (remembered.data as { remembered: boolean }).remembered) {
+    forgetSlot.innerHTML = `<button id="forgetDevice" class="link-btn" type="button">Forget this device (2-step login)</button>`;
+    document.getElementById('forgetDevice')!.addEventListener('click', async () => {
+      const forgotten = await sendRequest({ type: 'auth.forgetDevice' });
+      if (forgotten.ok) forgetSlot.innerHTML = '<span class="muted">This device is no longer remembered.</span>';
     });
   }
 }

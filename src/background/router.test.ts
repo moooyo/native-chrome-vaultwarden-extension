@@ -454,6 +454,44 @@ describe('router', () => {
     expect(submitTwoFactor).toHaveBeenCalledTimes(1);
   });
 
+  it('auth.isDeviceRemembered returns the remembered flag and forwards the email', async () => {
+    const isDeviceRemembered = vi.fn(async () => true);
+    const router = createRouter({
+      auth: { isDeviceRemembered },
+      vault: {},
+      settings: {
+        getServerUrl: vi.fn(),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
+      },
+    });
+    await expect(router.handle({ type: 'auth.isDeviceRemembered', email: 'u@x.com' }))
+      .resolves.toEqual({ ok: true, data: { remembered: true } });
+    expect(isDeviceRemembered).toHaveBeenCalledWith('u@x.com');
+  });
+
+  it('auth.forgetDevice forwards the email and returns null data', async () => {
+    const forgetDevice = vi.fn(async () => {});
+    const router = createRouter({
+      auth: { forgetDevice },
+      vault: {},
+      settings: {
+        getServerUrl: vi.fn(),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
+      },
+    });
+    await expect(router.handle({ type: 'auth.forgetDevice', email: 'u@x.com' }))
+      .resolves.toEqual({ ok: true, data: null });
+    expect(forgetDevice).toHaveBeenCalledWith('u@x.com');
+  });
+
   it('preserves typed application error codes', async () => {
     const router = createRouter({
       auth: { lock: vi.fn(async () => { throw new AppError('locked', 'Vault is locked'); }) },

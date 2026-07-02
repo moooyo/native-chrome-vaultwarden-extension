@@ -112,6 +112,8 @@ export type RequestMessage =
   | { type: 'auth.listAccounts' }
   | { type: 'auth.switchAccount'; email: string }
   | { type: 'auth.removeAccount'; email: string }
+  | { type: 'auth.forgetDevice'; email?: string }
+  | { type: 'auth.isDeviceRemembered'; email?: string }
   | { type: 'vault.sync' }
   | { type: 'vault.listItems' }
   | { type: 'vault.getField'; id: string; field: FieldName; masterPassword?: string }
@@ -176,6 +178,7 @@ export type ResponseMessage =
   | { ok: true; data: { json: string } }
   | { ok: true; data: { imported: number } }
   | { ok: true; data: { enabled: boolean } }
+  | { ok: true; data: { remembered: boolean } }
   | { ok: true; data: { verified: boolean } }
   | { ok: true; data: { matches: boolean } }
   | { ok: true; data: { assertion: PasskeyAssertion | null } }

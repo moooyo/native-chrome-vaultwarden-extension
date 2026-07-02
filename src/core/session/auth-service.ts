@@ -13,6 +13,8 @@ export type AuthResult =
 export interface AuthServiceDeps {
   api: ApiClient;
   session: SessionManager;
+  /** Current configured server URL (for per-(server,email) remember-token keying). */
+  serverUrlProvider?: () => Promise<string | undefined>;
   now?: () => number;
 }
 
@@ -30,6 +32,11 @@ export class AuthService {
 
   constructor(private readonly deps: AuthServiceDeps) {
     this.now = deps.now ?? (() => Date.now());
+  }
+
+  /** The configured server URL, or undefined when none is set (remember-token keying is then skipped). */
+  private currentServerUrl(): Promise<string | undefined> {
+    return this.deps.serverUrlProvider ? this.deps.serverUrlProvider() : Promise.resolve(undefined);
   }
 
   /** Register a new PBKDF2 account (client-side key generation), then auto-log-in. */
@@ -56,11 +63,53 @@ export class AuthService {
     const masterKey = await deriveMasterKey(input.masterPassword, email, prelogin.kdfIterations);
     const masterPasswordHash = await deriveMasterPasswordHash(masterKey, input.masterPassword);
     const stretchedMasterKey = await stretchMasterKey(masterKey);
+    const pending: PendingLogin = { email, masterPasswordHash, stretchedMasterKey, kdfIterations: prelogin.kdfIterations };
+
+    // If this (server, email) has a remembered device token, try to reuse it to skip 2FA.
+    const serverUrl = await this.currentServerUrl();
+    const remembered = serverUrl ? await this.deps.session.getRememberDeviceToken(serverUrl, email) : undefined;
+    if (serverUrl && remembered) {
+      return this.loginWithRememberToken({ email, masterPasswordHash, serverUrl, token: remembered, pending });
+    }
+
     const result = await this.deps.api.passwordLogin({ email, masterPasswordHash });
-    return this.finishPasswordLogin({
-      result,
-      pending: { email, masterPasswordHash, stretchedMasterKey, kdfIterations: prelogin.kdfIterations },
-    });
+    return this.finishPasswordLogin({ result, pending });
+  }
+
+  /**
+   * Reuse a stored device-remember token (two_factor_provider=5) to skip the 2FA challenge. Best-effort:
+   *  - success  → finishPasswordLogin (which captures the server's freshly ROTATED token)
+   *  - twoFactor → the token is stale; the server already returned the REAL providers, so clear the
+   *               token and drive the normal 2FA screen from THIS SAME result (no second round-trip,
+   *               and no duplicate email for email-2FA accounts)
+   *  - throws    → any other rejection (non-2FA 400, 5xx): clear the token and retry ONCE without it,
+   *               guaranteeing the fallback to the normal login/2FA flow regardless of error shape
+   */
+  private async loginWithRememberToken(args: {
+    email: string;
+    masterPasswordHash: string;
+    serverUrl: string;
+    token: string;
+    pending: PendingLogin;
+  }): Promise<AuthResult> {
+    let result: PasswordLoginResult;
+    try {
+      result = await this.deps.api.passwordLogin({
+        email: args.email,
+        masterPasswordHash: args.masterPasswordHash,
+        twoFactorProvider: 5,
+        twoFactorToken: args.token,
+        remember: true,
+      });
+    } catch {
+      await this.deps.session.removeRememberDeviceToken(args.serverUrl, args.email);
+      const retry = await this.deps.api.passwordLogin({ email: args.email, masterPasswordHash: args.masterPasswordHash });
+      return this.finishPasswordLogin({ result: retry, pending: args.pending });
+    }
+    if (result.kind === 'twoFactor') {
+      await this.deps.session.removeRememberDeviceToken(args.serverUrl, args.email);
+    }
+    return this.finishPasswordLogin({ result, pending: args.pending });
   }
 
   async submitTwoFactor(input: { provider: number; code: string; remember?: boolean }): Promise<AuthResult> {
@@ -240,7 +289,34 @@ export class AuthService {
 
   async removeAccount(email: string): Promise<void> {
     this.pendingLogin = undefined;
+    const serverUrl = await this.currentServerUrl();
+    if (serverUrl) await this.deps.session.removeRememberDeviceToken(serverUrl, email.trim().toLowerCase());
     await this.deps.session.removeAccount(email);
+  }
+
+  /** Forget this device's remembered-2FA token for `email` (defaults to the current account). No-op
+   *  when no server is configured or no account/email is resolvable. */
+  async forgetDevice(email?: string): Promise<void> {
+    const serverUrl = await this.currentServerUrl();
+    if (!serverUrl) return;
+    const target = await this.resolveRememberEmail(email);
+    if (!target) return;
+    await this.deps.session.removeRememberDeviceToken(serverUrl, target);
+  }
+
+  /** Whether a remembered-2FA token is stored for `email` (defaults to the current account). */
+  async isDeviceRemembered(email?: string): Promise<boolean> {
+    const serverUrl = await this.currentServerUrl();
+    if (!serverUrl) return false;
+    const target = await this.resolveRememberEmail(email);
+    if (!target) return false;
+    return Boolean(await this.deps.session.getRememberDeviceToken(serverUrl, target));
+  }
+
+  /** Normalize an explicit email, or fall back to the current persisted account's email. */
+  private async resolveRememberEmail(email?: string): Promise<string | undefined> {
+    if (email) return email.trim().toLowerCase();
+    return (await this.deps.session.getPersistedAuth())?.email;
   }
 
   private async derivePinKey(pin: string, email: string, iterations: number): Promise<SymmetricKey> {
@@ -316,6 +392,20 @@ export class AuthService {
       privateKey ? { ...saveInput, privateKey } : saveInput,
     );
     this.pendingLogin = undefined;
+    // Capture the device-remember token whenever the server returns one. The server only includes it
+    // when remember was in play — a first-time opt-in, or a reuse that auto-rotated it — so
+    // capture-on-presence covers both first capture and every subsequent rotation. Keyed by (server,
+    // email); undefined server (none configured) skips silently. This is a best-effort convenience:
+    // the login already succeeded and is persisted unlocked above, so a storage-write failure here
+    // (e.g. chrome.storage.local rejecting) must never surface as a login failure. Swallow errors.
+    try {
+      const rememberServerUrl = await this.currentServerUrl();
+      if (rememberServerUrl && data.TwoFactorToken) {
+        await this.deps.session.saveRememberDeviceToken(rememberServerUrl, input.pending.email, data.TwoFactorToken);
+      }
+    } catch {
+      /* best-effort token capture; never fail the login over it */
+    }
     return { kind: 'unlocked' };
   }
 }
