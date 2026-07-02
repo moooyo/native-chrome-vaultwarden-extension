@@ -1,6 +1,6 @@
 import { decryptToBytes, encryptToBytes } from '../crypto/encstring.js';
-import { rewrapDeep, rewrapEncString } from './rotate-crypto.js';
-import type { SymmetricKey } from '../crypto/keys.js';
+import { isEncString, rewrapDeep, rewrapEncString } from './rotate-crypto.js';
+import { symmetricKeyFromBytes, type SymmetricKey } from '../crypto/keys.js';
 import type { CipherResponse, FolderResponse, SendResponse } from '../api/types.js';
 
 export type RotatedCipher = Record<string, unknown> & { id: string };
@@ -33,6 +33,53 @@ export async function rotateCipher(raw: CipherResponse, oldKey: SymmetricKey, ne
     (rotated as Record<string, unknown>).attachments = rotatedAttachments;
   }
   return rotated;
+}
+
+/**
+ * Strict pre-POST self-verify for a single rotated personal cipher. Stronger than a plain
+ * `decryptCipher` check:
+ *  - KEYED (`rotated.key` set): rotateCipher leaves every field/attachment under the unchanged item
+ *    key, so this recovers the item key from the re-wrapped `rotated.key` and — for each
+ *    attachment — verifies its `key` unwraps under THAT item key. This catches a legacy
+ *    cross-client attachment whose key is actually wrapped under the (rotated-away) UserKey:
+ *    `decryptCipher` never attempts to decrypt attachment keys at all, so that corruption would
+ *    otherwise sail through self-verify and get POSTed (Finding 1).
+ *  - KEYLESS: deep-walks every EncString leaf in the rotated cipher (name/login/card/identity/
+ *    fields/fido2/notes, and — unlike `decryptCipher` — passwordHistory, attachment keys/fileNames,
+ *    and any unmodeled fields such as sshKey) and confirms each decrypts under the new UserKey
+ *    (Finding 2). `attachments2` is skipped: it is a key/fileName lift from the SAME rewrapped
+ *    `attachments` array (byte-identical), so verifying `attachments` already covers it.
+ * Throws (fail-close) on the first undecryptable leaf/key.
+ */
+export async function verifyRotatedCipher(rotated: RotatedCipher, newUserKey: SymmetricKey): Promise<void> {
+  const wrappedItemKey = rotated.key;
+  if (typeof wrappedItemKey === 'string' && wrappedItemKey) {
+    const itemKey = symmetricKeyFromBytes(await decryptToBytes(wrappedItemKey, newUserKey));
+    const attachments = rotated.attachments;
+    if (Array.isArray(attachments) && attachments.length > 0) {
+      for (const att of attachments) {
+        const attKey = (att as { key?: string | null } | null | undefined)?.key;
+        if (attKey) await decryptToBytes(attKey, itemKey);
+      }
+    }
+    return;
+  }
+  const { attachments2: _attachments2, ...rest } = rotated as Record<string, unknown>;
+  await verifyEncStringsDeep(rest, newUserKey);
+}
+
+async function verifyEncStringsDeep(value: unknown, key: SymmetricKey): Promise<void> {
+  if (isEncString(value)) {
+    await decryptToBytes(value, key);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) await verifyEncStringsDeep(item, key);
+    return;
+  }
+  if (value && typeof value === 'object') {
+    for (const v of Object.values(value as Record<string, unknown>)) await verifyEncStringsDeep(v, key);
+  }
 }
 
 export async function rotateFolder(raw: FolderResponse, oldKey: SymmetricKey, newKey: SymmetricKey): Promise<{ id: string; name: string }> {

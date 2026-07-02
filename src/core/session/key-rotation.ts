@@ -3,8 +3,7 @@ import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey } from '../
 import { encryptToBytes } from '../crypto/encstring.js';
 import { rsaOaepEncrypt } from '../crypto/primitives.js';
 import { base64ToBytes, bytesToBase64 } from '../crypto/encoding.js';
-import { decryptCipher } from '../vault/decrypt.js';
-import { rotateCipher, rotateFolder, rotateSend } from '../vault/rotate.js';
+import { rotateCipher, rotateFolder, rotateSend, verifyRotatedCipher, type RotatedCipher } from '../vault/rotate.js';
 import type { RotateKeyData, RotateOrgRecoveryData } from '../api/types.js';
 import { AppError } from '../errors.js';
 
@@ -69,10 +68,13 @@ export async function rotateAccountKey(masterPassword: string, deps: KeyRotation
     orgRecovery.push({ organizationId: org.id, resetPasswordKey: `4.${bytesToBase64(await rsaOaepEncrypt(pub, newUserKeyBytes))}` });
   }
 
-  // Strict pre-POST self-verify: every re-encrypted personal cipher must decrypt with the NEW UserKey.
-  for (let i = 0; i < ciphers.length; i++) {
-    const check = await decryptCipher(ciphers[i] as never, newUserKey);
-    if (!check || check.name === undefined || check.name === '(error)') throw new AppError('error', 'Rotation self-check failed; aborting.');
+  // Strict pre-POST self-verify: every re-encrypted personal cipher must be fully decryptable with
+  // the NEW UserKey (keyed: item key + every attachment key under it; keyless: every EncString leaf,
+  // including passwordHistory/attachment-keys/sshKey that a plain decryptCipher check would miss).
+  try {
+    for (const c of ciphers) await verifyRotatedCipher(c as RotatedCipher, newUserKey);
+  } catch {
+    throw new AppError('error', 'Rotation self-check failed; aborting.');
   }
 
   const body: RotateKeyData = {
