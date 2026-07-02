@@ -13,6 +13,8 @@ export type AuthResult =
 export interface AuthServiceDeps {
   api: ApiClient;
   session: SessionManager;
+  /** Current configured server URL (for per-(server,email) remember-token keying). */
+  serverUrlProvider?: () => Promise<string | undefined>;
   now?: () => number;
 }
 
@@ -30,6 +32,11 @@ export class AuthService {
 
   constructor(private readonly deps: AuthServiceDeps) {
     this.now = deps.now ?? (() => Date.now());
+  }
+
+  /** The configured server URL, or undefined when none is set (remember-token keying is then skipped). */
+  private currentServerUrl(): Promise<string | undefined> {
+    return this.deps.serverUrlProvider ? this.deps.serverUrlProvider() : Promise.resolve(undefined);
   }
 
   /** Register a new PBKDF2 account (client-side key generation), then auto-log-in. */
@@ -315,6 +322,14 @@ export class AuthService {
     await this.deps.session.saveUnlocked(
       privateKey ? { ...saveInput, privateKey } : saveInput,
     );
+    // Capture the device-remember token whenever the server returns one. The server only includes it
+    // when remember was in play — a first-time opt-in, or a reuse that auto-rotated it — so
+    // capture-on-presence covers both first capture and every subsequent rotation. Keyed by (server,
+    // email); undefined server (none configured) skips silently.
+    const rememberServerUrl = await this.currentServerUrl();
+    if (rememberServerUrl && data.TwoFactorToken) {
+      await this.deps.session.saveRememberDeviceToken(rememberServerUrl, input.pending.email, data.TwoFactorToken);
+    }
     this.pendingLogin = undefined;
     return { kind: 'unlocked' };
   }
