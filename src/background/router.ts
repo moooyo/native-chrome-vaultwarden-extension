@@ -351,6 +351,11 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.vault.getFillData) throw new Error('vault.getFillData is not wired');
             return { ok: true, data: await deps.vault.getFillData(request.cipherId, request.kind) };
           }
+          // Current-tab suggestions orchestration is not wired yet (tracked in a later task).
+          case 'autofill.getTabSuggestions':
+            throw new Error('autofill.getTabSuggestions is not wired');
+          case 'autofill.fillTabSuggestion':
+            throw new Error('autofill.fillTabSuggestion is not wired');
         }
       } catch (err) {
         if (err instanceof AppError) {

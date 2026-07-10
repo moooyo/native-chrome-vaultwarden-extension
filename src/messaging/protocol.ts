@@ -92,6 +92,62 @@ export interface FocusedFillCommand {
 
 export type ContentCommand = FillCommand | FillErrorCommand | FocusedFillCommand;
 
+/** Metadata-only description of a detected login form in a single frame. Never carries field values. */
+export interface FrameLoginForm {
+  formId: string;
+  visible: boolean;
+  focusedAt?: number;
+}
+
+/** Metadata-only snapshot of a frame's login forms, returned by `autofill.inspectFrame`. */
+export interface FrameInspection {
+  frameUrl: string;
+  forms: FrameLoginForm[];
+}
+
+/** Identifies a specific form within a specific frame/tab for the current-tab suggestions flow. */
+export interface TabSuggestionTarget {
+  frameId: number;
+  formId: string;
+  documentId?: string;
+}
+
+/** An autofill candidate paired with the frame/form it can be filled into (when known). */
+export interface TabAutofillSuggestion extends AutofillCandidate {
+  target?: TabSuggestionTarget;
+}
+
+export type TabSuggestionsOutcome =
+  | { status: 'ready'; suggestions: TabAutofillSuggestion[] }
+  | {
+      status:
+        | 'no_eligible_tab'
+        | 'site_access_unavailable'
+        | 'restricted_page'
+        | 'content_script_unavailable';
+      suggestions: [];
+    };
+
+export type TabFillOutcome =
+  | { status: 'filled' }
+  | { status: 'no_eligible_tab' }
+  | { status: 'site_access_unavailable' }
+  | { status: 'no_fillable_target' }
+  | { status: 'target_changed' }
+  | { status: 'restricted_page' }
+  | { status: 'content_script_unavailable' };
+
+/** Background → content: inspect the frame's login forms (metadata only) or commit a fill after
+ *  re-validating the frame URL and form identity (TOCTOU guard). */
+export type FrameAutofillMessage =
+  | { type: 'autofill.inspectFrame' }
+  | {
+      type: 'autofill.commitLoginFill';
+      formId: string;
+      expectedFrameUrl: string;
+      credentials: AutofillCredentials;
+    };
+
 export type RequestMessage =
   | { type: 'auth.getState' }
   | { type: 'auth.login'; email: string; masterPassword: string }
@@ -162,7 +218,9 @@ export type RequestMessage =
   | { type: 'autofill.saveLogin'; frameUrl: string; username?: string; password: string }
   | { type: 'autofill.updateLogin'; cipherId: string; frameUrl: string; password: string }
   | { type: 'autofill.findFillItems'; kind: FillKind }
-  | { type: 'autofill.getFillData'; cipherId: string; kind: FillKind };
+  | { type: 'autofill.getFillData'; cipherId: string; kind: FillKind }
+  | { type: 'autofill.getTabSuggestions'; tabId: number }
+  | { type: 'autofill.fillTabSuggestion'; tabId: number; cipherId: string; target: TabSuggestionTarget };
 
 export type ResponseMessage =
   | { ok: true; data: { state: SessionState } }
@@ -196,6 +254,8 @@ export type ResponseMessage =
   | { ok: true; data: SaveLoginPrompt }
   | { ok: true; data: { sends: SendSummary[] } }
   | { ok: true; data: { send: SendSummary } }
+  | { ok: true; data: { outcome: TabSuggestionsOutcome } }
+  | { ok: true; data: { outcome: TabFillOutcome } }
   | { ok: false; error: { code: AppErrorCode; message: string } };
 
 export async function sendRequest(request: RequestMessage): Promise<ResponseMessage> {
