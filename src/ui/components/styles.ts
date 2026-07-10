@@ -11,14 +11,18 @@ export const controlStyles = css`
     align-items: center;
     justify-content: center;
     gap: 6px;
-    height: 32px;
+    min-height: 34px;
     padding: 0 12px;
     border: 1px solid var(--vw-line);
-    border-radius: var(--vw-radius-control);
+    border-radius: var(--vw-radius-row);
     background: var(--vw-panel);
     color: var(--vw-ink);
     font-family: var(--vw-font-ui);
-    font-size: 13px;
+    font-size: var(--vw-font-size-body);
+    font-weight: 600;
+    letter-spacing: 0;
+    white-space: nowrap;
+    transition: background-color var(--vw-duration-fast), border-color var(--vw-duration-fast);
     cursor: pointer;
   }
   .button:hover {
@@ -26,23 +30,23 @@ export const controlStyles = css`
     background: var(--vw-blue-50);
   }
   .button.primary {
-    border-color: var(--vw-blue-600);
-    background: var(--vw-blue-600);
+    border-color: var(--vw-blue);
+    background: var(--vw-blue);
     color: #fff;
   }
   .button.primary:hover {
-    border-color: var(--vw-blue-700);
-    background: var(--vw-blue-700);
+    border-color: var(--vw-blue-hover);
+    background: var(--vw-blue-hover);
   }
 
   .icon-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     border: none;
-    border-radius: var(--vw-radius-control);
+    border-radius: var(--vw-radius-row);
     background: transparent;
     color: var(--vw-muted);
     cursor: pointer;
@@ -60,14 +64,15 @@ export const controlStyles = css`
 
   .input,
   .select {
-    height: 32px;
+    min-height: 36px;
     padding: 0 8px;
     border: 1px solid var(--vw-line);
-    border-radius: var(--vw-radius-control);
+    border-radius: var(--vw-radius-row);
     background: var(--vw-panel);
     color: var(--vw-ink);
     font-family: var(--vw-font-ui);
-    font-size: 13px;
+    font-size: var(--vw-font-size-body);
+    letter-spacing: 0;
   }
   .input:hover,
   .select:hover {
@@ -78,9 +83,26 @@ export const controlStyles = css`
     font-family: var(--vw-font-mono);
   }
 
+  .field-group {
+    overflow: hidden;
+    border: 1px solid var(--vw-line);
+    border-radius: var(--vw-radius-row);
+    background: var(--vw-panel);
+  }
+
+  .field-row {
+    min-height: 52px;
+    padding: var(--vw-space-xs) var(--vw-space-small);
+    border-top: 1px solid var(--vw-line-weak);
+  }
+
+  .field-row:first-child {
+    border-top: 0;
+  }
+
   :focus-visible {
     outline: none;
     box-shadow: var(--vw-focus);
-    border-radius: var(--vw-radius-control);
+    border-radius: var(--vw-radius-row);
   }
 `;
