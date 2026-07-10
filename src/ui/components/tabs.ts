@@ -11,7 +11,8 @@ export interface TabItem {
 /**
  * A dormant tablist built from native <button role="tab"> controls with a
  * roving tabindex. ArrowLeft/ArrowRight move (and activate) the adjacent
- * tab, wrapping at the edges; Home/End jump to the first/last tab.
+ * tab, wrapping at the edges; Home/End jump to the first/last tab. Real DOM
+ * focus always follows the newly selected tab's button.
  */
 export class VwTabs extends LitElement {
   static override properties = {
@@ -96,27 +97,40 @@ export class VwTabs extends LitElement {
       return;
     }
     const current = this.currentIndex();
+    let target: number;
     switch (event.key) {
       case 'ArrowRight':
         event.preventDefault();
-        this.selectByIndex((current + 1) % count);
+        target = (current + 1) % count;
         break;
       case 'ArrowLeft':
         event.preventDefault();
-        this.selectByIndex((current - 1 + count) % count);
+        target = (current - 1 + count) % count;
         break;
       case 'Home':
         event.preventDefault();
-        this.selectByIndex(0);
+        target = 0;
         break;
       case 'End':
         event.preventDefault();
-        this.selectByIndex(count - 1);
+        target = count - 1;
         break;
       default:
-        break;
+        return;
     }
+    this.selectByIndex(target);
+    this.focusTabAt(target);
   };
+
+  private focusTabAt(index: number): void {
+    void this.updateComplete.then(() => {
+      const buttons = this.shadowRoot?.querySelectorAll('button[role="tab"]');
+      const button = buttons?.[index];
+      if (button instanceof HTMLElement) {
+        button.focus();
+      }
+    });
+  }
 
   protected override render() {
     return html`

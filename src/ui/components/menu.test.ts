@@ -40,6 +40,34 @@ describe('vw-menu', () => {
     }));
   });
 
+  it('establishes a real initial focused menu item when opened', async () => {
+    const menu = await mountMenu();
+    const buttons = Array.from(menu.shadowRoot?.querySelectorAll('button[role="menuitem"]') ?? []) as HTMLButtonElement[];
+    expect(menu.shadowRoot?.activeElement).toBe(buttons[0]);
+  });
+
+  it('moves real DOM focus with ArrowDown/ArrowUp', async () => {
+    const menu = await mountMenu();
+    const buttons = Array.from(menu.shadowRoot?.querySelectorAll('button[role="menuitem"]') ?? []) as HTMLButtonElement[];
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await menu.updateComplete;
+    expect(menu.shadowRoot?.activeElement).toBe(buttons[1]);
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    await menu.updateComplete;
+    expect(menu.shadowRoot?.activeElement).toBe(buttons[0]);
+  });
+
+  it('moves real DOM focus with Home/End, skipping disabled entries', async () => {
+    const menu = await mountMenu();
+    const buttons = Array.from(menu.shadowRoot?.querySelectorAll('button[role="menuitem"]') ?? []) as HTMLButtonElement[];
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    await menu.updateComplete;
+    expect(menu.shadowRoot?.activeElement).toBe(buttons[1]);
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    await menu.updateComplete;
+    expect(menu.shadowRoot?.activeElement).toBe(buttons[0]);
+  });
+
   it('uses native button controls with menu/menuitem roles', async () => {
     const menu = await mountMenu();
     expect(menu.shadowRoot?.querySelector('[role="menu"]')).not.toBeNull();

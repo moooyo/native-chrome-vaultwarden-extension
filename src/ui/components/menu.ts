@@ -13,8 +13,10 @@ export interface MenuItem {
 
 /**
  * A dormant popup menu built from native <button role="menuitem"> controls.
- * Keyboard support: ArrowUp/ArrowDown/Home/End move the active item, Enter
- * and Space select it, Escape closes it. A document-level pointerdown
+ * Keyboard support: ArrowUp/ArrowDown/Home/End move real DOM focus (roving
+ * tabindex is unnecessary since items only render while open) to the active
+ * item, Enter and Space select it, Escape closes it. Opening the menu moves
+ * initial focus to the first enabled item. A document-level pointerdown
  * listener closes the menu on outside clicks while it is open, and is always
  * removed in disconnectedCallback.
  */
@@ -100,17 +102,44 @@ export class VwMenu extends LitElement {
     document.removeEventListener('pointerdown', this.handleDocumentPointerDown);
   }
 
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has('open') && this.open) {
+      // Compute the initial active item before render so the "active" CSS
+      // class and the focus target are consistent within the same update.
+      this.activeIndex = this.enabledIndexFrom(0, 1);
+    }
+  }
+
   protected override updated(changed: PropertyValues<this>): void {
     if (!changed.has('open')) {
       return;
     }
     if (this.open) {
-      this.activeIndex = this.enabledIndexFrom(0, 1);
       document.addEventListener('pointerdown', this.handleDocumentPointerDown);
+      // render() already committed synchronously above, so the active
+      // item's button exists in the DOM now and can be focused directly.
+      this.focusButtonAt(this.activeIndex);
     } else {
       this.activeIndex = -1;
       document.removeEventListener('pointerdown', this.handleDocumentPointerDown);
     }
+  }
+
+  private focusButtonAt(index: number): void {
+    const buttons = this.shadowRoot?.querySelectorAll('button[role="menuitem"]');
+    const button = buttons?.[index];
+    if (button instanceof HTMLElement) {
+      button.focus();
+    }
+  }
+
+  private focusActiveItem(): void {
+    void this.updateComplete.then(() => {
+      if (!this.open) {
+        return;
+      }
+      this.focusButtonAt(this.activeIndex);
+    });
   }
 
   private enabledIndexFrom(start: number, direction: 1 | -1): number {
@@ -128,6 +157,7 @@ export class VwMenu extends LitElement {
     const from = this.activeIndex === -1 ? 0 : this.activeIndex + direction;
     this.activeIndex = this.enabledIndexFrom(from, direction);
     this.requestUpdate();
+    this.focusActiveItem();
   }
 
   private selectActive(): void {
@@ -168,11 +198,13 @@ export class VwMenu extends LitElement {
         event.preventDefault();
         this.activeIndex = this.enabledIndexFrom(0, 1);
         this.requestUpdate();
+        this.focusActiveItem();
         break;
       case 'End':
         event.preventDefault();
         this.activeIndex = this.enabledIndexFrom(this.items.length - 1, -1);
         this.requestUpdate();
+        this.focusActiveItem();
         break;
       case 'Enter':
       case ' ':

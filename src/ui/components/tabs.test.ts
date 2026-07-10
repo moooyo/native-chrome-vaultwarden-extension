@@ -37,6 +37,36 @@ describe('vw-tabs', () => {
     expect(tabs.selected).toBe('all');
   });
 
+  it('moves real DOM focus to the newly selected tab on ArrowRight', async () => {
+    const tabs = await mountTabs();
+    const buttons = Array.from(tabs.shadowRoot?.querySelectorAll('button[role="tab"]') ?? []) as HTMLButtonElement[];
+    buttons[0]?.focus();
+    tabs.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    await tabs.updateComplete;
+    expect(tabs.shadowRoot?.activeElement).toBe(buttons[1]);
+  });
+
+  it('moves real DOM focus to the newly selected tab on ArrowLeft', async () => {
+    const tabs = await mountTabs();
+    const buttons = Array.from(tabs.shadowRoot?.querySelectorAll('button[role="tab"]') ?? []) as HTMLButtonElement[];
+    buttons[0]?.focus();
+    tabs.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    await tabs.updateComplete;
+    expect(tabs.shadowRoot?.activeElement).toBe(buttons[1]);
+  });
+
+  it('moves real DOM focus to the last tab on End and back to the first on Home', async () => {
+    const tabs = await mountTabs();
+    const buttons = Array.from(tabs.shadowRoot?.querySelectorAll('button[role="tab"]') ?? []) as HTMLButtonElement[];
+    buttons[0]?.focus();
+    tabs.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    await tabs.updateComplete;
+    expect(tabs.shadowRoot?.activeElement).toBe(buttons[1]);
+    tabs.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    await tabs.updateComplete;
+    expect(tabs.shadowRoot?.activeElement).toBe(buttons[0]);
+  });
+
   it('uses native buttons with tablist/tab roles and roving tabindex', async () => {
     const tabs = await mountTabs();
     const list = tabs.shadowRoot?.querySelector('[role="tablist"]');
