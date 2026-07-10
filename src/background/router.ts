@@ -2,7 +2,7 @@ import type { AuthService } from '../core/session/auth-service.js';
 import type { VaultService } from '../core/vault/vault-service.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 import type { LockTimeoutSetting, OnIdleAction, ClipboardClearSetting } from './settings.js';
-import type { RequestMessage, ResponseMessage } from '../messaging/protocol.js';
+import type { RequestMessage, ResponseMessage, TabFillOutcome, TabSuggestionsOutcome, TabSuggestionTarget } from '../messaging/protocol.js';
 import { AppError } from '../core/errors.js';
 
 export interface RouterDeps {
@@ -21,6 +21,10 @@ export interface RouterDeps {
     saveClipboardClearSetting(value: ClipboardClearSetting): Promise<void>;
   };
   clipboard?: { scheduleClear(): Promise<void> };
+  tabAutofill?: {
+    getSuggestions(tabId: number): Promise<TabSuggestionsOutcome>;
+    fill(tabId: number, cipherId: string, target: TabSuggestionTarget): Promise<TabFillOutcome>;
+  };
 }
 
 export function createRouter(deps: RouterDeps) {
@@ -351,11 +355,14 @@ export function createRouter(deps: RouterDeps) {
             if (!deps.vault.getFillData) throw new Error('vault.getFillData is not wired');
             return { ok: true, data: await deps.vault.getFillData(request.cipherId, request.kind) };
           }
-          // Current-tab suggestions orchestration is not wired yet (tracked in a later task).
-          case 'autofill.getTabSuggestions':
-            throw new Error('autofill.getTabSuggestions is not wired');
-          case 'autofill.fillTabSuggestion':
-            throw new Error('autofill.fillTabSuggestion is not wired');
+          case 'autofill.getTabSuggestions': {
+            if (!deps.tabAutofill) throw new Error('tabAutofill is not wired');
+            return { ok: true, data: { outcome: await deps.tabAutofill.getSuggestions(request.tabId) } };
+          }
+          case 'autofill.fillTabSuggestion': {
+            if (!deps.tabAutofill) throw new Error('tabAutofill is not wired');
+            return { ok: true, data: { outcome: await deps.tabAutofill.fill(request.tabId, request.cipherId, request.target) } };
+          }
         }
       } catch (err) {
         if (err instanceof AppError) {

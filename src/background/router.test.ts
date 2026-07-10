@@ -586,6 +586,31 @@ describe('router', () => {
     expect(res).toEqual({ ok: true, data: { number: '4111' } });
   });
 
+  it('routes autofill.getTabSuggestions to tabAutofill.getSuggestions', async () => {
+    const getSuggestions = vi.fn(async () => ({ status: 'ready' as const, suggestions: [] }));
+    const router = createRouter({ auth: {}, vault: {}, settings: settingsStub, tabAutofill: { getSuggestions, fill: vi.fn() } });
+    const res = await router.handle({ type: 'autofill.getTabSuggestions', tabId: 7 });
+    expect(getSuggestions).toHaveBeenCalledWith(7);
+    expect(res).toEqual({ ok: true, data: { outcome: { status: 'ready', suggestions: [] } } });
+  });
+
+  it('routes autofill.fillTabSuggestion to tabAutofill.fill', async () => {
+    const fill = vi.fn(async () => ({ status: 'filled' as const }));
+    const router = createRouter({ auth: {}, vault: {}, settings: settingsStub, tabAutofill: { getSuggestions: vi.fn(), fill } });
+    const target = { frameId: 0, formId: 'form-1' };
+    const res = await router.handle({ type: 'autofill.fillTabSuggestion', tabId: 7, cipherId: 'c1', target });
+    expect(fill).toHaveBeenCalledWith(7, 'c1', target);
+    expect(res).toEqual({ ok: true, data: { outcome: { status: 'filled' } } });
+  });
+
+  it('throws when tabAutofill is not wired', async () => {
+    const router = createRouter({ auth: {}, vault: {}, settings: settingsStub });
+    await expect(router.handle({ type: 'autofill.getTabSuggestions', tabId: 7 }))
+      .resolves.toEqual({ ok: false, error: { code: 'error', message: 'tabAutofill is not wired' } });
+    await expect(router.handle({ type: 'autofill.fillTabSuggestion', tabId: 7, cipherId: 'c1', target: { frameId: 0, formId: 'form-1' } }))
+      .resolves.toEqual({ ok: false, error: { code: 'error', message: 'tabAutofill is not wired' } });
+  });
+
   it('routes sends.createFile to vault.createFileSend with the server URL', async () => {
     const createFileSend = vi.fn(async () => ({ id: 's1', url: 'u', name: 'Doc', type: 1 }));
     const settings = { getServerUrl: vi.fn(async () => 'http://localhost:8080'), saveServerUrl: vi.fn(), getDefaultUriMatchStrategy: vi.fn(async () => 0), saveDefaultUriMatchStrategy: vi.fn(), getLockTimeout: vi.fn(async () => '15'), saveLockTimeout: vi.fn() };

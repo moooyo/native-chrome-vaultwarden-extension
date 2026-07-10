@@ -44,4 +44,9 @@ describe('manifest', () => {
     expect(manifest.permissions).toContain('idle');
     expect(manifest.permissions).toContain('offscreen');
   });
+
+  it('declares activeTab and webNavigation permissions', () => {
+    expect(manifest.permissions).toContain('activeTab');
+    expect(manifest.permissions).toContain('webNavigation');
+  });
 });

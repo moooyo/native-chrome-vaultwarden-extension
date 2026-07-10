@@ -10,6 +10,7 @@ import { createIdleLock, IDLE_LOCK_ALARM } from './idle-lock.js';
 import { createClipboard, CLIPBOARD_CLEAR_ALARM } from './clipboard.js';
 import { createContextMenu, shouldRefreshMenu } from './context-menu.js';
 import { handleFocusedFillCommand } from './commands.js';
+import { createTabAutofillCoordinator, parseBrowserFrame } from './tab-autofill.js';
 import type { RequestMessage } from '../messaging/protocol.js';
 
 const localStore = createBrowserStore('local');
@@ -70,7 +71,32 @@ const clipboard = createClipboard({
   closeOffscreen: async () => { try { await offscreenApi?.offscreen?.closeDocument(); } catch { /* none open */ } },
 });
 
-const router = createRouter({ auth, vault, settings, clipboard: { scheduleClear: () => clipboard.scheduleClear() } });
+const tabAutofill = createTabAutofillCoordinator({
+  getTab: async (tabId) => {
+    const tab = await browser.tabs.get(tabId);
+    return tab.url === undefined ? { active: tab.active } : { active: tab.active, url: tab.url };
+  },
+  // Only consulted for cross-origin frames; the active tab and same-origin frames are already
+  // covered by the activeTab grant implied by `getTab` exposing a `url` at all.
+  hasHostAccess: (url) => browser.permissions.contains({ origins: [url] }),
+  getFrames: async (tabId) => {
+    const frames = await browser.webNavigation.getAllFrames({ tabId });
+    return (frames ?? []).flatMap((frame) => {
+      const parsed = parseBrowserFrame(frame);
+      return parsed ? [parsed] : [];
+    });
+  },
+  getFrame: async (tabId, frameId) => {
+    const frame = await browser.webNavigation.getFrame({ tabId, frameId });
+    return frame === null ? undefined : parseBrowserFrame(frame);
+  },
+  sendToFrame: (tabId, frameId, message) => browser.tabs.sendMessage(tabId, message, { frameId }),
+  findCandidates: async (frameUrl) => vault.findAutofillCandidates(frameUrl, await settings.getDefaultUriMatchStrategy()),
+  getCredentials: async (cipherId, frameUrl) => vault.getAutofillCredentials(cipherId, frameUrl, await settings.getDefaultUriMatchStrategy()),
+  now: () => Date.now(),
+});
+
+const router = createRouter({ auth, vault, settings, clipboard: { scheduleClear: () => clipboard.scheduleClear() }, tabAutofill });
 
 // Pin storage.session to trusted contexts on every SW start (MV3 workers re-evaluate this file
 // on each wake) and again on install. Default is already TRUSTED_CONTEXTS; this is defense-in-depth.
