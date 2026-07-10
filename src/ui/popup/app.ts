@@ -3,7 +3,7 @@ import browser from 'webextension-polyfill';
 import { sendRequest, type ResponseMessage } from '../../messaging/protocol.js';
 import type { AuthResult } from '../../core/session/auth-service.js';
 import type { SessionState } from '../../core/session/session-manager.js';
-import type { CipherSummary, CollectionSummary, DecryptedCipher, FolderSummary } from '../../core/vault/models.js';
+import type { CipherInput, CipherSummary, CollectionSummary, DecryptedCipher, FolderSummary } from '../../core/vault/models.js';
 import type { OrgPermission } from '../../core/vault/org-permissions.js';
 import type { TabFillOutcome, TabSuggestionsOutcome } from '../../messaging/protocol.js';
 import { themeTokens } from '../components/tokens.js';
@@ -13,6 +13,8 @@ import './vault/popup-header.js';
 import './vault/vault-view.js';
 import './item/item-detail.js';
 import './item/reprompt-gate.js';
+import './editor/type-picker.js';
+import './editor/cipher-editor.js';
 import { triggerDownload } from './utils.js';
 import type {
   EmailChangeDetail,
@@ -46,6 +48,12 @@ import type {
   SuggestionsViewState,
   ToolActionDetail,
 } from './types.js';
+import type {
+  CipherCollectionsDetail,
+  EditorContext,
+  EditorShareDetail,
+  EditorTypeDetail,
+} from './editor/editor-types.js';
 
 /** The auth-related route names `VwAuthViews` renders; everything else is out of this task's scope. */
 type AuthRoute = Extract<PopupRoute, { name: 'login' | 'register' | 'twoFactor' | 'unlock' }>;
@@ -115,6 +123,8 @@ export class VwPopupApp extends LitElement {
     detailCipher: { attribute: false },
     detailStatus: { attribute: false },
     repromptError: { attribute: false },
+    editorInput: { attribute: false },
+    editorStatus: { attribute: false },
   };
 
   declare route: PopupRoute;
@@ -143,6 +153,11 @@ export class VwPopupApp extends LitElement {
   declare detailStatus: DetailStatus | undefined;
   /** The reprompt gate's error message (wrong/failed master-password verification). */
   declare repromptError: string | undefined;
+  /** The reprompt-gated editable plaintext for the item open in the editor, or `null` while loading
+   *  (or in create mode). Held only for the editor's lifetime; cleared on every navigation. */
+  declare editorInput: CipherInput | null;
+  /** Request-error/success banner the root drives on the open editor (save/collections/share). */
+  declare editorStatus: DetailStatus | undefined;
 
   /** Injectable worker request function; defaults to the real messaging channel. */
   request: PopupRequest = sendRequest;
@@ -194,6 +209,8 @@ export class VwPopupApp extends LitElement {
     this.detailCipher = null;
     this.detailStatus = undefined;
     this.repromptError = undefined;
+    this.editorInput = null;
+    this.editorStatus = undefined;
   }
 
   static override styles = [
@@ -226,6 +243,8 @@ export class VwPopupApp extends LitElement {
     this.detailCipher = null;
     this.detailStatus = undefined;
     this.repromptError = undefined;
+    this.editorInput = null;
+    this.editorStatus = undefined;
   }
 
   /** Assigns the next route, clearing per-view ephemeral state that must not survive a
@@ -246,6 +265,14 @@ export class VwPopupApp extends LitElement {
     }
     if (route.name === 'detail') {
       void this.loadDetail(route.cipherId);
+    }
+    if (route.name === 'editor' && route.mode === 'edit' && route.cipherId !== undefined) {
+      const summary = this.items.find((item) => item.id === route.cipherId);
+      // A protected item must clear the reprompt gate (which then triggers the load) before the
+      // editor can reveal its editable plaintext; otherwise load it straight away.
+      if (!summary?.reprompt || this.repromptCredential?.cipherId === route.cipherId) {
+        void this.loadEditorInput(route.cipherId);
+      }
     }
   }
 
@@ -761,6 +788,8 @@ export class VwPopupApp extends LitElement {
       this.repromptError = undefined;
       this.detailExtrasCache = undefined; // rebuild extras so they carry the newly-verified credential
       this.requestUpdate();
+      // In the editor, the newly-verified credential unlocks the reprompt-gated editable plaintext.
+      if (this.route.name === 'editor') void this.loadEditorInput(id);
     } finally {
       this.pending = false;
     }
@@ -897,6 +926,111 @@ export class VwPopupApp extends LitElement {
     }
   }
 
+  // --- Editor (dormant) orchestration -------------------------------------------------------
+
+  /** Fetch the reprompt-gated editable plaintext for the item open in the editor. Guards against a
+   *  stale response arriving after the user navigated away from that editor. */
+  private async loadEditorInput(id: string): Promise<void> {
+    const mp = this.repromptMp(id);
+    const response = await this.request(
+      mp === undefined ? { type: 'vault.getCipherInput', id } : { type: 'vault.getCipherInput', id, masterPassword: mp },
+    );
+    if (this.route.name !== 'editor' || this.route.cipherId !== id) return;
+    if (!response.ok) {
+      this.editorStatus = { message: response.error.message, tone: 'danger' };
+      return;
+    }
+    const input = (response.data as { input: CipherInput | null }).input;
+    if (!input) {
+      this.editorStatus = { message: 'This item type cannot be edited yet', tone: 'danger' };
+      return;
+    }
+    this.editorInput = input;
+  }
+
+  /** Persist the editor's validated `CipherInput` (create or update), then reload and return to the
+   *  list. A failed request stays in the editor with the error surfaced on its own status banner. */
+  private async handleEditorSave(input: CipherInput): Promise<void> {
+    if (this.pending || this.route.name !== 'editor') return;
+    const route = this.route;
+    this.pending = true;
+    try {
+      const response = route.mode === 'edit' && route.cipherId !== undefined
+        ? await this.request({ type: 'vault.updateCipher', id: route.cipherId, input })
+        : await this.request({ type: 'vault.createCipher', input });
+      if (!response.ok) {
+        this.editorStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      await this.loadListing();
+      this.navigate({ name: 'vault', scope: 'all' });
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  /** Assign an organization item to collections — a separate operation from the field save. Keeps the
+   *  editor open (with the refreshed listing) so the user can continue editing. */
+  private async handleCipherCollections(detail: CipherCollectionsDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.request({ type: 'vault.setCipherCollections', id: detail.cipherId, collectionIds: detail.collectionIds });
+      if (!response.ok) {
+        this.editorStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      await this.loadListing();
+      this.editorStatus = { message: 'Collections updated', tone: 'success' };
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  /** Move a personal item into an organization ("share") — a separate operation from both the field
+   *  save and collection assignment. The worker fails closed on passkey/history items; the editor also
+   *  guards these client-side. */
+  private async handleEditorShare(detail: EditorShareDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const mp = this.repromptMp(detail.cipherId);
+      const response = await this.request(
+        mp === undefined
+          ? { type: 'vault.shareCipher', id: detail.cipherId, organizationId: detail.organizationId, collectionIds: detail.collectionIds }
+          : { type: 'vault.shareCipher', id: detail.cipherId, organizationId: detail.organizationId, collectionIds: detail.collectionIds, masterPassword: mp },
+      );
+      if (!response.ok) {
+        this.editorStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      await this.loadListing();
+      this.navigate({ name: 'vault', scope: 'all' });
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  /** Delete the item open in the editor (soft delete to trash, or permanent), then reload and return
+   *  to the list. Errors stay local to the editor's status banner. */
+  private async handleEditorDelete(detail: DeleteItemDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.request(
+        detail.permanent ? { type: 'vault.deleteCipher', id: detail.cipherId } : { type: 'vault.softDeleteCipher', id: detail.cipherId },
+      );
+      if (!response.ok) {
+        this.editorStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      await this.loadListing();
+      this.navigate({ name: 'vault', scope: 'all' });
+    } finally {
+      this.pending = false;
+    }
+  }
+
   private renderLoading() {
     return html`<vw-status-message tone="info" .icon=${'refresh'} message="Loading vault…"></vw-status-message>`;
   }
@@ -1000,6 +1134,62 @@ export class VwPopupApp extends LitElement {
     `;
   }
 
+  private renderEditor(route: Extract<PopupRoute, { name: 'editor' }>) {
+    // Step one of "add item": no type chosen yet → show the type picker.
+    if (route.mode === 'create' && route.cipherType === undefined) {
+      return html`
+        <vw-type-picker
+          @vw-editor-type=${(event: CustomEvent<EditorTypeDetail>) => this.navigate({ name: 'editor', mode: 'create', cipherType: event.detail.type })}
+          @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+        ></vw-type-picker>
+      `;
+    }
+    const summary = route.cipherId !== undefined ? this.items.find((item) => item.id === route.cipherId) : undefined;
+    if (route.mode === 'edit' && route.cipherId !== undefined) {
+      const id = route.cipherId;
+      if (!summary) {
+        return html`<vw-status-message tone="warning" .icon=${'alert'} message="This item is no longer available."></vw-status-message>`;
+      }
+      // A protected item must clear the master-password gate before the editor reveals its plaintext.
+      if (summary.reprompt && this.repromptCredential?.cipherId !== id) {
+        return html`
+          <vw-reprompt-gate
+            .name=${summary.name}
+            .pending=${this.pending}
+            .error=${this.repromptError}
+            @vw-reprompt-submit=${(event: CustomEvent<RepromptSubmitDetail>) => void this.handleReprompt(id, event.detail.password)}
+            @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'all' })}
+          ></vw-reprompt-gate>
+        `;
+      }
+      if (!this.editorInput) return this.renderLoading();
+    }
+    const type = route.mode === 'create' ? route.cipherType : this.editorInput?.type;
+    if (type === undefined) return this.renderLoading();
+    const context: EditorContext = {
+      mode: route.mode,
+      type,
+      ...(route.cipherId !== undefined ? { cipherId: route.cipherId } : {}),
+      ...(this.editorInput ? { input: this.editorInput } : {}),
+      folders: this.folders,
+      collections: this.collections,
+      orgPermissions: this.orgPermissions,
+    };
+    return html`
+      <vw-cipher-editor
+        .context=${context}
+        .summary=${summary}
+        .pending=${this.pending}
+        .status=${this.editorStatus}
+        @vw-editor-save=${(event: CustomEvent<CipherInput>) => void this.handleEditorSave(event.detail)}
+        @vw-cipher-collections=${(event: CustomEvent<CipherCollectionsDetail>) => void this.handleCipherCollections(event.detail)}
+        @vw-editor-share=${(event: CustomEvent<EditorShareDetail>) => void this.handleEditorShare(event.detail)}
+        @vw-delete-item=${(event: CustomEvent<DeleteItemDetail>) => void this.handleEditorDelete(event.detail)}
+        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'all' })}
+      ></vw-cipher-editor>
+    `;
+  }
+
   protected override render() {
     const route = this.route;
     switch (route.name) {
@@ -1014,8 +1204,10 @@ export class VwPopupApp extends LitElement {
         return this.renderVault(route);
       case 'detail':
         return this.renderDetail(route);
+      case 'editor':
+        return this.renderEditor(route);
       default:
-        // Editor/generator/health/sends/accountSecurity/pin views are added by later tasks;
+        // Generator/health/sends/accountSecurity/pin views are added by later tasks;
         // this root only routes to them for now.
         return nothing;
     }

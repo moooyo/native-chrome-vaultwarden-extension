@@ -794,3 +794,125 @@ describe('vw-popup-app item detail', () => {
 });
 
 
+
+// --- Task 8: cipher editor integration ---
+
+function editorEl(app: VwPopupApp): Element | null {
+  return app.shadowRoot!.querySelector('vw-cipher-editor');
+}
+
+function pickerEl(app: VwPopupApp): Element | null {
+  return app.shadowRoot!.querySelector('vw-type-picker');
+}
+
+async function openEditorForEdit(app: VwPopupApp, cipherId: string): Promise<void> {
+  await openDetail(app, cipherId);
+  detailEl(app)!.dispatchEvent(new CustomEvent('vw-edit-item', { detail: { cipherId }, bubbles: true, composed: true }));
+  await fully(app);
+}
+
+describe('vw-popup-app cipher editor', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it('shows the type picker on add, then renders the editor for the chosen type', async () => {
+    const app = await mountVault(unlockedHandlers(), browserSeam());
+    header(app).dispatchEvent(new CustomEvent('vw-add', { bubbles: true, composed: true }));
+    await fully(app);
+    expect(pickerEl(app)).not.toBeNull();
+    pickerEl(app)!.dispatchEvent(new CustomEvent('vw-editor-type', { detail: { type: 3 }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(app.route).toEqual({ name: 'editor', mode: 'create', cipherType: 3 });
+    expect(editorEl(app)).not.toBeNull();
+  });
+
+  it('creates a cipher via vault.createCipher and reloads the listing', async () => {
+    const createCipher = vi.fn(async () => ({ ok: true as const, data: null }));
+    const app = await mountVault(unlockedHandlers({ 'vault.createCipher': createCipher }), browserSeam());
+    app.navigate({ name: 'editor', mode: 'create', cipherType: 1 });
+    await fully(app);
+    editorEl(app)!.dispatchEvent(new CustomEvent('vw-editor-save', { detail: { type: 1, name: 'New', favorite: false, reprompt: false, folderId: null, fields: [] }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(createCipher).toHaveBeenCalledWith(expect.objectContaining({ type: 'vault.createCipher', input: expect.objectContaining({ name: 'New' }) }));
+    expect(app.route).toEqual({ name: 'vault', scope: 'all' });
+  });
+
+  it('loads the editable input for an edit and updates via vault.updateCipher', async () => {
+    const getCipherInput = vi.fn(async () => ({ ok: true as const, data: { input: { type: 1 as const, name: 'GitHub', login: { username: 'octo' } } } }));
+    const updateCipher = vi.fn(async () => ({ ok: true as const, data: null }));
+    const app = await mountVault(unlockedHandlers({ 'vault.getCipherInput': getCipherInput, 'vault.updateCipher': updateCipher }), browserSeam());
+    await openEditorForEdit(app, 'c1');
+    expect(getCipherInput).toHaveBeenCalledWith(expect.objectContaining({ type: 'vault.getCipherInput', id: 'c1' }));
+    expect(editorEl(app)).not.toBeNull();
+    editorEl(app)!.dispatchEvent(new CustomEvent('vw-editor-save', { detail: { type: 1, name: 'GitHub 2', favorite: false, reprompt: false, folderId: null, fields: [] }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(updateCipher).toHaveBeenCalledWith(expect.objectContaining({ type: 'vault.updateCipher', id: 'c1', input: expect.objectContaining({ name: 'GitHub 2' }) }));
+    expect(app.route).toEqual({ name: 'vault', scope: 'all' });
+  });
+
+  it('assigns collections through vault.setCipherCollections as a separate operation', async () => {
+    const setCipherCollections = vi.fn(async () => ({ ok: true as const, data: null }));
+    const app = await mountVault(unlockedHandlers({ 'vault.getCipherInput': async () => ({ ok: true, data: { input: { type: 1 as const, name: 'Item' } } }), 'vault.setCipherCollections': setCipherCollections }), browserSeam());
+    app.navigate({ name: 'editor', mode: 'edit', cipherId: 'c1' });
+    await fully(app);
+    editorEl(app)!.dispatchEvent(new CustomEvent('vw-cipher-collections', { detail: { cipherId: 'c1', collectionIds: ['col1', 'col2'] }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(setCipherCollections).toHaveBeenCalledWith({ type: 'vault.setCipherCollections', id: 'c1', collectionIds: ['col1', 'col2'] });
+    // stays in the editor after a collection assignment
+    expect(app.route.name).toBe('editor');
+  });
+
+  it('moves a personal item into an organization through vault.shareCipher', async () => {
+    const shareCipher = vi.fn(async () => ({ ok: true as const, data: null }));
+    const app = await mountVault(unlockedHandlers({ 'vault.getCipherInput': async () => ({ ok: true, data: { input: { type: 1 as const, name: 'Item' } } }), 'vault.shareCipher': shareCipher }), browserSeam());
+    app.navigate({ name: 'editor', mode: 'edit', cipherId: 'c1' });
+    await fully(app);
+    editorEl(app)!.dispatchEvent(new CustomEvent('vw-editor-share', { detail: { cipherId: 'c1', organizationId: 'org1', collectionIds: ['col1'] }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(shareCipher).toHaveBeenCalledWith(expect.objectContaining({ type: 'vault.shareCipher', id: 'c1', organizationId: 'org1', collectionIds: ['col1'] }));
+    expect(app.route).toEqual({ name: 'vault', scope: 'all' });
+  });
+
+  it('soft-deletes from the editor via vault.softDeleteCipher', async () => {
+    const softDeleteCipher = vi.fn(async () => ({ ok: true as const, data: null }));
+    const app = await mountVault(unlockedHandlers({ 'vault.getCipherInput': async () => ({ ok: true, data: { input: { type: 1 as const, name: 'Item' } } }), 'vault.softDeleteCipher': softDeleteCipher }), browserSeam());
+    app.navigate({ name: 'editor', mode: 'edit', cipherId: 'c1' });
+    await fully(app);
+    editorEl(app)!.dispatchEvent(new CustomEvent('vw-delete-item', { detail: { cipherId: 'c1', permanent: false }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(softDeleteCipher).toHaveBeenCalledWith({ type: 'vault.softDeleteCipher', id: 'c1' });
+    expect(app.route).toEqual({ name: 'vault', scope: 'all' });
+  });
+
+  it('gates editing a protected item behind the reprompt gate before loading its input', async () => {
+    const getCipherInput = vi.fn(async () => ({ ok: true as const, data: { input: { type: 1 as const, name: 'Secret' } } }));
+    const app = await mountVault(
+      unlockedHandlers({
+        'vault.listItems': async () => ({ ok: true, data: { items: [summary({ id: 'c1', reprompt: true })], folders: [], collections: [], orgPermissions: [] } }),
+        'auth.verifyMasterPassword': async () => ({ ok: true, data: { verified: true } }),
+        'vault.getCipherInput': getCipherInput,
+      }),
+      browserSeam(),
+    );
+    app.navigate({ name: 'editor', mode: 'edit', cipherId: 'c1' });
+    await fully(app);
+    expect(gateEl(app)).not.toBeNull();
+    expect(editorEl(app)).toBeNull();
+    expect(getCipherInput).not.toHaveBeenCalled();
+    gateEl(app)!.dispatchEvent(new CustomEvent('vw-reprompt-submit', { detail: { password: 'master-pw' }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(editorEl(app)).not.toBeNull();
+    expect(getCipherInput).toHaveBeenCalledWith(expect.objectContaining({ type: 'vault.getCipherInput', id: 'c1', masterPassword: 'master-pw' }));
+  });
+
+  it('surfaces a save error on the editor status banner and stays in the editor', async () => {
+    const app = await mountVault(unlockedHandlers({ 'vault.createCipher': async () => ({ ok: false, error: { code: 'error', message: 'server refused' } }) }), browserSeam());
+    app.navigate({ name: 'editor', mode: 'create', cipherType: 1 });
+    await fully(app);
+    editorEl(app)!.dispatchEvent(new CustomEvent('vw-editor-save', { detail: { type: 1, name: 'X', favorite: false, reprompt: false, folderId: null, fields: [] }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(app.route.name).toBe('editor');
+    expect(app.editorStatus).toEqual({ message: 'server refused', tone: 'danger' });
+  });
+});
