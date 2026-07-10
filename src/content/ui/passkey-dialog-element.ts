@@ -7,18 +7,18 @@ const dialogStyles = css`
   .overlay {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: rgba(12,16,26,.45); z-index: 2147483647;
-    font: 14px/1.5 -apple-system, "Segoe UI", system-ui, Roboto, sans-serif;
+    font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   }
   .card {
     width: min(360px, calc(100vw - 32px));
     background: #ffffff; color: #181d2b;
-    border: 1px solid #dee3ef; border-radius: 14px;
+    border: 1px solid rgb(0 0 0 / 13%); border-radius: 12px;
     box-shadow: 0 24px 64px rgba(20,27,45,.32);
     padding: 18px; animation: pop 140ms cubic-bezier(.2,.7,.2,1);
   }
   @keyframes pop { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
   .head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
-  .mark { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(150deg, #4f46e5, #4338ca); color: #fff; flex: none; }
+  .mark { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 4px; background: hsl(212 96% 47%); color: #fff; flex: none; }
   .mark svg { width: 16px; height: 16px; }
   h1 { font-size: 14px; font-weight: 680; margin: 0; }
   p { margin: 0 0 14px; color: #5b647a; }
@@ -29,11 +29,11 @@ const dialogStyles = css`
   .targets.scrollable { max-height: 232px; overflow-y: auto; }
   .target { text-align: left; }
   button { font: inherit; flex: 1; padding: 9px 12px; border-radius: 9px; cursor: pointer; border: 1px solid transparent; font-weight: 620; }
-  .confirm { background: #4f46e5; color: #fff; }
-  .confirm:hover { background: #4338ca; }
+  .confirm { background: hsl(212 96% 47%); color: #fff; }
+  .confirm:hover { background: hsl(216 100% 39%); }
   .cancel { background: #f3f5fb; color: #181d2b; border-color: #e7ebf5; }
   .cancel:hover { background: #e9edf7; }
-  button:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(79,70,229,.35); }
+  button:focus-visible { outline: none; box-shadow: 0 0 0 2px hsl(215 63% 53%); }
   svg { stroke-width: 1.8; }
   @media (prefers-color-scheme: dark) {
     .card { background: #151a26; color: #e9edf7; border-color: #283041; box-shadow: 0 24px 64px rgba(0,0,0,.65); }

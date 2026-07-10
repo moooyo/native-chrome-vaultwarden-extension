@@ -109,6 +109,16 @@ describe('vw-autofill-popover', () => {
     expect(root.innerHTML).not.toContain('cipher-secret-id');
   });
 
+  it('uses selected-row semantics without exposing candidate ids', async () => {
+    const element = await mount((el) => {
+      el.view = 'list';
+      el.candidates = [{ id: 'cipher-secret-id', name: 'Alpha', sub: 'a@example.com', favorite: false }];
+    });
+    const row = shadow(element).querySelector('[role="option"]')!;
+    expect(row.getAttribute('aria-selected')).toBe('true');
+    expect(shadow(element).innerHTML).not.toContain('cipher-secret-id');
+  });
+
   it('caps the list height and marks long lists as locally scrollable', async () => {
     const element = await mount((el) => {
       el.view = 'list';

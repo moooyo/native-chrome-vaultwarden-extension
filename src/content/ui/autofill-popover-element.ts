@@ -67,20 +67,20 @@ export class VwAutofillPopover extends LitElement {
     :host { all: initial; }
     * { box-sizing: border-box; }
     .box {
-      font: 13px/1.45 -apple-system, "Segoe UI", system-ui, Roboto, sans-serif;
-      color: #181d2b;
+      font: 14px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+      color: rgb(0 0 0 / 82%);
       background: #ffffff;
-      border: 1px solid #dee3ef;
-      border-radius: 12px;
+      border: 1px solid rgb(0 0 0 / 13%);
+      border-radius: 8px;
       box-shadow: 0 18px 48px rgba(20,27,45,.22), 0 4px 12px rgba(20,27,45,.12);
       min-width: 232px;
       max-width: 340px;
       overflow: hidden;
-      animation: pop 140ms cubic-bezier(.2,.7,.2,1);
+      animation: pop 175ms cubic-bezier(.4,0,.2,1);
     }
     @keyframes pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
     .brandrow { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border-bottom: 1px solid #eef1f8; }
-    .mark { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; background: linear-gradient(150deg, #4f46e5, #4338ca); color: #fff; flex: none; }
+    .mark { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 4px; background: hsl(212 96% 47%); color: #fff; flex: none; }
     .mark svg { width: 13px; height: 13px; }
     .brandrow .label { font-weight: 650; font-size: 12px; letter-spacing: .01em; }
     .list { padding: 6px; display: block; }
@@ -91,16 +91,19 @@ export class VwAutofillPopover extends LitElement {
       border: 1px solid transparent; background: transparent;
       padding: 8px; border-radius: 9px; cursor: pointer; color: inherit;
     }
-    button.candidate:hover { background: #f3f5fb; border-color: #e7ebf5; }
-    button.candidate:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(79,70,229,.32); }
-    .mono-chip { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: 8px; font-weight: 680; font-size: 13px; text-transform: uppercase; color: #fff; background: #4f46e5; }
+    button.candidate { min-height: 50px; border-radius: 8px; }
+    button.candidate:hover { background: hsl(214 100% 96%); border-color: hsl(215 84% 76%); }
+    button.candidate[aria-selected='true'] { background: hsl(212 96% 47%); color: #fff; }
+    button.candidate[aria-selected='true'] .sub { color: rgb(255 255 255 / 85%); }
+    button.candidate:focus-visible { outline: none; box-shadow: 0 0 0 2px hsl(215 63% 53%); }
+    .mono-chip { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 8px; font-weight: 680; font-size: 13px; text-transform: uppercase; color: hsl(212 100% 35%); background: #fff; border:1px solid rgb(0 0 0 / 13%); }
     .meta { min-width: 0; flex: 1; }
     .name { display: flex; align-items: center; gap: 4px; font-weight: 600; }
     .name .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .star { width: 11px; height: 11px; color: #e0a400; flex: none; }
-    .sub { display: block; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px; color: #5b647a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sub { display: block; font-family: "Cascadia Code", Consolas, ui-monospace, monospace; font-size: 12px; color: rgb(0 0 0 / 62%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .open-trigger { display: flex; align-items: center; gap: 8px; width: 100%; font: inherit; text-align: left; border: 0; background: transparent; padding: 10px 12px; cursor: pointer; color: inherit; font-weight: 600; }
-    .open-trigger:hover { background: #f3f5fb; }
+    .open-trigger:hover { background: hsl(214 100% 96%); }
     .open-trigger .chev { margin-left: auto; color: #8b93a7; width: 16px; height: 16px; }
     .status { display: flex; align-items: center; gap: 8px; padding: 11px 12px; color: #5b647a; }
     .status svg { width: 15px; height: 15px; flex: none; color: #8b93a7; }
@@ -108,7 +111,8 @@ export class VwAutofillPopover extends LitElement {
     @media (prefers-color-scheme: dark) {
       .box { color: #e9edf7; background: #151a26; border-color: #283041; box-shadow: 0 18px 48px rgba(0,0,0,.6); }
       .brandrow { border-bottom-color: #1f2636; }
-      button.candidate:hover { background: #1b2230; border-color: #283041; }
+      button.candidate:hover { background: hsl(227 40% 16%); border-color: #506078; }
+      button.candidate[aria-selected='true'] { background: hsl(214 100% 16%); }
       .sub { color: #9aa4b8; }
       .open-trigger:hover { background: #1b2230; }
       .status { color: #9aa4b8; }
@@ -168,8 +172,8 @@ export class VwAutofillPopover extends LitElement {
 
   private renderCandidate(candidate: PopoverCandidate, index: number) {
     return html`
-      <button type="button" class="candidate" @click=${(event: MouseEvent) => this.handleSelect(event, index)}>
-        <span class="mono-chip" style="background:hsl(${hueFor(candidate.name)} 55% 48%)">${monogramLetter(candidate.name)}</span>
+      <button type="button" class="candidate" role="option" aria-selected=${index === 0 ? 'true' : 'false'} @click=${(event: MouseEvent) => this.handleSelect(event, index)}>
+        <span class="mono-chip">${monogramLetter(candidate.name)}</span>
         <span class="meta">
           <span class="name">
             ${candidate.favorite
@@ -187,14 +191,6 @@ export class VwAutofillPopover extends LitElement {
 function monogramLetter(name: string): string {
   const match = name.match(/[\p{L}\p{N}]/u);
   return match ? match[0]!.toUpperCase() : '•';
-}
-
-function hueFor(name: string): number {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-  }
-  return hash % 360;
 }
 
 customElements.define('vw-autofill-popover', VwAutofillPopover);

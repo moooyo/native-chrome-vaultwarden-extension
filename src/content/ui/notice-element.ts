@@ -26,8 +26,8 @@ export class VwNotice extends LitElement {
     .bar {
       position: fixed; right: 16px; bottom: 16px; z-index: 2147483647;
       max-width: 320px; padding: 10px 14px;
-      font: 13px/1.4 -apple-system, "Segoe UI", system-ui, Roboto, sans-serif;
-      color: #fff; background: #1f2636; border-radius: 10px;
+      font: 14px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+      color: #fff; background: #1a1a1a; border-radius: 8px;
       box-shadow: 0 12px 32px rgba(0,0,0,.35);
       overflow-wrap: anywhere; word-break: break-word;
     }
