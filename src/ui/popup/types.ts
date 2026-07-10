@@ -10,6 +10,9 @@ import type { SendInput, SendSummary, UpdateSendInput } from '../../core/vault/s
 import type { AsyncState } from '../components/async-state.js';
 import type { StatusTone } from '../components/status-message.js';
 
+/** Popup geometry mode. Unlocked vault routes use two panes; auth and constrained routes use one. */
+export type PopupLayoutMode = 'double' | 'single' | 'auth';
+
 /**
  * The dormant Lit popup's client-side router state. Every screen the popup can show is one
  * variant here; `VwPopupApp` owns the current value and hands it to feature views as props.
