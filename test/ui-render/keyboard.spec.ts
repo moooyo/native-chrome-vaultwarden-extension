@@ -1,5 +1,57 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { gotoFixture } from './helpers.js';
+
+/** The computed focus indicator of the actually focused element, resolved through open shadow roots. */
+interface FocusIndicator {
+  tag: string;
+  id: string;
+  outlineStyle: string;
+  outlineWidth: string;
+  boxShadow: string;
+}
+
+/**
+ * Reads the computed outline/box-shadow of the element that keyboard focus actually landed on.
+ * `document.activeElement` stops at the shadow host for open shadow roots, so this walks into
+ * `shadowRoot.activeElement` (the same pattern `accessibility.spec.ts` uses for effective
+ * background) to reach the real focused native control.
+ */
+async function focusedIndicator(page: Page): Promise<FocusIndicator | null> {
+  return page.evaluate(() => {
+    function deepActiveElement(root: Document | ShadowRoot): Element | null {
+      const active = root.activeElement;
+      if (active?.shadowRoot?.activeElement) return deepActiveElement(active.shadowRoot);
+      return active;
+    }
+    const element = deepActiveElement(document);
+    if (!element) return null;
+    const style = getComputedStyle(element);
+    return {
+      tag: element.tagName,
+      id: (element as HTMLElement).id,
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+      boxShadow: style.boxShadow,
+    };
+  });
+}
+
+test('a keyboard-navigated native control renders a visible focus indicator', async ({ page }) => {
+  await gotoFixture(page, { surface: 'popup', state: 'auth', theme: 'light' });
+  // The login form has no header on this surface, so the first real Tab press (not `.focus()`)
+  // lands on the email input inside `vw-auth-views`' shadow root.
+  await page.keyboard.press('Tab');
+  const indicator = await focusedIndicator(page);
+  expect(indicator).not.toBeNull();
+  expect(indicator!.tag).toBe('INPUT');
+  expect(indicator!.id).toBe('email');
+  const hasVisibleOutline = indicator!.outlineStyle !== 'none' && Number.parseFloat(indicator!.outlineWidth) > 0;
+  const hasVisibleBoxShadow = indicator!.boxShadow !== 'none';
+  expect(
+    hasVisibleOutline || hasVisibleBoxShadow,
+    `expected a visible outline or box-shadow, got outline:${indicator!.outlineStyle} ${indicator!.outlineWidth}, box-shadow:${indicator!.boxShadow}`,
+  ).toBe(true);
+});
 
 test('vault tabs move selection with the arrow keys', async ({ page }) => {
   await gotoFixture(page, { surface: 'popup', state: 'suggestions', count: 10 });

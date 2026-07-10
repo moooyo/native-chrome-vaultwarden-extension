@@ -54,13 +54,37 @@ test('long unbroken text stays contained at 320px', async ({ page }) => {
   expect(scrollWidth).toBeLessThanOrEqual(320);
 });
 
-test('200% zoom (halved layout viewport) introduces no horizontal overflow', async ({ page }) => {
-  // Chrome's 200% page zoom halves the available CSS pixels; emulate that by halving the viewport
-  // and require the popup shell to still fit without a horizontal scrollbar.
-  await page.setViewportSize({ width: 384, height: 520 });
-  await gotoFixture(page, { surface: 'popup', state: 'suggestions', count: 20 });
+test('200% zoom (halved 404px popup baseline) keeps content and primary controls reachable', async ({ page }) => {
+  // Chrome's 200% page zoom halves the available CSS pixels. The popup's real baseline width is
+  // 404 CSS px (see OVERFLOW_SURFACES above), so emulate 200% zoom with a 202x320 layout viewport
+  // (404/2 x 640/2) rather than an arbitrary halved shell width.
+  await page.setViewportSize({ width: 202, height: 320 });
+  await gotoFixture(page, { surface: 'popup', state: 'editor' });
+
   const { scrollWidth, clientWidth } = await documentWidth(page);
   expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+
+  const nameField = page.locator('vw-cipher-editor input[data-field="name"]');
+  const save = page.locator('vw-cipher-editor [data-save]');
+  const cancel = page.locator('vw-cipher-editor [data-back]');
+
+  await expect(nameField).toBeVisible();
+  await expect(save).toBeVisible();
+  await expect(cancel).toBeVisible();
+
+  // "Reachable" means the short-viewport scroll region can bring the primary/cancel controls
+  // into view without any of them being clipped by document-level horizontal overflow.
+  await save.scrollIntoViewIfNeeded();
+  await expect(save).toBeInViewport();
+  await cancel.scrollIntoViewIfNeeded();
+  await expect(cancel).toBeInViewport();
+
+  for (const control of [nameField, save, cancel]) {
+    const box = await control.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(clientWidth);
+  }
 });
 
 test('the static server rejects encoded path traversal', async () => {
