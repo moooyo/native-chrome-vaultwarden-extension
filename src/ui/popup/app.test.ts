@@ -694,6 +694,28 @@ describe('vw-popup-app account and tool actions', () => {
     }));
     expect(app.shadowRoot!.querySelector('vw-popup-frame')?.getAttribute('mode')).toBe('auth');
   });
+
+  it('renders the vault list in the default slot in constrained mode', async () => {
+    const app = await mountVault(unlockedHandlers(), browserSeam());
+    app.narrow = true;
+    await app.updateComplete;
+    const frame = app.shadowRoot!.querySelector('vw-popup-frame')!;
+    expect(frame.getAttribute('mode')).toBe('single');
+    expect(frame.querySelector(':scope > .single-workspace vw-vault-view')).not.toBeNull();
+    expect(frame.querySelector('[slot="list"]')).toBeNull();
+  });
+
+  it('renders item detail instead of the list in constrained detail mode', async () => {
+    const app = await mountVault(unlockedHandlers({
+      'vault.getCipherDetail': async () => ({ ok: true, data: { cipher: { ...summary(), fields: [] } } }),
+    }), browserSeam());
+    app.narrow = true;
+    await openDetail(app, 'c1');
+    const frame = app.shadowRoot!.querySelector('vw-popup-frame')!;
+    expect(frame.getAttribute('mode')).toBe('single');
+    expect(frame.querySelector(':scope > vw-item-detail')).not.toBeNull();
+    expect(frame.querySelector('vw-vault-view')).toBeNull();
+  });
 });
 
 // --- Task 7: item detail, reprompt, TOTP, and attachments integration ---

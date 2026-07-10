@@ -154,6 +154,7 @@ export class VwPopupApp extends LitElement {
     toolStatus: { attribute: false },
     vaultScope: { type: String },
     selectedCipherId: { attribute: false },
+    narrow: { type: Boolean, reflect: true },
   };
 
   declare route: PopupRoute;
@@ -201,6 +202,7 @@ export class VwPopupApp extends LitElement {
   declare toolStatus: DetailStatus | undefined;
   declare vaultScope: 'suggestions' | 'all';
   declare selectedCipherId: string | null;
+  declare narrow: boolean;
 
   /** Injectable worker request function; defaults to the real messaging channel. */
   request: PopupRequest = sendRequest;
@@ -227,6 +229,8 @@ export class VwPopupApp extends LitElement {
   /** The active tab whose Suggestions are currently shown; the Fill target for `handleSuggestionFill`.
    *  Re-resolved on every vault entry — the popup never trusts a remembered tab across sessions. */
   private activeTabId: number | undefined;
+  private mediaQuery: MediaQueryList | undefined;
+  private readonly onNarrowChange = (event: MediaQueryListEvent): void => { this.narrow = event.matches; };
 
   constructor() {
     super();
@@ -261,6 +265,7 @@ export class VwPopupApp extends LitElement {
     this.toolStatus = undefined;
     this.vaultScope = 'suggestions';
     this.selectedCipherId = null;
+    this.narrow = false;
   }
 
   static override styles = [
@@ -288,11 +293,17 @@ export class VwPopupApp extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    if (typeof window.matchMedia === 'function') {
+      this.mediaQuery = window.matchMedia('(max-width: 480px)');
+      this.narrow = this.mediaQuery.matches;
+      this.mediaQuery.addEventListener('change', this.onNarrowChange);
+    }
     void this.init();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    this.mediaQuery?.removeEventListener('change', this.onNarrowChange);
     this.clearEphemeralDetailState();
   }
 
@@ -1410,9 +1421,8 @@ export class VwPopupApp extends LitElement {
 
   private layoutMode(): PopupLayoutMode {
     const name = this.route.name;
-    return name === 'login' || name === 'register' || name === 'twoFactor' || name === 'unlock'
-      ? 'auth'
-      : 'double';
+    if (name === 'login' || name === 'register' || name === 'twoFactor' || name === 'unlock') return 'auth';
+    return this.narrow ? 'single' : 'double';
   }
 
   private renderRightPane(route: PopupRoute) {
@@ -1445,6 +1455,12 @@ export class VwPopupApp extends LitElement {
   }
 
   private renderUnlockedWorkspace(route: PopupRoute) {
+    if (this.narrow) {
+      const content = route.name === 'vault'
+        ? html`<div class="single-workspace">${this.renderPopupHeader()}${this.renderVaultList()}</div>`
+        : this.renderRightPane(route);
+      return html`<vw-popup-frame mode="single">${content}</vw-popup-frame>`;
+    }
     return html`
       <vw-popup-frame mode=${this.layoutMode()}>
         <div slot="toolbar">${this.renderPopupHeader()}</div>
