@@ -1,0 +1,139 @@
+// @vitest-environment happy-dom
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { VwAutofillPopover } from './autofill-popover-element.js';
+import './autofill-popover-element.js';
+
+afterEach(() => {
+  document.body.replaceChildren();
+});
+
+async function mount(configure: (element: VwAutofillPopover) => void): Promise<VwAutofillPopover> {
+  const element = document.createElement('vw-autofill-popover') as VwAutofillPopover;
+  configure(element);
+  document.body.append(element);
+  await element.updateComplete;
+  return element;
+}
+
+function shadow(element: VwAutofillPopover): ShadowRoot {
+  if (!element.shadowRoot) {
+    throw new Error('element has no render root');
+  }
+  return element.shadowRoot;
+}
+
+function trustedClick(el: Element | null): void {
+  const event = new MouseEvent('click', { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'isTrusted', { value: true });
+  el?.dispatchEvent(event);
+}
+
+describe('vw-autofill-popover', () => {
+  it('invokes onOpen only on a trusted trigger click', async () => {
+    const onOpen = vi.fn();
+    const element = await mount((el) => {
+      el.view = 'trigger';
+      el.onOpen = onOpen;
+    });
+    const trigger = shadow(element).querySelector('#vw-open');
+    trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onOpen).not.toHaveBeenCalled();
+    trustedClick(trigger);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the status message inertly', async () => {
+    const element = await mount((el) => {
+      el.view = 'status';
+      el.statusMessage = '<img src=x onerror=alert(1)> Locked';
+    });
+    const status = shadow(element).querySelector('.status');
+    expect(status?.querySelector('img')).toBeNull();
+    expect(status?.textContent).toContain('Locked');
+  });
+
+  it.each([
+    ['login', 'Fill from Vaultwarden', 'No matching logins'] as const,
+    ['card', 'Fill card', 'No saved cards'] as const,
+    ['identity', 'Fill identity', 'No saved identities'] as const,
+  ])('renders the %s header and empty state', async (kind, header, empty) => {
+    const withRows = await mount((el) => {
+      el.kind = kind;
+      el.view = 'list';
+      el.candidates = [{ id: '1', name: 'Item', sub: 'sub', favorite: false }];
+    });
+    expect(shadow(withRows).textContent).toContain(header);
+
+    const emptyEl = await mount((el) => {
+      el.kind = kind;
+      el.view = 'list';
+      el.candidates = [];
+    });
+    expect(shadow(emptyEl).textContent).toContain(empty);
+  });
+
+  it('calls onSelect with the candidate id resolved from the in-memory index', async () => {
+    const onSelect = vi.fn();
+    const element = await mount((el) => {
+      el.view = 'list';
+      el.candidates = [
+        { id: 'first', name: 'Alpha', sub: 'a@example.com', favorite: false },
+        { id: 'second', name: 'Beta', sub: 'b@example.com', favorite: true },
+      ];
+      el.onSelect = onSelect;
+    });
+    const buttons = shadow(element).querySelectorAll('button.candidate');
+    trustedClick(buttons[1] ?? null);
+    expect(onSelect).toHaveBeenCalledWith('second');
+  });
+
+  it('ignores untrusted candidate clicks', async () => {
+    const onSelect = vi.fn();
+    const element = await mount((el) => {
+      el.view = 'list';
+      el.candidates = [{ id: '1', name: 'Alpha', sub: 'a@example.com', favorite: false }];
+      el.onSelect = onSelect;
+    });
+    shadow(element).querySelector('button.candidate')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('never emits cipher ids into DOM attributes or serialized HTML', async () => {
+    const element = await mount((el) => {
+      el.view = 'list';
+      el.candidates = [{ id: 'cipher-secret-id', name: 'Alpha', sub: 'a@example.com', favorite: false }];
+    });
+    const root = shadow(element);
+    expect(root.querySelector('[data-cipher-id]')).toBeNull();
+    expect(root.querySelector('[data-target]')).toBeNull();
+    expect(root.innerHTML).not.toContain('cipher-secret-id');
+  });
+
+  it('caps the list height and marks long lists as locally scrollable', async () => {
+    const element = await mount((el) => {
+      el.view = 'list';
+      el.candidates = Array.from({ length: 12 }, (_, index) => ({
+        id: String(index),
+        name: `Item ${index}`,
+        sub: `sub ${index}`,
+        favorite: false,
+      }));
+    });
+    expect(shadow(element).querySelector('.list.scrollable')).not.toBeNull();
+    const styleText = styleTextOf(VwAutofillPopover);
+    expect(styleText).toContain('max-height');
+    expect(styleText).toContain('overflow-y');
+  });
+
+  it('declares dark and reduced-motion tokens', () => {
+    const styleText = styleTextOf(VwAutofillPopover);
+    expect(styleText).toContain('prefers-color-scheme: dark');
+    expect(styleText).toContain('prefers-reduced-motion: reduce');
+  });
+});
+
+function styleTextOf(ctor: typeof VwAutofillPopover): string {
+  const styles = ctor.styles;
+  const list = Array.isArray(styles) ? styles : [styles];
+  return list.map((style) => String((style as { cssText: string }).cssText)).join('\n');
+}
