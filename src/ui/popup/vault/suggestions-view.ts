@@ -38,6 +38,14 @@ export function fillOutcomeMessage(status: TabFillOutcome['status']): { tone: St
       return { tone: 'info', message: "This page's address isn't available to the extension." };
     case 'no_fillable_target':
       return { tone: 'warning', message: 'No login field to fill on this page.' };
+    case 'reprompt_required':
+      return { tone: 'warning', message: 'This item needs master-password verification. Open it here first, then fill.' };
+    case 'vault_locked':
+      return { tone: 'info', message: 'Your vault locked. Unlock it and try again.' };
+    case 'sync_required':
+      return { tone: 'info', message: 'Sync your vault, then try again.' };
+    case 'no_longer_matched':
+      return { tone: 'warning', message: 'This item no longer matches this page.' };
     case 'target_changed':
       return { tone: 'warning', message: 'The page changed before filling. Reopen and try again.' };
     case 'restricted_page':

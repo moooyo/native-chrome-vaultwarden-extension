@@ -10,6 +10,7 @@ import type {
   TabSuggestionTarget,
 } from '../messaging/protocol.js';
 import { AppError } from '../core/errors.js';
+import type { AppErrorCode } from '../core/errors.js';
 
 /** A frame within a tab, as reported by the browser (`webNavigation`) — never by page content.
  *  `documentId` (Chrome-only) is used to detect a same-frameId navigation between Suggestions and
@@ -92,10 +93,17 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
     const bestRank = new Map<string, { rank: FormRank; target: TabSuggestionTarget }>();
     let order = 0;
     for (const { frame, inspection } of inspected) {
-      const frameCandidates = await deps.findCandidates(inspection.frameUrl);
+      // Match candidates against the browser-authoritative frame URL, never the content-reported
+      // `inspection.frameUrl` (which a compromised/racing renderer could spoof).
+      const frameCandidates = await deps.findCandidates(frame.url);
       for (const candidate of frameCandidates) {
         if (!merged.has(candidate.id)) merged.set(candidate.id, { ...candidate });
       }
+      // Only trust this frame's form targets when the content script's reported URL still equals the
+      // browser's. A mismatch means the frame navigated between the webNavigation read and the
+      // inspection, so its form ids may belong to a different document — show the row (matched above
+      // against the authoritative URL) but withhold the direct-fill target.
+      if (inspection.frameUrl !== frame.url) continue;
       for (const form of inspection.forms) {
         const rank: FormRank = {
           focusScore: form.focusedAt !== undefined && deps.now() - form.focusedAt <= RECENT_FOCUS_WINDOW_MS ? 0 : 1,
@@ -147,7 +155,9 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
       // Reuses the existing URI-match + reprompt guard; a stale/mismatched URL denies here.
       credentials = await deps.getCredentials(cipherId, frame.url);
     } catch (err) {
-      if (err instanceof AppError) return { status: 'no_fillable_target' };
+      // Surface the specific reason so the popup can guide the user (unlock / sync / reprompt /
+      // no-longer-matched) instead of a single generic failure. Non-AppError is a real bug: rethrow.
+      if (err instanceof AppError) return { status: fillOutcomeForErrorCode(err.code) };
       throw err;
     }
 
@@ -244,6 +254,25 @@ function parseFrameInspection(value: unknown): FrameInspection | undefined {
   const { frameUrl, forms } = value;
   if (typeof frameUrl !== 'string' || !Array.isArray(forms) || !forms.every(isFrameLoginForm)) return undefined;
   return { frameUrl, forms };
+}
+
+/** Maps a credential-release `AppError` (from `getAutofillCredentials`) to an explicit, typed Fill
+ *  outcome so the popup can render specific guidance rather than one generic failure. Unknown codes
+ *  fall back to the neutral `no_fillable_target`. These outcomes are worker-derived only; the
+ *  content script never reports them (see `parseTabFillOutcome`). */
+function fillOutcomeForErrorCode(code: AppErrorCode): TabFillOutcome['status'] {
+  switch (code) {
+    case 'reprompt_required':
+      return 'reprompt_required';
+    case 'locked':
+      return 'vault_locked';
+    case 'sync_required':
+      return 'sync_required';
+    case 'denied':
+      return 'no_longer_matched';
+    default:
+      return 'no_fillable_target';
+  }
 }
 
 function parseTabFillOutcome(value: unknown): TabFillOutcome | undefined {

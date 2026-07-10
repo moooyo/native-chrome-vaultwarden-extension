@@ -90,6 +90,78 @@ describe('tab autofill coordinator', () => {
       expect(outcome.suggestions[0]).toEqual(expect.objectContaining({ id: 'c1', target: { frameId: 0, formId: 'top-form' } }));
     });
 
+    it('matches sub-frame candidates against the browser frame.url, not the content-reported inspection URL', async () => {
+      const browserFrameUrl = 'https://widget.example/login';
+      const contentReportedUrl = 'https://spoofed.example/login';
+      const findCandidates = vi.fn(async (url: string) => {
+        if (url === browserFrameUrl) return [candidate('browser-c')];
+        if (url === contentReportedUrl) return [candidate('spoof-c')];
+        return [];
+      });
+      const deps = makeDeps({
+        getTab: async () => ({ active: true, url: 'https://example.com/login' }),
+        getFrames: async () => [
+          { frameId: 0, url: 'https://example.com/login' },
+          { frameId: 1, url: browserFrameUrl },
+        ],
+        hasHostAccess: async () => true,
+        sendToFrame: vi.fn(async (_tabId, frameId) => (frameId === 0
+          ? { frameUrl: 'https://example.com/login', forms: [] }
+          : { frameUrl: contentReportedUrl, forms: [{ formId: 'sub-form', visible: true }] })),
+        findCandidates,
+      });
+      const outcome = await createTabAutofillCoordinator(deps).getSuggestions(7);
+      expect(outcome.status).toBe('ready');
+      const ids = outcome.suggestions.map((s) => s.id);
+      expect(ids).toContain('browser-c');
+      expect(ids).not.toContain('spoof-c');
+      expect(findCandidates).toHaveBeenCalledWith(browserFrameUrl);
+      expect(findCandidates).not.toHaveBeenCalledWith(contentReportedUrl);
+    });
+
+    it('withholds a sub-frame form target when the content-reported URL disagrees with the browser frame URL', async () => {
+      const browserFrameUrl = 'https://widget.example/a';
+      const deps = makeDeps({
+        getTab: async () => ({ active: true, url: 'https://example.com/login' }),
+        getFrames: async () => [
+          { frameId: 0, url: 'https://example.com/login' },
+          { frameId: 1, url: browserFrameUrl },
+        ],
+        hasHostAccess: async () => true,
+        // frameId 1 reports a *different* URL than the browser says it has — a navigation between
+        // the webNavigation read and the content inspection. Its form target must not be attached.
+        sendToFrame: vi.fn(async (_tabId, frameId) => (frameId === 0
+          ? { frameUrl: 'https://example.com/login', forms: [] }
+          : { frameUrl: 'https://widget.example/b', forms: [{ formId: 'sub-form', visible: true }] })),
+        findCandidates: vi.fn(async () => [candidate('c1')]),
+      });
+      const outcome = await createTabAutofillCoordinator(deps).getSuggestions(7);
+      expect(outcome.status).toBe('ready');
+      const c1 = outcome.suggestions.find((s) => s.id === 'c1');
+      expect(c1).toBeDefined();
+      expect(c1).not.toHaveProperty('target');
+    });
+
+    it('attaches a sub-frame form target when the content-reported URL equals the browser frame URL', async () => {
+      const browserFrameUrl = 'https://widget.example/login';
+      const deps = makeDeps({
+        getTab: async () => ({ active: true, url: 'https://example.com/login' }),
+        getFrames: async () => [
+          { frameId: 0, url: 'https://example.com/login' },
+          { frameId: 1, url: browserFrameUrl },
+        ],
+        hasHostAccess: async () => true,
+        sendToFrame: vi.fn(async (_tabId, frameId) => (frameId === 0
+          ? { frameUrl: 'https://example.com/login', forms: [] }
+          : { frameUrl: browserFrameUrl, forms: [{ formId: 'sub-form', visible: true }] })),
+        findCandidates: vi.fn(async (url: string) => (url === browserFrameUrl ? [candidate('c1')] : [])),
+      });
+      const outcome = await createTabAutofillCoordinator(deps).getSuggestions(7);
+      expect(outcome.status).toBe('ready');
+      const c1 = outcome.suggestions.find((s) => s.id === 'c1');
+      expect(c1?.target).toEqual({ frameId: 1, formId: 'sub-form' });
+    });
+
     it('keeps top-frame URI matches without a Fill target when no form exists', async () => {
       const deps = makeDeps({
         sendToFrame: vi.fn(async () => ({ frameUrl: 'https://example.com/login', forms: [] })),
@@ -268,11 +340,25 @@ describe('tab autofill coordinator', () => {
       expect(sendToFrame).not.toHaveBeenCalled();
     });
 
-    it('reports no_fillable_target when credential release is denied', async () => {
+    it.each([
+      ['reprompt_required', 'reprompt_required'],
+      ['locked', 'vault_locked'],
+      ['sync_required', 'sync_required'],
+      ['denied', 'no_longer_matched'],
+    ] as const)('maps a %s credential-release AppError to the explicit %s fill outcome', async (code, status) => {
       const { AppError } = await import('../core/errors.js');
       const deps = makeDeps({
         getFrame: vi.fn(async () => ({ frameId: 0, url: 'https://example.com/login', documentId: 'doc-A' })),
-        getCredentials: vi.fn(async () => { throw new AppError('denied', 'Autofill item is not allowed for this page'); }),
+        getCredentials: vi.fn(async () => { throw new AppError(code, 'blocked in test'); }),
+      });
+      await expect(createTabAutofillCoordinator(deps).fill(7, 'c1', target)).resolves.toEqual({ status });
+    });
+
+    it('falls back to no_fillable_target for an unrecognized credential-release AppError code', async () => {
+      const { AppError } = await import('../core/errors.js');
+      const deps = makeDeps({
+        getFrame: vi.fn(async () => ({ frameId: 0, url: 'https://example.com/login', documentId: 'doc-A' })),
+        getCredentials: vi.fn(async () => { throw new AppError('stale_form', 'blocked in test'); }),
       });
       await expect(createTabAutofillCoordinator(deps).fill(7, 'c1', target)).resolves.toEqual({ status: 'no_fillable_target' });
     });

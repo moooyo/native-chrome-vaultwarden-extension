@@ -133,6 +133,10 @@ export type TabFillOutcome =
   | { status: 'no_eligible_tab' }
   | { status: 'site_access_unavailable' }
   | { status: 'no_fillable_target' }
+  | { status: 'reprompt_required' }
+  | { status: 'vault_locked' }
+  | { status: 'sync_required' }
+  | { status: 'no_longer_matched' }
   | { status: 'target_changed' }
   | { status: 'restricted_page' }
   | { status: 'content_script_unavailable' };
