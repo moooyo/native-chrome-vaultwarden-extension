@@ -213,8 +213,10 @@ The header contains:
 - a primary Add item action.
 
 The account menu contains account switching and management, PIN settings,
-Options, Lock, and Log out. The global tools menu contains Password Health,
-Sends, Trash, and Sync. Import and Export move to Options > Data.
+Account security (change master password, change PBKDF2 iterations, and rotate
+the account encryption key), Options, Lock, and Log out. The global tools menu
+contains Password Health, Sends, Trash, and Sync. Import and Export move to
+Options > Data.
 
 All existing actions remain reachable. Moving an action does not change its
 underlying request or confirmation behavior.
