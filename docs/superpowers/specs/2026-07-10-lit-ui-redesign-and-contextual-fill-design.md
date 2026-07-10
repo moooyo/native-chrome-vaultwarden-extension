@@ -2,8 +2,7 @@
 
 ## Status
 
-Design sections approved on 2026-07-10. Written specification awaiting final
-user review.
+Approved by the user on 2026-07-10.
 
 This specification supersedes and replaces
 `docs/superpowers/specs/2026-07-10-ui-layout-hardening-design.md`. The earlier
