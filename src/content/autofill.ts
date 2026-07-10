@@ -2,8 +2,10 @@ import browser from 'webextension-polyfill';
 import { sendRequest, type AutofillCandidate, type AutofillCredentials } from '../messaging/protocol.js';
 import type { FillItemCandidate, CardFillData, IdentityFillData, FillKind } from '../messaging/protocol.js';
 import type { ContentCommand, FillCommand } from '../messaging/protocol.js';
+import type { FrameAutofillMessage, FrameInspection, TabFillOutcome } from '../messaging/protocol.js';
 import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
 import { fillLoginForm } from './fill.js';
+import { createFrameAutofillController, type FrameAutofillController } from './frame-autofill.js';
 import { fillCardForm, fillIdentityForm } from './fill-card-identity.js';
 import type { DetectedLoginForm } from './form-detection.js';
 import { detectCardForms, detectIdentityForms, isFillableField, type DetectedFillForm } from './field-detection.js';
@@ -18,9 +20,26 @@ import { showNotice } from './notice.js';
 
 type FrameUrlProvider = () => string;
 
+/** The current frame's URL provider and its login-form inspection/commit controller. Both are set
+ *  from `startAutofill` and are also used by the runtime listener that answers the background's
+ *  current-tab-fill inspect/commit messages. */
+let frameUrlProvider: FrameUrlProvider = () => window.location.href;
+let frameController: FrameAutofillController | undefined;
+
+/** Lazily build (once) the per-frame login-form controller, reading the live frame URL through the
+ *  module-level provider so it always reflects the latest same-document navigation. */
+function ensureFrameController(): FrameAutofillController {
+  if (!frameController) {
+    frameController = createFrameAutofillController({ frameUrl: () => frameUrlProvider(), now: () => Date.now() });
+  }
+  return frameController;
+}
+
 export function startAutofill(frameUrlOrProvider: string | FrameUrlProvider = () => window.location.href): void {
   const getFrameUrl = typeof frameUrlOrProvider === 'function' ? frameUrlOrProvider : () => frameUrlOrProvider;
+  frameUrlProvider = getFrameUrl;
   if (!isHttpUrl(getFrameUrl())) return;
+  ensureFrameController();
   const attach = () => attachPopovers(getFrameUrl);
   attach();
   const observer = new MutationObserver(debounce(attach, 250));
@@ -293,13 +312,36 @@ function debounce(fn: () => void, ms: number): () => void {
 let lastContextElement: Element | null = null;
 document.addEventListener('contextmenu', (event) => { lastContextElement = event.target as Element | null; }, true);
 
+// Record which login form was most recently focused so the background's frame inspection can rank
+// the recently-used form first. Metadata only — the controller never reads or retains field values.
+document.addEventListener('focusin', (event) => {
+  const target = event.target;
+  if (target instanceof HTMLInputElement) ensureFrameController().noteFocus(target);
+}, true);
+
 /** form.id → its hover popover, so the keyboard shortcut can open the right picker on a multi-match. */
 export const popoverRegistry = new Map<string, ReturnType<typeof createAutofillPopover>>();
 
-browser.runtime.onMessage.addListener((message: unknown) => {
+browser.runtime.onMessage.addListener((message: unknown): Promise<FrameInspection | TabFillOutcome> | undefined => {
+  // Frame inspect/commit are the only content messages that return a value: the background awaits a
+  // typed response (metadata for inspect, a fill outcome for commit). A Promise return tells the
+  // polyfill to use it as the async response; content commands return nothing so the channel closes.
+  if (isFrameAutofillMessage(message)) return Promise.resolve(handleFrameAutofillMessage(message));
   if (isContentCommand(message)) handleContentCommand(message);
-  // No response needed; return nothing (a non-Promise) so the channel closes immediately.
+  return undefined;
 });
+
+/** Answer a background current-tab-fill message: report this frame's login-form metadata, or commit
+ *  a fill after the controller re-validates the frame URL and form identity (TOCTOU guard). */
+export function handleFrameAutofillMessage(message: FrameAutofillMessage): FrameInspection | TabFillOutcome {
+  const controller = ensureFrameController();
+  if (message.type === 'autofill.inspectFrame') return controller.inspect();
+  return controller.commit({
+    formId: message.formId,
+    expectedFrameUrl: message.expectedFrameUrl,
+    credentials: message.credentials,
+  });
+}
 
 export function handleContentCommand(command: ContentCommand): void {
   if (command.type === 'autofill.focusedFill') { void handleFocusedFill(); return; }
@@ -409,6 +451,15 @@ function isContentCommand(value: unknown): value is ContentCommand {
     && (value.scope === 'form' || value.scope === 'field')
     && (value.kind === 'card' || value.kind === 'identity')
     && isRecord(value.data);
+}
+
+function isFrameAutofillMessage(value: unknown): value is FrameAutofillMessage {
+  if (!isRecord(value)) return false;
+  if (value.type === 'autofill.inspectFrame') return true;
+  return value.type === 'autofill.commitLoginFill'
+    && typeof value.formId === 'string'
+    && typeof value.expectedFrameUrl === 'string'
+    && isAutofillCredentials(value.credentials);
 }
 
 startAutofill();

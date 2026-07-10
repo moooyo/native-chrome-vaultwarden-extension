@@ -50,7 +50,7 @@ vi.mock('./popover.js', () => ({
 import { sendRequest, type ResponseMessage } from '../messaging/protocol.js';
 import { fillLoginForm } from './fill.js';
 import * as noticeModule from './notice.js';
-import { startAutofill, handleContentCommand, handleFocusedFill, openPickerFor, popoverRegistry } from './autofill.js';
+import { startAutofill, handleContentCommand, handleFocusedFill, handleFrameAutofillMessage, openPickerFor, popoverRegistry } from './autofill.js';
 
 describe('autofill controller', () => {
   beforeEach(() => {
@@ -480,5 +480,51 @@ describe('focused-fill command', () => {
     const notice = vi.spyOn(noticeModule, 'showNotice');
     openPickerFor(() => 'https://ex.com', 'missing');
     expect(notice).toHaveBeenCalledWith("Multiple matches — click the field's Vaultwarden icon to choose");
+  });
+});
+
+describe('frame inspect/commit messages', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<form id="login"><input type="email"><input type="password"></form>';
+    vi.mocked(sendRequest).mockReset();
+    vi.mocked(fillLoginForm).mockReset();
+  });
+
+  it('inspectFrame reports the frame URL and detected login-form metadata only', () => {
+    startAutofill('https://example.com/login');
+    const result = handleFrameAutofillMessage({ type: 'autofill.inspectFrame' });
+    if (!('forms' in result)) throw new Error('expected a frame inspection');
+    expect(result.frameUrl).toBe('https://example.com/login');
+    expect(result.forms.length).toBeGreaterThan(0);
+    // Metadata only: the inspection never carries field values or credentials.
+    expect(JSON.stringify(result)).not.toContain('password');
+  });
+
+  it('commitLoginFill fills the matching form and reports filled', () => {
+    startAutofill('https://example.com/login');
+    vi.mocked(fillLoginForm).mockReturnValue(true);
+    const inspection = handleFrameAutofillMessage({ type: 'autofill.inspectFrame' });
+    if (!('forms' in inspection)) throw new Error('expected a frame inspection');
+    const formId = inspection.forms[0]!.formId;
+    const outcome = handleFrameAutofillMessage({
+      type: 'autofill.commitLoginFill',
+      formId,
+      expectedFrameUrl: 'https://example.com/login',
+      credentials: { username: 'u', password: 'p' },
+    });
+    expect(outcome).toEqual({ status: 'filled' });
+    expect(vi.mocked(fillLoginForm)).toHaveBeenCalledTimes(1);
+  });
+
+  it('commitLoginFill reports target_changed and fills nothing when the frame URL no longer matches', () => {
+    startAutofill('https://example.com/login');
+    const outcome = handleFrameAutofillMessage({
+      type: 'autofill.commitLoginFill',
+      formId: 'login',
+      expectedFrameUrl: 'https://different.example/login',
+      credentials: { username: 'u', password: 'p' },
+    });
+    expect(outcome).toEqual({ status: 'target_changed' });
+    expect(vi.mocked(fillLoginForm)).not.toHaveBeenCalled();
   });
 });

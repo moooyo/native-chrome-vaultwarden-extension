@@ -89,6 +89,26 @@
   `navigator.credentials.get` + 隔离世界 `webauthn-bridge` 转发至 worker，无匹配则回退原生。
   仍待：`navigator.credentials.create`（注册新 passkey）、严格 `instanceof PublicKeyCredential` 的站点、计数器持久化。
 
+- **Lit 组件化 UI 原子切换（Atomic Lit UI cutover）** ✅（本次落地，Task 14；真实 Chromium + live Vaultwarden 验证）
+  - 背景：Task 1-13 先构建并评审了全部**休眠**的 Lit 3 根/组件（popup 状态机、上下文优先的 vault 导航、
+    详情/编辑器/工具、Options 设置轨、Receive 流、内容层封闭 Shadow 组件、tab 协调器、Playwright 夹具）。
+    Task 14 **一次性**把所有活动入口/工厂切到 Lit 并删除遗留命令式 UI，提交不含新旧混合态。
+  - 入口瘦身：`src/ui/{popup,options,receive}/*.ts` 变为**薄依赖适配 + 挂载**（注入 worker 请求通道与
+    浏览器 seam，挂载 `vw-popup-app`/`vw-options-app`/`vw-receive-app`）；HTML 仅加载各自脚本 + 极简页面 CSS；
+    删除共享 `src/ui/theme.css` 与命令式 `src/ui/icons.ts`（所有消费者已迁移，组件改用 `ui/components/icon.ts`
+    的 `uiIcon` 与 `tokens.ts` 的 `themeTokens`）。popup 为 404px 上下文优先面板；Options 为设置轨（rail）+ 分区。
+  - 内容工厂改挂 Lit：`popover.ts`/`save-bar.ts`/`notice.ts`/`passkey-consent.ts` 保持公开函数名与回调契约不变，
+    内部改用 `mountClosedSurface` + 封闭 ShadowRoot 的 `vw-*` 元素；页面无法读取状态或伪造回调，
+    `Event.isTrusted` 门控保留。`autofill.ts` 注册 `autofill.inspectFrame`/`autofill.commitLoginFill`
+    的运行时监听并返回类型化响应（`FrameInspection`/`TabFillOutcome`），直填仍是 worker→目标帧、绝不提交。
+  - 生产构建：各入口独立打包（无共享 ESM 拆分、无远端资源、MV3 CSP 兼容）；新增 `tools/assert-build.mjs`
+    并让 `build:prod` 自动运行——断言三页只加载自身脚本 + 极简 CSS、无 `theme.css`、源入口无命令式 `innerHTML`
+    渲染器、manifest 含 `activeTab`/`webNavigation`、`dist` 无遗留 `theme.css`。UI 回归见 `npm.cmd run test:ui`
+    （Playwright 夹具：320/404/768 宽度无横向溢出、长文不撑破、深色、键盘可达、200% 缩放、视觉快照）。
+  - 真实验证：Chromium MV3 加载扩展→service worker 注册→worker 可达 live `/alive`→三个 Lit 面板均挂载且
+    **无 console 错误**；Options 保存服务端 URL；popup 用 disposable PBKDF2 账户对 live 服务端**真登录并解锁 vault**
+    （渲染 Suggestions/All items）。
+
 ## 安全缺陷（2026-06-28 完整性审计新发现）
 
 > 由多代理完整性审计发现、并经代码核实的两处**安全回归**，不在原登记表内。优先级最高。
@@ -113,6 +133,15 @@
 - **Argon2id KDF**（2026-06-28 明确决定暂不实现，已写入 `CLAUDE.md`）：需引入 WASM/纯 JS Argon2。
   `prelogin`/登录成功两处守卫均抛 `'Argon2id accounts are not supported in this MVP'`
   （`src/core/session/auth-service.ts`）。**这是单项最大的兼容性缺口**——Argon2 账户当前完全无法使用。
+
+- **Lit UI 切换的真实浏览器手工验证残留（Task 14）**：自动化冒烟（Playwright + Chromium MV3 + live
+  Vaultwarden）已覆盖：扩展加载/worker 注册/可达 live、三面板挂载无 console 错误、Options 保存服务端 URL、
+  popup 真登录并解锁 vault。**以下真实流程仍属手工**（受交互式主机权限授予、特定账户状态或需真实第三方站点所限，
+  当前环境不可稳定自动化）：验证码型 2FA / remembered device / PIN 锁解 / logout；真实站点顶帧与嵌套 iframe 的
+  直填、检视↔填充间导航的 `target_changed`、reprompt 拒填 + 扩展侧验证；详情/编辑器/附件全部动作、生成器、
+  健康/HIBP、Sends、账户安全、Data 导入/导出；Receive 文本/文件端到端（需真实 Send 链接）；页面内
+  popover/save-bar/notice/passkey 同意与注册（单测 + `test:ui` 视觉夹具已覆盖，但未在 live 第三方页驱动）；
+  交互式**可选主机权限授予提示**本身（冒烟中以预授权旁路，提示 UI 属 Chrome 原生，不可自动化点击）。
 
 ### 完整性审计缺口清单（2026-06-28，按优先级）
 

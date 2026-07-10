@@ -1,23 +1,33 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { showNotice } from './notice.js';
 
-describe('notice', () => {
-  beforeEach(() => { document.documentElement.innerHTML = '<body></body>'; });
+// showNotice is the stable content factory; it now delegates to the closed-shadow Lit `vw-notice`
+// (rendering/auto-dismiss are covered by notice-element.test.ts). These tests assert the factory
+// still mounts an isolated, page-inert, self-dismissing notice.
 
-  it('renders the message inside a closed shadow root (not exposed)', () => {
+afterEach(() => {
+  document.documentElement.querySelectorAll('[data-vw-notice]').forEach((node) => node.remove());
+});
+
+describe('showNotice', () => {
+  it('mounts the Lit notice inside a closed shadow root the page cannot reach', () => {
     showNotice('Protected item — open the extension to verify');
-    const host = document.querySelector('[data-vw-notice]') as HTMLElement;
-    expect(host).toBeTruthy();
-    expect(host.shadowRoot).toBeNull(); // closed shadow: not reachable from the page
+    const host = document.querySelector('[data-vw-notice]') as HTMLElement | null;
+    expect(host).not.toBeNull();
+    expect(customElements.get('vw-notice')).toBeDefined();
+    expect(host?.shadowRoot).toBeNull(); // closed shadow: not reachable from the page
   });
 
-  it('auto-dismisses after 4s', () => {
+  it('auto-dismisses after four seconds', () => {
     vi.useFakeTimers();
-    showNotice('x');
-    expect(document.querySelector('[data-vw-notice]')).toBeTruthy();
-    vi.advanceTimersByTime(4000);
-    expect(document.querySelector('[data-vw-notice]')).toBeNull();
-    vi.useRealTimers();
+    try {
+      showNotice('x');
+      expect(document.querySelector('[data-vw-notice]')).not.toBeNull();
+      vi.advanceTimersByTime(4000);
+      expect(document.querySelector('[data-vw-notice]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

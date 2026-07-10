@@ -40,7 +40,7 @@ describe('createIdleLock', () => {
     const deps = makeDeps({
       isUnlocked: async () => false,
       getConfig: async () => ({ idleSeconds: 60, action: 'logout' }),
-      queryState: async (_: number): Promise<IdleState> => 'idle', // backstop reaches applyAction, then hits the guard
+      queryState: async (): Promise<IdleState> => 'idle', // backstop reaches applyAction, then hits the guard
     });
     const il = createIdleLock(deps);
     await il.onStateChanged('idle');
@@ -50,7 +50,7 @@ describe('createIdleLock', () => {
   });
 
   it('ignores idle and locked when disabled (idleSeconds null)', async () => {
-    const deps = makeDeps({ getConfig: async () => ({ idleSeconds: null, action: 'lock' }), queryState: vi.fn(async (_: number): Promise<IdleState> => 'active') });
+    const deps = makeDeps({ getConfig: async () => ({ idleSeconds: null, action: 'lock' }), queryState: vi.fn(async (): Promise<IdleState> => 'active') });
     const il = createIdleLock(deps);
     await il.onStateChanged('idle');
     await il.onStateChanged('locked');
@@ -72,10 +72,10 @@ describe('createIdleLock', () => {
   });
 
   it('backstop alarm queries idle state and acts on idle/locked only', async () => {
-    const idle = makeDeps({ queryState: vi.fn(async (_: number): Promise<IdleState> => 'idle') });
+    const idle = makeDeps({ queryState: vi.fn(async (): Promise<IdleState> => 'idle') });
     await createIdleLock(idle).onBackstopAlarm();
     expect(idle.lock).toHaveBeenCalledTimes(1);
-    const active = makeDeps({ queryState: vi.fn(async (_: number): Promise<IdleState> => 'active') });
+    const active = makeDeps({ queryState: vi.fn(async (): Promise<IdleState> => 'active') });
     await createIdleLock(active).onBackstopAlarm();
     expect(active.lock).not.toHaveBeenCalled();
   });

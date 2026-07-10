@@ -64,7 +64,8 @@ export async function verifyRotatedCipher(rotated: RotatedCipher, newUserKey: Sy
     }
     return;
   }
-  const { attachments2: _attachments2, ...rest } = rotated as Record<string, unknown>;
+  const rest: Record<string, unknown> = { ...(rotated as Record<string, unknown>) };
+  delete rest.attachments2;
   await verifyEncStringsDeep(rest, newUserKey);
 }
 

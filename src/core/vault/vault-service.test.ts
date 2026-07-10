@@ -93,6 +93,13 @@ function makeSyncUrl(): SyncResponse {
   };
 }
 
+/** Exposes a mocked ApiClient's methods as writable, loosely-typed slots so a test can stub the few
+ *  methods the base `makeService` mock omits without matching each response's full type. Behaviour is
+ *  identical to the object it wraps — this is only a type view over the same mock instance. */
+function stubApi(api: ApiClient): Record<string, (...args: never[]) => unknown> {
+  return api as unknown as Record<string, (...args: never[]) => unknown>;
+}
+
 async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8Array; now?: () => number } = {}) {
   const localStore = createMemoryStore();
   const sm = new SessionManager({ localStore, sessionStore: createMemoryStore() });
@@ -619,12 +626,12 @@ describe('VaultService', () => {
 
     it('createFileSend encrypts the file, uploads via v2, and returns a decrypted summary', async () => {
       const { service, api } = await makeService();
-      (api as any).createSendFile = vi.fn(async (_t: string, req: any) => ({ url: '/sends/s1/file/f1', sendResponse: { ...req, id: 's1', accessId: 'acc1', file: { id: 'f1', fileName: req.file.fileName, sizeName: '3 Bytes' } } }));
-      (api as any).uploadSendFileData = vi.fn(async () => {});
+      stubApi(api).createSendFile = vi.fn(async (_t: string, req: { file: { fileName: string } }) => ({ url: '/sends/s1/file/f1', sendResponse: { ...req, id: 's1', accessId: 'acc1', file: { id: 'f1', fileName: req.file.fileName, sizeName: '3 Bytes' } } }));
+      stubApi(api).uploadSendFileData = vi.fn(async () => {});
       const dataB64 = btoa(String.fromCharCode(1, 2, 3));
       const summary = await service.createFileSend({ name: 'Doc', deletionDays: 7 }, dataB64, 'secret.pdf', 'http://localhost:8080');
-      expect((api as any).createSendFile).toHaveBeenCalled();
-      expect((api as any).uploadSendFileData).toHaveBeenCalledWith('access', '/sends/s1/file/f1', expect.any(Uint8Array), expect.any(String));
+      expect(stubApi(api).createSendFile).toHaveBeenCalled();
+      expect(stubApi(api).uploadSendFileData).toHaveBeenCalledWith('access', '/sends/s1/file/f1', expect.any(Uint8Array), expect.any(String));
       expect(summary.type).toBe(1);
       expect(summary.fileName).toBe('secret.pdf');
       expect(summary.url).toContain('/#/send/acc1/');
@@ -632,35 +639,35 @@ describe('VaultService', () => {
 
     it('createFileSend deletes the orphan send if the blob upload fails', async () => {
       const { service, api } = await makeService();
-      (api as any).createSendFile = vi.fn(async () => ({ url: '/sends/s9/file/f9', sendResponse: { id: 's9', accessId: 'a9', type: 1, file: { fileName: '2.enc' } } }));
-      (api as any).uploadSendFileData = vi.fn(async () => { throw new Error('upload boom'); });
-      (api as any).deleteSend = vi.fn(async () => {});
+      stubApi(api).createSendFile = vi.fn(async () => ({ url: '/sends/s9/file/f9', sendResponse: { id: 's9', accessId: 'a9', type: 1, file: { fileName: '2.enc' } } }));
+      stubApi(api).uploadSendFileData = vi.fn(async () => { throw new Error('upload boom'); });
+      stubApi(api).deleteSend = vi.fn(async () => {});
       const dataB64 = btoa(String.fromCharCode(1, 2, 3));
       await expect(service.createFileSend({ name: 'Doc', deletionDays: 7 }, dataB64, 'f.pdf', 'http://localhost:8080')).rejects.toThrow('upload boom');
-      expect((api as any).deleteSend).toHaveBeenCalledWith('access', 's9');
+      expect(stubApi(api).deleteSend).toHaveBeenCalledWith('access', 's9');
     });
 
     it('updateSend re-fetches the existing send, PUTs the rebuilt request, and returns the decrypted summary', async () => {
       const { service, api } = await makeService();
       const existing = { id: 's1', accessId: 'a1', type: 0, name: FIELD_VECTOR.encString, key: FIELD_VECTOR.encString, text: { text: FIELD_VECTOR.encString }, deletionDate: new Date(0).toISOString(), accessCount: 0 };
-      (api as any).listSends = vi.fn(async () => [existing]);
-      (api as any).updateSend = vi.fn(async () => existing);
-      (api as any).removeSendPassword = vi.fn(async () => {});
+      stubApi(api).listSends = vi.fn(async () => [existing]);
+      stubApi(api).updateSend = vi.fn(async () => existing);
+      stubApi(api).removeSendPassword = vi.fn(async () => {});
       const summary = await service.updateSend('s1', { name: 'New', text: 'x', passwordMode: 'keep' }, 'http://localhost:8080');
-      expect((api as any).updateSend).toHaveBeenCalledWith('access', 's1', expect.objectContaining({ key: existing.key }));
-      expect((api as any).removeSendPassword).not.toHaveBeenCalled();
+      expect(stubApi(api).updateSend).toHaveBeenCalledWith('access', 's1', expect.objectContaining({ key: existing.key }));
+      expect(stubApi(api).removeSendPassword).not.toHaveBeenCalled();
       expect(summary.id).toBe('s1');
     });
 
     it('updateSend calls removeSendPassword when passwordMode is remove, and throws when the send is gone', async () => {
       const { service, api } = await makeService();
       const existing = { id: 's1', accessId: 'a1', type: 0, name: FIELD_VECTOR.encString, key: FIELD_VECTOR.encString, text: { text: FIELD_VECTOR.encString }, deletionDate: new Date(0).toISOString(), accessCount: 0 };
-      (api as any).listSends = vi.fn(async () => [existing]);
-      (api as any).updateSend = vi.fn(async () => existing);
-      (api as any).removeSendPassword = vi.fn(async () => {});
+      stubApi(api).listSends = vi.fn(async () => [existing]);
+      stubApi(api).updateSend = vi.fn(async () => existing);
+      stubApi(api).removeSendPassword = vi.fn(async () => {});
       await service.updateSend('s1', { name: 'N', passwordMode: 'remove' }, 'http://x');
-      expect((api as any).removeSendPassword).toHaveBeenCalledWith('access', 's1');
-      (api as any).listSends = vi.fn(async () => []);
+      expect(stubApi(api).removeSendPassword).toHaveBeenCalledWith('access', 's1');
+      stubApi(api).listSends = vi.fn(async () => []);
       await expect(service.updateSend('missing', { name: 'N' }, 'http://x')).rejects.toMatchObject({ code: 'error' });
     });
   });
@@ -1430,7 +1437,7 @@ describe('VaultService', () => {
     const entries = await service.getPwnedReport();
     expect(entries).toEqual([{ id: 'a', pwnedCount: 42 }, { id: 'b', pwnedCount: 42 }, { id: 'c', pwnedCount: 0 }]);
     const { pwnedCount } = await import('./pwned.js');
-    expect((pwnedCount as any).mock.calls.length).toBe(2); // deduped: 'reused-weak' + 'unique-safe'
+    expect(vi.mocked(pwnedCount).mock.calls.length).toBe(2); // deduped: 'reused-weak' + 'unique-safe'
     expect(JSON.stringify(entries)).not.toContain('reused-weak'); // no password crosses the boundary
   });
 

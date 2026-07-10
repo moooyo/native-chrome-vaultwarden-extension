@@ -27,12 +27,13 @@ Collections grouping, Argon2id accounts, and account registration are not implem
 
 ## User interface
 
-All three surfaces — the popup, the options page, and the in-page autofill popover — share one design system (`src/ui/theme.css`):
+All surfaces — the popup, the options page, the Receive page, and the in-page autofill surfaces — are built from one **Lit 3 component system** (`src/ui/components/`, with `themeTokens` design tokens and shared control styles). Each surface's production entry file (`src/ui/{popup,options,receive}/*.ts`) is a thin dependency adapter that mounts a single Lit root; there is no imperative string renderer and no shared `theme.css`.
 
-- A cool-slate palette with a single indigo accent and a teal "secured" signal. Credential data (usernames, URIs, codes) is set in monospace so machine strings stay unambiguous.
-- A full dark theme that follows `prefers-color-scheme`, and motion that respects `prefers-reduced-motion`.
-- Iconography is inline SVG and sizing is `rem`-based, so the UI stays crisp and proportional across resolutions, DPI, and browser zoom. The toolbar/extension icon set (16/32/48/128) is generated from a single vector source by `tools/gen-icons.mjs`.
-- The options page is a responsive centered column; the popup is a fixed-width panel whose regions scroll within Chrome's height budget; the popover is Shadow-DOM isolated and flips above / clamps to the viewport edge when space is tight.
+- **Popup** — a fixed **404 px, context-first panel** (`vw-popup-app`). When the vault is unlocked it opens on **Suggestions** for the active tab (with an **All items** view alongside search, folders, collections, and trash). Choosing a suggestion triggers a **direct Fill**: the worker coordinates the fill into the target frame and never submits the form, and credentials never enter popup/suggestion state.
+- **Options** — a **settings rail** (`vw-options-app`): Connection, Security, Autofill, Data, and About sections, collapsing to a single selector on narrow viewports.
+- **Receive** — `vw-receive-app` accesses and decrypts a Vaultwarden Send (text or file) entirely on-device.
+- **In-page surfaces** — the autofill popover, save/update bar, self-dismissing notice, and passkey consent/registration dialogs each render inside a **closed** Shadow Root the page cannot read or forge; every privileged click is gated on `Event.isTrusted`.
+- A full dark theme follows `prefers-color-scheme`, motion respects `prefers-reduced-motion`, iconography is inline SVG, and sizing is `rem`-based so the UI stays crisp across resolutions, DPI, and browser zoom. Rendered-UI regression coverage (overflow at 320/404/768 px, long text, dark mode, keyboard focus, 200 % zoom, and visual snapshots) runs under `npm.cmd run test:ui`.
 
 ## Development
 
@@ -41,10 +42,11 @@ npm.cmd install
 npm.cmd test
 npm.cmd run typecheck
 npm.cmd run lint
+npm.cmd run test:ui
 npm.cmd run build
 ```
 
-Load `dist/` from Chrome `chrome://extensions` with Developer Mode enabled.
+`npm.cmd run build:prod` produces the shippable bundle and runs `tools/assert-build.mjs`, which fails the build unless every surface has been switched to its Lit root (independent MV3-CSP-compatible bundles, no shared code splitting, no `theme.css`, no imperative renderer). Load `dist/` from Chrome `chrome://extensions` with Developer Mode enabled.
 
 ## Manual acceptance
 

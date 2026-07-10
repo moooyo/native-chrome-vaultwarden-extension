@@ -1,87 +1,91 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest';
-import { renderConsentInto, renderPasskeyPickerInto } from './passkey-consent.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { PasskeyRegisterResult, PasskeyRegisterTarget } from './ui/passkey-dialog-element.js';
 
-afterEach(() => { document.body.innerHTML = ''; });
+// The factories mount the closed-shadow Lit dialogs `vw-passkey-consent` / `vw-passkey-register`
+// (their Event.isTrusted gating, Escape/outside-click cancel, and index-only target selection are
+// covered by passkey-dialog-element.test.ts). Here we verify each factory configures the dialog and
+// resolves its promise from the element's one-shot result, then removes the closed surface. We mock
+// the mount seam to reach the element the factory would otherwise hide inside a closed root.
 
-function mount(rpId: string): { root: HTMLElement; result: () => boolean | undefined } {
-  const root = document.createElement('div');
-  document.body.append(root);
-  let result: boolean | undefined;
-  renderConsentInto(root, rpId, (c) => { result = c; });
-  return { root, result: () => result };
+interface FakePasskeyDialog {
+  rpId?: string;
+  targets?: PasskeyRegisterTarget[];
+  onResult?: (result: boolean | PasskeyRegisterResult) => void;
 }
 
-function trustedClick(el: Element | null): void {
-  const event = new MouseEvent('click', { bubbles: true, cancelable: true });
-  Object.defineProperty(event, 'isTrusted', { value: true });
-  el!.dispatchEvent(event);
-}
+const state = vi.hoisted(() => ({
+  instances: [] as Array<{ tag: string; element: FakePasskeyDialog; remove: ReturnType<typeof vi.fn> }>,
+}));
 
-describe('passkey consent dialog', () => {
-  it('reports true only after a trusted confirm click', () => {
-    const { root, result } = mount('example.com');
-    trustedClick(root.querySelector('#vw-pk-confirm'));
-    expect(result()).toBe(true);
+vi.mock('./ui/closed-surface.js', () => ({
+  mountClosedSurface: vi.fn((tag: string, configure: (element: FakePasskeyDialog) => void) => {
+    const element: FakePasskeyDialog = {};
+    configure(element);
+    const remove = vi.fn();
+    state.instances.push({ tag, element, remove });
+    return { host: document.createElement('div'), root: document.createElement('div'), element, remove };
+  }),
+}));
+
+import { mountClosedSurface } from './ui/closed-surface.js';
+import { confirmPasskeyUse, choosePasskeyTarget } from './passkey-consent.js';
+
+afterEach(() => {
+  state.instances.length = 0;
+  vi.mocked(mountClosedSurface).mockClear();
+});
+
+describe('confirmPasskeyUse', () => {
+  it('mounts vw-passkey-consent for the rpId', () => {
+    void confirmPasskeyUse('login.acme.com');
+    expect(mountClosedSurface).toHaveBeenCalledWith('vw-passkey-consent', expect.any(Function));
+    const { tag, element } = state.instances[0]!;
+    expect(tag).toBe('vw-passkey-consent');
+    expect(element.rpId).toBe('login.acme.com');
   });
 
-  it('reports false on cancel', () => {
-    const { root, result } = mount('example.com');
-    trustedClick(root.querySelector('#vw-pk-cancel'));
-    expect(result()).toBe(false);
+  it('resolves true and removes the dialog when the element confirms', async () => {
+    const promise = confirmPasskeyUse('example.com');
+    const { element, remove } = state.instances[0]!;
+    element.onResult?.(true);
+    await expect(promise).resolves.toBe(true);
+    expect(remove).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores untrusted (page-synthesized) clicks so consent cannot be forged', () => {
-    const { root, result } = mount('example.com');
-    // A synthetic event has isTrusted=false, exactly what a malicious page can dispatch.
-    root.querySelector('#vw-pk-confirm')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    expect(result()).toBeUndefined();
-  });
-
-  it('shows the rpId so the user knows where they are signing in', () => {
-    const { root } = mount('login.acme.com');
-    expect(root.querySelector('.rp')?.textContent).toBe('login.acme.com');
-  });
-
-  it('fires the result at most once', () => {
-    const root = document.createElement('div');
-    document.body.append(root);
-    let count = 0;
-    renderConsentInto(root, 'x.com', () => { count++; });
-    trustedClick(root.querySelector('#vw-pk-confirm'));
-    trustedClick(root.querySelector('#vw-pk-cancel'));
-    expect(count).toBe(1);
+  it('resolves false and removes the dialog when the element cancels', async () => {
+    const promise = confirmPasskeyUse('example.com');
+    const { element, remove } = state.instances[0]!;
+    element.onResult?.(false);
+    await expect(promise).resolves.toBe(false);
+    expect(remove).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('renderPasskeyPickerInto', () => {
-  function setup(targets: Array<{ id: string; name: string; username?: string }>) {
-    const root = document.createElement('div');
-    document.body.append(root);
-    let result: { cancelled: true } | { targetCipherId?: string } | undefined;
-    renderPasskeyPickerInto(root, 'example.com', targets, (r) => { result = r; });
-    return { root, get: () => result };
-  }
-  it('picking "New login item" resolves with no targetCipherId', () => {
-    const { root, get } = setup([{ id: 'c1', name: 'Example', username: 'me' }]);
-    trustedClick(root.querySelector('#vw-pk-new'));
-    expect(get()).toEqual({});
+describe('choosePasskeyTarget', () => {
+  it('mounts vw-passkey-register with the rpId and target list', () => {
+    const targets: PasskeyRegisterTarget[] = [{ id: 'c1', name: 'Example', username: 'me' }];
+    void choosePasskeyTarget('example.com', targets);
+    expect(mountClosedSurface).toHaveBeenCalledWith('vw-passkey-register', expect.any(Function));
+    const { tag, element } = state.instances[0]!;
+    expect(tag).toBe('vw-passkey-register');
+    expect(element.rpId).toBe('example.com');
+    expect(element.targets).toEqual(targets);
   });
-  it('picking an existing target resolves with its id', () => {
-    const { root, get } = setup([{ id: 'c1', name: 'Example', username: 'me' }]);
-    trustedClick(root.querySelector('[data-target="c1"]'));
-    expect(get()).toEqual({ targetCipherId: 'c1' });
+
+  it('resolves with the chosen target id and removes the dialog', async () => {
+    const promise = choosePasskeyTarget('example.com', [{ id: 'c1', name: 'Example' }]);
+    const { element, remove } = state.instances[0]!;
+    element.onResult?.({ targetCipherId: 'c1' });
+    await expect(promise).resolves.toEqual({ targetCipherId: 'c1' });
+    expect(remove).toHaveBeenCalledTimes(1);
   });
-  it('cancel resolves cancelled', () => {
-    const { root, get } = setup([]);
-    trustedClick(root.querySelector('#vw-pk-cancel'));
-    expect(get()).toEqual({ cancelled: true });
-  });
-  it('ignores untrusted (synthetic) clicks only when isTrusted is enforced', () => {
-    // renderPasskeyPickerInto gates on e.isTrusted; happy-dom MouseEvent has isTrusted=false, so the
-    // production dialog would ignore it. This test documents the guard by asserting the handler checks it.
-    const { root, get } = setup([{ id: 'c1', name: 'Example' }]);
-    (root.querySelector('#vw-pk-new') as HTMLButtonElement).click(); // .click() → isTrusted false in happy-dom
-    expect(get()).toBeUndefined();
+
+  it('resolves cancelled and removes the dialog', async () => {
+    const promise = choosePasskeyTarget('example.com', []);
+    const { element, remove } = state.instances[0]!;
+    element.onResult?.({ cancelled: true });
+    await expect(promise).resolves.toEqual({ cancelled: true });
+    expect(remove).toHaveBeenCalledTimes(1);
   });
 });

@@ -9,7 +9,7 @@ import { AppError } from '../errors.js';
 
 export interface KeyRotationDeps {
   api: {
-    sync(token: string): Promise<any>;
+    sync(token: string): Promise<unknown>;
     getTrustedEmergencyAccess(token: string): Promise<Array<{ id: string }>>;
     getOrganizationPublicKey(token: string, orgId: string): Promise<{ publicKey: string }>;
     getAccountPublicKey(token: string): Promise<{ publicKey: string }>;
@@ -38,7 +38,12 @@ export async function rotateAccountKey(masterPassword: string, deps: KeyRotation
     throw new AppError('error', 'Remove your emergency-access contacts before rotating your encryption key.');
   }
 
-  const sync = await deps.api.sync(token); // authoritative full current vault
+  const sync = await deps.api.sync(token) as {
+    ciphers: unknown[];
+    folders?: unknown[];
+    sends?: unknown[];
+    profile?: { organizations?: unknown[] };
+  }; // authoritative full current vault
   const newUserKeyBytes = globalThis.crypto.getRandomValues(new Uint8Array(64));
   const newUserKey = symmetricKeyFromBytes(newUserKeyBytes);
 

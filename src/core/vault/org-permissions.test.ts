@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { canManageCollections, toOrgPermission } from './org-permissions.js';
 import type { OrganizationResponse } from '../api/types.js';
 
-const org = (over: Partial<OrganizationResponse> & Record<string, any>): OrganizationResponse => ({ id: 'o1', key: 'k', name: 'Acme', status: 2, ...over });
+const org = (over: Partial<OrganizationResponse> & Record<string, unknown>): OrganizationResponse => ({ id: 'o1', key: 'k', name: 'Acme', status: 2, ...over });
 
 describe('canManageCollections', () => {
   it('is true for a confirmed Owner or Admin regardless of permissions', () => {
@@ -20,8 +20,8 @@ describe('canManageCollections', () => {
   });
   it('fails closed on non-confirmed status or unknown/missing type', () => {
     expect(canManageCollections(org({ type: 0, status: 1 }))).toBe(false);
-    expect(canManageCollections(org({ type: 0, status: undefined as any }))).toBe(false);
-    expect(canManageCollections(org({ type: undefined as any }))).toBe(false);
+    expect(canManageCollections(org({ type: 0, status: undefined as never }))).toBe(false);
+    expect(canManageCollections(org({ type: undefined as never }))).toBe(false);
     expect(canManageCollections(org({ type: 99 }))).toBe(false);
   });
 });

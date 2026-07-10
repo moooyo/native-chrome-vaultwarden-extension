@@ -3,100 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="../theme.css" />
   <link rel="stylesheet" href="options.css" />
 </head>
 <body>
-  <div class="page">
-    <header class="page-head">
-      <div class="brand">
-        <span class="brand-mark" id="brandMark"></span>
-        <span class="titles">
-          <span class="wordmark">Vaultwarden</span>
-          <span class="eyebrow">Extension settings</span>
-        </span>
-      </div>
-    </header>
-
-    <main class="card settings">
-      <div class="settings-head">
-        <h1>Connection</h1>
-        <p class="muted">Point the extension at your self-hosted Vaultwarden server and choose how saved logins are matched to websites.</p>
-      </div>
-
-      <form id="settingsForm">
-        <label class="field" for="serverUrl">
-          <span class="field-label">Server URL</span>
-          <input id="serverUrl" class="input mono" type="url" placeholder="https://vault.example.com/" required />
-          <span class="help">Saving prompts for permission to reach this origin. Use the full address, including <span class="mono">https://</span>.</span>
-        </label>
-
-        <label class="field" for="defaultUriMatchStrategy">
-          <span class="field-label">Default URI match strategy</span>
-          <select id="defaultUriMatchStrategy" class="select">
-            <option value="0">Base domain / Domain</option>
-            <option value="1">Host</option>
-            <option value="2">Starts with</option>
-            <option value="3">Exact</option>
-            <option value="4">Regular expression</option>
-            <option value="5">Never</option>
-          </select>
-          <span class="help" id="strategyHelp"></span>
-        </label>
-
-        <label class="field" for="lockTimeout">
-          <span class="field-label">Auto-lock after inactivity</span>
-          <select id="lockTimeout" class="select">
-            <option value="1">1 minute</option>
-            <option value="5">5 minutes</option>
-            <option value="15">15 minutes</option>
-            <option value="30">30 minutes</option>
-            <option value="onClose">Only when the browser closes</option>
-            <option value="never">Never</option>
-          </select>
-          <span class="help">Locks the vault and clears keys after this much idle time. “Only when the browser closes” keeps the vault unlocked until the browser quits.</span>
-        </label>
-
-        <div class="actions">
-          <button type="submit" class="btn" id="saveButton"><span>Save settings</span></button>
-        </div>
-      </form>
-
-      <div id="status" class="status" aria-live="polite"></div>
-    </main>
-
-    <section class="card settings">
-      <div class="settings-head">
-        <h1>Security</h1>
-      </div>
-
-      <label class="field" for="onIdleAction">
-        <span class="field-label">On idle timeout / system lock</span>
-        <select id="onIdleAction" class="select">
-          <option value="lock">Lock</option>
-          <option value="logout">Log out</option>
-        </select>
-        <p id="idleActionWarning" class="help"></p>
-      </label>
-
-      <label class="field" for="clipboardClear">
-        <span class="field-label">Clear copied values after</span>
-        <select id="clipboardClear" class="select">
-          <option value="never">Never</option>
-          <option value="30">30 seconds</option>
-          <option value="60">1 minute</option>
-          <option value="120">2 minutes</option>
-          <option value="300">5 minutes</option>
-        </select>
-      </label>
-
-      <div id="securityStatus" class="status" aria-live="polite"></div>
-    </section>
-
-    <footer class="page-foot">
-      <span class="muted">The master password and vault keys never leave this device.</span>
-    </footer>
-  </div>
+  <main id="app"></main>
   <script type="module" src="options.js"></script>
 </body>
 </html>

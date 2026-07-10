@@ -20,7 +20,7 @@ async function derivePublicSpki(pkcs8: Uint8Array): Promise<Uint8Array> {
   const pub = await crypto.subtle.importKey('jwk', { kty: 'RSA', n: jwk.n, e: jwk.e, ext: true, key_ops: ['encrypt'] } as JsonWebKey, { name: 'RSA-OAEP', hash: 'SHA-1' }, true, ['encrypt']);
   return new Uint8Array(await crypto.subtle.exportKey('spki', pub));
 }
-async function rawJson(method: string, path: string, token: string, body: unknown): Promise<any> {
+async function rawJson(method: string, path: string, token: string, body: unknown): Promise<unknown> {
   const r = await fetch(`${SERVER}${path}`, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const t = await r.text(); return t ? JSON.parse(t) : undefined;
 }
@@ -41,7 +41,7 @@ async function rawJson(method: string, path: string, token: string, body: unknow
     const orgKeyBytes = crypto.getRandomValues(new Uint8Array(64));
     const orgKey = symmetricKeyFromBytes(orgKeyBytes);
     const org = await rawJson('POST', '/api/organizations', token, { name: `LiveOrg-${Date.now()}`, billingEmail: EMAIL, collectionName: await encryptToText('Default', orgKey), key: `4.${bytesToBase64(await rsaOaepEncrypt(spki, orgKeyBytes))}`, planType: 0, keys: null });
-    const orgId: string = org.id;
+    const orgId: string = (org as { id: string }).id;
     try {
       // CREATE via the real ApiClient method.
       const created = await api.createCollection(token, orgId, await encryptToText('LiveCol', orgKey));

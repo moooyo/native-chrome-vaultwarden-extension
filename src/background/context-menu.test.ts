@@ -1,15 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createContextMenu, shouldRefreshMenu } from './context-menu.js';
+import type { FillItemCandidate, FillCommand, FillErrorCommand } from '../messaging/protocol.js';
 
-function makeDeps(state: 'loggedOut' | 'locked' | 'unlocked', cards: any[] = [], identities: any[] = []) {
-  const created: any[] = [];
-  const sent: any[] = [];
+function makeDeps(state: 'loggedOut' | 'locked' | 'unlocked', cards: FillItemCandidate[] = [], identities: FillItemCandidate[] = []) {
+  const created: Record<string, unknown>[] = [];
+  const sent: Array<{ id: number; msg: FillCommand | FillErrorCommand; opts: { frameId?: number } | undefined }> = [];
   const deps = {
     getState: vi.fn(async () => state),
     findFillItems: vi.fn(async (kind: 'card' | 'identity') => (kind === 'card' ? cards : identities)),
     getFillData: vi.fn(async () => ({ number: '4111' })),
-    menus: { removeAll: vi.fn(async () => {}), create: vi.fn((p: any) => { created.push(p); }) },
-    tabs: { sendMessage: vi.fn(async (id: number, msg: unknown, opts?: any) => { sent.push({ id, msg, opts }); }) },
+    menus: { removeAll: vi.fn(async () => {}), create: vi.fn((p: Record<string, unknown>) => { created.push(p); }) },
+    tabs: { sendMessage: vi.fn(async (id: number, msg: FillCommand | FillErrorCommand, opts?: { frameId?: number }) => { sent.push({ id, msg, opts }); }) },
   };
   return { deps, created, sent };
 }
@@ -38,8 +39,8 @@ describe('context menu', () => {
     const { deps, created } = makeDeps('unlocked', [{ id: 'c1', name: 'Amex', favorite: false, reprompt: true }], []);
     await createContextMenu(deps).refresh();
     const item = created.find((c) => c.id === 'vw-fill|form|card|c1');
-    expect(item.title).toContain('Amex');
-    expect(item.title).toContain('🔒');
+    expect(item!.title).toContain('Amex');
+    expect(item!.title).toContain('🔒');
     // no identity group when there are no identities
     expect(created.some((c) => c.id === 'vw-identity-form')).toBe(false);
   });
@@ -55,7 +56,7 @@ describe('context menu', () => {
     const { deps, sent } = makeDeps('unlocked');
     deps.getFillData = vi.fn(async () => { throw Object.assign(new Error('x'), { code: 'reprompt_required' }); });
     await createContextMenu(deps).handleClick('vw-fill|form|card|c9', { id: 7 }, 0);
-    expect(sent[0].msg).toEqual({ type: 'autofill.fillError', code: 'reprompt_required' });
+    expect(sent[0]!.msg).toEqual({ type: 'autofill.fillError', code: 'reprompt_required' });
   });
 
   it('ignores clicks with no tab id or unrecognized menu id', async () => {
