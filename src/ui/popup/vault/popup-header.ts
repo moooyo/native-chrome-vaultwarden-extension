@@ -16,17 +16,20 @@ export class VwPopupHeader extends LitElement {
     accounts: { attribute: false },
     pinEnabled: { type: Boolean },
     deviceRemembered: { type: Boolean },
+    query: { type: String },
   };
 
   declare accounts: AccountInfo[];
   declare pinEnabled: boolean;
   declare deviceRemembered: boolean;
+  declare query: string;
 
   constructor() {
     super();
     this.accounts = [];
     this.pinEnabled = false;
     this.deviceRemembered = false;
+    this.query = '';
   }
 
   static override styles = [
@@ -40,7 +43,9 @@ export class VwPopupHeader extends LitElement {
         display: flex;
         align-items: center;
         gap: 4px;
-        padding: 4px 0;
+        height: 100%;
+        padding: 0 10px;
+        box-sizing: border-box;
       }
       .spacer {
         flex: 1;
@@ -57,6 +62,35 @@ export class VwPopupHeader extends LitElement {
         width: 18px;
         height: 18px;
       }
+      .search {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: min(220px, 38vw);
+        min-width: 120px;
+        height: 34px;
+        padding: 0 9px;
+        border: 1px solid var(--vw-line);
+        border-radius: var(--vw-radius-row);
+        background: var(--vw-panel);
+      }
+      .search svg {
+        width: 16px;
+        height: 16px;
+        color: var(--vw-muted);
+      }
+      .search input {
+        flex: 1;
+        min-width: 0;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: var(--vw-ink);
+        font: inherit;
+      }
+      .new-item {
+        min-width: 92px;
+      }
     `,
   ];
 
@@ -64,13 +98,32 @@ export class VwPopupHeader extends LitElement {
     this.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true }));
   }
 
+  private emitSearch(query: string): void {
+    this.dispatchEvent(new CustomEvent('vw-search-change', {
+      detail: { query },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
   protected override render() {
     return html`
       <div class="header">
         <span class="brand">${uiIcon('shield')}<span>Vaultwarden</span></span>
         <span class="spacer"></span>
-        <button type="button" class="icon-button" data-add title="Add item" aria-label="Add item" @click=${() => this.emit('vw-add')}>
-          ${uiIcon('plus')}
+        <label class="search">
+          ${uiIcon('search')}
+          <input
+            data-search
+            type="search"
+            aria-label="Search vault"
+            placeholder="Search Vaultwarden"
+            .value=${this.query}
+            @input=${(event: Event) => this.emitSearch((event.target as HTMLInputElement).value)}
+          />
+        </label>
+        <button type="button" class="button primary new-item" data-add @click=${() => this.emit('vw-add')}>
+          ${uiIcon('plus')}<span>New item</span>
         </button>
         <button type="button" class="icon-button" data-generator title="Password generator" aria-label="Password generator" @click=${() => this.emit('vw-generator')}>
           ${uiIcon('key')}

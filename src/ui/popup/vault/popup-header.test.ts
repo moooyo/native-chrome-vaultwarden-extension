@@ -9,6 +9,7 @@ async function mount(accounts: AccountInfo[] = [{ email: 'me@example.com', activ
   el.accounts = accounts;
   el.pinEnabled = false;
   el.deviceRemembered = false;
+  el.query = '';
   document.body.append(el);
   await el.updateComplete;
   return el;
@@ -31,6 +32,21 @@ describe('vw-popup-header', () => {
     el.addEventListener('vw-add', added);
     el.shadowRoot?.querySelector<HTMLButtonElement>('[data-add]')!.click();
     expect(added).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders New item as the primary toolbar command', async () => {
+    const el = await mount();
+    expect(el.shadowRoot?.querySelector('[data-add]')?.textContent).toContain('New item');
+  });
+
+  it('emits the current search query', async () => {
+    const el = await mount();
+    const changed = vi.fn();
+    el.addEventListener('vw-search-change', changed);
+    const input = el.shadowRoot!.querySelector<HTMLInputElement>('[data-search]')!;
+    input.value = 'github';
+    input.dispatchEvent(new Event('input'));
+    expect(changed).toHaveBeenCalledWith(expect.objectContaining({ detail: { query: 'github' } }));
   });
 
   it('emits vw-generator when the generator control is used', async () => {

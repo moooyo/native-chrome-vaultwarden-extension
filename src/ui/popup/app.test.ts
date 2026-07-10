@@ -665,6 +665,31 @@ describe('vw-popup-app account and tool actions', () => {
     await fully(app);
     expect(app.route).toEqual({ name: 'detail', cipherId: 'c1' });
   });
+
+  it('renders the unlocked vault in a double-pane frame', async () => {
+    const app = await mountVault(unlockedHandlers(), browserSeam());
+    const frame = app.shadowRoot!.querySelector('vw-popup-frame');
+    expect(frame?.getAttribute('mode')).toBe('double');
+    expect(frame?.querySelector('[slot="list"] vw-vault-view')).not.toBeNull();
+  });
+
+  it('keeps the list mounted while detail opens in the right pane', async () => {
+    const app = await mountVault(unlockedHandlers({
+      'vault.getCipherDetail': async () => ({ ok: true, data: { cipher: { ...summary(), fields: [] } } }),
+    }), browserSeam());
+    const list = vaultView(app);
+    await openDetail(app, 'c1');
+    expect(vaultView(app)).toBe(list);
+    expect(app.shadowRoot!.querySelector('[slot="detail"] vw-item-detail')).not.toBeNull();
+    expect(app.selectedCipherId).toBe('c1');
+  });
+
+  it('uses auth mode for logged-out routes', async () => {
+    const app = await mountApp(fakeRequest({
+      'auth.getState': async () => ({ ok: true, data: { state: 'loggedOut' } }),
+    }));
+    expect(app.shadowRoot!.querySelector('vw-popup-frame')?.getAttribute('mode')).toBe('auth');
+  });
 });
 
 // --- Task 7: item detail, reprompt, TOTP, and attachments integration ---

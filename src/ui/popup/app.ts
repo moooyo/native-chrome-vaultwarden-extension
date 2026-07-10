@@ -8,6 +8,7 @@ import type { OrgPermission } from '../../core/vault/org-permissions.js';
 import type { TabFillOutcome, TabSuggestionsOutcome } from '../../messaging/protocol.js';
 import { themeTokens } from '../components/tokens.js';
 import '../components/status-message.js';
+import './popup-frame.js';
 import './auth/auth-views.js';
 import './vault/popup-header.js';
 import './vault/vault-view.js';
@@ -54,6 +55,7 @@ import type {
   SuggestionFillDetail,
   SuggestionsViewState,
   ToolActionDetail,
+  PopupLayoutMode,
 } from './types.js';
 import type {
   ChangeKdfDetail,
@@ -150,6 +152,8 @@ export class VwPopupApp extends LitElement {
     pwnedState: { attribute: false },
     sendsState: { attribute: false },
     toolStatus: { attribute: false },
+    vaultScope: { type: String },
+    selectedCipherId: { attribute: false },
   };
 
   declare route: PopupRoute;
@@ -195,6 +199,8 @@ export class VwPopupApp extends LitElement {
   /** Copy/create/update feedback banner the root drives on the open tool view (Sends, account
    *  security, PIN). Only one tool route is active at a time, so a single banner suffices. */
   declare toolStatus: DetailStatus | undefined;
+  declare vaultScope: 'suggestions' | 'all';
+  declare selectedCipherId: string | null;
 
   /** Injectable worker request function; defaults to the real messaging channel. */
   request: PopupRequest = sendRequest;
@@ -253,6 +259,8 @@ export class VwPopupApp extends LitElement {
     this.pwnedState = { status: 'idle' };
     this.sendsState = { status: 'idle' };
     this.toolStatus = undefined;
+    this.vaultScope = 'suggestions';
+    this.selectedCipherId = null;
   }
 
   static override styles = [
@@ -260,7 +268,15 @@ export class VwPopupApp extends LitElement {
     css`
       :host {
         display: block;
-        min-width: 320px;
+        min-width: 0;
+        width: fit-content;
+        max-width: 100vw;
+        max-height: 100vh;
+      }
+      .detail-route {
+        display: block;
+        min-width: 0;
+        min-height: 100%;
       }
     `,
   ];
@@ -295,6 +311,12 @@ export class VwPopupApp extends LitElement {
   navigate(route: PopupRoute): void {
     this.clearEphemeralDetailState();
     this.route = route;
+    if (route.name === 'vault') {
+      this.vaultScope = route.scope;
+      this.selectedCipherId = null;
+    } else if (route.name === 'detail') {
+      this.selectedCipherId = route.cipherId;
+    }
     if (route.name !== 'login') {
       this.deviceRemembered = false;
       this.deviceForgotten = false;
@@ -489,6 +511,7 @@ export class VwPopupApp extends LitElement {
    *  navigation into the vault goes through here so listing, account, and Suggestions data are
    *  refreshed from the worker/browser rather than trusted from a prior session. */
   private enterVault(): void {
+    this.vaultScope = 'suggestions';
     this.navigate({ name: 'vault', scope: 'suggestions' });
     void this.loadVaultData();
   }
@@ -539,7 +562,7 @@ export class VwPopupApp extends LitElement {
   private async loadSuggestions(): Promise<void> {
     this.suggestionsState = { status: 'loading' };
     const tabId = await this.browser.getActiveTabId();
-    if (this.route.name !== 'vault') return; // navigated away while resolving the tab
+    if (!this.isUnlockedWorkspace()) return;
     if (tabId === undefined) {
       this.activeTabId = undefined;
       this.suggestionsState = { status: 'unavailable', reason: 'no_eligible_tab' };
@@ -547,7 +570,7 @@ export class VwPopupApp extends LitElement {
     }
     this.activeTabId = tabId;
     const response = await this.request({ type: 'autofill.getTabSuggestions', tabId });
-    if (this.route.name !== 'vault') return;
+    if (!this.isUnlockedWorkspace()) return;
     if (!response.ok) {
       this.suggestionsState = { status: 'error', message: response.error.message };
       return;
@@ -580,7 +603,14 @@ export class VwPopupApp extends LitElement {
   }
 
   private handleScopeChange(id: string): void {
-    if (id === 'suggestions' || id === 'all') this.navigate({ name: 'vault', scope: id });
+    if (id === 'suggestions' || id === 'all') {
+      this.vaultScope = id;
+      this.navigate({ name: 'vault', scope: id });
+    }
+  }
+
+  private isUnlockedWorkspace(): boolean {
+    return !['loading', 'login', 'register', 'twoFactor', 'unlock'].includes(this.route.name);
   }
 
   private applyFilterPatch(patch: FilterChangeDetail): void {
@@ -663,6 +693,8 @@ export class VwPopupApp extends LitElement {
     this.showTrash = false;
     this.suggestionsState = { status: 'loading' };
     this.fillResult = {};
+    this.vaultScope = 'suggestions';
+    this.selectedCipherId = null;
     this.activeTabId = undefined;
     this.clearToolState();
   }
@@ -1325,19 +1357,28 @@ export class VwPopupApp extends LitElement {
     `;
   }
 
-  private renderVault(route: Extract<PopupRoute, { name: 'vault' }>) {
+  private renderPopupHeader() {
     return html`
       <vw-popup-header
         .accounts=${this.accounts}
+        .query=${this.query}
         .pinEnabled=${this.pinConfigured}
         .deviceRemembered=${this.vaultDeviceRemembered}
         @vw-add=${() => this.navigate({ name: 'editor', mode: 'create' })}
         @vw-generator=${() => this.navigate({ name: 'generator' })}
+        @vw-search-change=${(event: CustomEvent<{ query: string }>) => {
+          this.query = event.detail.query;
+          if (event.detail.query.trim()) this.vaultScope = 'all';
+        }}
         @vw-account-action=${(event: CustomEvent<AccountActionDetail>) => void this.handleAccountAction(event.detail)}
         @vw-tool-action=${(event: CustomEvent<ToolActionDetail>) => void this.handleToolAction(event.detail)}
-      ></vw-popup-header>
+      ></vw-popup-header>`;
+  }
+
+  private renderVaultList() {
+    return html`
       <vw-vault-view
-        .scope=${route.scope}
+        .scope=${this.vaultScope}
         .suggestionsState=${this.suggestionsState}
         .fill=${this.fillResult}
         .items=${this.items}
@@ -1349,6 +1390,7 @@ export class VwPopupApp extends LitElement {
         .query=${this.query}
         .showTrash=${this.showTrash}
         .skippedOrgCount=${this.skippedOrgCount}
+        .selectedCipherId=${this.selectedCipherId}
         @vw-tab-change=${(event: CustomEvent<{ id: string }>) => this.handleScopeChange(event.detail.id)}
         @vw-suggestion-fill=${(event: CustomEvent<SuggestionFillDetail>) => void this.handleSuggestionFill(event.detail)}
         @vw-item-open=${(event: CustomEvent<ItemOpenDetail>) => this.navigate({ name: 'detail', cipherId: event.detail.cipherId })}
@@ -1356,6 +1398,52 @@ export class VwPopupApp extends LitElement {
         @vw-folder-mutate=${(event: CustomEvent<FolderMutateDetail>) => void this.handleFolderMutate(event.detail)}
         @vw-collection-mutate=${(event: CustomEvent<CollectionMutateDetail>) => void this.handleCollectionMutate(event.detail)}
       ></vw-vault-view>
+    `;
+  }
+
+  private layoutMode(): PopupLayoutMode {
+    const name = this.route.name;
+    return name === 'login' || name === 'register' || name === 'twoFactor' || name === 'unlock'
+      ? 'auth'
+      : 'double';
+  }
+
+  private renderRightPane(route: PopupRoute) {
+    switch (route.name) {
+      case 'vault':
+        return html`<vw-status-message tone="info" .icon=${'shield'} message="Select an item to view its details."></vw-status-message>`;
+      case 'detail':
+        return this.renderDetail(route);
+      case 'editor':
+        return this.renderEditor(route);
+      case 'generator':
+        return this.renderGenerator();
+      case 'health':
+        return this.renderHealth();
+      case 'sends':
+        return this.renderSends();
+      case 'accountSecurity':
+        return this.renderAccountSecurity();
+      case 'pin':
+        return this.renderPin();
+      case 'trash':
+        return nothing;
+      case 'loading':
+      case 'login':
+      case 'register':
+      case 'twoFactor':
+      case 'unlock':
+        return nothing;
+    }
+  }
+
+  private renderUnlockedWorkspace(route: PopupRoute) {
+    return html`
+      <vw-popup-frame mode=${this.layoutMode()}>
+        <div slot="toolbar">${this.renderPopupHeader()}</div>
+        <div slot="list">${this.renderVaultList()}</div>
+        <section slot="detail" class="detail-route">${this.renderRightPane(route)}</section>
+      </vw-popup-frame>
     `;
   }
 
@@ -1524,31 +1612,14 @@ export class VwPopupApp extends LitElement {
     const route = this.route;
     switch (route.name) {
       case 'loading':
-        return this.renderLoading();
+        return html`<vw-popup-frame mode="auth">${this.renderLoading()}</vw-popup-frame>`;
       case 'login':
       case 'register':
       case 'twoFactor':
       case 'unlock':
-        return this.renderAuth(route);
-      case 'vault':
-        return this.renderVault(route);
-      case 'detail':
-        return this.renderDetail(route);
-      case 'editor':
-        return this.renderEditor(route);
-      case 'generator':
-        return this.renderGenerator();
-      case 'health':
-        return this.renderHealth();
-      case 'sends':
-        return this.renderSends();
-      case 'accountSecurity':
-        return this.renderAccountSecurity();
-      case 'pin':
-        return this.renderPin();
-      case 'trash':
-        // The trash tool routes into the vault's All-items scope; it is never rendered directly.
-        return nothing;
+        return html`<vw-popup-frame mode="auth">${this.renderAuth(route)}</vw-popup-frame>`;
+      default:
+        return this.renderUnlockedWorkspace(route);
     }
   }
 }
