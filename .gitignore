@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.zip
+.worktrees/
 .superpowers/sdd/
 .superpowers/brainstorm/
 test-results/
