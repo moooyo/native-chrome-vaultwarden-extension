@@ -2,7 +2,8 @@
 
 ## Status
 
-Approved on 2026-07-10.
+Design sections approved on 2026-07-10. Written specification awaiting final
+user review.
 
 This specification supersedes and replaces
 `docs/superpowers/specs/2026-07-10-ui-layout-hardening-design.md`. The earlier
@@ -96,9 +97,9 @@ in the existing monospace stack.
 
 Blue communicates focus, selection, the product mark, and primary actions. It
 must not become a large decorative field. Layout relies on spacing, typography,
-and quiet borders before color or shadow. Radii are purposeful: approximately
-14 px for the popup shell, 9-11 px for grouped surfaces, and 7-9 px for
-controls. Motion is limited to 120-160 ms state transitions and is disabled by
+and quiet borders before color or shadow. The base radius scale is 8 px for
+controls, 10 px for grouped surfaces, and 14 px for the popup shell. Motion is
+limited to 120-160 ms state transitions and is disabled by
 `prefers-reduced-motion`.
 
 ### Atomic cutover
@@ -152,28 +153,29 @@ restoration, and navigation history. Feature components own local form state.
 Sensitive local state is cleared when a component is detached, the vault locks,
 the account changes, or logout completes.
 
-The popup width is approximately 404 CSS px and remains capped by the available
-viewport. It has one outer scroll boundary and explicit inner list/editor
-scroll boundaries. No popup state may create document-level horizontal
-scrolling at 320 CSS px.
+The popup width is `25.25rem` (404 CSS px at the default 16 px root size) and is
+capped at `100vw`. It has one outer scroll boundary and explicit inner
+list/editor scroll boundaries. No popup state may create document-level
+horizontal scrolling at 320 CSS px.
 
 ### Options
 
 Options uses a full-page shell with a settings navigation rail. Initial
 sections are:
 
-- Connection;
-- Security;
-- Autofill;
-- Data;
-- About.
+- Connection: server URL and host-permission save flow;
+- Security: lock timeout, idle action, and clipboard clearing;
+- Autofill: default URI matching and related browser behavior;
+- Data: Import and Export;
+- About: extension version and the local-secret security statement.
 
 The Data section receives Import and Export, removing those operations from the
-popup footer. The navigation rail becomes a compact top selector below the
-narrow breakpoint. The content area uses setting rows with labels,
-descriptions, controls, and local status. Save behavior remains explicit where
-permission prompts or coupled settings require it; existing save-on-change
-security behavior remains unchanged.
+popup footer. Data first reads session state; while locked, its operations are
+disabled with an explicit instruction to unlock from the popup. The navigation
+rail becomes a compact top selector below the narrow breakpoint. The content
+area uses setting rows with labels, descriptions, controls, and local status.
+Save behavior remains explicit where permission prompts or coupled settings
+require it; existing save-on-change security behavior remains unchanged.
 
 ### Receive
 
@@ -192,6 +194,8 @@ Rewrite autofill, save, notice, passkey consent, and passkey registration UI as
 Lit components. Production hosts continue to attach `mode: 'closed'` shadow
 roots and retain direct references internally. Page-controlled strings are
 assigned as values or text nodes, never interpolated as unsafe HTML.
+Lit's `unsafeHTML` and `unsafeSVG` directives are prohibited for
+page-controlled or vault-controlled content.
 
 The page must not be able to inspect component state, invoke privileged
 actions, or forge accepted clicks. Existing `Event.isTrusted` checks remain at
@@ -279,7 +283,9 @@ The coordinator:
 4. receives only form metadata: stable form identifier, field roles,
    visibility, and recent-focus information; it receives no field values;
 5. ranks targets by recent recognized focus, then top-level frame, then visible
-   form/document order;
+   form/document order; "recent" means the newest recognized focus since that
+   frame's current document loaded, and timestamps older than 30 seconds do not
+   outrank an eligible top-level target;
 6. calls the existing URI-matching service with browser-derived frame URLs;
 7. deduplicates candidate items while preserving the best valid fill target;
 8. returns typed, non-secret suggestion records to the popup.
