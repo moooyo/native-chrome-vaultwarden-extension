@@ -642,3 +642,155 @@ describe('vw-popup-app account and tool actions', () => {
   });
 });
 
+// --- Task 7: item detail, reprompt, TOTP, and attachments integration ---
+
+function detailEl(app: VwPopupApp): Element | null {
+  return app.shadowRoot!.querySelector('vw-item-detail');
+}
+
+function gateEl(app: VwPopupApp): Element | null {
+  return app.shadowRoot!.querySelector('vw-reprompt-gate');
+}
+
+async function openDetail(app: VwPopupApp, cipherId: string): Promise<void> {
+  vaultView(app).dispatchEvent(new CustomEvent('vw-item-open', { detail: { cipherId }, bubbles: true, composed: true }));
+  await fully(app);
+}
+
+function stubClipboard(): ReturnType<typeof vi.fn> {
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+  return writeText;
+}
+
+describe('vw-popup-app item detail', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it('renders vw-item-detail and loads the secret-stripped cipher detail', async () => {
+    const getCipherDetail = vi.fn(async () => ({ ok: true as const, data: { cipher: { ...summary(), fields: [] } } }));
+    const app = await mountVault(unlockedHandlers({ 'vault.getCipherDetail': getCipherDetail }), browserSeam());
+    await openDetail(app, 'c1');
+    expect(detailEl(app)).not.toBeNull();
+    expect(getCipherDetail).toHaveBeenCalled();
+  });
+
+  it('gates a protected item behind the reprompt gate and threads the verified password into fetches', async () => {
+    const getField = vi.fn(async () => ({ ok: true as const, data: { value: 'p@ss' } }));
+    const app = await mountVault(
+      unlockedHandlers({
+        'vault.listItems': async () => ({ ok: true, data: { items: [summary({ id: 'c1', reprompt: true })], folders: [], collections: [], orgPermissions: [] } }),
+        'auth.verifyMasterPassword': async () => ({ ok: true, data: { verified: true } }),
+        'vault.getField': getField,
+      }),
+      browserSeam(),
+    );
+    await openDetail(app, 'c1');
+    expect(gateEl(app)).not.toBeNull();
+    expect(detailEl(app)).toBeNull();
+
+    const gate = gateEl(app)!;
+    gate.dispatchEvent(new CustomEvent('vw-reprompt-submit', { detail: { password: 'master-pw' }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(gateEl(app)).toBeNull();
+    expect(detailEl(app)).not.toBeNull();
+
+    detailEl(app)!.shadowRoot!.querySelector<HTMLButtonElement>('[data-toggle-password]')!.click();
+    await fully(app);
+    expect(getField).toHaveBeenCalledWith(expect.objectContaining({ type: 'vault.getField', field: 'password', masterPassword: 'master-pw' }));
+  });
+
+  it('rejects a wrong reprompt password with an error and no verified credential', async () => {
+    const app = await mountVault(
+      unlockedHandlers({
+        'vault.listItems': async () => ({ ok: true, data: { items: [summary({ id: 'c1', reprompt: true })], folders: [], collections: [], orgPermissions: [] } }),
+        'auth.verifyMasterPassword': async () => ({ ok: true, data: { verified: false } }),
+      }),
+      browserSeam(),
+    );
+    await openDetail(app, 'c1');
+    gateEl(app)!.dispatchEvent(new CustomEvent('vw-reprompt-submit', { detail: { password: 'nope' }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(gateEl(app)).not.toBeNull();
+    expect(app.repromptError).toBe('Incorrect master password');
+  });
+
+  it('clears the verified reprompt credential when navigating back and reopening', async () => {
+    const app = await mountVault(
+      unlockedHandlers({
+        'vault.listItems': async () => ({ ok: true, data: { items: [summary({ id: 'c1', reprompt: true })], folders: [], collections: [], orgPermissions: [] } }),
+        'auth.verifyMasterPassword': async () => ({ ok: true, data: { verified: true } }),
+      }),
+      browserSeam(),
+    );
+    await openDetail(app, 'c1');
+    gateEl(app)!.dispatchEvent(new CustomEvent('vw-reprompt-submit', { detail: { password: 'master-pw' }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(detailEl(app)).not.toBeNull();
+
+    detailEl(app)!.dispatchEvent(new CustomEvent('vw-item-back', { bubbles: true, composed: true }));
+    await fully(app);
+    await openDetail(app, 'c1');
+    expect(gateEl(app)).not.toBeNull();
+  });
+
+  it('copies a plaintext value and schedules a clipboard clear', async () => {
+    const writeText = stubClipboard();
+    const scheduleClear = vi.fn(async () => ({ ok: true as const, data: null }));
+    const app = await mountVault(unlockedHandlers({ 'clipboard.scheduleClear': scheduleClear }), browserSeam());
+    await openDetail(app, 'c1');
+    detailEl(app)!.dispatchEvent(new CustomEvent('vw-copy', { detail: { value: 'octocat', label: 'Username' }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(writeText).toHaveBeenCalledWith('octocat');
+    expect(scheduleClear).toHaveBeenCalled();
+  });
+
+  it('fetches a masked secret and copies it without holding it in the component', async () => {
+    const writeText = stubClipboard();
+    const getField = vi.fn(async () => ({ ok: true as const, data: { value: 's3cret' } }));
+    const app = await mountVault(unlockedHandlers({ 'vault.getField': getField, 'clipboard.scheduleClear': async () => ({ ok: true, data: null }) }), browserSeam());
+    await openDetail(app, 'c1');
+    detailEl(app)!.dispatchEvent(new CustomEvent('vw-secret-request', { detail: { kind: 'field', field: 'password', label: 'Password' }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(getField).toHaveBeenCalledWith(expect.objectContaining({ type: 'vault.getField', field: 'password' }));
+    expect(writeText).toHaveBeenCalledWith('s3cret');
+  });
+
+  it('soft-deletes an item and returns to the vault list', async () => {
+    const softDelete = vi.fn(async () => ({ ok: true as const, data: null }));
+    const app = await mountVault(unlockedHandlers({ 'vault.softDeleteCipher': softDelete }), browserSeam());
+    await openDetail(app, 'c1');
+    detailEl(app)!.dispatchEvent(new CustomEvent('vw-delete-item', { detail: { cipherId: 'c1', permanent: false }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(softDelete).toHaveBeenCalledWith(expect.objectContaining({ type: 'vault.softDeleteCipher', id: 'c1' }));
+    expect(app.route).toEqual({ name: 'vault', scope: 'all' });
+  });
+
+  it('downloads an attachment through the root', async () => {
+    const createSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:x');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const getAttachment = vi.fn(async () => ({ ok: true as const, data: { fileName: 'notes.txt', dataB64: btoa('data') } }));
+    const app = await mountVault(unlockedHandlers({ 'vault.getAttachment': getAttachment }), browserSeam());
+    await openDetail(app, 'c1');
+    detailEl(app)!.dispatchEvent(new CustomEvent('vw-attachment-download', { detail: { cipherId: 'c1', attachmentId: 'att-1', fileName: 'notes.txt' }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(getAttachment).toHaveBeenCalledWith(expect.objectContaining({ type: 'vault.getAttachment', cipherId: 'c1', attachmentId: 'att-1' }));
+    expect(createSpy).toHaveBeenCalled();
+    createSpy.mockRestore();
+    vi.restoreAllMocks();
+  });
+
+  it('clears a stale fillResult when switching accounts', async () => {
+    const app = await mountVault(
+      unlockedHandlers({ 'auth.switchAccount': async () => ({ ok: true, data: null }) }),
+      browserSeam(),
+    );
+    app.fillResult = { outcome: 'filled' };
+    header(app).dispatchEvent(new CustomEvent('vw-account-action', { detail: { action: 'switch-account', email: 'other@example.com' }, bubbles: true, composed: true }));
+    await fully(app);
+    expect(app.fillResult).toEqual({});
+  });
+});
+
+

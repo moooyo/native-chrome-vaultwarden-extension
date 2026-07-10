@@ -5,6 +5,8 @@ import type {
   TabSuggestionsOutcome,
   TabSuggestionTarget,
 } from '../../messaging/protocol.js';
+import type { FieldName } from '../../core/vault/models.js';
+import type { StatusTone } from '../components/status-message.js';
 
 /**
  * The dormant Lit popup's client-side router state. Every screen the popup can show is one
@@ -119,4 +121,95 @@ export type SuggestionsViewState =
 export interface FillResult {
   outcome?: TabFillOutcome['status'];
   error?: string;
+}
+
+// --- Item detail (dormant) --------------------------------------------------------------------
+
+/** Result of an on-demand secret fetch the root performs for the detail on explicit reveal. `ok:false`
+ *  carries no message — the root has already surfaced the error on its own status banner. */
+export type SecretResult =
+  | { ok: true; value: string | undefined }
+  | { ok: false };
+
+/** A single verification-code snapshot (never a secret seed) the root pulls for TOTP display. */
+export interface TotpSnapshot {
+  code: string;
+  period: number;
+  remaining: number;
+}
+
+export type TotpFetchResult =
+  | { ok: true; totp: TotpSnapshot | null }
+  | { ok: false };
+
+/** One decrypted previous password (fetched only on explicit history reveal). */
+export interface PasswordHistoryEntry {
+  password: string;
+  lastUsedDate?: string;
+}
+
+export type HistoryFetchResult =
+  | { ok: true; history: PasswordHistoryEntry[] }
+  | { ok: false };
+
+/**
+ * The async loaders the root injects into the detail so the component can pull on-demand values
+ * without ever issuing worker requests itself. Each function is a root closure over the current
+ * cipher id and the verified reprompt credential; the detail invokes them only on explicit user
+ * action (reveal password/hidden field, show TOTP, show history).
+ */
+export interface DetailExtras {
+  getField(field: FieldName): Promise<SecretResult>;
+  getCustomField(index: number): Promise<SecretResult>;
+  getTotp(): Promise<TotpFetchResult>;
+  getPasswordHistory(): Promise<HistoryFetchResult>;
+}
+
+/** `vw-secret-request` detail: the root fetches this masked secret and copies it straight to the
+ *  clipboard, so the plaintext never passes through the detail component. */
+export type SecretRequestDetail =
+  | { kind: 'field'; field: FieldName; label: string }
+  | { kind: 'customField'; index: number; label: string };
+
+/** `vw-copy` detail: copy a plaintext value the detail already legitimately displays (username, a
+ *  plain card/identity row, a revealed TOTP code, or a revealed history entry). */
+export interface CopyDetail {
+  value: string;
+  label: string;
+}
+
+/** `vw-edit-item` / `vw-restore-item` detail. */
+export interface ItemRefDetail {
+  cipherId: string;
+}
+
+/** `vw-delete-item` detail. `permanent` hard-deletes a trashed item; otherwise it soft-deletes to trash. */
+export interface DeleteItemDetail {
+  cipherId: string;
+  permanent: boolean;
+}
+
+/** `vw-attachment-download` / `vw-attachment-delete` detail. */
+export interface AttachmentRefDetail {
+  cipherId: string;
+  attachmentId: string;
+  fileName: string;
+}
+
+/** `vw-attachment-add` detail: a chosen file already read to base64 by the detail component. */
+export interface AttachmentAddDetail {
+  cipherId: string;
+  fileName: string;
+  dataB64: string;
+}
+
+/** The status banner the root drives on the detail (copy/reveal/attachment feedback). */
+export interface DetailStatus {
+  message: string;
+  tone: StatusTone;
+}
+
+/** `vw-reprompt-submit` detail from the master-password reprompt gate. */
+export interface RepromptSubmitDetail {
+  password: string;
 }

@@ -3,7 +3,7 @@ import browser from 'webextension-polyfill';
 import { sendRequest, type ResponseMessage } from '../../messaging/protocol.js';
 import type { AuthResult } from '../../core/session/auth-service.js';
 import type { SessionState } from '../../core/session/session-manager.js';
-import type { CipherSummary, CollectionSummary, FolderSummary } from '../../core/vault/models.js';
+import type { CipherSummary, CollectionSummary, DecryptedCipher, FolderSummary } from '../../core/vault/models.js';
 import type { OrgPermission } from '../../core/vault/org-permissions.js';
 import type { TabFillOutcome, TabSuggestionsOutcome } from '../../messaging/protocol.js';
 import { themeTokens } from '../components/tokens.js';
@@ -11,6 +11,9 @@ import '../components/status-message.js';
 import './auth/auth-views.js';
 import './vault/popup-header.js';
 import './vault/vault-view.js';
+import './item/item-detail.js';
+import './item/reprompt-gate.js';
+import { triggerDownload } from './utils.js';
 import type {
   EmailChangeDetail,
   LoginSubmitDetail,
@@ -22,14 +25,23 @@ import type {
 import type {
   AccountActionDetail,
   AccountInfo,
+  AttachmentAddDetail,
+  AttachmentRefDetail,
   CollectionMutateDetail,
+  CopyDetail,
+  DeleteItemDetail,
+  DetailExtras,
+  DetailStatus,
   FillResult,
   FilterChangeDetail,
   FolderMutateDetail,
   ItemOpenDetail,
+  ItemRefDetail,
   PopupBrowser,
   PopupRequest,
   PopupRoute,
+  RepromptSubmitDetail,
+  SecretRequestDetail,
   SuggestionFillDetail,
   SuggestionsViewState,
   ToolActionDetail,
@@ -100,6 +112,9 @@ export class VwPopupApp extends LitElement {
     accounts: { attribute: false },
     pinConfigured: { type: Boolean },
     vaultDeviceRemembered: { type: Boolean },
+    detailCipher: { attribute: false },
+    detailStatus: { attribute: false },
+    repromptError: { attribute: false },
   };
 
   declare route: PopupRoute;
@@ -121,6 +136,13 @@ export class VwPopupApp extends LitElement {
   declare accounts: AccountInfo[];
   declare pinConfigured: boolean;
   declare vaultDeviceRemembered: boolean;
+  /** The secret-stripped detail (structure/attachments/plain custom fields) for the open item, or
+   *  `null` while loading or when no detail is open. Never carries a masked secret. */
+  declare detailCipher: DecryptedCipher | null;
+  /** Copy/reveal/attachment feedback banner the root drives on the open detail. */
+  declare detailStatus: DetailStatus | undefined;
+  /** The reprompt gate's error message (wrong/failed master-password verification). */
+  declare repromptError: string | undefined;
 
   /** Injectable worker request function; defaults to the real messaging channel. */
   request: PopupRequest = sendRequest;
@@ -139,6 +161,10 @@ export class VwPopupApp extends LitElement {
    *  detail/editor view. Dormant in this task (no detail view sets it yet) — reserved for the
    *  task that adds it; `navigate()` and `disconnectedCallback()` always clear it. */
   private repromptCredential: { cipherId: string; masterPassword: string } | null = null;
+
+  /** Memoized detail extras, keyed by cipher id + verified-credential presence, so the detail
+   *  component gets a stable set of loaders across re-renders (avoids restarting TOTP on churn). */
+  private detailExtrasCache: { key: string; extras: DetailExtras } | undefined;
 
   /** The active tab whose Suggestions are currently shown; the Fill target for `handleSuggestionFill`.
    *  Re-resolved on every vault entry — the popup never trusts a remembered tab across sessions. */
@@ -165,6 +191,9 @@ export class VwPopupApp extends LitElement {
     this.accounts = [];
     this.pinConfigured = false;
     this.vaultDeviceRemembered = false;
+    this.detailCipher = null;
+    this.detailStatus = undefined;
+    this.repromptError = undefined;
   }
 
   static override styles = [
@@ -193,6 +222,10 @@ export class VwPopupApp extends LitElement {
       this.totpTimer = undefined;
     }
     this.repromptCredential = null;
+    this.detailExtrasCache = undefined;
+    this.detailCipher = null;
+    this.detailStatus = undefined;
+    this.repromptError = undefined;
   }
 
   /** Assigns the next route, clearing per-view ephemeral state that must not survive a
@@ -210,6 +243,9 @@ export class VwPopupApp extends LitElement {
       void this.refreshPinStatus();
     } else {
       this.pinEnabled = false;
+    }
+    if (route.name === 'detail') {
+      void this.loadDetail(route.cipherId);
     }
   }
 
@@ -560,13 +596,19 @@ export class VwPopupApp extends LitElement {
       case 'switch-account':
         if (detail.email !== undefined) {
           const response = await this.request({ type: 'auth.switchAccount', email: detail.email });
-          if (response.ok) await this.reRouteFromState();
+          if (response.ok) {
+            this.fillResult = {}; // the prior account's Fill outcome must not leak into the new one
+            await this.reRouteFromState();
+          }
         }
         return;
       case 'remove-account':
         if (detail.email !== undefined) {
           const response = await this.request({ type: 'auth.removeAccount', email: detail.email });
-          if (response.ok) await this.reRouteFromState();
+          if (response.ok) {
+            this.fillResult = {}; // the removed account's Fill outcome must not leak into the next one
+            await this.reRouteFromState();
+          }
         }
         return;
       case 'add-account':
@@ -626,6 +668,232 @@ export class VwPopupApp extends LitElement {
         }
         return;
       }
+    }
+  }
+
+  // --- Item detail (dormant) orchestration --------------------------------------------------
+
+  /** The verified reprompt master password for `id`, or `undefined`. Threaded into every on-demand
+   *  secret request so the worker's reprompt gate is satisfied for the currently-open protected item. */
+  private repromptMp(id: string): string | undefined {
+    return this.repromptCredential?.cipherId === id ? this.repromptCredential.masterPassword : undefined;
+  }
+
+  /** Fetch the secret-stripped detail for the open item. Guards against a stale response arriving
+   *  after the user has navigated to a different item. */
+  private async loadDetail(id: string): Promise<void> {
+    const response = await this.request({ type: 'vault.getCipherDetail', id });
+    if (this.route.name !== 'detail' || this.route.cipherId !== id) return;
+    this.detailCipher = response.ok
+      ? ((response.data as { cipher: DecryptedCipher | null } | null)?.cipher ?? null)
+      : null;
+  }
+
+  /** Build (memoized) the async loaders the detail invokes on explicit reveal. Every loader is a
+   *  root closure — the detail never issues a worker request itself — and each surfaces its own
+   *  error onto the shared status banner. */
+  private detailExtras(id: string): DetailExtras {
+    const mp = this.repromptMp(id);
+    const key = `${id}|${mp === undefined ? '' : '1'}`;
+    if (this.detailExtrasCache?.key === key) return this.detailExtrasCache.extras;
+    const extras: DetailExtras = {
+      getField: async (field) => {
+        const response = await this.request(
+          mp === undefined ? { type: 'vault.getField', id, field } : { type: 'vault.getField', id, field, masterPassword: mp },
+        );
+        if (!response.ok) {
+          this.detailStatus = { message: response.error.message, tone: 'danger' };
+          return { ok: false };
+        }
+        return { ok: true, value: (response.data as { value?: string }).value };
+      },
+      getCustomField: async (index) => {
+        const response = await this.request(
+          mp === undefined ? { type: 'vault.getCustomField', id, index } : { type: 'vault.getCustomField', id, index, masterPassword: mp },
+        );
+        if (!response.ok) {
+          this.detailStatus = { message: response.error.message, tone: 'danger' };
+          return { ok: false };
+        }
+        return { ok: true, value: (response.data as { value?: string }).value };
+      },
+      getTotp: async () => {
+        const response = await this.request(
+          mp === undefined ? { type: 'vault.getTotp', id } : { type: 'vault.getTotp', id, masterPassword: mp },
+        );
+        if (!response.ok) {
+          this.detailStatus = { message: response.error.message, tone: 'danger' };
+          return { ok: false };
+        }
+        return { ok: true, totp: (response.data as { totp: { code: string; period: number; remaining: number } | null }).totp };
+      },
+      getPasswordHistory: async () => {
+        const response = await this.request(
+          mp === undefined ? { type: 'vault.getPasswordHistory', id } : { type: 'vault.getPasswordHistory', id, masterPassword: mp },
+        );
+        if (!response.ok) {
+          this.detailStatus = { message: response.error.message, tone: 'danger' };
+          return { ok: false };
+        }
+        return { ok: true, history: (response.data as { history: Array<{ password: string; lastUsedDate?: string }> }).history };
+      },
+    };
+    this.detailExtrasCache = { key, extras };
+    return extras;
+  }
+
+  /** Verify the reprompt master password and, on success, hold it in the single private root field
+   *  for this cipher only. Cleared on every navigation, disconnect, lock, account switch, and logout. */
+  private async handleReprompt(id: string, password: string): Promise<void> {
+    if (this.pending || !password) return;
+    this.pending = true;
+    try {
+      const response = await this.request({ type: 'auth.verifyMasterPassword', masterPassword: password });
+      if (!response.ok) {
+        this.repromptError = response.error.message;
+        return;
+      }
+      if (!(response.data as { verified: boolean }).verified) {
+        this.repromptError = 'Incorrect master password';
+        return;
+      }
+      this.repromptCredential = { cipherId: id, masterPassword: password };
+      this.repromptError = undefined;
+      this.detailExtrasCache = undefined; // rebuild extras so they carry the newly-verified credential
+      this.requestUpdate();
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  /** Copy a plaintext value the detail already displays, then schedule the background clipboard clear. */
+  private async copyToClipboard(value: string, label: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(value);
+      void this.request({ type: 'clipboard.scheduleClear' });
+      this.detailStatus = { message: `${label} copied to clipboard`, tone: 'success' };
+    } catch {
+      this.detailStatus = { message: `Failed to copy ${label.toLowerCase()}`, tone: 'danger' };
+    }
+  }
+
+  private handleCopy(detail: CopyDetail): void {
+    void this.copyToClipboard(detail.value, detail.label);
+  }
+
+  /** Fetch a masked secret and copy it straight to the clipboard — the plaintext never passes
+   *  through the detail component. */
+  private async handleSecretRequest(detail: SecretRequestDetail): Promise<void> {
+    if (this.route.name !== 'detail') return;
+    const id = this.route.cipherId;
+    const mp = this.repromptMp(id);
+    const response = detail.kind === 'field'
+      ? await this.request(mp === undefined ? { type: 'vault.getField', id, field: detail.field } : { type: 'vault.getField', id, field: detail.field, masterPassword: mp })
+      : await this.request(mp === undefined ? { type: 'vault.getCustomField', id, index: detail.index } : { type: 'vault.getCustomField', id, index: detail.index, masterPassword: mp });
+    if (!response.ok) {
+      this.detailStatus = { message: response.error.message, tone: 'danger' };
+      return;
+    }
+    const value = (response.data as { value?: string }).value;
+    if (!value) {
+      this.detailStatus = { message: `${detail.label} is empty`, tone: 'danger' };
+      return;
+    }
+    await this.copyToClipboard(value, detail.label);
+  }
+
+  private async handleAttachmentDownload(detail: AttachmentRefDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const mp = this.repromptMp(detail.cipherId);
+      const response = await this.request(
+        mp === undefined
+          ? { type: 'vault.getAttachment', cipherId: detail.cipherId, attachmentId: detail.attachmentId }
+          : { type: 'vault.getAttachment', cipherId: detail.cipherId, attachmentId: detail.attachmentId, masterPassword: mp },
+      );
+      if (!response.ok) {
+        this.detailStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      const { fileName, dataB64 } = response.data as { fileName: string; dataB64: string };
+      triggerDownload(dataB64, fileName);
+      this.detailStatus = { message: `Downloaded ${fileName}`, tone: 'success' };
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async handleAttachmentAdd(detail: AttachmentAddDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const mp = this.repromptMp(detail.cipherId);
+      const response = await this.request(
+        mp === undefined
+          ? { type: 'vault.addAttachment', cipherId: detail.cipherId, fileName: detail.fileName, dataB64: detail.dataB64 }
+          : { type: 'vault.addAttachment', cipherId: detail.cipherId, fileName: detail.fileName, dataB64: detail.dataB64, masterPassword: mp },
+      );
+      if (!response.ok) {
+        this.detailStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      await this.loadListing();
+      await this.loadDetail(detail.cipherId);
+      this.detailStatus = { message: `Uploaded ${detail.fileName}`, tone: 'success' };
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async handleAttachmentDelete(detail: AttachmentRefDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.request({ type: 'vault.deleteAttachment', cipherId: detail.cipherId, attachmentId: detail.attachmentId });
+      if (!response.ok) {
+        this.detailStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      await this.loadListing();
+      await this.loadDetail(detail.cipherId);
+      this.detailStatus = { message: `Deleted ${detail.fileName}`, tone: 'success' };
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async handleDeleteItem(detail: DeleteItemDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.request(
+        detail.permanent ? { type: 'vault.deleteCipher', id: detail.cipherId } : { type: 'vault.softDeleteCipher', id: detail.cipherId },
+      );
+      if (!response.ok) {
+        this.detailStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      await this.loadListing();
+      this.navigate({ name: 'vault', scope: 'all' });
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async handleRestoreItem(detail: ItemRefDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.request({ type: 'vault.restoreCipher', id: detail.cipherId });
+      if (!response.ok) {
+        this.detailStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      await this.loadListing();
+      this.navigate({ name: 'vault', scope: 'all' });
+    } finally {
+      this.pending = false;
     }
   }
 
@@ -694,6 +962,44 @@ export class VwPopupApp extends LitElement {
     `;
   }
 
+  private renderDetail(route: Extract<PopupRoute, { name: 'detail' }>) {
+    const id = route.cipherId;
+    const summary = this.items.find((item) => item.id === id);
+    if (!summary) {
+      return html`<vw-status-message tone="warning" .icon=${'alert'} message="This item is no longer available."></vw-status-message>`;
+    }
+    // Reprompt gate: a protected item must clear master-password re-verification before any view
+    // that can reveal/copy its secrets. The worker also enforces this — the gate is the UX.
+    if (summary.reprompt && this.repromptCredential?.cipherId !== id) {
+      return html`
+        <vw-reprompt-gate
+          .name=${summary.name}
+          .pending=${this.pending}
+          .error=${this.repromptError}
+          @vw-reprompt-submit=${(event: CustomEvent<RepromptSubmitDetail>) => void this.handleReprompt(id, event.detail.password)}
+          @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'all' })}
+        ></vw-reprompt-gate>
+      `;
+    }
+    return html`
+      <vw-item-detail
+        .summary=${summary}
+        .cipher=${this.detailCipher}
+        .extras=${this.detailExtras(id)}
+        .status=${this.detailStatus}
+        @vw-copy=${(event: CustomEvent<CopyDetail>) => this.handleCopy(event.detail)}
+        @vw-secret-request=${(event: CustomEvent<SecretRequestDetail>) => void this.handleSecretRequest(event.detail)}
+        @vw-edit-item=${(event: CustomEvent<ItemRefDetail>) => this.navigate({ name: 'editor', mode: 'edit', cipherId: event.detail.cipherId })}
+        @vw-delete-item=${(event: CustomEvent<DeleteItemDetail>) => void this.handleDeleteItem(event.detail)}
+        @vw-restore-item=${(event: CustomEvent<ItemRefDetail>) => void this.handleRestoreItem(event.detail)}
+        @vw-attachment-download=${(event: CustomEvent<AttachmentRefDetail>) => void this.handleAttachmentDownload(event.detail)}
+        @vw-attachment-add=${(event: CustomEvent<AttachmentAddDetail>) => void this.handleAttachmentAdd(event.detail)}
+        @vw-attachment-delete=${(event: CustomEvent<AttachmentRefDetail>) => void this.handleAttachmentDelete(event.detail)}
+        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'all' })}
+      ></vw-item-detail>
+    `;
+  }
+
   protected override render() {
     const route = this.route;
     switch (route.name) {
@@ -706,8 +1012,10 @@ export class VwPopupApp extends LitElement {
         return this.renderAuth(route);
       case 'vault':
         return this.renderVault(route);
+      case 'detail':
+        return this.renderDetail(route);
       default:
-        // Detail/editor/generator/health/sends/accountSecurity/pin views are added by later tasks;
+        // Editor/generator/health/sends/accountSecurity/pin views are added by later tasks;
         // this root only routes to them for now.
         return nothing;
     }
