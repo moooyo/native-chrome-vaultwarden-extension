@@ -683,8 +683,9 @@ export class VwPopupApp extends LitElement {
         if (detail.email !== undefined) {
           const response = await this.request({ type: 'auth.switchAccount', email: detail.email });
           if (response.ok) {
-            this.fillResult = {}; // the prior account's Fill outcome must not leak into the new one
-            this.clearToolState();
+            // Drop the prior account's non-secret vault listing + Fill outcome before re-routing;
+            // an unlocked destination reloads its own data via enterVault().
+            this.resetVaultState();
             await this.reRouteFromState();
           }
         }
@@ -693,8 +694,8 @@ export class VwPopupApp extends LitElement {
         if (detail.email !== undefined) {
           const response = await this.request({ type: 'auth.removeAccount', email: detail.email });
           if (response.ok) {
-            this.fillResult = {}; // the removed account's Fill outcome must not leak into the next one
-            this.clearToolState();
+            // Drop the removed account's non-secret vault listing + Fill outcome before re-routing.
+            this.resetVaultState();
             await this.reRouteFromState();
           }
         }
@@ -713,7 +714,9 @@ export class VwPopupApp extends LitElement {
         return;
       case 'lock': {
         const response = await this.request({ type: 'auth.lock' });
-        if (response.ok) { this.clearToolState(); this.navigate(unlockRoute()); }
+        // A lock must drop the unlocked vault's non-secret listing state (items/folders/
+        // collections/org permissions/suggestions), not only the tool state.
+        if (response.ok) { this.resetVaultState(); this.navigate(unlockRoute()); }
         else this.navigate({ name: 'vault', scope: 'suggestions', error: response.error.message });
         return;
       }

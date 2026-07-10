@@ -559,6 +559,31 @@ describe('vw-popup-app account and tool actions', () => {
     expect(app.route.name).toBe('unlock');
   });
 
+  it('clears the non-secret vault listing state on lock', async () => {
+    const app = await mountVault(unlockedHandlers({
+      'auth.lock': async () => ({ ok: true, data: null }),
+      'vault.listItems': async () => ({ ok: true, data: {
+        items: [summary({ id: 'a' })],
+        folders: [{ id: 'f1', name: 'Folder' }],
+        collections: [{ id: 'c1', name: 'Ops', organizationId: 'o1' }],
+        orgPermissions: [{ id: 'o1', name: 'Org', canManageCollections: true }],
+      } }),
+    }), browserSeam());
+    expect(app.items.length).toBeGreaterThan(0);
+    expect(app.folders.length).toBeGreaterThan(0);
+    expect(app.collections.length).toBeGreaterThan(0);
+    expect(app.orgPermissions.length).toBeGreaterThan(0);
+
+    account(app, { action: 'lock' });
+    await fully(app);
+
+    expect(app.route.name).toBe('unlock');
+    expect(app.items).toEqual([]);
+    expect(app.folders).toEqual([]);
+    expect(app.collections).toEqual([]);
+    expect(app.orgPermissions).toEqual([]);
+  });
+
   it('logs out via auth.logout and routes to login', async () => {
     const logout = vi.fn(async () => ({ ok: true as const, data: null }));
     const app = await mountVault(unlockedHandlers({ 'auth.logout': logout }), browserSeam());
