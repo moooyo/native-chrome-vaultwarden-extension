@@ -1321,19 +1321,29 @@ import { extname, resolve, sep } from 'node:path';
 const root = resolve('.');
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
 createServer(async (request, response) => {
+  let pathname;
   try {
-    const pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://127.0.0.1').pathname);
-    const file = resolve(root, `.${pathname}`);
-    if (file !== root && !file.startsWith(`${root}${sep}`)) {
-      response.writeHead(403).end();
-      return;
-    }
-    const body = await readFile(file);
-    response.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream' });
-    response.end(body);
-  } catch {
-    response.writeHead(404).end();
+    pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://127.0.0.1').pathname);
+  } catch (error) {
+    if (!(error instanceof URIError)) throw error;
+    response.writeHead(400).end();
+    return;
   }
+  const file = resolve(root, `.${pathname}`);
+  if (file !== root && !file.startsWith(`${root}${sep}`)) {
+    response.writeHead(403).end();
+    return;
+  }
+  const body = await readFile(file).catch((error) => {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
+    throw error;
+  });
+  if (body === undefined) {
+    response.writeHead(404).end();
+    return;
+  }
+  response.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream' });
+  response.end(body);
 }).listen(4173, '127.0.0.1');
 ```
 
@@ -1370,7 +1380,7 @@ Expected: PASS and stable PNG baselines are created under `test\ui-render`.
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add package.json package-lock.json playwright.config.ts tools\build-ui-fixtures.mjs test\ui-render && git commit -m "test: add rendered UI regression coverage" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+git add package.json package-lock.json tsconfig.json playwright.config.ts tools\build-ui-fixtures.mjs test\ui-render && git commit -m "test: add rendered UI regression coverage" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
 ---
@@ -1437,12 +1447,13 @@ for (const permission of ['activeTab', 'webNavigation']) {
   if (!manifest.permissions?.includes(permission)) throw new Error(`Missing ${permission} permission`);
 }
 
-try {
-  await access('dist/ui/theme.css');
-  throw new Error('Legacy dist/ui/theme.css still exists');
-} catch (error) {
-  if (error instanceof Error && error.message.startsWith('Legacy')) throw error;
-}
+const legacyThemeExists = await access('dist/ui/theme.css')
+  .then(() => true)
+  .catch((error) => {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false;
+    throw error;
+  });
+if (legacyThemeExists) throw new Error('Legacy dist/ui/theme.css still exists');
 ```
 
 Add/update manifest and content factory tests for new mounts.
