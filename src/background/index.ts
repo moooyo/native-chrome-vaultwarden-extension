@@ -11,6 +11,7 @@ import { createClipboard, CLIPBOARD_CLEAR_ALARM } from './clipboard.js';
 import { createContextMenu, shouldRefreshMenu } from './context-menu.js';
 import { handleFocusedFillCommand } from './commands.js';
 import { createTabAutofillCoordinator, parseBrowserFrame } from './tab-autofill.js';
+import { createHostAccessCheck } from './host-access.js';
 import type { RequestMessage } from '../messaging/protocol.js';
 
 const localStore = createBrowserStore('local');
@@ -77,8 +78,10 @@ const tabAutofill = createTabAutofillCoordinator({
     return tab.url === undefined ? { active: tab.active } : { active: tab.active, url: tab.url };
   },
   // Only consulted for cross-origin frames; the active tab and same-origin frames are already
-  // covered by the activeTab grant implied by `getTab` exposing a `url` at all.
-  hasHostAccess: (url) => browser.permissions.contains({ origins: [url] }),
+  // covered by the activeTab grant implied by `getTab` exposing a `url` at all. The raw frame URL
+  // is normalized to an `${origin}/*` match pattern (Chrome rejects a full path/query URL as a
+  // host pattern) and non-HTTP(S) URLs fail closed without ever calling into permissions.
+  hasHostAccess: createHostAccessCheck((permissions) => browser.permissions.contains(permissions)),
   getFrames: async (tabId) => {
     const frames = await browser.webNavigation.getAllFrames({ tabId });
     return (frames ?? []).flatMap((frame) => {
