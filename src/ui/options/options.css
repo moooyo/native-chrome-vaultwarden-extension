@@ -6,9 +6,9 @@ html { color-scheme: light dark; }
 
 body {
   margin: 0;
-  padding: 24px 16px;
+  padding: 16px;
   font-family: "Segoe UI Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  background: #f6f8fb;
+  background: #fafafa;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -17,6 +17,6 @@ body {
 
 #app {
   display: block;
-  max-width: 760px;
+  max-width: 1120px;
   margin: 0 auto;
 }

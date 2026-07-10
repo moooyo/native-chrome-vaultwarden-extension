@@ -37,14 +37,20 @@ export class VwConnectionSection extends LitElement {
     themeTokens,
     controlStyles,
     css`
-      :host { display: block; }
-      h1 { margin: 0 0 4px; font-size: 16px; }
-      p.lede { margin: 0 0 16px; color: var(--vw-muted); font-size: 13px; }
-      form { display: flex; flex-direction: column; gap: 10px; max-width: 420px; }
+      :host { display: block; max-width: 760px; }
+      h1 { margin: 0 0 4px; font-size: 28px; color: var(--vw-ink-strong); }
+      h2 { margin: 0; padding: 10px 12px; background: var(--vw-blue-weak); font-size: 14px; }
+      p.lede { margin: 0 0 24px; color: var(--vw-muted); font-size: 14px; }
+      form { display: flex; flex-direction: column; }
+      .settings-group { overflow: hidden; border: 1px solid var(--vw-line); border-radius: var(--vw-radius-row); background: var(--vw-panel); }
+      .setting-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(210px, 320px); gap: 24px; align-items: center; padding: 16px 12px; border-top: 1px solid var(--vw-line-weak); }
+      .setting-row .field { margin: 0; }
       .input { width: 100%; box-sizing: border-box; }
-      .notice { display: flex; gap: 8px; font-size: 12px; color: var(--vw-muted); }
+      .notice { display: flex; gap: 8px; margin: 0; font-size: 12px; color: var(--vw-muted); }
       .notice svg { width: 16px; height: 16px; flex: none; }
       .status { margin-top: 12px; }
+      .primary-action { align-self: flex-start; margin-top: 18px; min-width: 150px; }
+      @media (max-width: 640px) { .setting-row { grid-template-columns: 1fr; gap: 10px; } }
     `,
   ];
 
@@ -79,16 +85,16 @@ export class VwConnectionSection extends LitElement {
 
   protected override render() {
     return html`
-      <h1>Connection</h1>
-      <p class="lede">The address of your Vaultwarden or Bitwarden server.</p>
+      <header><h1>Connection</h1><p class="lede">Choose the Vaultwarden or Bitwarden server used by this browser.</p></header>
       <form @submit=${(e: Event) => this.submit(e)}>
-        <label class="field">
-          <span>Server URL</span>
-          <input class="input" data-server-url type="text" inputmode="url" autocomplete="off"
-            placeholder="http://10.0.1.20:8080" .value=${this.serverUrl} />
-        </label>
-        <p class="notice">${uiIcon('shield')}<span>Saving asks your browser for permission to reach the server's address.</span></p>
-        <button type="submit" class="button primary" data-save ?disabled=${this.pending}>${uiIcon('check')}<span>Save connection</span></button>
+        <section class="settings-group">
+          <h2>Server connection</h2>
+          <div class="setting-row" data-setting-row>
+            <div><strong>Server URL</strong><p class="notice">${uiIcon('shield')}<span>Chrome asks for permission when this address changes.</span></p></div>
+            <label class="field"><span class="sr-only">Server URL</span><input class="input" data-server-url type="text" inputmode="url" autocomplete="off" placeholder="http://10.0.1.20:8080" .value=${this.serverUrl} /></label>
+          </div>
+        </section>
+        <button type="submit" class="button primary primary-action" data-save data-primary-action ?disabled=${this.pending}>${uiIcon('check')}<span>Save connection</span></button>
       </form>
       ${this.renderStatus()}
     `;

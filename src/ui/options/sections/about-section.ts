@@ -24,13 +24,12 @@ export class VwAboutSection extends LitElement {
     themeTokens,
     controlStyles,
     css`
-      :host { display: block; }
-      h1 { margin: 0 0 4px; font-size: 16px; }
+      :host { display: block; max-width: 760px; }
+      h1 { margin: 0 0 24px; font-size: 28px; color:var(--vw-ink-strong); }
       dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0 0 16px; font-size: 13px; }
       dt { color: var(--vw-muted); }
       dd { margin: 0; }
-      .note { display: flex; gap: 8px; max-width: 440px; font-size: 13px; color: var(--vw-ink);
-        border: 1px solid var(--vw-line); border-radius: var(--vw-radius-group); padding: 12px; }
+      .note { display: flex; gap: 8px; max-width: 620px; font-size: 13px; color: var(--vw-ink); border: 1px solid var(--vw-line); border-radius: var(--vw-radius-row); padding: 16px 12px; background:var(--vw-panel); }
       .note svg { width: 18px; height: 18px; flex: none; color: var(--vw-muted); }
     `,
   ];

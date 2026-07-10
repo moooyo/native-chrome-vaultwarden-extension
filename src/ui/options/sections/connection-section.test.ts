@@ -51,4 +51,10 @@ describe('vw-connection-section', () => {
     const el = await mount();
     expect(el.shadowRoot!.textContent?.toLowerCase()).toContain('permission');
   });
+
+  it('renders connection controls as workbench rows with a stable primary action', async () => {
+    const el = await mount();
+    expect(el.shadowRoot!.querySelector('[data-setting-row]')).not.toBeNull();
+    expect(el.shadowRoot!.querySelector('[data-primary-action]')?.textContent).toContain('Save connection');
+  });
 });

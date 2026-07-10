@@ -44,12 +44,11 @@ export class VwDataSection extends LitElement {
     themeTokens,
     controlStyles,
     css`
-      :host { display: block; }
-      h1 { margin: 0 0 4px; font-size: 16px; }
-      p.lede { margin: 0 0 16px; color: var(--vw-muted); font-size: 13px; }
-      .card { display: flex; flex-direction: column; gap: 10px; max-width: 440px; margin-bottom: 16px;
-        border: 1px solid var(--vw-line); border-radius: var(--vw-radius-group); padding: 14px; }
-      .card h2 { margin: 0; font-size: 13px; }
+      :host { display: block; max-width: 760px; }
+      h1 { margin: 0 0 4px; font-size: 28px; color:var(--vw-ink-strong); }
+      p.lede { margin: 0 0 24px; color: var(--vw-muted); font-size: 14px; }
+      .card { display: flex; flex-direction: column; gap: 10px; max-width: 620px; margin-bottom: 16px; border: 1px solid var(--vw-line); border-radius: var(--vw-radius-row); padding: 16px 12px; background:var(--vw-panel); }
+      .card h2 { margin:-16px -12px 4px; padding:10px 12px; background:var(--vw-blue-weak); font-size:14px; }
       .card p { margin: 0; font-size: 12px; color: var(--vw-muted); }
       .locked { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--vw-ink);
         border: 1px solid var(--vw-line); border-radius: var(--vw-radius-group); padding: 12px; margin-bottom: 16px; }

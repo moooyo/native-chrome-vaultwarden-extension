@@ -42,40 +42,61 @@ export class VwPageShell extends LitElement {
         display: block;
       }
       .shell {
-        display: flex;
-        gap: 16px;
+        display: grid;
+        grid-template-columns: 206px minmax(0, 1fr);
+        min-height: min(680px, calc(100vh - 32px));
+        overflow: hidden;
+        border: 1px solid var(--vw-line);
+        border-radius: var(--vw-radius-large);
+        background: var(--vw-panel);
       }
       :host([narrow]) .shell {
+        display: flex;
         flex-direction: column;
+        min-height: 0;
+        padding: 16px;
       }
       nav {
         display: flex;
         flex-direction: column;
         gap: 2px;
-        min-width: 160px;
+        padding: 18px 10px;
+        border-right: 1px solid var(--vw-line);
       }
       nav button {
         display: flex;
         align-items: center;
         gap: 8px;
-        height: 32px;
+        height: 39px;
         padding: 0 10px;
         border: none;
         border-radius: var(--vw-radius-control);
         background: transparent;
         color: var(--vw-ink);
         font-family: var(--vw-font-ui);
-        font-size: 13px;
+        font-size: var(--vw-font-size-body);
+        font-weight: 600;
         text-align: left;
         cursor: pointer;
       }
       nav button[aria-current='page'] {
-        background: var(--vw-blue-50);
-        color: var(--vw-blue-600);
+        background: var(--vw-blue);
+        color: #fff;
+      }
+      nav svg {
+        width: 18px;
+        height: 18px;
+        flex: none;
       }
       main {
-        flex: 1;
         min-width: 0;
+        padding: 28px 32px;
+        overflow: auto;
+        background: var(--vw-canvas);
+      }
+      :host([narrow]) main {
+        padding: 20px 0 0;
+        overflow: visible;
       }
     `,
   ];
@@ -94,7 +115,7 @@ export class VwPageShell extends LitElement {
 
   private renderRail() {
     return html`
-      <nav aria-label="Sections">
+      <nav data-settings-rail aria-label="Sections">
         ${this.items.map((item) => html`
           <button
             type="button"
@@ -126,9 +147,9 @@ export class VwPageShell extends LitElement {
 
   protected override render() {
     return html`
-      <div class="shell">
+      <div class="shell" data-page-shell>
         ${this.narrow ? this.renderSelector() : this.renderRail()}
-        <main><slot></slot></main>
+        <main data-settings-content><slot></slot></main>
       </div>
     `;
   }

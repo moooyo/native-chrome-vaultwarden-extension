@@ -32,6 +32,14 @@ describe('vw-page-shell', () => {
     expect(buttons).toHaveLength(2);
   });
 
+  it('renders bounded rail and content workbench regions', async () => {
+    const shell = await mountShell(false);
+    expect(shell.shadowRoot!.querySelector('[data-page-shell]')).not.toBeNull();
+    expect(shell.shadowRoot!.querySelector('[data-settings-rail]')).not.toBeNull();
+    expect(shell.shadowRoot!.querySelector('[data-settings-content]')).not.toBeNull();
+    expect((shell.constructor as typeof VwPageShell).styles.toString()).toContain('width: 18px');
+  });
+
   it('selects a rail item on click and emits a composed, bubbling vw-tab-change', async () => {
     const shell = await mountShell(false);
     const changed = vi.fn();

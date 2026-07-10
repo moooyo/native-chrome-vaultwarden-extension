@@ -86,6 +86,12 @@ function downloadButton(app: VwReceiveApp): HTMLButtonElement | null {
   return app.shadowRoot!.querySelector<HTMLButtonElement>('[data-download]');
 }
 
+it('renders a focused page task with a heading and constrained body', async () => {
+  const app = await mount(makeDeps().deps);
+  expect(app.shadowRoot!.querySelector('[data-page-heading]')?.textContent).toContain('Receive a Send');
+  expect(app.shadowRoot!.querySelector('[data-task-column]')).not.toBeNull();
+});
+
 async function accessFor(app: VwReceiveApp, link: string, password?: string): Promise<void> {
   linkInput(app).value = link;
   accessButton(app).click();

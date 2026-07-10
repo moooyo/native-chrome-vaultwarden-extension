@@ -66,16 +66,16 @@ export class VwSecuritySection extends LitElement {
     themeTokens,
     controlStyles,
     css`
-      :host { display: block; }
-      h1 { margin: 0 0 4px; font-size: 16px; }
-      p.lede { margin: 0 0 16px; color: var(--vw-muted); font-size: 13px; }
-      .card { display: flex; flex-direction: column; gap: 10px; max-width: 420px; margin-bottom: 16px;
-        border: 1px solid var(--vw-line); border-radius: var(--vw-radius-group); padding: 14px; }
-      .card h2 { margin: 0; font-size: 13px; }
+      :host { display: block; max-width: 760px; }
+      h1 { margin: 0 0 4px; font-size: 28px; color: var(--vw-ink-strong); }
+      p.lede { margin: 0 0 24px; color: var(--vw-muted); font-size: 14px; }
+      .card { display: grid; grid-template-columns: minmax(180px,1fr) minmax(210px,320px); gap: 12px 24px; align-items: center; margin-bottom: 16px; border: 1px solid var(--vw-line); border-radius: var(--vw-radius-row); padding: 16px 12px; background: var(--vw-panel); }
+      .card h2 { grid-column: 1 / -1; margin: -16px -12px 4px; padding: 10px 12px; background: var(--vw-blue-weak); font-size: 14px; }
       .select { width: 100%; box-sizing: border-box; }
       .warning { display: flex; gap: 8px; font-size: 12px; color: var(--vw-danger); }
       .warning svg { width: 16px; height: 16px; flex: none; }
       .status { margin-top: 8px; }
+      @media (max-width:640px) { .card { grid-template-columns:1fr; } }
     `,
   ];
 

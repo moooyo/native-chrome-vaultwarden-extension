@@ -70,10 +70,10 @@ export class VwAutofillSection extends LitElement {
     themeTokens,
     controlStyles,
     css`
-      :host { display: block; }
-      h1 { margin: 0 0 4px; font-size: 16px; }
-      p.lede { margin: 0 0 16px; color: var(--vw-muted); font-size: 13px; }
-      form { display: flex; flex-direction: column; gap: 10px; max-width: 420px; }
+      :host { display: block; max-width: 760px; }
+      h1 { margin: 0 0 4px; font-size: 28px; color: var(--vw-ink-strong); }
+      p.lede { margin: 0 0 24px; color: var(--vw-muted); font-size: 14px; }
+      form { display: flex; flex-direction: column; gap: 12px; max-width: 620px; padding: 16px 12px; border:1px solid var(--vw-line); border-radius:var(--vw-radius-row); background:var(--vw-panel); }
       .select { width: 100%; box-sizing: border-box; }
       .help { margin: 0; font-size: 12px; color: var(--vw-muted); }
       .status { margin-top: 12px; }

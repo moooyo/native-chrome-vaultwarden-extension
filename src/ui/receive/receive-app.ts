@@ -101,6 +101,10 @@ export class VwReceiveApp extends LitElement {
       :host {
         display: block;
       }
+      .task-column { max-width: 620px; margin: 0 auto; }
+      .page-heading { margin-bottom: 24px; }
+      .page-heading h1 { margin: 0 0 4px; font-size: 28px; color: var(--vw-ink-strong); }
+      .page-heading p { margin: 0; color: var(--vw-muted); }
       .receive {
         display: flex;
         flex-direction: column;
@@ -254,7 +258,9 @@ export class VwReceiveApp extends LitElement {
   protected override render() {
     const busy = this.state.status === 'accessing' || this.state.status === 'downloading';
     return html`
-      <div class="receive">
+      <section class="task-column" data-task-column>
+      <header class="page-heading" data-page-heading><h1>Receive a Send</h1><p>Open secure text or download a shared file on this device.</p></header>
+      <div class="receive field-group">
         <label class="field">
           <span class="field-label">Send link</span>
           <input
@@ -281,6 +287,7 @@ export class VwReceiveApp extends LitElement {
         ${this.renderResult()}
         ${this.renderStatus()}
       </div>
+      </section>
     `;
   }
 }
