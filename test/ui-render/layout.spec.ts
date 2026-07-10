@@ -81,7 +81,7 @@ test('long unbroken text stays contained at 320px', async ({ page }) => {
   expect(scrollWidth).toBeLessThanOrEqual(320);
 });
 
-test('200% zoom (halved 404px popup baseline) keeps content and primary controls reachable', async ({ page }) => {
+test('200% zoom (halved 350px popup baseline) keeps content and primary controls reachable', async ({ page }) => {
   await page.setViewportSize({ width: 175, height: 225 });
   await gotoFixture(page, { surface: 'popup', state: 'editor', layout: 'single' });
 
