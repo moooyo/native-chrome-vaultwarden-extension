@@ -65,17 +65,17 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
     const inspected: Array<{ frame: BrowserFrame; inspection: FrameInspection }> = [];
     let attempted = 0;
     for (const frame of frames) {
-      const accessible = frame.frameId === 0 || sameOrigin(frame.url, topUrl) || (await deps.hasHostAccess(frame.url));
-      if (!accessible) continue;
+      if (!(await isFrameAccessible(frame, topUrl, deps))) continue;
       attempted += 1;
       // A single frame's content script may be missing or unresponsive (e.g. a restricted embed);
-      // skip only that frame rather than failing the whole tab.
+      // skip only that frame rather than failing the whole tab. Any other error (a programming or
+      // API bug) is not a recognized delivery failure and must propagate, not be swallowed.
       try {
         const response = await deps.sendToFrame(tabId, frame.frameId, { type: 'autofill.inspectFrame' });
         const inspection = parseFrameInspection(response);
         if (inspection) inspected.push({ frame, inspection });
-      } catch {
-        continue;
+      } catch (err) {
+        if (!isMissingContentScriptError(err)) throw err;
       }
     }
 
@@ -136,6 +136,11 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
     if (target.documentId !== undefined && target.documentId !== frame.documentId) {
       return { status: 'target_changed' };
     }
+    // Apply the same browser-derived cross-origin frame policy Suggestions uses: the freshly
+    // re-read current frame URL against the freshly re-read tab URL, never the popup's memory.
+    if (!(await isFrameAccessible(frame, tab.url, deps))) {
+      return { status: 'content_script_unavailable' };
+    }
 
     let credentials: AutofillCredentials;
     try {
@@ -181,6 +186,37 @@ function sameOrigin(a: string, b: string): boolean {
   } catch {
     return a === b;
   }
+}
+
+/** Matches `about:` (blank/srcdoc), `data:`, and `blob:` frame URLs. These are never valid
+ *  `permissions.contains` host patterns — Chrome rejects them outright — and activeTab does not
+ *  extend host access to them anyway, so they must be excluded before any `hasHostAccess` call. */
+const NON_HOST_URL_SCHEME = /^(?:about|data|blob):/i;
+
+function isSkippableFrameUrl(url: string): boolean {
+  return NON_HOST_URL_SCHEME.test(url);
+}
+
+/** The single browser-derived accessibility policy shared by Suggestions (per inspected frame) and
+ *  Fill (for the one target frame): the top frame and same-origin frames are always accessible
+ *  (covered by the activeTab grant implied by the tab exposing a URL at all); `about:`/`data:`/
+ *  `blob:` frames are never accessible and must never reach `hasHostAccess`; anything else is a
+ *  genuine cross-origin frame and is only accessible with a permanent host permission. */
+async function isFrameAccessible(frame: BrowserFrame, topUrl: string, deps: TabAutofillDeps): Promise<boolean> {
+  if (frame.frameId === 0) return true;
+  if (isSkippableFrameUrl(frame.url)) return false;
+  if (sameOrigin(frame.url, topUrl)) return true;
+  return deps.hasHostAccess(frame.url);
+}
+
+/** Recognized "the content script isn't there to answer" delivery failures (e.g. Chrome's
+ *  "Could not establish connection. Receiving end does not exist." / "The message port closed
+ *  before a response was received."). Anything else is an unexpected error and must be rethrown,
+ *  not silently treated as an unreachable frame. */
+const MISSING_CONTENT_SCRIPT_MESSAGE = /could not establish connection|receiving end|message port closed/i;
+
+function isMissingContentScriptError(err: unknown): boolean {
+  return err instanceof Error && MISSING_CONTENT_SCRIPT_MESSAGE.test(err.message);
 }
 
 const RESTRICTED_HOSTS = /^https:\/\/(chrome\.google\.com\/webstore|chromewebstore\.google\.com)(\/|$)/i;

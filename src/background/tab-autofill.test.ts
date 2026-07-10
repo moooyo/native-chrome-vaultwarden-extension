@@ -182,6 +182,40 @@ describe('tab autofill coordinator', () => {
       expect(deps.sendToFrame).toHaveBeenCalledTimes(1);
       expect(deps.sendToFrame).toHaveBeenCalledWith(7, 0, { type: 'autofill.inspectFrame' });
     });
+
+    it.each(['about:blank', 'about:srcdoc', 'data:text/html,<h1>hi</h1>', 'blob:https://other-origin.example/1234'])(
+      'skips a %s frame before checking hasHostAccess, without aborting otherwise-valid suggestions',
+      async (frameUrl) => {
+        const hasHostAccess = vi.fn(async () => { throw new Error('Chrome would reject this as an invalid host pattern'); });
+        const sendToFrame = vi.fn(async (_tabId: number, frameId: number) => (frameId === 0
+          ? { frameUrl: 'https://example.com/login', forms: [{ formId: 'top-form', visible: true }] }
+          : { frameUrl, forms: [] }));
+        const deps = makeDeps({
+          hasHostAccess,
+          getFrames: async () => [
+            { frameId: 0, url: 'https://example.com/login' },
+            { frameId: 1, url: frameUrl },
+          ],
+          sendToFrame,
+          findCandidates: vi.fn(async () => [candidate('c1')]),
+        });
+
+        const outcome = await createTabAutofillCoordinator(deps).getSuggestions(7);
+
+        expect(outcome.status).toBe('ready');
+        expect(outcome.suggestions).toEqual([expect.objectContaining({ id: 'c1' })]);
+        expect(hasHostAccess).not.toHaveBeenCalled();
+        expect(sendToFrame).not.toHaveBeenCalledWith(7, 1, expect.anything());
+      },
+    );
+
+    it('rethrows an unexpected error from a frame instead of silently skipping it', async () => {
+      const deps = makeDeps({
+        getFrames: async () => [{ frameId: 0, url: 'https://example.com/login' }],
+        sendToFrame: vi.fn(async () => { throw new TypeError('candidates is not a function'); }),
+      });
+      await expect(createTabAutofillCoordinator(deps).getSuggestions(7)).rejects.toThrow('candidates is not a function');
+    });
   });
 
   describe('fill', () => {
@@ -247,6 +281,59 @@ describe('tab autofill coordinator', () => {
       const deps = makeDeps({ getFrame: vi.fn(async () => undefined) });
       await expect(createTabAutofillCoordinator(deps).fill(7, 'c1', target)).resolves.toEqual({ status: 'content_script_unavailable' });
     });
+
+    it('denies fill and never releases credentials for a cross-origin iframe lacking host access', async () => {
+      const crossOriginTarget: TabSuggestionTarget = { frameId: 1, formId: 'form-1', documentId: 'doc-A' };
+      const hasHostAccess = vi.fn(async () => false);
+      const getCredentials = vi.fn(async () => ({ username: 'me', password: 'secret' }));
+      const sendToFrame = vi.fn(async () => ({ status: 'filled' }));
+      const deps = makeDeps({
+        getTab: vi.fn(async () => ({ active: true, url: 'https://example.com/login' })),
+        getFrame: vi.fn(async () => ({ frameId: 1, url: 'https://other-origin.example/widget', documentId: 'doc-A' })),
+        hasHostAccess,
+        getCredentials,
+        sendToFrame,
+      });
+      const outcome = await createTabAutofillCoordinator(deps).fill(7, 'c1', crossOriginTarget);
+      expect(outcome).toEqual({ status: 'content_script_unavailable' });
+      expect(hasHostAccess).toHaveBeenCalledWith('https://other-origin.example/widget');
+      expect(getCredentials).not.toHaveBeenCalled();
+      expect(sendToFrame).not.toHaveBeenCalled();
+    });
+
+    it('allows fill for a cross-origin iframe that does have permanent host access', async () => {
+      const crossOriginTarget: TabSuggestionTarget = { frameId: 1, formId: 'form-1', documentId: 'doc-A' };
+      const getCredentials = vi.fn(async () => ({ username: 'me', password: 'secret' }));
+      const deps = makeDeps({
+        getTab: vi.fn(async () => ({ active: true, url: 'https://example.com/login' })),
+        getFrame: vi.fn(async () => ({ frameId: 1, url: 'https://other-origin.example/widget', documentId: 'doc-A' })),
+        hasHostAccess: vi.fn(async () => true),
+        getCredentials,
+        sendToFrame: vi.fn(async () => ({ status: 'filled' })),
+      });
+      const outcome = await createTabAutofillCoordinator(deps).fill(7, 'c1', crossOriginTarget);
+      expect(outcome).toEqual({ status: 'filled' });
+      expect(getCredentials).toHaveBeenCalledWith('c1', 'https://other-origin.example/widget');
+    });
+
+    it.each(['about:blank', 'about:srcdoc', 'data:text/html,<h1>hi</h1>', 'blob:https://other-origin.example/1234'])(
+      'denies fill for a %s frame before checking hasHostAccess',
+      async (frameUrl) => {
+        const skippableTarget: TabSuggestionTarget = { frameId: 1, formId: 'form-1', documentId: 'doc-A' };
+        const hasHostAccess = vi.fn(async () => { throw new Error('Chrome would reject this as an invalid host pattern'); });
+        const getCredentials = vi.fn(async () => ({ username: 'me', password: 'secret' }));
+        const deps = makeDeps({
+          getTab: vi.fn(async () => ({ active: true, url: 'https://example.com/login' })),
+          getFrame: vi.fn(async () => ({ frameId: 1, url: frameUrl, documentId: 'doc-A' })),
+          hasHostAccess,
+          getCredentials,
+        });
+        const outcome = await createTabAutofillCoordinator(deps).fill(7, 'c1', skippableTarget);
+        expect(outcome).toEqual({ status: 'content_script_unavailable' });
+        expect(hasHostAccess).not.toHaveBeenCalled();
+        expect(getCredentials).not.toHaveBeenCalled();
+      },
+    );
 
     it('reports no_eligible_tab, site_access_unavailable, and restricted_page before touching the frame', async () => {
       const inactive = makeDeps({ getTab: async () => ({ active: false, url: 'https://example.com/' }) });
