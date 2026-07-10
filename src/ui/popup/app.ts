@@ -15,7 +15,14 @@ import './item/item-detail.js';
 import './item/reprompt-gate.js';
 import './editor/type-picker.js';
 import './editor/cipher-editor.js';
+import './tools/generator-view.js';
+import './tools/health-view.js';
+import './tools/sends-view.js';
+import './tools/account-security-view.js';
+import './tools/pin-view.js';
 import { triggerDownload } from './utils.js';
+import { addPasswordToHistory } from '../../core/generator/history.js';
+import type { AsyncState } from '../components/async-state.js';
 import type {
   EmailChangeDetail,
   LoginSubmitDetail,
@@ -47,6 +54,19 @@ import type {
   SuggestionFillDetail,
   SuggestionsViewState,
   ToolActionDetail,
+} from './types.js';
+import type {
+  ChangeKdfDetail,
+  ChangePasswordDetail,
+  GeneratorHistoryAddDetail,
+  HealthEntry,
+  PinSetDetail,
+  PwnedState,
+  RotateKeyDetail,
+  SendCreateDetail,
+  SendDeleteDetail,
+  SendSummary,
+  SendUpdateDetail,
 } from './types.js';
 import type {
   CipherCollectionsDetail,
@@ -125,6 +145,11 @@ export class VwPopupApp extends LitElement {
     repromptError: { attribute: false },
     editorInput: { attribute: false },
     editorStatus: { attribute: false },
+    generatorHistory: { attribute: false },
+    healthReport: { attribute: false },
+    pwnedState: { attribute: false },
+    sendsState: { attribute: false },
+    toolStatus: { attribute: false },
   };
 
   declare route: PopupRoute;
@@ -158,6 +183,18 @@ export class VwPopupApp extends LitElement {
   declare editorInput: CipherInput | null;
   /** Request-error/success banner the root drives on the open editor (save/collections/share). */
   declare editorStatus: DetailStatus | undefined;
+  /** The in-memory generated-password history for the standalone generator. Held only for the popup
+   *  session (never persisted), capped via `addPasswordToHistory`, and cleared on lock/logout/switch. */
+  declare generatorHistory: string[];
+  /** The local password-health report, loaded on entry to the health route. */
+  declare healthReport: AsyncState<HealthEntry[]>;
+  /** The explicit HIBP breach-count result, loaded only on the user's `vw-health-check`. */
+  declare pwnedState: PwnedState;
+  /** The current account's Sends, loaded on entry to the sends route. */
+  declare sendsState: AsyncState<SendSummary[]>;
+  /** Copy/create/update feedback banner the root drives on the open tool view (Sends, account
+   *  security, PIN). Only one tool route is active at a time, so a single banner suffices. */
+  declare toolStatus: DetailStatus | undefined;
 
   /** Injectable worker request function; defaults to the real messaging channel. */
   request: PopupRequest = sendRequest;
@@ -211,6 +248,11 @@ export class VwPopupApp extends LitElement {
     this.repromptError = undefined;
     this.editorInput = null;
     this.editorStatus = undefined;
+    this.generatorHistory = [];
+    this.healthReport = { status: 'idle' };
+    this.pwnedState = { status: 'idle' };
+    this.sendsState = { status: 'idle' };
+    this.toolStatus = undefined;
   }
 
   static override styles = [
@@ -274,6 +316,12 @@ export class VwPopupApp extends LitElement {
         void this.loadEditorInput(route.cipherId);
       }
     }
+    if (route.name === 'generator' || route.name === 'health' || route.name === 'sends' || route.name === 'pin' || route.name === 'accountSecurity') {
+      this.toolStatus = undefined;
+    }
+    if (route.name === 'health') void this.loadHealth();
+    if (route.name === 'sends') void this.loadSends();
+    if (route.name === 'pin') void this.loadPinStatus();
   }
 
   private async init(): Promise<void> {
@@ -616,6 +664,17 @@ export class VwPopupApp extends LitElement {
     this.suggestionsState = { status: 'loading' };
     this.fillResult = {};
     this.activeTabId = undefined;
+    this.clearToolState();
+  }
+
+  /** Drop every tool-view value that must not survive a lock/logout/account switch: the in-memory
+   *  generator history and the loaded health/HIBP/Sends state. */
+  private clearToolState(): void {
+    this.generatorHistory = [];
+    this.healthReport = { status: 'idle' };
+    this.pwnedState = { status: 'idle' };
+    this.sendsState = { status: 'idle' };
+    this.toolStatus = undefined;
   }
 
   private async handleAccountAction(detail: AccountActionDetail): Promise<void> {
@@ -625,6 +684,7 @@ export class VwPopupApp extends LitElement {
           const response = await this.request({ type: 'auth.switchAccount', email: detail.email });
           if (response.ok) {
             this.fillResult = {}; // the prior account's Fill outcome must not leak into the new one
+            this.clearToolState();
             await this.reRouteFromState();
           }
         }
@@ -634,6 +694,7 @@ export class VwPopupApp extends LitElement {
           const response = await this.request({ type: 'auth.removeAccount', email: detail.email });
           if (response.ok) {
             this.fillResult = {}; // the removed account's Fill outcome must not leak into the next one
+            this.clearToolState();
             await this.reRouteFromState();
           }
         }
@@ -652,7 +713,7 @@ export class VwPopupApp extends LitElement {
         return;
       case 'lock': {
         const response = await this.request({ type: 'auth.lock' });
-        if (response.ok) this.navigate(unlockRoute());
+        if (response.ok) { this.clearToolState(); this.navigate(unlockRoute()); }
         else this.navigate({ name: 'vault', scope: 'suggestions', error: response.error.message });
         return;
       }
@@ -695,6 +756,205 @@ export class VwPopupApp extends LitElement {
         }
         return;
       }
+    }
+  }
+
+  // --- Vault tools (dormant) orchestration ------------------------------------------------------
+
+  /** The active account's email, used to prefill the generator's plus-addressed base email. */
+  private activeAccountEmail(): string | undefined {
+    return (this.accounts.find((account) => account.active) ?? this.accounts[0])?.email;
+  }
+
+  /** Copy a non-secret tool value (a generated password/username, or a Send link) and schedule the
+   *  background clipboard clear. Feedback lands on the shared tool banner. */
+  private async copyToolValue(value: string, label: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(value);
+      void this.request({ type: 'clipboard.scheduleClear' });
+      this.toolStatus = { message: `${label} copied to clipboard`, tone: 'success' };
+    } catch {
+      this.toolStatus = { message: `Failed to copy ${label.toLowerCase()}`, tone: 'danger' };
+    }
+  }
+
+  /** Record a freshly generated value into the in-memory (never persisted) generator history. */
+  private handleGeneratorHistoryAdd(detail: GeneratorHistoryAddDetail): void {
+    this.generatorHistory = addPasswordToHistory(this.generatorHistory, detail.value);
+  }
+
+  private async loadHealth(): Promise<void> {
+    this.healthReport = { status: 'loading' };
+    this.pwnedState = { status: 'idle' };
+    const response = await this.request({ type: 'vault.getPasswordHealth' });
+    if (this.route.name !== 'health') return;
+    if (!response.ok) {
+      this.healthReport = { status: 'error', message: response.error.message };
+      return;
+    }
+    const entries = (response.data as { entries?: HealthEntry[] } | null)?.entries ?? [];
+    this.healthReport = entries.length > 0 ? { status: 'ready', data: entries } : { status: 'empty' };
+  }
+
+  private async handleHealthCheck(): Promise<void> {
+    if (this.pwnedState.status === 'loading') return;
+    this.pwnedState = { status: 'loading' };
+    const response = await this.request({ type: 'vault.checkPwned' });
+    if (this.route.name !== 'health') return;
+    if (!response.ok) {
+      this.pwnedState = { status: 'error', message: response.error.message };
+      return;
+    }
+    const entries = (response.data as { entries?: Array<{ id: string; pwnedCount: number }> } | null)?.entries ?? [];
+    const byId = new Map<string, number>();
+    for (const entry of entries) byId.set(entry.id, entry.pwnedCount);
+    this.pwnedState = { status: 'ready', data: byId };
+  }
+
+  private async loadSends(): Promise<void> {
+    this.sendsState = { status: 'loading' };
+    const response = await this.request({ type: 'sends.list' });
+    if (this.route.name !== 'sends') return;
+    if (!response.ok) {
+      this.sendsState = { status: 'error', message: response.error.message };
+      return;
+    }
+    const sends = (response.data as { sends?: SendSummary[] } | null)?.sends ?? [];
+    this.sendsState = sends.length > 0 ? { status: 'ready', data: sends } : { status: 'empty' };
+  }
+
+  private async handleSendCreate(detail: SendCreateDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = detail.kind === 'text'
+        ? await this.request({ type: 'sends.createText', input: detail.input })
+        : await this.request({ type: 'sends.createFile', input: detail.input, dataB64: detail.dataB64, fileName: detail.fileName });
+      if (!response.ok) {
+        this.toolStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      const send = (response.data as { send?: SendSummary } | null)?.send;
+      if (send) {
+        await this.copyToolValue(send.url, 'Send link');
+        this.toolStatus = { message: 'Send created. Link copied to clipboard.', tone: 'success' };
+      }
+      await this.loadSends();
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async handleSendUpdate(detail: SendUpdateDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.request({ type: 'sends.update', id: detail.id, input: detail.input });
+      if (!response.ok) {
+        this.toolStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      this.toolStatus = { message: 'Send updated.', tone: 'success' };
+      await this.loadSends();
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async handleSendDelete(detail: SendDeleteDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.request({ type: 'sends.delete', id: detail.id });
+      if (!response.ok) {
+        this.toolStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      await this.loadSends();
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async loadPinStatus(): Promise<void> {
+    const response = await this.request({ type: 'auth.pinStatus' });
+    if (this.route.name !== 'pin') return;
+    this.pinConfigured = response.ok && Boolean((response.data as { enabled?: boolean } | null)?.enabled);
+  }
+
+  private async handlePinSet(detail: PinSetDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.request({ type: 'auth.setPin', pin: detail.pin });
+      if (!response.ok) {
+        this.toolStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      this.pinConfigured = true;
+      this.toolStatus = { message: 'PIN unlock enabled.', tone: 'success' };
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async handlePinRemove(): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.request({ type: 'auth.disablePin' });
+      if (!response.ok) {
+        this.toolStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      this.pinConfigured = false;
+      this.toolStatus = { message: 'PIN unlock removed.', tone: 'success' };
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async handleChangePassword(detail: ChangePasswordDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.request({ type: 'auth.changePassword', currentPassword: detail.currentPassword, newPassword: detail.newPassword });
+      this.toolStatus = response.ok
+        ? { message: 'Master password changed.', tone: 'success' }
+        : { message: response.error.message, tone: 'danger' };
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async handleChangeKdf(detail: ChangeKdfDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.request({ type: 'auth.changeKdf', currentPassword: detail.currentPassword, iterations: detail.iterations });
+      this.toolStatus = response.ok
+        ? { message: `KDF iterations changed to ${detail.iterations}.`, tone: 'success' }
+        : { message: response.error.message, tone: 'danger' };
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  /** Two-step key rotation. On success the worker has already logged out this and every other
+   *  session for the account, so the popup drops all vault/tool state and returns to login. */
+  private async handleRotateKey(detail: RotateKeyDetail): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.request({ type: 'auth.rotateAccountKey', masterPassword: detail.masterPassword });
+      if (!response.ok) {
+        this.toolStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      this.resetVaultState();
+      this.navigate(loginRoute('Encryption key rotated — please sign in again.'));
+    } finally {
+      this.pending = false;
     }
   }
 
@@ -1190,6 +1450,73 @@ export class VwPopupApp extends LitElement {
     `;
   }
 
+  private renderGenerator() {
+    return html`
+      <vw-generator-view
+        .history=${this.generatorHistory}
+        .accountEmail=${this.activeAccountEmail()}
+        @vw-history-add=${(event: CustomEvent<GeneratorHistoryAddDetail>) => this.handleGeneratorHistoryAdd(event.detail)}
+        @vw-history-clear=${() => { this.generatorHistory = []; }}
+        @vw-copy=${(event: CustomEvent<CopyDetail>) => void this.copyToolValue(event.detail.value, event.detail.label)}
+        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+      ></vw-generator-view>
+    `;
+  }
+
+  private renderHealth() {
+    return html`
+      <vw-health-view
+        .report=${this.healthReport}
+        .pwned=${this.pwnedState}
+        @vw-health-check=${() => void this.handleHealthCheck()}
+        @vw-item-open=${(event: CustomEvent<ItemOpenDetail>) => this.navigate({ name: 'detail', cipherId: event.detail.cipherId })}
+        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+      ></vw-health-view>
+    `;
+  }
+
+  private renderSends() {
+    return html`
+      <vw-sends-view
+        .sends=${this.sendsState}
+        .pending=${this.pending}
+        .status=${this.toolStatus}
+        @vw-send-create=${(event: CustomEvent<SendCreateDetail>) => void this.handleSendCreate(event.detail)}
+        @vw-send-update=${(event: CustomEvent<SendUpdateDetail>) => void this.handleSendUpdate(event.detail)}
+        @vw-send-delete=${(event: CustomEvent<SendDeleteDetail>) => void this.handleSendDelete(event.detail)}
+        @vw-copy=${(event: CustomEvent<CopyDetail>) => void this.copyToolValue(event.detail.value, event.detail.label)}
+        @vw-send-receive=${() => void this.browser.openReceive()}
+        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+      ></vw-sends-view>
+    `;
+  }
+
+  private renderAccountSecurity() {
+    return html`
+      <vw-account-security-view
+        .pending=${this.pending}
+        .status=${this.toolStatus}
+        @vw-change-password=${(event: CustomEvent<ChangePasswordDetail>) => void this.handleChangePassword(event.detail)}
+        @vw-change-kdf=${(event: CustomEvent<ChangeKdfDetail>) => void this.handleChangeKdf(event.detail)}
+        @vw-rotate-key=${(event: CustomEvent<RotateKeyDetail>) => void this.handleRotateKey(event.detail)}
+        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+      ></vw-account-security-view>
+    `;
+  }
+
+  private renderPin() {
+    return html`
+      <vw-pin-view
+        .enabled=${this.pinConfigured}
+        .pending=${this.pending}
+        .status=${this.toolStatus}
+        @vw-pin-set=${(event: CustomEvent<PinSetDetail>) => void this.handlePinSet(event.detail)}
+        @vw-pin-remove=${() => void this.handlePinRemove()}
+        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+      ></vw-pin-view>
+    `;
+  }
+
   protected override render() {
     const route = this.route;
     switch (route.name) {
@@ -1206,9 +1533,18 @@ export class VwPopupApp extends LitElement {
         return this.renderDetail(route);
       case 'editor':
         return this.renderEditor(route);
-      default:
-        // Generator/health/sends/accountSecurity/pin views are added by later tasks;
-        // this root only routes to them for now.
+      case 'generator':
+        return this.renderGenerator();
+      case 'health':
+        return this.renderHealth();
+      case 'sends':
+        return this.renderSends();
+      case 'accountSecurity':
+        return this.renderAccountSecurity();
+      case 'pin':
+        return this.renderPin();
+      case 'trash':
+        // The trash tool routes into the vault's All-items scope; it is never rendered directly.
         return nothing;
     }
   }

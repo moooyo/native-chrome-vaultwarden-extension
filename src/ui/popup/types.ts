@@ -6,6 +6,8 @@ import type {
   TabSuggestionTarget,
 } from '../../messaging/protocol.js';
 import type { FieldName } from '../../core/vault/models.js';
+import type { SendInput, SendSummary, UpdateSendInput } from '../../core/vault/sends.js';
+import type { AsyncState } from '../components/async-state.js';
 import type { StatusTone } from '../components/status-message.js';
 
 /**
@@ -213,3 +215,65 @@ export interface DetailStatus {
 export interface RepromptSubmitDetail {
   password: string;
 }
+
+// --- Vault tools (dormant): generator, health, Sends, PIN, account security -------------------
+
+/** `vw-history-add` detail: a generated value the root records into its in-memory generator
+ *  history via `addPasswordToHistory`. Never persisted. */
+export interface GeneratorHistoryAddDetail {
+  value: string;
+}
+
+/** One weak/reused login as surfaced by `vault.getPasswordHealth`; non-secret display data only. */
+export interface HealthEntry {
+  id: string;
+  name: string;
+  weak: boolean;
+  reuseCount: number;
+}
+
+/** The on-demand HIBP breach result the root loads via `vault.checkPwned`, keyed by cipher id.
+ *  `idle` = not checked yet; `loading` = check in flight; `ready` carries the per-id breach counts. */
+export type PwnedState = AsyncState<ReadonlyMap<string, number>>;
+
+/** `vw-send-create` detail: a text or file Send the root creates. The file variant carries the
+ *  already-read base64 bytes so the root only performs the worker request. */
+export type SendCreateDetail =
+  | { kind: 'text'; input: SendInput }
+  | { kind: 'file'; input: SendInput; dataB64: string; fileName: string };
+
+/** `vw-send-update` detail: an edit to an existing Send the root performs. */
+export interface SendUpdateDetail {
+  id: string;
+  input: UpdateSendInput;
+}
+
+/** `vw-send-delete` detail. */
+export interface SendDeleteDetail {
+  id: string;
+}
+
+/** `vw-change-password` detail: a validated master-password change the root performs. */
+export interface ChangePasswordDetail {
+  currentPassword: string;
+  newPassword: string;
+}
+
+/** `vw-change-kdf` detail: a validated PBKDF2 iteration change (iterations already >= 600000). */
+export interface ChangeKdfDetail {
+  currentPassword: string;
+  iterations: number;
+}
+
+/** `vw-rotate-key` detail: the confirmed encryption-key rotation the root performs. */
+export interface RotateKeyDetail {
+  masterPassword: string;
+}
+
+/** `vw-pin-set` detail: a validated new PIN (already >= 4 characters). */
+export interface PinSetDetail {
+  pin: string;
+}
+
+/** Re-exported so tool components/tests reference a single Send type surface. */
+export type { SendSummary };
