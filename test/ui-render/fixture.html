@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vaultwarden UI fixture</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+      }
+      body {
+        overflow: hidden;
+        font-family: "Segoe UI Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      }
+      #vw-root {
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="vw-root"></div>
+    <script type="module" src="/dist/ui-test/fixture.js"></script>
+  </body>
+</html>

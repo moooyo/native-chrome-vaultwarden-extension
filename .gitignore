@@ -2,3 +2,5 @@ node_modules/
 dist/
 *.zip
 .superpowers/sdd/
+test-results/
+playwright-report/

@@ -10,6 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "build:ui-fixtures": "node tools/build-ui-fixtures.mjs",
+    "test:ui": "node tools/build-ui-fixtures.mjs && playwright test",
+    "test:ui:update": "node tools/build-ui-fixtures.mjs && playwright test --update-snapshots",
     "lint": "eslint ."
   },
   "dependencies": {
