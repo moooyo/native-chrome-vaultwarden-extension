@@ -35,15 +35,16 @@ describe('vw-tools-menu', () => {
     document.body.replaceChildren();
   });
 
-  it('lists health, Sends, trash, and sync', async () => {
+  it('lists generator, health, Sends, trash, and sync', async () => {
     const menu = await open(await mount());
     const text = (menu.shadowRoot?.textContent ?? '').toLowerCase();
-    for (const label of ['health', 'sends', 'trash', 'sync']) {
+    for (const label of ['generator', 'health', 'sends', 'trash', 'sync']) {
       expect(text).toContain(label);
     }
   });
 
   it.each([
+    ['Generator', 'generator'],
     ['health', 'health'],
     ['Sends', 'sends'],
     ['Trash', 'trash'],

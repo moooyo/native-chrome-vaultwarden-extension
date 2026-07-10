@@ -7,8 +7,8 @@ import '../menus/tools-menu.js';
 import type { AccountInfo } from '../types.js';
 
 /**
- * The unlocked-vault header: the account menu, an Add and a Generator control, and the tools menu.
- * It performs no requests. Add/Generator raise `vw-add`/`vw-generator`; account and tool actions are
+ * The unlocked-vault header: search, a New item command, and grouped account/tools controls.
+ * It performs no requests. New item raises `vw-add`; account and tool actions are
  * raised by the nested menus and bubble through unchanged.
  */
 export class VwPopupHeader extends LitElement {
@@ -124,9 +124,6 @@ export class VwPopupHeader extends LitElement {
         </label>
         <button type="button" class="button primary new-item" data-add @click=${() => this.emit('vw-add')}>
           ${uiIcon('plus')}<span>New item</span>
-        </button>
-        <button type="button" class="icon-button" data-generator title="Password generator" aria-label="Password generator" @click=${() => this.emit('vw-generator')}>
-          ${uiIcon('key')}
         </button>
         <vw-tools-menu></vw-tools-menu>
         <vw-account-menu

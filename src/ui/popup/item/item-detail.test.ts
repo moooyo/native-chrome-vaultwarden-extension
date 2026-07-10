@@ -66,6 +66,12 @@ describe('vw-item-detail login', () => {
     expect(link.href).toBe('https://github.com/');
   });
 
+  it('renders a dedicated detail scroll region and field groups', async () => {
+    const el = await mount(summary({ username: 'octocat' }));
+    expect(el.shadowRoot!.querySelector('[data-detail-scroll]')).not.toBeNull();
+    expect(el.shadowRoot!.querySelectorAll('[data-field-group]').length).toBeGreaterThan(0);
+  });
+
   it('renders a javascript: uri as plain text, never a link', async () => {
     const el = await mount(summary({ uris: ['javascript:alert(1)'] }));
     expect(el.shadowRoot?.querySelector('a[data-uri]')).toBeNull();

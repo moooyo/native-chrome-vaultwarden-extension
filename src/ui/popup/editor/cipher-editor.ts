@@ -99,17 +99,23 @@ export class VwCipherEditor extends LitElement {
     controlStyles,
     css`
       :host {
-        display: block;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
       }
       .head {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 6px 0 10px;
+        flex: none;
+        min-height: 52px;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--vw-line);
       }
       .head h1 {
         margin: 0;
-        font-size: 15px;
+        font-size: var(--vw-font-size-view);
       }
       .head svg {
         width: 16px;
@@ -180,9 +186,9 @@ export class VwCipherEditor extends LitElement {
       }
       .actions {
         display: flex;
-        flex-direction: column;
+        flex-direction: row;
         gap: 8px;
-        margin: 12px 0;
+        margin: 0;
       }
       .block {
         width: 100%;
@@ -208,6 +214,23 @@ export class VwCipherEditor extends LitElement {
       }
       .status {
         margin-top: 8px;
+      }
+      .view-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        padding: 12px;
+        box-sizing: border-box;
+      }
+      .view-actions {
+        flex: none;
+        padding: 10px 12px;
+        border-top: 1px solid var(--vw-line);
+        background: var(--vw-panel);
+      }
+      .view-actions .block {
+        width: auto;
+        flex: 1;
       }
       svg {
         width: 16px;
@@ -623,17 +646,19 @@ export class VwCipherEditor extends LitElement {
         <button type="button" class="icon-button" data-back title="Back" aria-label="Back" @click=${() => this.back()}>${uiIcon('back')}</button>
         <h1>${title}</h1>
       </div>
-      ${this.textField('Name', this.form.name, (v) => this.patch({ name: v }), { field: 'name' })}
-      ${this.renderTypeFields()}
-      ${this.renderCommon()}
-      ${this.renderCollections()}
-      ${this.renderMove()}
-      ${this.renderActions()}
-      ${this.localError
-        ? html`<vw-status-message class="status" tone="danger" .icon=${'alert'} .message=${this.localError}></vw-status-message>`
-        : this.status
-        ? html`<vw-status-message class="status" .tone=${this.status.tone} .icon=${this.status.tone === 'success' ? 'checkCircle' : 'alert'} .message=${this.status.message}></vw-status-message>`
-        : nothing}
+      <div class="view-scroll" data-view-scroll>
+        ${this.textField('Name', this.form.name, (v) => this.patch({ name: v }), { field: 'name' })}
+        ${this.renderTypeFields()}
+        ${this.renderCommon()}
+        ${this.renderCollections()}
+        ${this.renderMove()}
+        ${this.localError
+          ? html`<vw-status-message class="status" tone="danger" .icon=${'alert'} .message=${this.localError}></vw-status-message>`
+          : this.status
+          ? html`<vw-status-message class="status" .tone=${this.status.tone} .icon=${this.status.tone === 'success' ? 'checkCircle' : 'alert'} .message=${this.status.message}></vw-status-message>`
+          : nothing}
+      </div>
+      <div class="view-actions" data-view-actions>${this.renderActions()}</div>
     `;
   }
 }

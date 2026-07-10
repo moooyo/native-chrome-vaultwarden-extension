@@ -57,6 +57,12 @@ function saveDetail(el: VwCipherEditor): Promise<CipherInput> {
   });
 }
 
+it('keeps editor content and actions in dedicated regions', async () => {
+  const el = await mount(ctx());
+  expect(el.shadowRoot!.querySelector('[data-view-scroll]')).not.toBeNull();
+  expect(el.shadowRoot!.querySelector('[data-view-actions]')).not.toBeNull();
+});
+
 describe('vw-cipher-editor login', () => {
   afterEach(() => document.body.replaceChildren());
 

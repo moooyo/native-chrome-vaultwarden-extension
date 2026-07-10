@@ -49,12 +49,9 @@ describe('vw-popup-header', () => {
     expect(changed).toHaveBeenCalledWith(expect.objectContaining({ detail: { query: 'github' } }));
   });
 
-  it('emits vw-generator when the generator control is used', async () => {
+  it('keeps generator in the tools menu rather than the primary toolbar', async () => {
     const el = await mount();
-    const gen = vi.fn();
-    el.addEventListener('vw-generator', gen);
-    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-generator]')!.click();
-    expect(gen).toHaveBeenCalledTimes(1);
+    expect(el.shadowRoot?.querySelector('[data-generator]')).toBeNull();
   });
 
   it('forwards the account list to the account menu', async () => {

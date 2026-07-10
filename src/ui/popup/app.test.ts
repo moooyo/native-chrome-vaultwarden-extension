@@ -651,10 +651,14 @@ describe('vw-popup-app account and tool actions', () => {
     header(app).dispatchEvent(new CustomEvent('vw-add', { bubbles: true, composed: true }));
     await fully(app);
     expect(app.route.name).toBe('editor');
-    // return to the vault, then open the generator
+    // Return to the vault, then open the generator from the grouped tools entry.
     app.navigate({ name: 'vault', scope: 'suggestions' });
     await fully(app);
-    header(app).dispatchEvent(new CustomEvent('vw-generator', { bubbles: true, composed: true }));
+    header(app).dispatchEvent(new CustomEvent('vw-tool-action', {
+      detail: { action: 'generator' },
+      bubbles: true,
+      composed: true,
+    }));
     await fully(app);
     expect(app.route.name).toBe('generator');
   });

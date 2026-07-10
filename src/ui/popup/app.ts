@@ -276,7 +276,12 @@ export class VwPopupApp extends LitElement {
       .detail-route {
         display: block;
         min-width: 0;
-        min-height: 100%;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .detail-route > * {
+        height: 100%;
       }
     `,
   ];
@@ -767,6 +772,9 @@ export class VwPopupApp extends LitElement {
 
   private async handleToolAction(detail: ToolActionDetail): Promise<void> {
     switch (detail.action) {
+      case 'generator':
+        this.navigate({ name: 'generator' });
+        return;
       case 'health':
         this.navigate({ name: 'health' });
         return;
@@ -1365,7 +1373,6 @@ export class VwPopupApp extends LitElement {
         .pinEnabled=${this.pinConfigured}
         .deviceRemembered=${this.vaultDeviceRemembered}
         @vw-add=${() => this.navigate({ name: 'editor', mode: 'create' })}
-        @vw-generator=${() => this.navigate({ name: 'generator' })}
         @vw-search-change=${(event: CustomEvent<{ query: string }>) => {
           this.query = event.detail.query;
           if (event.detail.query.trim()) this.vaultScope = 'all';

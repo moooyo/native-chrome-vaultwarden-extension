@@ -7,6 +7,7 @@ import type { MenuItem, VwMenu } from '../../components/menu.js';
 import type { ToolAction, ToolActionDetail } from '../types.js';
 
 const TOOL_ITEMS: { item: MenuItem; action: ToolAction }[] = [
+  { item: { id: 'generator', label: 'Password generator', icon: 'key' }, action: 'generator' },
   { item: { id: 'health', label: 'Password health', icon: 'checkCircle' }, action: 'health' },
   { item: { id: 'sends', label: 'Sends', icon: 'mail' }, action: 'sends' },
   { item: { id: 'trash', label: 'Trash', icon: 'trash' }, action: 'trash' },

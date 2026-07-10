@@ -103,13 +103,19 @@ export class VwItemDetail extends LitElement {
     controlStyles,
     css`
       :host {
-        display: block;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
       }
       .head {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 6px 0 10px;
+        flex: none;
+        min-height: 52px;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--vw-line);
       }
       .titles {
         flex: 1;
@@ -117,7 +123,7 @@ export class VwItemDetail extends LitElement {
       }
       .titles h1 {
         margin: 0;
-        font-size: 15px;
+        font-size: var(--vw-font-size-title);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -127,17 +133,18 @@ export class VwItemDetail extends LitElement {
         color: var(--vw-muted);
       }
       .readout {
-        border: 1px solid var(--vw-line);
-        border-radius: var(--vw-radius-control);
         padding: 8px 10px;
-        margin-bottom: 8px;
+        border-top: 1px solid var(--vw-line-weak);
+      }
+      .readout:first-child {
+        border-top: 0;
       }
       .k {
         display: flex;
         align-items: center;
         gap: 6px;
         font-size: 12px;
-        color: var(--vw-muted);
+        color: var(--vw-blue-text);
         margin-bottom: 4px;
       }
       .k svg {
@@ -152,7 +159,7 @@ export class VwItemDetail extends LitElement {
       .v {
         flex: 1;
         min-width: 0;
-        font-size: 13px;
+        font-size: var(--vw-font-size-body);
         word-break: break-word;
       }
       .note-body {
@@ -165,6 +172,19 @@ export class VwItemDetail extends LitElement {
         flex-direction: column;
         gap: 8px;
         margin: 12px 0;
+      }
+      .detail-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        padding: 12px;
+        box-sizing: border-box;
+      }
+      .detail-fields {
+        overflow: hidden;
+        border: 1px solid var(--vw-line);
+        border-radius: var(--vw-radius-row);
+        background: var(--vw-panel);
       }
       .block {
         width: 100%;
@@ -746,9 +766,11 @@ export class VwItemDetail extends LitElement {
   protected override render() {
     return html`
       ${this.renderHeader()}
-      ${this.renderBody()}
-      ${this.renderConfirmDelete()}
-      ${this.renderStatus()}
+      <div class="detail-scroll" data-detail-scroll>
+        <div class="detail-fields" data-field-group>${this.renderBody()}</div>
+        ${this.renderConfirmDelete()}
+        ${this.renderStatus()}
+      </div>
     `;
   }
 }

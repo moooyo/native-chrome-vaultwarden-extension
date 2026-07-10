@@ -59,7 +59,7 @@ export type AccountAction =
   | 'forget-device';
 
 /** The closed vocabulary of tools-menu actions. */
-export type ToolAction = 'health' | 'sends' | 'trash' | 'sync';
+export type ToolAction = 'generator' | 'health' | 'sends' | 'trash' | 'sync';
 
 /** `vw-account-action` detail. `email` is present only for the per-account switch/remove actions. */
 export interface AccountActionDetail {
