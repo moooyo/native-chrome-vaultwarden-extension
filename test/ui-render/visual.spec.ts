@@ -11,14 +11,14 @@ interface VisualCase {
 }
 
 const CASES: VisualCase[] = [
-  { name: 'popup-suggestions-light', params: { surface: 'popup', state: 'suggestions', count: 6 }, selector: '#vw-surface', viewport: { width: 404, height: 600 } },
-  { name: 'popup-suggestions-dark', params: { surface: 'popup', state: 'suggestions', count: 6, theme: 'dark' }, selector: '#vw-surface', viewport: { width: 404, height: 600 } },
-  { name: 'popup-list', params: { surface: 'popup', state: 'list', count: 6 }, selector: '#vw-surface', viewport: { width: 404, height: 600 } },
-  { name: 'popup-detail', params: { surface: 'popup', state: 'detail' }, selector: '#vw-surface', viewport: { width: 404, height: 600 } },
-  { name: 'popup-editor', params: { surface: 'popup', state: 'editor' }, selector: '#vw-surface', viewport: { width: 404, height: 600 } },
-  { name: 'popup-tools', params: { surface: 'popup', state: 'tools' }, selector: '#vw-surface', viewport: { width: 404, height: 600 } },
-  { name: 'popup-auth', params: { surface: 'popup', state: 'auth' }, selector: '#vw-surface', viewport: { width: 404, height: 600 } },
-  { name: 'options', params: { surface: 'options' }, selector: '#vw-surface', viewport: { width: 900, height: 600 } },
+  { name: 'popup-double-suggestions-light', params: { surface: 'popup', state: 'suggestions', layout: 'double', count: 8 }, selector: '#vw-surface', viewport: { width: 600, height: 450 } },
+  { name: 'popup-double-detail-dark', params: { surface: 'popup', state: 'detail', layout: 'double', count: 8, theme: 'dark' }, selector: '#vw-surface', viewport: { width: 600, height: 450 } },
+  { name: 'popup-double-list', params: { surface: 'popup', state: 'list', layout: 'double', count: 8 }, selector: '#vw-surface', viewport: { width: 600, height: 450 } },
+  { name: 'popup-double-detail', params: { surface: 'popup', state: 'detail', layout: 'double' }, selector: '#vw-surface', viewport: { width: 600, height: 450 } },
+  { name: 'popup-double-editor', params: { surface: 'popup', state: 'editor', layout: 'double' }, selector: '#vw-surface', viewport: { width: 600, height: 450 } },
+  { name: 'popup-double-tools', params: { surface: 'popup', state: 'tools', layout: 'double' }, selector: '#vw-surface', viewport: { width: 600, height: 450 } },
+  { name: 'popup-single-auth', params: { surface: 'popup', state: 'auth', layout: 'single' }, selector: '#vw-surface', viewport: { width: 350, height: 450 } },
+  { name: 'options', params: { surface: 'options' }, selector: '#vw-surface', viewport: { width: 1000, height: 700 } },
   { name: 'receive', params: { surface: 'receive' }, selector: '#vw-surface', viewport: { width: 720, height: 600 } },
   { name: 'popover', params: { surface: 'popover' }, selector: 'vw-autofill-popover .box', viewport: { width: 420, height: 420 } },
   { name: 'save-bar', params: { surface: 'save' }, selector: 'vw-save-bar .bar', viewport: { width: 720, height: 240 } },

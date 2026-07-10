@@ -41,7 +41,12 @@ export class VwStatusMessage extends LitElement {
         border: 1px solid var(--vw-line);
         background: var(--vw-blue-50);
         color: var(--vw-ink);
-        font-size: 13px;
+        font-size: var(--vw-font-size-meta);
+      }
+      .status svg {
+        width: 16px;
+        height: 16px;
+        flex: none;
       }
       .status.tone-success {
         border-color: var(--vw-ok);

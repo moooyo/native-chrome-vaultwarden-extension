@@ -96,7 +96,7 @@
   - 入口瘦身：`src/ui/{popup,options,receive}/*.ts` 变为**薄依赖适配 + 挂载**（注入 worker 请求通道与
     浏览器 seam，挂载 `vw-popup-app`/`vw-options-app`/`vw-receive-app`）；HTML 仅加载各自脚本 + 极简页面 CSS；
     删除共享 `src/ui/theme.css` 与命令式 `src/ui/icons.ts`（所有消费者已迁移，组件改用 `ui/components/icon.ts`
-    的 `uiIcon` 与 `tokens.ts` 的 `themeTokens`）。popup 为 404px 上下文优先面板；Options 为设置轨（rail）+ 分区。
+    的 `uiIcon` 与 `tokens.ts` 的 `themeTokens`）。popup 后续升级为 600x450 双栏工作区，并保留 350x450 单栏回退；Options 为设置轨（rail）+ 分区。
   - 内容工厂改挂 Lit：`popover.ts`/`save-bar.ts`/`notice.ts`/`passkey-consent.ts` 保持公开函数名与回调契约不变，
     内部改用 `mountClosedSurface` + 封闭 ShadowRoot 的 `vw-*` 元素；页面无法读取状态或伪造回调，
     `Event.isTrusted` 门控保留。`autofill.ts` 注册 `autofill.inspectFrame`/`autofill.commitLoginFill`
@@ -104,7 +104,7 @@
   - 生产构建：各入口独立打包（无共享 ESM 拆分、无远端资源、MV3 CSP 兼容）；新增 `tools/assert-build.mjs`
     并让 `build:prod` 自动运行——断言三页只加载自身脚本 + 极简 CSS、无 `theme.css`、源入口无命令式 `innerHTML`
     渲染器、manifest 含 `activeTab`/`webNavigation`、`dist` 无遗留 `theme.css`。UI 回归见 `npm.cmd run test:ui`
-    （Playwright 夹具：320/404/768 宽度无横向溢出、长文不撑破、深色、键盘可达、200% 缩放、视觉快照）。
+    （Playwright 夹具：600/350 精确几何、260/340 双栏、320/404/768 宽度无横向溢出、长文不撑破、深色、键盘可达、200% 缩放、视觉快照）。
   - 真实验证：Chromium MV3 加载扩展→service worker 注册→worker 可达 live `/alive`→三个 Lit 面板均挂载且
     **无 console 错误**；Options 保存服务端 URL；popup 用 disposable PBKDF2 账户对 live 服务端**真登录并解锁 vault**
     （渲染 Suggestions/All items）。

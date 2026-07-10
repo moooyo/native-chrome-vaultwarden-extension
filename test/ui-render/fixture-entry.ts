@@ -15,6 +15,7 @@ import type { PopoverCandidate } from '../../src/content/ui/autofill-popover-ele
 import type { PasskeyRegisterTarget } from '../../src/content/ui/passkey-dialog-element.js';
 
 import { VwPopupHeader } from '../../src/ui/popup/vault/popup-header.js';
+import { VwPopupFrame } from '../../src/ui/popup/popup-frame.js';
 import { VwVaultView } from '../../src/ui/popup/vault/vault-view.js';
 import { VwItemDetail } from '../../src/ui/popup/item/item-detail.js';
 import { VwCipherEditor } from '../../src/ui/popup/editor/cipher-editor.js';
@@ -43,6 +44,7 @@ const state = params.get('state') ?? 'suggestions';
 const theme: Theme = params.get('theme') === 'dark' ? 'dark' : 'light';
 const parsedCount = Number.parseInt(params.get('count') ?? '', 10);
 const itemCount = Number.isFinite(parsedCount) && parsedCount > 0 ? parsedCount : 12;
+const layout = params.get('layout') === 'single' ? 'single' : 'double';
 
 const palette: Palette = theme === 'dark'
   ? { panel: '#171e2b', canvas: '#0f1420', ink: '#edf2fb' }
@@ -128,28 +130,42 @@ function popupHeader(): VwPopupHeader {
   return header;
 }
 
-function popupShell(scrollKey: string, header: HTMLElement | null, content: HTMLElement): HTMLElement {
-  const shell = document.createElement('div');
-  shell.id = 'vw-surface';
-  shell.style.cssText = [
-    'width:min(404px,100vw)',
-    'max-width:100vw',
-    'height:100%',
-    'margin:0 auto',
-    'box-sizing:border-box',
-    'display:flex',
-    'flex-direction:column',
-    'overflow:hidden',
-    `background:${palette.panel}`,
-    `color:${palette.ink}`,
-  ].join(';');
-  if (header) shell.appendChild(header);
-  const scroll = document.createElement('div');
-  scroll.setAttribute('data-scroll-region', scrollKey);
-  scroll.style.cssText = 'flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:8px 12px;box-sizing:border-box;';
-  scroll.appendChild(content);
-  shell.appendChild(scroll);
-  return shell;
+function popupShell(header: HTMLElement | null, list: HTMLElement | null, detail: HTMLElement): VwPopupFrame {
+  const frame = track(new VwPopupFrame());
+  frame.id = 'vw-surface';
+  frame.mode = layout;
+  if (layout === 'single') {
+    frame.append(detail);
+    return frame;
+  }
+  if (header) {
+    const toolbar = document.createElement('div');
+    toolbar.slot = 'toolbar';
+    toolbar.style.height = '100%';
+    toolbar.append(header);
+    frame.append(toolbar);
+  }
+  if (list) {
+    const listSlot = document.createElement('div');
+    listSlot.slot = 'list';
+    listSlot.setAttribute('data-scroll-region', 'list');
+    listSlot.append(list);
+    frame.append(listSlot);
+  }
+  const detailSlot = document.createElement('div');
+  detailSlot.slot = 'detail';
+  detailSlot.setAttribute('data-scroll-region', 'detail');
+  detailSlot.style.cssText = 'height:100%;min-height:0;overflow:auto;';
+  detailSlot.append(detail);
+  frame.append(detailSlot);
+  return frame;
+}
+
+function emptyDetail(): HTMLElement {
+  const empty = document.createElement('div');
+  empty.style.cssText = 'height:100%;display:grid;place-items:center;padding:24px;box-sizing:border-box;color:#666;text-align:center;';
+  empty.textContent = 'Select an item to view its details.';
+  return empty;
 }
 
 function pageSurface(content: HTMLElement): HTMLElement {
@@ -277,33 +293,54 @@ function longTextView(): VwVaultView {
 }
 
 function mountPopup(): void {
+  if (layout === 'single') {
+    const content = state === 'auth'
+      ? authView()
+      : state === 'editor'
+        ? editorView()
+        : state === 'detail'
+          ? detailView()
+          : state === 'tools'
+            ? toolsView()
+            : state === 'longtext'
+              ? longTextView()
+              : state === 'list'
+                ? listView()
+                : suggestionsView('suggestions', buildSuggestions(itemCount), state === 'filled');
+    root.appendChild(popupShell(null, null, content));
+    return;
+  }
   switch (state) {
-    case 'suggestions':
-      root.appendChild(popupShell('suggestions', popupHeader(), suggestionsView('suggestions', buildSuggestions(itemCount), false)));
+    case 'suggestions': {
+      const list = suggestionsView('suggestions', buildSuggestions(itemCount), false);
+      root.appendChild(popupShell(popupHeader(), list, emptyDetail()));
       return;
-    case 'filled':
-      root.appendChild(popupShell('suggestions', popupHeader(), suggestionsView('suggestions', buildSuggestions(itemCount), true)));
+    }
+    case 'filled': {
+      const list = suggestionsView('suggestions', buildSuggestions(itemCount), true);
+      root.appendChild(popupShell(popupHeader(), list, emptyDetail()));
       return;
+    }
     case 'longtext':
-      root.appendChild(popupShell('suggestions', popupHeader(), longTextView()));
+      root.appendChild(popupShell(popupHeader(), longTextView(), longTextView()));
       return;
     case 'list':
-      root.appendChild(popupShell('list', popupHeader(), listView()));
+      root.appendChild(popupShell(popupHeader(), listView(), detailView()));
       return;
     case 'detail':
-      root.appendChild(popupShell('detail', null, detailView()));
+      root.appendChild(popupShell(popupHeader(), suggestionsView('suggestions', buildSuggestions(itemCount), false), detailView()));
       return;
     case 'editor':
-      root.appendChild(popupShell('editor', null, editorView()));
+      root.appendChild(popupShell(popupHeader(), suggestionsView('suggestions', buildSuggestions(itemCount), false), editorView()));
       return;
     case 'tools':
-      root.appendChild(popupShell('tools', null, toolsView()));
+      root.appendChild(popupShell(popupHeader(), suggestionsView('suggestions', buildSuggestions(itemCount), false), toolsView()));
       return;
     case 'auth':
-      root.appendChild(popupShell('auth', null, authView()));
+      root.appendChild(popupShell(null, null, authView()));
       return;
     default:
-      root.appendChild(popupShell('suggestions', popupHeader(), suggestionsView('suggestions', buildSuggestions(itemCount), false)));
+      root.appendChild(popupShell(popupHeader(), suggestionsView('suggestions', buildSuggestions(itemCount), false), emptyDetail()));
   }
 }
 

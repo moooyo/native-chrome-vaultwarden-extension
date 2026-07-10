@@ -58,6 +58,7 @@ export class VwPopupFrame extends LitElement {
       [data-list-pane],
       [data-detail-pane],
       [data-single-pane] {
+        box-sizing: border-box;
         min-width: 0;
         min-height: 0;
         overflow: auto;

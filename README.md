@@ -29,11 +29,11 @@ Collections grouping, Argon2id accounts, and account registration are not implem
 
 All surfaces — the popup, the options page, the Receive page, and the in-page autofill surfaces — are built from one **Lit 3 component system** (`src/ui/components/`, with `themeTokens` design tokens and shared control styles). Each surface's production entry file (`src/ui/{popup,options,receive}/*.ts`) is a thin dependency adapter that mounts a single Lit root; there is no imperative string renderer and no shared `theme.css`.
 
-- **Popup** — a fixed **404 px, context-first panel** (`vw-popup-app`). When the vault is unlocked it opens on **Suggestions** for the active tab (with an **All items** view alongside search, folders, collections, and trash). Choosing a suggestion triggers a **direct Fill**: the worker coordinates the fill into the target frame and never submits the form, and credentials never enter popup/suggestion state.
+- **Popup** — an unlocked **600 x 450 px two-pane workspace** (`vw-popup-app`): the 260 px credential list remains visible while the 340 px detail/workflow pane changes. Authentication and constrained layouts use a **350 x 450 px single-pane** flow. The vault opens on **Suggestions** for the active tab, with All items, search, folders, collections, and trash available without losing list context. Direct Fill remains worker-coordinated, never submits the form, and never places credentials in popup state.
 - **Options** — a **settings rail** (`vw-options-app`): Connection, Security, Autofill, Data, and About sections, collapsing to a single selector on narrow viewports.
 - **Receive** — `vw-receive-app` accesses and decrypts a Vaultwarden Send (text or file) entirely on-device.
 - **In-page surfaces** — the autofill popover, save/update bar, self-dismissing notice, and passkey consent/registration dialogs each render inside a **closed** Shadow Root the page cannot read or forge; every privileged click is gated on `Event.isTrusted`.
-- A full dark theme follows `prefers-color-scheme`, motion respects `prefers-reduced-motion`, iconography is inline SVG, and sizing is `rem`-based so the UI stays crisp across resolutions, DPI, and browser zoom. Rendered-UI regression coverage (overflow at 320/404/768 px, long text, dark mode, keyboard focus, 200 % zoom, and visual snapshots) runs under `npm.cmd run test:ui`.
+- A full dark theme follows `prefers-color-scheme`, motion respects `prefers-reduced-motion`, and iconography is inline SVG with explicit role sizes. Rendered-UI regression coverage verifies exact 600/350 popup geometry, 260/340 pane widths, overflow at 320/404/768 px, long text, dark mode, keyboard focus, 200% zoom, and representative visual snapshots under `npm.cmd run test:ui`.
 
 ## Development
 

@@ -6,6 +6,7 @@ export interface FixtureParams {
   state?: string;
   theme?: 'light' | 'dark';
   count?: number;
+  layout?: 'double' | 'single';
 }
 
 /** Builds the repository-relative fixture URL the static server serves. */
@@ -15,6 +16,7 @@ export function fixturePath(params: FixtureParams): string {
   if (params.state !== undefined) search.set('state', params.state);
   if (params.theme !== undefined) search.set('theme', params.theme);
   if (params.count !== undefined) search.set('count', String(params.count));
+  if (params.layout !== undefined) search.set('layout', params.layout);
   return `/test/ui-render/fixture.html?${search.toString()}`;
 }
 

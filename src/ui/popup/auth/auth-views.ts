@@ -102,12 +102,14 @@ export class VwAuthViews extends LitElement {
     css`
       :host {
         display: block;
+        height: 100%;
       }
       .auth {
         display: flex;
         flex-direction: column;
         gap: 12px;
-        padding: 8px 4px;
+        padding: 32px 20px 20px;
+        box-sizing: border-box;
       }
       .auth-head {
         display: flex;
@@ -118,6 +120,15 @@ export class VwAuthViews extends LitElement {
       }
       .auth-head .brand-mark {
         color: var(--vw-blue-600);
+      }
+      .auth svg {
+        width: 16px;
+        height: 16px;
+        flex: none;
+      }
+      .auth-head .brand-mark svg {
+        width: 28px;
+        height: 28px;
       }
       .auth-head h1 {
         margin: 0;

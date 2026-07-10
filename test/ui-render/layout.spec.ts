@@ -17,18 +17,45 @@ const OVERFLOW_SURFACES: FixtureParams[] = [
 
 const WIDTHS = [320, 404, 768];
 
-test('popup has no horizontal overflow at 320px', async ({ page }) => {
+test('single popup has no horizontal overflow at 320px', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 520 });
-  await page.goto('/test/ui-render/fixture.html?surface=popup&state=suggestions&count=50');
+  await page.goto('/test/ui-render/fixture.html?surface=popup&state=suggestions&layout=single&count=50');
   await page.waitForSelector('body[data-ready="true"]');
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });
 
-test('candidate list owns short-viewport scrolling', async ({ page }) => {
-  await page.setViewportSize({ width: 404, height: 360 });
-  await page.goto('/test/ui-render/fixture.html?surface=popup&state=suggestions&count=50');
+test('unlocked popup uses a 600 by 450 double-pane frame', async ({ page }) => {
+  await page.setViewportSize({ width: 600, height: 450 });
+  await gotoFixture(page, { surface: 'popup', state: 'detail', layout: 'double' });
+  const frame = page.locator('[data-popup-frame]');
+  await expect(frame).toHaveCSS('width', '600px');
+  await expect(frame).toHaveCSS('height', '450px');
+  await expect(page.locator('[data-list-pane]')).toHaveCSS('width', '260px');
+  await expect(page.locator('[data-detail-pane]')).toHaveCSS('width', '340px');
+});
+
+test('auth popup uses a 350 by 450 single-pane frame', async ({ page }) => {
+  await page.setViewportSize({ width: 350, height: 450 });
+  await gotoFixture(page, { surface: 'popup', state: 'auth', layout: 'single' });
+  const frame = page.locator('[data-popup-frame]');
+  await expect(frame).toHaveCSS('width', '350px');
+  await expect(frame).toHaveCSS('height', '450px');
+  await expect(page.locator('[data-detail-pane]')).toHaveCount(0);
+  const buttonIcon = await page.locator('vw-auth-views .button.primary svg').first().boundingBox();
+  expect(buttonIcon).not.toBeNull();
+  expect(buttonIcon!.width).toBeLessThanOrEqual(20);
+  expect(buttonIcon!.height).toBeLessThanOrEqual(20);
+  const statusIcon = await page.locator('vw-auth-views vw-status-message svg').first().boundingBox();
+  expect(statusIcon).not.toBeNull();
+  expect(statusIcon!.width).toBeLessThanOrEqual(20);
+  expect(statusIcon!.height).toBeLessThanOrEqual(20);
+});
+
+test('double-pane list owns short-viewport scrolling', async ({ page }) => {
+  await page.setViewportSize({ width: 600, height: 360 });
+  await page.goto('/test/ui-render/fixture.html?surface=popup&state=detail&layout=double&count=50');
   await page.waitForSelector('body[data-ready="true"]');
-  const geometry = await page.locator('[data-scroll-region="suggestions"]').evaluate((element) => ({
+  const geometry = await page.locator('[data-list-pane]').evaluate((element) => ({
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight,
   }));
@@ -40,7 +67,7 @@ for (const width of WIDTHS) {
   for (const target of OVERFLOW_SURFACES) {
     test(`no horizontal overflow at ${width}px for ${target.surface}/${target.state ?? 'default'}`, async ({ page }) => {
       await page.setViewportSize({ width, height: 640 });
-      await gotoFixture(page, target);
+      await gotoFixture(page, { ...target, layout: width < 600 ? 'single' : 'double' });
       const { scrollWidth, clientWidth } = await documentWidth(page);
       expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
     });
@@ -49,17 +76,14 @@ for (const width of WIDTHS) {
 
 test('long unbroken text stays contained at 320px', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 520 });
-  await gotoFixture(page, { surface: 'popup', state: 'longtext' });
+  await gotoFixture(page, { surface: 'popup', state: 'longtext', layout: 'single' });
   const { scrollWidth } = await documentWidth(page);
   expect(scrollWidth).toBeLessThanOrEqual(320);
 });
 
 test('200% zoom (halved 404px popup baseline) keeps content and primary controls reachable', async ({ page }) => {
-  // Chrome's 200% page zoom halves the available CSS pixels. The popup's real baseline width is
-  // 404 CSS px (see OVERFLOW_SURFACES above), so emulate 200% zoom with a 202x320 layout viewport
-  // (404/2 x 640/2) rather than an arbitrary halved shell width.
-  await page.setViewportSize({ width: 202, height: 320 });
-  await gotoFixture(page, { surface: 'popup', state: 'editor' });
+  await page.setViewportSize({ width: 175, height: 225 });
+  await gotoFixture(page, { surface: 'popup', state: 'editor', layout: 'single' });
 
   const { scrollWidth, clientWidth } = await documentWidth(page);
   expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
