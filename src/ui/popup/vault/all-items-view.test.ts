@@ -15,6 +15,7 @@ interface Props {
   skippedOrgCount?: number;
   selectedFolderId?: string | null;
   selectedCollectionId?: string | null;
+  selectedCipherId?: string | null;
 }
 
 async function mount(props: Props = {}): Promise<VwAllItemsView> {
@@ -28,6 +29,7 @@ async function mount(props: Props = {}): Promise<VwAllItemsView> {
   el.skippedOrgCount = props.skippedOrgCount ?? 0;
   el.selectedFolderId = props.selectedFolderId ?? null;
   el.selectedCollectionId = props.selectedCollectionId ?? null;
+  el.selectedCipherId = props.selectedCipherId ?? null;
   document.body.append(el);
   await el.updateComplete;
   return el;
@@ -103,5 +105,26 @@ describe('vw-all-items-view', () => {
     const el = await mount({ items: [] });
     expect(rows(el)).toHaveLength(0);
     expect(el.shadowRoot?.textContent?.length).toBeGreaterThan(0);
+  });
+
+  it('passes selection to the matching row', async () => {
+    const el = await mount({ items: [summary({ id: 'a' }), summary({ id: 'b' })], selectedCipherId: 'b' });
+    expect((rows(el)[0] as Element & { selected: boolean }).selected).toBe(false);
+    expect((rows(el)[1] as Element & { selected: boolean }).selected).toBe(true);
+  });
+
+  it('moves row focus with arrow keys without opening an item', async () => {
+    const el = await mount({ items: [summary({ id: 'a' }), summary({ id: 'b' })] });
+    const opened = vi.fn();
+    el.addEventListener('vw-item-open', opened);
+    const rowElements = rows(el) as (Element & { shadowRoot: ShadowRoot })[];
+    await Promise.all(rowElements.map((row) => (row as unknown as { updateComplete: Promise<boolean> }).updateComplete));
+    const first = rowElements[0]!.shadowRoot.querySelector<HTMLButtonElement>('button')!;
+    const second = rowElements[1]!.shadowRoot.querySelector<HTMLButtonElement>('button')!;
+    const focus = vi.spyOn(second, 'focus');
+    first.focus();
+    first.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, composed: true }));
+    expect(focus).toHaveBeenCalled();
+    expect(opened).not.toHaveBeenCalled();
   });
 });

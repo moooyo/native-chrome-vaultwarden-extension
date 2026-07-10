@@ -18,6 +18,7 @@ async function mount(scope: 'suggestions' | 'all', state: SuggestionsViewState):
   el.query = '';
   el.showTrash = false;
   el.skippedOrgCount = 0;
+  el.selectedCipherId = null;
   document.body.append(el);
   await el.updateComplete;
   return el;
@@ -60,5 +61,13 @@ describe('vw-vault-view', () => {
     const el = await mount('suggestions', state);
     const child = el.shadowRoot?.querySelector('vw-suggestions-view') as (Element & { state: SuggestionsViewState }) | null;
     expect(child?.state).toEqual(state);
+  });
+
+  it('passes selectedCipherId to the active sub-view', async () => {
+    const el = await mount('suggestions', { status: 'ready', suggestions: [] });
+    el.selectedCipherId = 'c1';
+    await el.updateComplete;
+    const child = el.shadowRoot!.querySelector('vw-suggestions-view') as Element & { selectedCipherId: string | null };
+    expect(child.selectedCipherId).toBe('c1');
   });
 });

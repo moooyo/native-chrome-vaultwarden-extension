@@ -31,9 +31,16 @@ const TYPE_ICONS: Record<1 | 2 | 3 | 4 | 5, IconName> = {
 export class VwVaultItemRow extends LitElement {
   static override properties = {
     item: { attribute: false },
+    selected: { type: Boolean },
   };
 
   declare item: CipherSummary;
+  declare selected: boolean;
+
+  constructor() {
+    super();
+    this.selected = false;
+  }
 
   static override styles = [
     themeTokens,
@@ -47,7 +54,8 @@ export class VwVaultItemRow extends LitElement {
         align-items: center;
         gap: 10px;
         width: 100%;
-        padding: 8px 10px;
+        min-height: 52px;
+        padding: 4px 8px;
         border: none;
         border-radius: var(--vw-radius-control);
         background: transparent;
@@ -57,7 +65,17 @@ export class VwVaultItemRow extends LitElement {
         cursor: pointer;
       }
       .row:hover {
-        background: var(--vw-blue-50);
+        background: var(--vw-blue-weak);
+      }
+      .row[data-selected] {
+        background: var(--vw-blue);
+        color: #fff;
+      }
+      .row[data-selected] .sub,
+      .row[data-selected] .type,
+      .row[data-selected] .chevron,
+      .row[data-selected] .type-glyph {
+        color: rgb(255 255 255 / 85%);
       }
       .body {
         display: flex;
@@ -70,7 +88,7 @@ export class VwVaultItemRow extends LitElement {
         display: flex;
         align-items: center;
         gap: 6px;
-        font-size: 13px;
+        font-size: var(--vw-font-size-body);
       }
       .title {
         overflow: hidden;
@@ -86,7 +104,7 @@ export class VwVaultItemRow extends LitElement {
         height: 14px;
       }
       .sub {
-        font-size: 12px;
+        font-size: var(--vw-font-size-meta);
         color: var(--vw-muted);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -126,12 +144,26 @@ export class VwVaultItemRow extends LitElement {
     );
   }
 
+  private onKeyDown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    this.open();
+  }
+
   protected override render() {
     const item = this.item;
     const subtitle = item.username ?? item.uris[0] ?? item.subtitle ?? '';
     const label = TYPE_LABELS[item.type];
     return html`
-      <button type="button" class="row" @click=${() => this.open()}>
+      <button
+        type="button"
+        class="row"
+        role="option"
+        aria-selected=${this.selected ? 'true' : 'false'}
+        ?data-selected=${this.selected}
+        @click=${() => this.open()}
+        @keydown=${(event: KeyboardEvent) => this.onKeyDown(event)}
+      >
         <span class="type-glyph">${uiIcon(TYPE_ICONS[item.type])}</span>
         <span class="body">
           <span class="name">

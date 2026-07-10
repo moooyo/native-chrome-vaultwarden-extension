@@ -34,6 +34,7 @@ export class VwVaultView extends LitElement {
     query: { type: String },
     showTrash: { type: Boolean },
     skippedOrgCount: { type: Number },
+    selectedCipherId: { attribute: false },
   };
 
   declare scope: 'suggestions' | 'all';
@@ -48,6 +49,7 @@ export class VwVaultView extends LitElement {
   declare query: string;
   declare showTrash: boolean;
   declare skippedOrgCount: number;
+  declare selectedCipherId: string | null;
 
   constructor() {
     super();
@@ -63,6 +65,7 @@ export class VwVaultView extends LitElement {
     this.query = '';
     this.showTrash = false;
     this.skippedOrgCount = 0;
+    this.selectedCipherId = null;
   }
 
   static override styles = [
@@ -91,9 +94,14 @@ export class VwVaultView extends LitElement {
           .query=${this.query}
           .showTrash=${this.showTrash}
           .skippedOrgCount=${this.skippedOrgCount}
+          .selectedCipherId=${this.selectedCipherId}
         ></vw-all-items-view>`;
     }
-    return html`<vw-suggestions-view .state=${this.suggestionsState} .fill=${this.fill}></vw-suggestions-view>`;
+    return html`<vw-suggestions-view
+      .state=${this.suggestionsState}
+      .fill=${this.fill}
+      .selectedCipherId=${this.selectedCipherId}
+    ></vw-suggestions-view>`;
   }
 
   protected override render() {

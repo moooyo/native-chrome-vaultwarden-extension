@@ -88,6 +88,15 @@ describe('vw-suggestions-view', () => {
     expect(opened).toHaveBeenCalledWith(expect.objectContaining({ detail: { cipherId: 'cip' } }));
   });
 
+  it('marks the selected suggestion without reflecting its cipher id', async () => {
+    const el = await mount({ status: 'ready', suggestions: [suggestion({ id: 'secret-id', target })] });
+    el.selectedCipherId = 'secret-id';
+    await el.updateComplete;
+    const row = el.shadowRoot!.querySelector('[data-open]')!;
+    expect(row.getAttribute('aria-selected')).toBe('true');
+    expect(el.shadowRoot!.innerHTML).not.toContain('secret-id');
+  });
+
   it.each(ALL_UNAVAILABLE)('maps the %s unavailable reason to neutral (non-danger) guidance', async (reason) => {
     const el = await mount({ status: 'unavailable', reason });
     const status = el.shadowRoot?.querySelector('vw-status-message');

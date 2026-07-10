@@ -64,4 +64,22 @@ describe('vw-vault-item-row', () => {
     const el = await mount(summary({ id: 'secret-id', name: 'x' }));
     expect(el.shadowRoot?.innerHTML).not.toContain('secret-id');
   });
+
+  it('exposes selected semantics without reflecting the cipher id', async () => {
+    const el = await mount(summary({ id: 'secret-id' }));
+    el.selected = true;
+    await el.updateComplete;
+    const button = el.shadowRoot!.querySelector('button')!;
+    expect(button.getAttribute('aria-selected')).toBe('true');
+    expect(button.hasAttribute('data-selected')).toBe(true);
+    expect(el.shadowRoot!.innerHTML).not.toContain('secret-id');
+  });
+
+  it('opens the row on Enter', async () => {
+    const el = await mount(summary({ id: 'abc' }));
+    const opened = vi.fn();
+    el.addEventListener('vw-item-open', opened);
+    el.shadowRoot!.querySelector('button')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(opened).toHaveBeenCalledWith(expect.objectContaining({ detail: { cipherId: 'abc' } }));
+  });
 });

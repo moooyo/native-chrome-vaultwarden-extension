@@ -26,6 +26,7 @@ export class VwAllItemsView extends LitElement {
     query: { type: String },
     showTrash: { type: Boolean },
     skippedOrgCount: { type: Number },
+    selectedCipherId: { attribute: false },
   };
 
   declare items: CipherSummary[];
@@ -37,6 +38,7 @@ export class VwAllItemsView extends LitElement {
   declare query: string;
   declare showTrash: boolean;
   declare skippedOrgCount: number;
+  declare selectedCipherId: string | null;
 
   constructor() {
     super();
@@ -49,6 +51,7 @@ export class VwAllItemsView extends LitElement {
     this.query = '';
     this.showTrash = false;
     this.skippedOrgCount = 0;
+    this.selectedCipherId = null;
   }
 
   static override styles = [
@@ -151,6 +154,23 @@ export class VwAllItemsView extends LitElement {
       </div>`;
   }
 
+  private moveFocus(event: KeyboardEvent): void {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const path = event.composedPath();
+    const current = path.find((node) => node instanceof HTMLElement && node.tagName === 'VW-VAULT-ITEM-ROW');
+    if (!(current instanceof HTMLElement)) return;
+    const rows = Array.from(this.renderRoot.querySelectorAll('vw-vault-item-row'));
+    const currentIndex = rows.indexOf(current as typeof rows[number]);
+    if (currentIndex < 0) return;
+    event.preventDefault();
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? rows.length - 1
+        : Math.max(0, Math.min(rows.length - 1, currentIndex + (event.key === 'ArrowDown' ? 1 : -1)));
+    rows[nextIndex]?.shadowRoot?.querySelector<HTMLButtonElement>('button')?.focus();
+  }
+
   protected override render() {
     const visible = this.visibleItems;
     return html`
@@ -191,7 +211,9 @@ export class VwAllItemsView extends LitElement {
         : nothing}
       ${visible.length === 0
         ? this.renderEmpty()
-        : html`<div class="list">${visible.map((item) => html`<vw-vault-item-row .item=${item}></vw-vault-item-row>`)}</div>`}
+        : html`<div class="list" role="listbox" @keydown=${(event: KeyboardEvent) => this.moveFocus(event)}>${visible.map((item) => html`
+            <vw-vault-item-row .item=${item} .selected=${item.id === this.selectedCipherId}></vw-vault-item-row>
+          `)}</div>`}
     `;
   }
 }

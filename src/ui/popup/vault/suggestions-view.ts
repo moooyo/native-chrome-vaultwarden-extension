@@ -65,15 +65,18 @@ export class VwSuggestionsView extends LitElement {
   static override properties = {
     state: { attribute: false },
     fill: { attribute: false },
+    selectedCipherId: { attribute: false },
   };
 
   declare state: SuggestionsViewState;
   declare fill: FillResult;
+  declare selectedCipherId: string | null;
 
   constructor() {
     super();
     this.state = { status: 'loading' };
     this.fill = {};
+    this.selectedCipherId = null;
   }
 
   static override styles = [
@@ -93,6 +96,12 @@ export class VwSuggestionsView extends LitElement {
         display: flex;
         align-items: center;
         gap: 8px;
+        min-height: 54px;
+        border-radius: var(--vw-radius-row);
+      }
+      .suggestion[data-selected] {
+        background: var(--vw-blue);
+        color: #fff;
       }
       .open {
         display: flex;
@@ -110,7 +119,15 @@ export class VwSuggestionsView extends LitElement {
         cursor: pointer;
       }
       .open:hover {
-        background: var(--vw-blue-50);
+        background: var(--vw-blue-weak);
+      }
+      .suggestion[data-selected] .open,
+      .suggestion[data-selected] .sub,
+      .suggestion[data-selected] .glyph {
+        color: #fff;
+      }
+      .suggestion[data-selected] .open:hover {
+        background: transparent;
       }
       .body {
         display: flex;
@@ -119,7 +136,7 @@ export class VwSuggestionsView extends LitElement {
         min-width: 0;
       }
       .name {
-        font-size: 13px;
+        font-size: var(--vw-font-size-body);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -177,9 +194,10 @@ export class VwSuggestionsView extends LitElement {
 
   private renderRow(suggestion: TabAutofillSuggestion) {
     const canFill = suggestion.target !== undefined && suggestion.reprompt !== true;
+    const selected = suggestion.id === this.selectedCipherId;
     return html`
-      <div class="suggestion">
-        <button type="button" class="open" data-open @click=${() => this.emitOpen(suggestion.id)}>
+      <div class="suggestion" ?data-selected=${selected}>
+        <button type="button" class="open" role="option" aria-selected=${selected ? 'true' : 'false'} data-open @click=${() => this.emitOpen(suggestion.id)}>
           <span class="glyph">${uiIcon('globe')}</span>
           <span class="body">
             <span class="name">${suggestion.name}</span>
@@ -206,7 +224,7 @@ export class VwSuggestionsView extends LitElement {
       case 'ready':
         return state.suggestions.length === 0
           ? html`<vw-status-message tone="info" .icon=${'search'} message="No matching logins for this page. Use All items to search your vault."></vw-status-message>`
-          : html`<div class="list">${state.suggestions.map((s) => this.renderRow(s))}</div>`;
+          : html`<div class="list" role="listbox">${state.suggestions.map((s) => this.renderRow(s))}</div>`;
     }
   }
 
