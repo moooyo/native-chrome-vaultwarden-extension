@@ -1,77 +1,242 @@
 # Native Vaultwarden Browser Extension
 
-Native Manifest V3 browser extension for a self-hosted Vaultwarden server. The extension uses the WebExtensions API with TypeScript and no frontend framework.
+An independent Manifest V3 browser extension for connecting Chromium browsers
+to a self-hosted [Vaultwarden](https://github.com/dani-garcia/vaultwarden)
+server. Cryptographic operations and vault decryption happen locally in the
+extension.
 
-## Scope
+> [!IMPORTANT]
+> This project is unofficial and is not affiliated with, endorsed by, or
+> supported by Vaultwarden or Bitwarden. Releases are not signed or distributed
+> through the Chrome Web Store or Microsoft Edge Add-ons. Review the release and
+> security notes before using it with a production vault.
 
-M1-M3 provides:
+## Features
 
-- PBKDF2-HMAC-SHA256 login derivation, Bitwarden-style Master Password Hash, HKDF-Expand stretching, EncString encType=2 decrypt with MAC verification before AES-CBC decrypt.
-- Vaultwarden prelogin, password grant, Authenticator/Email 2FA branch, refresh token, and sync API calls.
-- MV3 service worker-centered session management with UserKey stored only in `storage.session`.
-- Read-only vault sync, search, detail view, and on-demand password copy.
+- Sign in to a self-hosted Vaultwarden server, including authenticator and email
+  two-factor authentication.
+- Sync, search, view, create, edit, move, and delete supported vault items.
+- Fill logins, cards, and identities from the popup, in-page picker, context
+  menu, or focused-fill keyboard shortcut.
+- Generate passwords, passphrases, usernames, and TOTP verification codes.
+- Work with collections, file attachments, Vaultwarden Sends, passkeys, password
+  health, and Have I Been Pwned password checks.
+- Store unlocked key material in browser session storage and clear sensitive
+  state on lock, logout, or account change.
 
-M4 adds:
+The extension currently targets Chromium Manifest V3. Firefox and Safari are
+not supported. Vaultwarden configurations and server versions vary; test the
+extension with your server before relying on it for daily access.
 
-- Native content-script autofill on `http://*/*` and `https://*/*` pages, including all frames.
-- Bitwarden-like URI match strategies: Domain, Host, Starts With, Exact, Regular Expression, and Never.
-- Semi-automatic form-side popover: credentials are filled only after user selection and forms are never auto-submitted.
+## Requirements
 
-Beyond the milestones, the extension now also:
+- Google Chrome or Microsoft Edge with Manifest V3 and Developer mode support.
+- A reachable Vaultwarden server using HTTPS. Plain HTTP should only be used for
+  local development on a trusted machine.
+- An existing Vaultwarden account, or a server that permits new account
+  registration through the extension's **Create account** flow.
+- A permanent folder where the unpacked extension can remain installed.
 
-- Decrypts organization-owned ciphers by unwrapping each organization key (RSA-OAEP-SHA1, encType=4) with the account private key, so org logins appear in the list and participate in autofill.
-- Generates RFC 6238 TOTP codes for logins that store a TOTP secret (base32 or `otpauth://`), shown with a live countdown in the login detail. The secret is decrypted only in the service worker; only the current code crosses to the popup.
-- Includes a password generator (configurable length, character sets, and ambiguous-character avoidance) reachable from the vault toolbar, using `crypto.getRandomValues` with rejection sampling.
+## Install from GitHub Releases
 
-Collections grouping, Argon2id accounts, and account registration are not implemented in this milestone.
+1. Open the [latest GitHub Release](https://github.com/moooyo/native-chrome-vaultwarden-extension/releases/latest).
+2. Under **Assets**, download `vaultwarden-extension-vX.Y.Z.zip`.
+3. Optionally download `SHA256SUMS.txt` and verify the archive as described
+   below.
+4. Extract the ZIP into a permanent folder, for example
+   `C:\Users\YourName\Applications\VaultwardenExtension`.
+5. Follow the Chrome or Edge instructions below and select that extracted
+   folder.
 
-## User interface
+Do not drag the ZIP onto the browser's extension page. The release archive is
+an unpacked-extension package, not a store-signed CRX. It must be extracted
+first, and the extracted folder must remain in place while the extension is
+installed.
 
-All surfaces — the popup, the options page, the Receive page, and the in-page autofill surfaces — are built from one **Lit 3 component system** (`src/ui/components/`, with `themeTokens` design tokens and shared control styles). Each surface's production entry file (`src/ui/{popup,options,receive}/*.ts`) is a thin dependency adapter that mounts a single Lit root; there is no imperative string renderer and no shared `theme.css`.
+### Verify the download on Windows
 
-- **Popup** — an unlocked **600 x 450 px two-pane workspace** (`vw-popup-app`): the 260 px credential list remains visible while the 340 px detail/workflow pane changes. Authentication and constrained layouts use a **350 x 450 px single-pane** flow. The vault opens on **Suggestions** for the active tab, with All items, search, folders, collections, and trash available without losing list context. Direct Fill remains worker-coordinated, never submits the form, and never places credentials in popup state.
-- **Options** — a **settings rail** (`vw-options-app`): Connection, Security, Autofill, Data, and About sections, collapsing to a single selector on narrow viewports.
-- **Receive** — `vw-receive-app` accesses and decrypts a Vaultwarden Send (text or file) entirely on-device.
-- **In-page surfaces** — the autofill popover, save/update bar, self-dismissing notice, and passkey consent/registration dialogs each render inside a **closed** Shadow Root the page cannot read or forge; every privileged click is gated on `Event.isTrusted`.
-- A full dark theme follows `prefers-color-scheme`, motion respects `prefers-reduced-motion`, and iconography is inline SVG with explicit role sizes. Rendered-UI regression coverage verifies exact 600/350 popup geometry, 260/340 pane widths, overflow at 320/404/768 px, long text, dark mode, keyboard focus, 200% zoom, and representative visual snapshots under `npm.cmd run test:ui`.
+Place the ZIP and `SHA256SUMS.txt` in the same directory. Open PowerShell in
+that directory, replace `vX.Y.Z` with the downloaded version, and run:
+
+```powershell
+$expected = (Get-Content .\SHA256SUMS.txt).Split()[0]
+$actual = (Get-FileHash .\vaultwarden-extension-vX.Y.Z.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "SHA-256 checksum mismatch" }
+```
+
+No output means the checksum matches. Delete the files and do not install the
+extension if PowerShell reports a mismatch.
+
+### Google Chrome
+
+1. Open `chrome://extensions`.
+2. Enable **Developer mode** in the upper-right corner.
+3. Select **Load unpacked**.
+4. Select the extracted folder that directly contains `manifest.json`.
+5. Pin **Vaultwarden Extension** from Chrome's Extensions menu if desired.
+
+### Microsoft Edge
+
+1. Open `edge://extensions`.
+2. Enable **Developer mode** in the left sidebar.
+3. Select **Load unpacked**.
+4. Select the extracted folder that directly contains `manifest.json`.
+5. Pin **Vaultwarden Extension** from Edge's Extensions menu if desired.
+
+The browser may display a warning about extensions running in Developer mode.
+That warning is expected for manually loaded, unpacked extensions.
+
+## First-time setup
+
+1. Open the extension and choose **Settings**, or open its **Details** page from
+   the browser extension manager and select **Extension options**.
+2. In **Connection**, enter the base URL of your Vaultwarden server, such as
+   `https://vault.example.com`. Do not append `/api` or `/identity`.
+3. Save the URL and approve the requested site access. This permission lets the
+   extension contact your server and offer autofill on approved pages.
+4. Open the extension popup and sign in with your Vaultwarden email address and
+   master password. If the server allows registration, **Create account** can
+   create a new vault directly from the login screen.
+5. Complete two-factor authentication if prompted, then select **Sync** if the
+   vault does not populate automatically.
+
+The extension never submits a web form automatically. Select a credential or a
+fill action to place values into detected fields.
+
+## Update
+
+Unpacked extensions installed from GitHub Releases do **not** update
+automatically.
+
+1. Download and verify the new release ZIP.
+2. Extract it to a new temporary folder.
+3. Close any open extension popup, Options page, or Receive page.
+4. Replace the files in the permanent extension folder with the newly extracted
+   files. Keep the folder path unchanged.
+5. Open `chrome://extensions` or `edge://extensions` and select **Reload** on the
+   extension card.
+6. Confirm that the displayed version matches the downloaded release, then open
+   the popup and sync the vault.
+
+If the browser reports a manifest or loading error, restore the previous release
+folder and reload it before troubleshooting the new package.
+
+## Troubleshooting
+
+**The browser cannot find `manifest.json`.**
+
+Select the directory that directly contains `manifest.json`, not the ZIP and not
+a parent folder created by an extraction tool.
+
+**The extension disappears after moving or deleting files.**
+
+An unpacked extension runs from the selected directory. Restore that directory
+or remove the broken entry and load the extension again from a permanent folder.
+
+**The Vaultwarden server cannot be saved or reached.**
+
+Confirm that the URL opens in the same browser, uses the correct scheme and
+port, and does not include an API suffix. Review TLS certificate errors and
+approve the host-access prompt when saving the URL.
+
+**Autofill does not appear on a site.**
+
+Open the extension's Details page, check **Site access**, reload the website,
+and confirm that the vault is unlocked. Browser-internal pages such as
+`chrome://` and `edge://` do not allow extension content scripts.
+
+**A new version still shows the old behavior.**
+
+Verify that the permanent folder was replaced, select **Reload** on the browser
+extension page, and reload any already-open website tabs.
+
+For reproducible defects, open a GitHub issue with the extension version,
+browser version, Vaultwarden server version, and sanitized reproduction steps.
+Never include master passwords, session tokens, vault exports, TOTP secrets, or
+real credentials.
+
+## Remove the extension
+
+1. Open `chrome://extensions` or `edge://extensions`.
+2. Select **Remove** on **Vaultwarden Extension** and confirm.
+3. Delete the extracted extension folder and any downloaded release archives.
+
+Removing the extension deletes its browser-managed local data. It does not
+delete the Vaultwarden account or server-side vault data.
+
+## Build from source
+
+Building from source requires Node.js 22 and npm.
+
+```powershell
+git clone https://github.com/moooyo/native-chrome-vaultwarden-extension.git
+Set-Location .\native-chrome-vaultwarden-extension
+npm.cmd ci
+npm.cmd run build:prod
+```
+
+Load the generated `dist` directory with **Load unpacked**. Development builds
+are not release artifacts and do not include a GitHub-published checksum.
 
 ## Development
 
-```bash
-npm.cmd install
-npm.cmd test
-npm.cmd run typecheck
+```powershell
+npm.cmd ci
 npm.cmd run lint
+npm.cmd run typecheck
+npm.cmd test
+npm.cmd run build:prod
 npm.cmd run test:ui
-npm.cmd run build
 ```
 
-`npm.cmd run build:prod` produces the shippable bundle and runs `tools/assert-build.mjs`, which fails the build unless every surface has been switched to its Lit root (independent MV3-CSP-compatible bundles, no shared code splitting, no `theme.css`, no imperative renderer). Load `dist/` from Chrome `chrome://extensions` with Developer Mode enabled.
+Use `npm.cmd run watch` for incremental development builds. Live tests under
+`test/live` require a separately configured Vaultwarden test environment and
+are skipped by the default test command when that environment is unavailable.
 
-## Manual acceptance
+## Release for maintainers
 
-1. Start or point to a Vaultwarden server and create an existing account with PBKDF2 KDF.
-2. Build the extension with `npm.cmd run build`.
-3. Load `dist/` as an unpacked extension.
-4. Open Options and save the Vaultwarden base URL, approving the host permission prompt.
-5. Open the popup and log in with email + master password.
-6. If the server requires 2FA, complete Authenticator or Email login.
-7. Click Sync and confirm personal login ciphers are listed.
-8. Search by item name, username, and URI.
-9. Open a login item and copy the password.
-10. Keep the popup open for 60 seconds and confirm the clipboard clears if the value is unchanged (best-effort: clearing only occurs while the popup document remains open).
-11. Click Lock, reopen the popup, unlock with the master password, and confirm cached items are available.
-12. Log out and confirm the popup returns to the login form.
-13. Confirm Options exposes the default URI match strategy and defaults to Base domain / Domain.
-14. Open a website with one matching login item and confirm the Vaultwarden popover appears near the password field.
-15. Click the matching login item and confirm username/password fill without submitting the form.
-16. Open a website with multiple matching login items and confirm favorites and stronger match types are listed first.
-17. Open a website with no matching login item and confirm the popover reports no matching logins.
-18. Lock the vault, reload a login page, and confirm the popover reports locked without showing or filling credentials.
-19. Test an iframe login page and confirm matching uses the iframe URL, not the top-level page URL.
-20. Confirm hidden, disabled, and readonly fields are not filled.
-21. Switch the OS/browser to dark mode and confirm the popup, options page, and popover all adopt the dark theme.
-22. Set the display to a HiDPI scale (e.g. 150% / 200%) and confirm icons and text stay crisp in all surfaces.
-23. Narrow the options tab and confirm the layout reflows without horizontal scrolling.
-24. Open a login that stores a TOTP secret and confirm the verification code shows with a countdown, rolls over at the end of its window, and copies on demand.
-25. Open the password generator from the vault toolbar, adjust length and character sets, and confirm a matching password generates, regenerates, and copies.
+Git tags are the only release trigger and source of release identity. Before
+publishing `vX.Y.Z`:
+
+1. Set the same numeric `X.Y.Z` version in `package.json` and
+   `src/manifest.json`. Chrome manifest versions cannot contain prerelease
+   suffixes.
+2. Commit the version change and run every development command listed above.
+3. Verify the exact local package:
+
+   ```powershell
+   npm.cmd run release:prepare -- --tag vX.Y.Z
+   ```
+
+4. Create and push an annotated tag that points to the verified commit:
+
+   ```powershell
+   git tag -a vX.Y.Z -m "Release vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+The Release workflow checks out the exact existing tag, installs locked
+dependencies, runs lint, typecheck, tests, and the production build, creates a
+root-manifest ZIP, verifies the packaged runtime files, writes
+`SHA256SUMS.txt`, and publishes both assets to GitHub Releases. A tag such as
+`vX.Y.Z-beta.1` becomes a GitHub prerelease while its package and manifest
+versions remain `X.Y.Z`.
+
+To rebuild assets for an existing immutable tag, run the **Release** workflow
+manually and enter that tag. The workflow cannot create or move tags and rejects
+all version mismatches.
+
+## Security
+
+Treat this extension as security-sensitive software. Install only artifacts from
+this repository's GitHub Releases, verify checksums, keep the browser and
+Vaultwarden server updated, and lock the vault when it is not in use.
+
+Report suspected vulnerabilities privately through the repository's GitHub
+security advisory interface when available. Do not disclose secrets or an
+exploitable proof of concept in a public issue.
+
+## License
+
+No license file is currently included. Unless and until the repository owner
+adds one, copyright law reserves reuse and redistribution rights.
