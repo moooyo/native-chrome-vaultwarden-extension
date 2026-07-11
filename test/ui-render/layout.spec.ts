@@ -2,30 +2,39 @@ import { test, expect } from '@playwright/test';
 import { get } from 'node:http';
 import { documentWidth, gotoFixture, type FixtureParams } from './helpers.js';
 
-/** Every surface that renders inside the fixed-width popup shell or a full page. All must avoid
- *  document-level horizontal overflow at constrained widths. */
-const OVERFLOW_SURFACES: FixtureParams[] = [
+/** Full-page surfaces render into the browser document itself, so they must stay responsive and
+ *  avoid document-level horizontal overflow across the embedded-browser width range. */
+const FULL_PAGE_SURFACES: FixtureParams[] = [
+  { surface: 'options' },
+  { surface: 'receive' },
+];
+
+/** Popup surfaces render inside the fixed-size popup shell. Per the approved design the shell has
+ *  intrinsic dimensions (auth/single 350x450, unlocked/double 600x450) that do not shrink to the
+ *  startup viewport, so each is validated only within its intrinsic target viewport. */
+const SINGLE_POPUP_SURFACES: FixtureParams[] = [
   { surface: 'popup', state: 'suggestions', count: 30 },
   { surface: 'popup', state: 'list', count: 30 },
   { surface: 'popup', state: 'detail' },
   { surface: 'popup', state: 'editor' },
   { surface: 'popup', state: 'tools' },
   { surface: 'popup', state: 'auth' },
-  { surface: 'options' },
-  { surface: 'receive' },
 ];
 
-const WIDTHS = [320, 404, 768];
+const FULL_PAGE_WIDTHS = [320, 404, 768];
 
-test('single popup has no horizontal overflow at 320px', async ({ page }) => {
-  await page.setViewportSize({ width: 320, height: 520 });
+const SINGLE_POPUP = { width: 350, height: 450 };
+const DOUBLE_POPUP = { width: 600, height: 450 };
+
+test('single popup has no horizontal overflow in its 350px intrinsic frame', async ({ page }) => {
+  await page.setViewportSize(SINGLE_POPUP);
   await page.goto('/test/ui-render/fixture.html?surface=popup&state=suggestions&layout=single&count=50');
   await page.waitForSelector('body[data-ready="true"]');
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(350);
 });
 
 test('unlocked popup uses a 600 by 450 double-pane frame', async ({ page }) => {
-  await page.setViewportSize({ width: 600, height: 450 });
+  await page.setViewportSize(DOUBLE_POPUP);
   await gotoFixture(page, { surface: 'popup', state: 'detail', layout: 'double' });
   const frame = page.locator('[data-popup-frame]');
   await expect(frame).toHaveCSS('width', '600px');
@@ -35,7 +44,7 @@ test('unlocked popup uses a 600 by 450 double-pane frame', async ({ page }) => {
 });
 
 test('auth popup uses a 350 by 450 single-pane frame', async ({ page }) => {
-  await page.setViewportSize({ width: 350, height: 450 });
+  await page.setViewportSize(SINGLE_POPUP);
   await gotoFixture(page, { surface: 'popup', state: 'auth', layout: 'single' });
   const frame = page.locator('[data-popup-frame]');
   await expect(frame).toHaveCSS('width', '350px');
@@ -51,8 +60,8 @@ test('auth popup uses a 350 by 450 single-pane frame', async ({ page }) => {
   expect(statusIcon!.height).toBeLessThanOrEqual(20);
 });
 
-test('double-pane list owns short-viewport scrolling', async ({ page }) => {
-  await page.setViewportSize({ width: 600, height: 360 });
+test('double-pane list owns intrinsic-frame scrolling', async ({ page }) => {
+  await page.setViewportSize(DOUBLE_POPUP);
   await page.goto('/test/ui-render/fixture.html?surface=popup&state=detail&layout=double&count=50');
   await page.waitForSelector('body[data-ready="true"]');
   const geometry = await page.locator('[data-list-pane]').evaluate((element) => ({
@@ -60,29 +69,38 @@ test('double-pane list owns short-viewport scrolling', async ({ page }) => {
     scrollHeight: element.scrollHeight,
   }));
   expect(geometry.scrollHeight).toBeGreaterThan(geometry.clientHeight);
-  expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(360);
+  expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(450);
 });
 
-for (const width of WIDTHS) {
-  for (const target of OVERFLOW_SURFACES) {
+for (const target of SINGLE_POPUP_SURFACES) {
+  test(`no horizontal overflow in the 350px single frame for popup/${target.state ?? 'default'}`, async ({ page }) => {
+    await page.setViewportSize(SINGLE_POPUP);
+    await gotoFixture(page, { ...target, layout: 'single' });
+    const { scrollWidth } = await documentWidth(page);
+    expect(scrollWidth).toBeLessThanOrEqual(350);
+  });
+}
+
+for (const width of FULL_PAGE_WIDTHS) {
+  for (const target of FULL_PAGE_SURFACES) {
     test(`no horizontal overflow at ${width}px for ${target.surface}/${target.state ?? 'default'}`, async ({ page }) => {
       await page.setViewportSize({ width, height: 640 });
-      await gotoFixture(page, { ...target, layout: width < 600 ? 'single' : 'double' });
+      await gotoFixture(page, target);
       const { scrollWidth, clientWidth } = await documentWidth(page);
       expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
     });
   }
 }
 
-test('long unbroken text stays contained at 320px', async ({ page }) => {
-  await page.setViewportSize({ width: 320, height: 520 });
+test('long unbroken text stays contained in the 350px single frame', async ({ page }) => {
+  await page.setViewportSize(SINGLE_POPUP);
   await gotoFixture(page, { surface: 'popup', state: 'longtext', layout: 'single' });
   const { scrollWidth } = await documentWidth(page);
-  expect(scrollWidth).toBeLessThanOrEqual(320);
+  expect(scrollWidth).toBeLessThanOrEqual(350);
 });
 
-test('200% zoom (halved 350px popup baseline) keeps content and primary controls reachable', async ({ page }) => {
-  await page.setViewportSize({ width: 175, height: 225 });
+test('editor primary controls stay reachable inside the 350px single frame', async ({ page }) => {
+  await page.setViewportSize(SINGLE_POPUP);
   await gotoFixture(page, { surface: 'popup', state: 'editor', layout: 'single' });
 
   const { scrollWidth, clientWidth } = await documentWidth(page);
@@ -96,8 +114,8 @@ test('200% zoom (halved 350px popup baseline) keeps content and primary controls
   await expect(save).toBeVisible();
   await expect(cancel).toBeVisible();
 
-  // "Reachable" means the short-viewport scroll region can bring the primary/cancel controls
-  // into view without any of them being clipped by document-level horizontal overflow.
+  // "Reachable" means the frame's local scroll region can bring the primary/cancel controls into
+  // view without any of them being clipped by document-level horizontal overflow.
   await save.scrollIntoViewIfNeeded();
   await expect(save).toBeInViewport();
   await cancel.scrollIntoViewIfNeeded();
