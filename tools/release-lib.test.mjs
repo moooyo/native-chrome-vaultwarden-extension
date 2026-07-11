@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
@@ -17,6 +19,7 @@ const matchingVersions = {
   'src/manifest.json': '1.2.3',
   'dist/manifest.json': '1.2.3',
 };
+const execFileAsync = promisify(execFile);
 
 const requiredFiles = [
   'manifest.json',
@@ -57,6 +60,14 @@ async function createZip(path, entries) {
     Object.fromEntries(Object.entries(entries).map(([name, value]) => [name, new TextEncoder().encode(value)])),
   );
   await writeFile(path, archive);
+}
+
+async function createReleaseProject(root, version = '1.2.3') {
+  await rm(root, { recursive: true, force: true });
+  await mkdir(join(root, 'src'), { recursive: true });
+  await writeFile(join(root, 'package.json'), JSON.stringify({ version }));
+  await writeFile(join(root, 'src', 'manifest.json'), JSON.stringify({ version }));
+  await createRuntimeTree(join(root, 'dist'), version);
 }
 
 describe('resolveReleaseMetadata', () => {
@@ -184,5 +195,66 @@ describe('release archive contract', () => {
     await expect(
       createReleaseArchive({ sourceDir: distDir, archivePath: join(root, 'symlink.zip') }),
     ).rejects.toThrow('symbolic links are not allowed');
+  });
+});
+
+describe('release CLI', () => {
+  const cliPath = join(import.meta.dirname, 'release.mjs');
+
+  it('creates verified assets and writes GitHub outputs', async () => {
+    const root = join(import.meta.dirname, '..', 'test-results', 'release-cli-valid');
+    const outputPath = join(root, 'github-output.txt');
+    await createReleaseProject(root);
+
+    await execFileAsync(
+      process.execPath,
+      [cliPath, '--tag', 'v1.2.3', '--dist-dir', 'dist', '--out-dir', 'release'],
+      { cwd: root, env: { ...process.env, GITHUB_OUTPUT: outputPath } },
+    );
+
+    const archivePath = join(root, 'release', 'vaultwarden-extension-v1.2.3.zip');
+    const checksumPath = join(root, 'release', 'SHA256SUMS.txt');
+    expect(await verifyReleaseArchive({ archivePath, expectedVersion: '1.2.3' })).toEqual({
+      version: '1.2.3',
+      files: requiredFiles.length,
+    });
+    expect(await readFile(checksumPath, 'utf8')).toBe(`${await sha256File(archivePath)}  vaultwarden-extension-v1.2.3.zip\n`);
+    expect((await readFile(outputPath, 'utf8')).trim().split(/\r?\n/)).toEqual([
+      'tag=v1.2.3',
+      'version=1.2.3',
+      'archive=vaultwarden-extension-v1.2.3.zip',
+      `archive_path=${archivePath.replaceAll('\\', '/')}`,
+      `checksum_path=${checksumPath.replaceAll('\\', '/')}`,
+      'prerelease=false',
+    ]);
+  });
+
+  it('fails when --tag is missing', async () => {
+    const root = join(import.meta.dirname, '..', 'test-results', 'release-cli-no-tag');
+    await createReleaseProject(root);
+
+    await expect(execFileAsync(process.execPath, [cliPath], { cwd: root })).rejects.toMatchObject({
+      stderr: expect.stringContaining('Missing required --tag'),
+    });
+  });
+
+  it('fails when the build directory is missing', async () => {
+    const root = join(import.meta.dirname, '..', 'test-results', 'release-cli-no-dist');
+    await createReleaseProject(root);
+    await rm(join(root, 'dist'), { recursive: true });
+
+    await expect(execFileAsync(process.execPath, [cliPath, '--tag', 'v1.2.3'], { cwd: root })).rejects.toMatchObject({
+      stderr: expect.stringContaining('dist'),
+    });
+  });
+
+  it('fails when source versions do not match the tag', async () => {
+    const root = join(import.meta.dirname, '..', 'test-results', 'release-cli-version');
+    await createReleaseProject(root);
+    await writeFile(join(root, 'src', 'manifest.json'), JSON.stringify({ version: '1.2.4' }));
+
+    await expect(execFileAsync(process.execPath, [cliPath, '--tag', 'v1.2.3'], { cwd: root })).rejects.toMatchObject({
+      stderr: expect.stringContaining('src/manifest.json version 1.2.4 does not match tag version 1.2.3'),
+    });
   });
 });
