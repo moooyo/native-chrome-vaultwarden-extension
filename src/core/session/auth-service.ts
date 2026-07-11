@@ -15,6 +15,8 @@ export interface AuthServiceDeps {
   session: SessionManager;
   /** Current configured server URL (for per-(server,email) remember-token keying). */
   serverUrlProvider?: () => Promise<string | undefined>;
+  /** Clears data derived from the active account whenever that identity changes. */
+  onIdentityChanged?: () => Promise<void>;
   now?: () => number;
 }
 
@@ -28,6 +30,10 @@ interface PendingLogin {
 
 export class AuthService {
   private pendingLogin: PendingLogin | undefined;
+  private activeRefresh: { key: string; promise: Promise<void> } | undefined;
+  private serverResetPending = false;
+  private refreshAttempts = 0;
+  private refreshIdleResolvers: Array<() => void> = [];
   private readonly now: () => number;
 
   constructor(private readonly deps: AuthServiceDeps) {
@@ -204,7 +210,7 @@ export class AuthService {
         getPersistedAuth: () => this.deps.session.getPersistedAuth(),
         loadUserKey: () => this.deps.session.loadUserKey(),
         loadPrivateKey: () => this.deps.session.loadPrivateKey(),
-        logout: () => this.deps.session.logout(),
+        logout: () => this.logout(),
       },
       verifyMasterPassword: (pw) => this.verifyMasterPassword(pw),
     });
@@ -284,14 +290,31 @@ export class AuthService {
   /** Activate another logged-in account; the vault locks so the user re-unlocks it. */
   async switchAccount(email: string): Promise<void> {
     this.pendingLogin = undefined;
+    const activeBefore = (await this.deps.session.getPersistedAuth())?.email;
+    if (email !== activeBefore) await this.notifyIdentityChanged();
     await this.deps.session.switchAccount(email);
   }
 
   async removeAccount(email: string): Promise<void> {
     this.pendingLogin = undefined;
+    const activeBefore = (await this.deps.session.getPersistedAuth())?.email;
     const serverUrl = await this.currentServerUrl();
     if (serverUrl) await this.deps.session.removeRememberDeviceToken(serverUrl, email.trim().toLowerCase());
+    if (email.trim().toLowerCase() === activeBefore) await this.notifyIdentityChanged();
     await this.deps.session.removeAccount(email);
+  }
+
+  /** Drop all account-scoped authentication before switching the configured server. */
+  async resetForServerChange(): Promise<void> {
+    this.pendingLogin = undefined;
+    this.serverResetPending = true;
+    try {
+      await this.waitForRefreshIdle();
+      await this.notifyIdentityChanged();
+      await this.deps.session.resetAllAccounts();
+    } finally {
+      this.serverResetPending = false;
+    }
   }
 
   /** Forget this device's remembered-2FA token for `email` (defaults to the current account). No-op
@@ -331,21 +354,62 @@ export class AuthService {
     return this.deps.session.lock();
   }
 
-  logout(): Promise<void> {
+  async logout(): Promise<void> {
     this.pendingLogin = undefined;
-    return this.deps.session.logout();
+    await this.notifyIdentityChanged();
+    await this.deps.session.logout();
   }
 
   async refreshIfNeeded(skewMs = 60_000): Promise<void> {
+    if (this.serverResetPending) return;
+    this.refreshAttempts++;
+    try {
+      if (this.serverResetPending) return;
+      await this.runRefreshIfNeeded(skewMs);
+    } finally {
+      this.refreshAttempts--;
+      if (this.refreshAttempts === 0) {
+        for (const resolve of this.refreshIdleResolvers.splice(0)) resolve();
+      }
+    }
+  }
+
+  private async runRefreshIfNeeded(skewMs: number): Promise<void> {
     const auth = await this.deps.session.getPersistedAuth();
     if (!auth) return;
     if (auth.expiresAt - this.now() > skewMs) return;
-    const refreshed = await this.deps.api.refresh(auth.refreshToken);
-    await this.deps.session.saveTokens({
-      accessToken: refreshed.access_token,
-      refreshToken: refreshed.refresh_token,
-      expiresAt: this.now() + refreshed.expires_in * 1000,
-    });
+    const serverUrl = await this.currentServerUrl();
+    const key = `${serverUrl ?? ''}\n${auth.email}\n${auth.refreshToken}`;
+    if (this.activeRefresh?.key === key) return this.activeRefresh.promise;
+
+    const promise = (async () => {
+      const refreshed = await this.deps.api.refresh(auth.refreshToken);
+      const [current, currentServerUrl] = await Promise.all([
+        this.deps.session.getPersistedAuth(),
+        this.currentServerUrl(),
+      ]);
+      if (currentServerUrl !== serverUrl || current?.email !== auth.email || current.refreshToken !== auth.refreshToken) return;
+      await this.deps.session.saveTokens({
+        accessToken: refreshed.access_token,
+        refreshToken: refreshed.refresh_token,
+        expiresAt: this.now() + refreshed.expires_in * 1000,
+      });
+    })();
+    this.activeRefresh = { key, promise };
+    try {
+      await promise;
+    } finally {
+      if (this.activeRefresh?.promise === promise) this.activeRefresh = undefined;
+    }
+  }
+
+  private waitForRefreshIdle(): Promise<void> {
+    if (this.refreshAttempts === 0) return Promise.resolve();
+    return new Promise((resolve) => this.refreshIdleResolvers.push(resolve));
+  }
+
+  private async notifyIdentityChanged(): Promise<void> {
+    await this.deps.onIdentityChanged?.();
   }
 
   private async finishPasswordLogin(input: {
@@ -388,6 +452,8 @@ export class AuthService {
       // Persist only the userKey-wrapped (encrypted) blob; plaintext PKCS8 is set via privateKey below.
       ...(data.PrivateKey ? { encPrivateKey: data.PrivateKey } : {}),
     };
+    const activeBefore = (await this.deps.session.getPersistedAuth())?.email;
+    if (input.pending.email !== activeBefore) await this.notifyIdentityChanged();
     await this.deps.session.saveUnlocked(
       privateKey ? { ...saveInput, privateKey } : saveInput,
     );

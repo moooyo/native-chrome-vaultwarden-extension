@@ -31,6 +31,7 @@ export interface VaultServiceDeps {
   auth: Pick<AuthService, 'refreshIfNeeded' | 'verifyMasterPassword'>;
   session: SessionManager;
   localStore: KeyValueStore;
+  getIdentityEpoch?: () => number;
   now?: () => number;
 }
 
@@ -70,14 +71,17 @@ export interface Fido2Registration {
 }
 
 export class VaultService {
+  private cacheMutationTail: Promise<void> = Promise.resolve();
+
   constructor(private readonly deps: VaultServiceDeps) {}
 
   async sync(): Promise<VaultListing> {
+    const identityEpoch = this.identityEpoch();
     await this.deps.auth.refreshIfNeeded();
     const auth = await this.deps.session.getPersistedAuth();
     if (!auth) throw new Error('not logged in');
     const response = await this.deps.api.sync(auth.accessToken);
-    await this.deps.localStore.set(VAULT_CACHE_KEY, response);
+    this.assertIdentityEpoch(identityEpoch);
     const userKey = await this.deps.session.loadUserKey();
     if (!userKey) throw new Error('vault is locked');
     const orgKeys = await this.buildOrgKeys(response.profile);
@@ -86,22 +90,41 @@ export class VaultService {
     const collections = await decryptCollections(response.collections, orgKeys);
     // Org ciphers whose key could not be unwrapped (e.g. locked private key) are surfaced to the UI.
     const skippedOrgCount = response.ciphers.filter((c) => c.organizationId && !orgKeys.has(c.organizationId)).length;
-    await this.deps.localStore.set(SUMMARY_CACHE_KEY, items);
-    await this.deps.localStore.set(FOLDER_CACHE_KEY, folders);
-    await this.deps.localStore.set(COLLECTION_CACHE_KEY, collections);
-    await this.deps.localStore.set(EQUIV_DOMAINS_KEY, response.domains?.equivalentDomains ?? []);
     // Domains of global equivalence groups the user has switched off (Domain Rules), so the client
     // stops treating them as equivalent for autofill.
     const excludedDomains = (response.domains?.globalEquivalentDomains ?? [])
       .filter((g) => g.excluded)
       .flatMap((g) => g.domains ?? []);
-    await this.deps.localStore.set(EQUIV_EXCLUDED_KEY, excludedDomains);
-    await this.deps.localStore.set(SKIPPED_ORG_KEY, skippedOrgCount);
     const orgPermissions = (response.profile?.organizations ?? [])
       .filter((o) => orgKeys.has(o.id))
       .map(toOrgPermission);
-    await this.deps.localStore.set(ORG_PERMISSIONS_KEY, orgPermissions);
+    await this.withCacheMutation(async () => {
+      this.assertIdentityEpoch(identityEpoch);
+      await this.deps.localStore.set(VAULT_CACHE_KEY, response);
+      await this.deps.localStore.set(SUMMARY_CACHE_KEY, items);
+      await this.deps.localStore.set(FOLDER_CACHE_KEY, folders);
+      await this.deps.localStore.set(COLLECTION_CACHE_KEY, collections);
+      await this.deps.localStore.set(EQUIV_DOMAINS_KEY, response.domains?.equivalentDomains ?? []);
+      await this.deps.localStore.set(EQUIV_EXCLUDED_KEY, excludedDomains);
+      await this.deps.localStore.set(SKIPPED_ORG_KEY, skippedOrgCount);
+      await this.deps.localStore.set(ORG_PERMISSIONS_KEY, orgPermissions);
+    });
+    this.assertIdentityEpoch(identityEpoch);
     return { items, folders, collections, orgPermissions };
+  }
+
+  private identityEpoch(): number {
+    return this.deps.getIdentityEpoch?.() ?? 0;
+  }
+
+  private assertIdentityEpoch(expected: number): void {
+    if (this.identityEpoch() !== expected) throw new AppError('error', 'Account changed during vault operation');
+  }
+
+  private async withCacheMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.cacheMutationTail.then(operation, operation);
+    this.cacheMutationTail = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   /** Build the equivalent-domain index from the built-in list plus any cached user-defined groups,
@@ -736,11 +759,15 @@ export class VaultService {
   /** Replace-or-insert a server cipher representation into the raw sync cache (so findPasskeyCredential
    *  sees it immediately). Does not rebuild the decrypted summary caches — the popup re-syncs. */
   private async mergeCipherIntoCache(cipher: CipherResponse): Promise<void> {
-    const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
-    if (!cache) return;
-    const idx = cache.ciphers.findIndex((c) => c.id === cipher.id);
-    if (idx >= 0) cache.ciphers[idx] = cipher; else cache.ciphers.push(cipher);
-    await this.deps.localStore.set(VAULT_CACHE_KEY, cache);
+    const identityEpoch = this.identityEpoch();
+    await this.withCacheMutation(async () => {
+      const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+      if (!cache) return;
+      const idx = cache.ciphers.findIndex((c) => c.id === cipher.id);
+      if (idx >= 0) cache.ciphers[idx] = cipher; else cache.ciphers.push(cipher);
+      this.assertIdentityEpoch(identityEpoch);
+      await this.deps.localStore.set(VAULT_CACHE_KEY, cache);
+    });
   }
 
   /** Find a stored passkey for the rpId. Returns the decrypted credential (incl. private key, which
@@ -873,14 +900,16 @@ export class VaultService {
   }
 
   async clearCache(): Promise<void> {
-    await this.deps.localStore.remove(VAULT_CACHE_KEY);
-    await this.deps.localStore.remove(SUMMARY_CACHE_KEY);
-    await this.deps.localStore.remove(FOLDER_CACHE_KEY);
-    await this.deps.localStore.remove(COLLECTION_CACHE_KEY);
-    await this.deps.localStore.remove(EQUIV_DOMAINS_KEY);
-    await this.deps.localStore.remove(EQUIV_EXCLUDED_KEY);
-    await this.deps.localStore.remove(SKIPPED_ORG_KEY);
-    await this.deps.localStore.remove(ORG_PERMISSIONS_KEY);
+    await this.withCacheMutation(async () => {
+      await this.deps.localStore.remove(VAULT_CACHE_KEY);
+      await this.deps.localStore.remove(SUMMARY_CACHE_KEY);
+      await this.deps.localStore.remove(FOLDER_CACHE_KEY);
+      await this.deps.localStore.remove(COLLECTION_CACHE_KEY);
+      await this.deps.localStore.remove(EQUIV_DOMAINS_KEY);
+      await this.deps.localStore.remove(EQUIV_EXCLUDED_KEY);
+      await this.deps.localStore.remove(SKIPPED_ORG_KEY);
+      await this.deps.localStore.remove(ORG_PERMISSIONS_KEY);
+    });
   }
 
   async findAutofillCandidates(

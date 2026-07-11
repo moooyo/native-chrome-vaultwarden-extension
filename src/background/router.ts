@@ -2,6 +2,7 @@ import type { AuthService } from '../core/session/auth-service.js';
 import type { VaultService } from '../core/vault/vault-service.js';
 import type { UriMatchStrategySetting } from '../core/vault/uri-match.js';
 import type { LockTimeoutSetting, OnIdleAction, ClipboardClearSetting } from './settings.js';
+import { normalizeServerUrl } from './settings.js';
 import type { RequestMessage, ResponseMessage, TabFillOutcome, TabSuggestionsOutcome, TabSuggestionTarget } from '../messaging/protocol.js';
 import { AppError } from '../core/errors.js';
 
@@ -277,6 +278,14 @@ export function createRouter(deps: RouterDeps) {
             return { ok: true, data: serverUrl === undefined ? base : { serverUrl, ...base } };
           }
           case 'settings.save':
+            {
+              const currentServerUrl = await deps.settings.getServerUrl();
+              const nextServerUrl = normalizeServerUrl(request.serverUrl);
+              if (currentServerUrl !== undefined && normalizeServerUrl(currentServerUrl) !== nextServerUrl) {
+                if (!deps.auth.resetForServerChange) throw new Error('auth.resetForServerChange is not wired');
+                await deps.auth.resetForServerChange();
+              }
+            }
             await deps.settings.saveServerUrl(request.serverUrl);
             if (request.defaultUriMatchStrategy !== undefined) {
               await deps.settings.saveDefaultUriMatchStrategy(request.defaultUriMatchStrategy);

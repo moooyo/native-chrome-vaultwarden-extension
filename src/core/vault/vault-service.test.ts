@@ -100,7 +100,7 @@ function stubApi(api: ApiClient): Record<string, (...args: never[]) => unknown> 
   return api as unknown as Record<string, (...args: never[]) => unknown>;
 }
 
-async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8Array; now?: () => number } = {}) {
+async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8Array; now?: () => number; getIdentityEpoch?: () => number } = {}) {
   const localStore = createMemoryStore();
   const sm = new SessionManager({ localStore, sessionStore: createMemoryStore() });
   await sm.saveUnlocked({
@@ -142,7 +142,11 @@ async function makeService(syncResponse = makeSync(), opts: { privateKey?: Uint8
     // Reprompt verification: only 'correct-master' is accepted, like a real master-password check.
     verifyMasterPassword: vi.fn(async (pw: string) => pw === 'correct-master'),
   } as unknown as AuthService;
-  const deps = { api, auth, session: sm, localStore, ...(opts.now ? { now: opts.now } : {}) };
+  const deps = {
+    api, auth, session: sm, localStore,
+    ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.getIdentityEpoch ? { getIdentityEpoch: opts.getIdentityEpoch } : {}),
+  };
   return { service: new VaultService(deps), api, session: sm, auth };
 }
 
@@ -277,6 +281,25 @@ describe('VaultService', () => {
     const listed = await service.listItems();
     expect(listed).toEqual(synced);
     expect(api.sync).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not cache a sync response after the active identity changes', async () => {
+    let epoch = 0;
+    let releaseSync!: () => void;
+    const syncGate = new Promise<void>((resolve) => { releaseSync = resolve; });
+    const { service, api } = await makeService(makeSync(), { getIdentityEpoch: () => epoch });
+    stubApi(api).sync = vi.fn(async () => {
+      await syncGate;
+      return makeSync();
+    });
+
+    const pending = service.sync();
+    await vi.waitFor(() => expect(api.sync).toHaveBeenCalledTimes(1));
+    epoch++;
+    releaseSync();
+
+    await expect(pending).rejects.toThrow(/account changed/i);
+    await expect(service.listItems()).resolves.toEqual({ items: [], folders: [], collections: [], orgPermissions: [] });
   });
 
   // Coverage-only: public method clearCache() — removes cached data.

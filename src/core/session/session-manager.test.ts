@@ -120,6 +120,28 @@ describe('SessionManager', () => {
     expect(await sm.getState()).toBe('loggedOut');
   });
 
+  it('resetAllAccounts clears accounts, PIN, and session keys but preserves remembered-device tokens', async () => {
+    const sm = new SessionManager({ localStore: createMemoryStore(), sessionStore: createMemoryStore() });
+    await sm.saveUnlocked({
+      email: 'first@example.com', accessToken: 'a1', refreshToken: 'r1', expiresAt: 123,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 600000, userKey,
+    });
+    await sm.saveUnlocked({
+      email: 'second@example.com', accessToken: 'a2', refreshToken: 'r2', expiresAt: 123,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 600000, userKey,
+    });
+    await sm.savePinProtectedUserKey('protected-pin-key');
+    await sm.saveRememberDeviceToken('https://old.example', 'first@example.com', 'remember-token');
+
+    await sm.resetAllAccounts();
+
+    expect(await sm.getState()).toBe('loggedOut');
+    expect(await sm.listAccounts()).toEqual([]);
+    expect(await sm.getPinProtectedUserKey()).toBeUndefined();
+    expect(await sm.loadUserKey()).toBeUndefined();
+    expect(await sm.getRememberDeviceToken('https://old.example', 'first@example.com')).toBe('remember-token');
+  });
+
   describe('privateKey (PKCS8) session slot', () => {
     it('saveUnlocked stores the decrypted privateKey only in session storage', async () => {
       const local = createMemoryStore();

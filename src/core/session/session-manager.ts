@@ -149,6 +149,16 @@ export class SessionManager {
     }
   }
 
+  /** Remove every authenticated account and unlock method while preserving device-level settings
+   *  and remembered-2FA tokens. Used before changing the configured Vaultwarden server so tokens
+   *  issued by the old server can never be sent to the new one. */
+  async resetAllAccounts(): Promise<void> {
+    await this.lock();
+    await this.deps.localStore.remove(PIN_KEY);
+    await this.deps.localStore.remove(AUTH_KEY);
+    await this.deps.localStore.remove(ACCOUNTS_KEY);
+  }
+
   private async loadAccounts(): Promise<Record<string, PersistedAuth>> {
     return (await this.deps.localStore.get<Record<string, PersistedAuth>>(ACCOUNTS_KEY)) ?? {};
   }

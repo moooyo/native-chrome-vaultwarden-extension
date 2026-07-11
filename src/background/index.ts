@@ -18,6 +18,8 @@ const localStore = createBrowserStore('local');
 const sessionStore = createBrowserStore('session');
 const settings = createSettingsService(localStore);
 const session = new SessionManager({ localStore, sessionStore });
+let identityEpoch = 0;
+let clearVaultCache = async (): Promise<void> => {};
 const api = new ApiClient({
   serverUrlProvider: async () => {
     const serverUrl = await settings.getServerUrl();
@@ -26,8 +28,17 @@ const api = new ApiClient({
   },
   localStore,
 });
-const auth = new AuthService({ api, session, serverUrlProvider: () => settings.getServerUrl() });
-const vault = new VaultService({ api, auth, session, localStore });
+const auth = new AuthService({
+  api,
+  session,
+  serverUrlProvider: () => settings.getServerUrl(),
+  onIdentityChanged: async () => {
+    identityEpoch++;
+    await clearVaultCache();
+  },
+});
+const vault = new VaultService({ api, auth, session, localStore, getIdentityEpoch: () => identityEpoch });
+clearVaultCache = () => vault.clearCache();
 const contextMenu = createContextMenu({
   getState: () => auth.getState(),
   findFillItems: (kind) => vault.findFillItems(kind),

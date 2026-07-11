@@ -21,9 +21,19 @@ import { KDF_VECTOR, KDF_VECTOR_600K, USER_KEY_VECTOR, USER_KEY_VECTOR_600K, RSA
 function makeService(
   api: Partial<ApiClient>,
   serverUrlProvider: () => Promise<string | undefined> = async () => 'https://vault.example',
+  onIdentityChanged?: () => Promise<void>,
 ) {
   const sm = new SessionManager({ localStore: createMemoryStore(), sessionStore: createMemoryStore() });
-  return { sm, auth: new AuthService({ api: api as ApiClient, session: sm, now: () => 1000, serverUrlProvider }) };
+  return {
+    sm,
+    auth: new AuthService({
+      api: api as ApiClient,
+      session: sm,
+      now: () => 1000,
+      serverUrlProvider,
+      ...(onIdentityChanged ? { onIdentityChanged } : {}),
+    }),
+  };
 }
 
 // Happy-path login tests use the 600000-iteration vector because the KDF floor (5000) forbids
@@ -515,6 +525,185 @@ describe('AuthService', () => {
     await auth.refreshIfNeeded(5000);
     expect(api.refresh).toHaveBeenCalledWith('old-refresh');
     expect((await sm.getPersistedAuth())?.accessToken).toBe('new-access');
+  });
+
+  it('coalesces concurrent refreshes that use the same refresh token', async () => {
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    const refresh = vi.fn(async () => {
+      await refreshGate;
+      return {
+        access_token: 'new-access',
+        expires_in: 3600,
+        refresh_token: 'new-refresh',
+        token_type: 'Bearer',
+      };
+    });
+    const { auth, sm } = makeService({ refresh });
+    await sm.saveUnlocked({
+      email: KDF_VECTOR.email,
+      accessToken: 'old-access',
+      refreshToken: 'old-refresh',
+      expiresAt: 1100,
+      protectedKey: USER_KEY_VECTOR.akey,
+      kdf: 0,
+      kdfIterations: KDF_VECTOR.iterations,
+      userKey: { encKey: new Uint8Array(32), macKey: new Uint8Array(32) },
+    });
+
+    const first = auth.refreshIfNeeded(5000);
+    const second = auth.refreshIfNeeded(5000);
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    releaseRefresh();
+    await Promise.all([first, second]);
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect((await sm.getPersistedAuth())?.refreshToken).toBe('new-refresh');
+  });
+
+  it('finishes an in-flight refresh before resetting accounts for a server change', async () => {
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    const refresh = vi.fn(async () => {
+      await refreshGate;
+      return {
+        access_token: 'stale-old-server-access',
+        expires_in: 3600,
+        refresh_token: 'stale-old-server-refresh',
+        token_type: 'Bearer',
+      };
+    });
+    let serverUrl = 'https://old.example';
+    const { auth, sm } = makeService({ refresh }, async () => serverUrl);
+    const userKey = { encKey: new Uint8Array(32), macKey: new Uint8Array(32) };
+    await sm.saveUnlocked({
+      email: 'same@example.com', accessToken: 'old-access', refreshToken: 'same-token', expiresAt: 1100,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000, userKey,
+    });
+
+    const pending = auth.refreshIfNeeded(5000);
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    let resetFinished = false;
+    const reset = auth.resetForServerChange().then(() => { resetFinished = true; });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(resetFinished).toBe(false);
+
+    releaseRefresh();
+    await Promise.all([pending, reset]);
+    serverUrl = 'https://new.example';
+    await sm.saveUnlocked({
+      email: 'same@example.com', accessToken: 'new-server-access', refreshToken: 'same-token', expiresAt: 999999,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000, userKey,
+    });
+
+    expect((await sm.getPersistedAuth())?.accessToken).toBe('new-server-access');
+  });
+
+  it('waits for a refresh attempt even before its network request starts', async () => {
+    let releaseAuthRead!: () => void;
+    const authReadGate = new Promise<void>((resolve) => { releaseAuthRead = resolve; });
+    const { auth, sm } = makeService({
+      refresh: vi.fn(async () => ({
+        access_token: 'new-access', refresh_token: 'new-refresh', expires_in: 3600, token_type: 'Bearer',
+      })),
+    });
+    await sm.saveUnlocked({
+      email: 'same@example.com', accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 1100,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000,
+      userKey: { encKey: new Uint8Array(32), macKey: new Uint8Array(32) },
+    });
+    const originalGetPersistedAuth = sm.getPersistedAuth.bind(sm);
+    vi.spyOn(sm, 'getPersistedAuth').mockImplementationOnce(async () => {
+      await authReadGate;
+      return originalGetPersistedAuth();
+    });
+
+    const refresh = auth.refreshIfNeeded(5000);
+    let resetFinished = false;
+    const reset = auth.resetForServerChange().then(() => { resetFinished = true; });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(resetFinished).toBe(false);
+
+    releaseAuthRead();
+    await Promise.all([refresh, reset]);
+  });
+
+  it('invalidates cached vault data when the active identity changes', async () => {
+    const onIdentityChanged = vi.fn(async () => {});
+    const { auth, sm } = makeService({}, async () => 'https://vault.example', onIdentityChanged);
+    const userKey = { encKey: new Uint8Array(32), macKey: new Uint8Array(32) };
+    await sm.saveUnlocked({
+      email: 'a@example.com', accessToken: 'a', refreshToken: 'ra', expiresAt: 999999,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000, userKey,
+    });
+    await sm.saveUnlocked({
+      email: 'b@example.com', accessToken: 'b', refreshToken: 'rb', expiresAt: 999999,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000, userKey,
+    });
+
+    await auth.switchAccount('a@example.com');
+    expect(onIdentityChanged).toHaveBeenCalledTimes(1);
+
+    await auth.logout();
+    expect(onIdentityChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the active account cache when removing a different account', async () => {
+    const onIdentityChanged = vi.fn(async () => {});
+    const { auth, sm } = makeService({}, async () => 'https://vault.example', onIdentityChanged);
+    const userKey = { encKey: new Uint8Array(32), macKey: new Uint8Array(32) };
+    await sm.saveUnlocked({
+      email: 'other@example.com', accessToken: 'a', refreshToken: 'ra', expiresAt: 999999,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000, userKey,
+    });
+    await sm.saveUnlocked({
+      email: 'active@example.com', accessToken: 'b', refreshToken: 'rb', expiresAt: 999999,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000, userKey,
+    });
+
+    await auth.removeAccount('other@example.com');
+
+    expect((await sm.getPersistedAuth())?.email).toBe('active@example.com');
+    expect(onIdentityChanged).not.toHaveBeenCalled();
+  });
+
+  it('keeps cached vault data when switching to the already-active account', async () => {
+    const onIdentityChanged = vi.fn(async () => {});
+    const { auth, sm } = makeService({}, async () => 'https://vault.example', onIdentityChanged);
+    await sm.saveUnlocked({
+      email: 'active@example.com', accessToken: 'a', refreshToken: 'r', expiresAt: 999999,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000,
+      userKey: { encKey: new Uint8Array(32), macKey: new Uint8Array(32) },
+    });
+
+    await auth.switchAccount('active@example.com');
+
+    expect((await sm.getPersistedAuth())?.email).toBe('active@example.com');
+    expect(onIdentityChanged).not.toHaveBeenCalled();
+  });
+
+  it('invalidates old cache before activating a different account', async () => {
+    const refs: { session?: SessionManager } = {};
+    const activeDuringInvalidation: Array<string | undefined> = [];
+    const made = makeService({}, async () => 'https://vault.example', async () => {
+      activeDuringInvalidation.push((await refs.session!.getPersistedAuth())?.email);
+    });
+    refs.session = made.sm;
+    const sm = made.sm;
+    const userKey = { encKey: new Uint8Array(32), macKey: new Uint8Array(32) };
+    await sm.saveUnlocked({
+      email: 'old@example.com', accessToken: 'a', refreshToken: 'ra', expiresAt: 999999,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000, userKey,
+    });
+    await sm.saveUnlocked({
+      email: 'current@example.com', accessToken: 'b', refreshToken: 'rb', expiresAt: 999999,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000, userKey,
+    });
+
+    await made.auth.switchAccount('old@example.com');
+
+    expect(activeDuringInvalidation).toEqual(['current@example.com']);
+    expect((await sm.getPersistedAuth())?.email).toBe('old@example.com');
   });
 
   // --- Finding 5: logout clears pending login ---

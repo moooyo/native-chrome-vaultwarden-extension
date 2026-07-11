@@ -40,6 +40,14 @@ export function clipboardClearToSeconds(value: ClipboardClearSetting): number | 
   return value === 'never' ? null : Number(value);
 }
 
+export function normalizeServerUrl(serverUrl: string): string {
+  const url = new URL(serverUrl);
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error('serverUrl must start with http:// or https://');
+  }
+  return url.toString();
+}
+
 export function createSettingsService(store: KeyValueStore) {
   const service = {
     async getServerUrl(): Promise<string | undefined> {
@@ -47,11 +55,7 @@ export function createSettingsService(store: KeyValueStore) {
     },
 
     async saveServerUrl(serverUrl: string): Promise<void> {
-      const url = new URL(serverUrl);
-      if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-        throw new Error('serverUrl must start with http:// or https://');
-      }
-      await store.set(SERVER_URL_KEY, url.toString());
+      await store.set(SERVER_URL_KEY, normalizeServerUrl(serverUrl));
     },
 
     async getDefaultUriMatchStrategy(): Promise<UriMatchStrategySetting> {

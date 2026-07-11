@@ -126,6 +126,72 @@ describe('router', () => {
     expect(save).toHaveBeenCalledWith('https://vault.example.com');
   });
 
+  it('resets authentication before saving a different server URL', async () => {
+    const calls: string[] = [];
+    const resetForServerChange = vi.fn(async () => { calls.push('reset'); });
+    const saveServerUrl = vi.fn(async () => { calls.push('save'); });
+    const router = createRouter({
+      auth: { resetForServerChange },
+      vault: {},
+      settings: {
+        getServerUrl: vi.fn(async () => 'https://old.example/'),
+        saveServerUrl,
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
+      },
+    });
+
+    await expect(router.handle({ type: 'settings.save', serverUrl: 'https://new.example' }))
+      .resolves.toEqual({ ok: true, data: null });
+    expect(resetForServerChange).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(['reset', 'save']);
+  });
+
+  it('keeps authentication when saving an equivalent normalized server URL', async () => {
+    const resetForServerChange = vi.fn(async () => {});
+    const saveServerUrl = vi.fn(async () => {});
+    const router = createRouter({
+      auth: { resetForServerChange },
+      vault: {},
+      settings: {
+        getServerUrl: vi.fn(async () => 'https://vault.example/'),
+        saveServerUrl,
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
+      },
+    });
+
+    await router.handle({ type: 'settings.save', serverUrl: 'https://vault.example' });
+    expect(resetForServerChange).not.toHaveBeenCalled();
+    expect(saveServerUrl).toHaveBeenCalledWith('https://vault.example');
+  });
+
+  it('rejects an invalid server URL before resetting authentication', async () => {
+    const resetForServerChange = vi.fn(async () => {});
+    const saveServerUrl = vi.fn(async () => {});
+    const router = createRouter({
+      auth: { resetForServerChange },
+      vault: {},
+      settings: {
+        getServerUrl: vi.fn(async () => 'https://vault.example/'),
+        saveServerUrl,
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'),
+        saveLockTimeout: vi.fn(), getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(), getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
+      },
+    });
+
+    await expect(router.handle({ type: 'settings.save', serverUrl: 'file:///tmp/not-a-server' }))
+      .resolves.toMatchObject({ ok: false });
+    expect(resetForServerChange).not.toHaveBeenCalled();
+    expect(saveServerUrl).not.toHaveBeenCalled();
+  });
+
   it('routes settings.get with default autofill strategy', async () => {
     const router = createRouter({
       auth: {},
