@@ -541,6 +541,7 @@ describe('vw-popup-app all items', () => {
 describe('vw-popup-app account and tool actions', () => {
   afterEach(() => {
     document.body.replaceChildren();
+    vi.unstubAllGlobals();
   });
 
   function account(app: VwPopupApp, detail: Record<string, unknown>): void {
@@ -677,6 +678,28 @@ describe('vw-popup-app account and tool actions', () => {
     expect(frame?.querySelector('[slot="list"] vw-vault-view')).not.toBeNull();
   });
 
+  it('does not let the provisional popup viewport force unlocked routes into single mode', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({
+      matches: true,
+      media: '(max-width: 480px)',
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+    const app = document.createElement('vw-popup-app') as VwPopupApp;
+    app.request = unlockedHandlers();
+    document.body.append(app);
+
+    await app.updateComplete;
+    await vi.waitFor(() => expect(app.route.name).toBe('vault'));
+    await app.updateComplete;
+
+    expect(app.shadowRoot?.querySelector('vw-popup-frame')?.getAttribute('mode')).toBe('double');
+  });
+
   it('keeps the list mounted while detail opens in the right pane', async () => {
     const app = await mountVault(unlockedHandlers({
       'vault.getCipherDetail': async () => ({ ok: true, data: { cipher: { ...summary(), fields: [] } } }),
@@ -693,28 +716,6 @@ describe('vw-popup-app account and tool actions', () => {
       'auth.getState': async () => ({ ok: true, data: { state: 'loggedOut' } }),
     }));
     expect(app.shadowRoot!.querySelector('vw-popup-frame')?.getAttribute('mode')).toBe('auth');
-  });
-
-  it('renders the vault list in the default slot in constrained mode', async () => {
-    const app = await mountVault(unlockedHandlers(), browserSeam());
-    app.narrow = true;
-    await app.updateComplete;
-    const frame = app.shadowRoot!.querySelector('vw-popup-frame')!;
-    expect(frame.getAttribute('mode')).toBe('single');
-    expect(frame.querySelector(':scope > .single-workspace vw-vault-view')).not.toBeNull();
-    expect(frame.querySelector('[slot="list"]')).toBeNull();
-  });
-
-  it('renders item detail instead of the list in constrained detail mode', async () => {
-    const app = await mountVault(unlockedHandlers({
-      'vault.getCipherDetail': async () => ({ ok: true, data: { cipher: { ...summary(), fields: [] } } }),
-    }), browserSeam());
-    app.narrow = true;
-    await openDetail(app, 'c1');
-    const frame = app.shadowRoot!.querySelector('vw-popup-frame')!;
-    expect(frame.getAttribute('mode')).toBe('single');
-    expect(frame.querySelector(':scope > vw-item-detail')).not.toBeNull();
-    expect(frame.querySelector('vw-vault-view')).toBeNull();
   });
 });
 
