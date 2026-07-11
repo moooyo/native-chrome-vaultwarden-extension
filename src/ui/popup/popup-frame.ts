@@ -22,14 +22,14 @@ export class VwPopupFrame extends LitElement {
     css`
       :host {
         display: block;
-        width: min(var(--vw-popup-double-width), 100vw);
-        height: min(var(--vw-popup-height), 100vh);
+        width: var(--vw-popup-double-width);
+        height: var(--vw-popup-height);
         overflow: hidden;
         background: var(--vw-panel);
       }
       :host([mode='single']),
       :host([mode='auth']) {
-        width: min(var(--vw-popup-single-width), 100vw);
+        width: var(--vw-popup-single-width);
       }
       [data-popup-frame] {
         width: 100%;
@@ -66,11 +66,6 @@ export class VwPopupFrame extends LitElement {
       }
       [data-list-pane] {
         border-right: 1px solid var(--vw-line);
-      }
-      @media (max-width: 480px) {
-        :host {
-          width: min(var(--vw-popup-single-width), 100vw);
-        }
       }
     `,
   ];

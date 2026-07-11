@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it } from 'vitest';
 import './popup-frame.js';
-import type { VwPopupFrame } from './popup-frame.js';
+import { VwPopupFrame } from './popup-frame.js';
 
 async function mount(mode: 'double' | 'single' | 'auth'): Promise<VwPopupFrame> {
   const frame = document.createElement('vw-popup-frame') as VwPopupFrame;
@@ -24,4 +24,14 @@ it.each(['single', 'auth'] as const)('renders one region in %s mode', async (mod
   const frame = await mount(mode);
   expect(frame.shadowRoot?.querySelector('[data-single-pane]')).not.toBeNull();
   expect(frame.shadowRoot?.querySelector('[data-list-pane]')).toBeNull();
+});
+
+it('uses intrinsic geometry instead of the provisional extension viewport', () => {
+  const cssText = VwPopupFrame.styles.map((style) => style.cssText).join(' ');
+
+  expect(cssText).toContain('width: var(--vw-popup-double-width)');
+  expect(cssText).toContain('height: var(--vw-popup-height)');
+  expect(cssText).toContain('width: var(--vw-popup-single-width)');
+  expect(cssText).not.toContain('100vw');
+  expect(cssText).not.toContain('100vh');
 });
