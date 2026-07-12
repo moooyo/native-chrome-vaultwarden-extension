@@ -57,8 +57,10 @@ for (const page of PAGES) {
     throw new Error(`${page}.html must load exactly its own ${page}.js (found: ${scripts.join(', ') || 'none'})`);
   }
   const stylesheets = [...html.matchAll(/<link\b[^>]*\brel="stylesheet"[^>]*\bhref="([^"]+)"/g)].map((match) => match[1]);
-  if (stylesheets.length !== 1 || stylesheets[0] !== `${page}.css`) {
-    throw new Error(`${page}.html must load only its own ${page}.css (found: ${stylesheets.join(', ') || 'none'})`);
+  // Each page loads the shared bundled MiYu fonts, then its own minimal page CSS.
+  const expectedCss = ['../fonts/fonts.css', `${page}.css`];
+  if (stylesheets.length !== 2 || stylesheets[0] !== expectedCss[0] || stylesheets[1] !== expectedCss[1]) {
+    throw new Error(`${page}.html must load ../fonts/fonts.css then its own ${page}.css (found: ${stylesheets.join(', ') || 'none'})`);
   }
 
   const source = await readFile(`src/ui/${page}/${page}.ts`, 'utf8');

@@ -1,73 +1,100 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import './vault-view.js';
-import type { VwVaultView } from './vault-view.js';
-import type { SuggestionsViewState } from '../types.js';
 
-async function mount(scope: 'suggestions' | 'all', state: SuggestionsViewState): Promise<VwVaultView> {
+// The component composes the MiYu i18n module, which imports webextension-polyfill; that throws
+// outside an extension, so stub it (matching the project's test convention).
+vi.mock('webextension-polyfill', () => ({
+  default: {
+    storage: {
+      local: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) },
+      onChanged: { addListener: vi.fn() },
+    },
+  },
+}));
+
+import './vault-view.js';
+import type { VwVaultView, CategoryId } from './vault-view.js';
+import type { SuggestionsViewState } from '../types.js';
+import type { CipherSummary } from '../../../core/vault/models.js';
+
+function login(over: Partial<CipherSummary> = {}): CipherSummary {
+  return {
+    id: 'c1', name: 'Nebula', username: 'me@x.dev', uris: ['https://nebula.dev'], loginUris: [],
+    type: 1, favorite: false, ...over,
+  };
+}
+
+async function mount(over: Partial<VwVaultView> = {}): Promise<VwVaultView> {
   const el = document.createElement('vw-vault-view') as VwVaultView;
-  el.scope = scope;
-  el.suggestionsState = state;
-  el.fill = {};
-  el.items = [];
-  el.folders = [];
-  el.collections = [];
-  el.orgPermissions = [];
-  el.selectedFolderId = null;
-  el.selectedCollectionId = null;
+  el.items = [login()];
+  el.suggestionsState = { status: 'ready', suggestions: [] } as SuggestionsViewState;
   el.query = '';
-  el.showTrash = false;
-  el.skippedOrgCount = 0;
+  el.category = 'all';
   el.selectedCipherId = null;
+  Object.assign(el, over);
   document.body.append(el);
   await el.updateComplete;
   return el;
 }
 
 describe('vw-vault-view', () => {
-  afterEach(() => {
-    document.body.replaceChildren();
+  afterEach(() => document.body.replaceChildren());
+
+  it('renders the search box and six category chips', async () => {
+    const el = await mount();
+    expect(el.shadowRoot?.querySelector('input[type="search"]')).not.toBeNull();
+    expect(el.shadowRoot?.querySelectorAll('.chip')).toHaveLength(6);
   });
 
-  it('defaults to the Suggestions sub-view', async () => {
-    const el = await mount('suggestions', { status: 'ready', suggestions: [] });
-    expect(el.shadowRoot?.querySelector('vw-suggestions-view')).not.toBeNull();
-    expect(el.shadowRoot?.querySelector('vw-all-items-view')).toBeNull();
+  it('emits vw-search-change on input', async () => {
+    const el = await mount();
+    const fired = vi.fn();
+    el.addEventListener('vw-search-change', fired);
+    const input = el.shadowRoot!.querySelector<HTMLInputElement>('input[type="search"]')!;
+    input.value = 'neb';
+    input.dispatchEvent(new Event('input'));
+    expect(fired).toHaveBeenCalledWith(expect.objectContaining({ detail: { query: 'neb' } }));
   });
 
-  it('renders the All items sub-view for the all scope', async () => {
-    const el = await mount('all', { status: 'ready', suggestions: [] });
-    expect(el.shadowRoot?.querySelector('vw-all-items-view')).not.toBeNull();
-    expect(el.shadowRoot?.querySelector('vw-suggestions-view')).toBeNull();
+  it('emits vw-category-change when a chip is clicked', async () => {
+    const el = await mount();
+    const fired = vi.fn();
+    el.addEventListener('vw-category-change', fired);
+    el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.chip')[1]!.click();
+    const detail = fired.mock.calls[0]![0].detail as { category: CategoryId };
+    expect(detail.category).toBe('login');
   });
 
-  it('offers both tabs and keeps All items selectable when suggestions are unavailable', async () => {
-    const el = await mount('suggestions', { status: 'unavailable', reason: 'restricted_page' });
-    const tabs = el.shadowRoot?.querySelector('vw-tabs') as (Element & { tabs: { id: string }[] }) | null;
-    expect(tabs).not.toBeNull();
-    const ids = tabs!.tabs.map((t) => t.id);
-    expect(ids).toContain('suggestions');
-    expect(ids).toContain('all');
-    // Suggestions still renders its neutral guidance, not a crash.
-    expect(el.shadowRoot?.querySelector('vw-suggestions-view')).not.toBeNull();
-    const changed = vi.fn();
-    el.addEventListener('vw-tab-change', changed);
-    tabs!.dispatchEvent(new CustomEvent('vw-tab-change', { detail: { id: 'all' }, bubbles: true, composed: true }));
-    expect(changed).toHaveBeenCalled();
+  it('renders an item row and toggles it open on click', async () => {
+    const el = await mount();
+    const fired = vi.fn();
+    el.addEventListener('vw-item-toggle', fired);
+    const row = el.shadowRoot!.querySelector<HTMLElement>('.row')!;
+    expect(row.textContent).toContain('Nebula');
+    row.click();
+    expect(fired).toHaveBeenCalledWith(expect.objectContaining({ detail: { cipherId: 'c1' } }));
   });
 
-  it('passes the suggestions state down to the Suggestions sub-view', async () => {
-    const state: SuggestionsViewState = { status: 'loading' };
-    const el = await mount('suggestions', state);
-    const child = el.shadowRoot?.querySelector('vw-suggestions-view') as (Element & { state: SuggestionsViewState }) | null;
-    expect(child?.state).toEqual(state);
+  it('shows the passkey marker only for items with a passkey', async () => {
+    const withPk = await mount({ items: [login({ hasPasskey: true })] });
+    expect(withPk.shadowRoot?.querySelector('.pk')).not.toBeNull();
+    withPk.remove();
+    const without = await mount({ items: [login()] });
+    expect(without.shadowRoot?.querySelector('.pk')).toBeNull();
   });
 
-  it('passes selectedCipherId to the active sub-view', async () => {
-    const el = await mount('suggestions', { status: 'ready', suggestions: [] });
-    el.selectedCipherId = 'c1';
-    await el.updateComplete;
-    const child = el.shadowRoot!.querySelector('vw-suggestions-view') as Element & { selectedCipherId: string | null };
-    expect(child.selectedCipherId).toBe('c1');
+  it('shows a Fill pill for current-site suggestions and emits vw-suggestion-fill', async () => {
+    const el = await mount({
+      suggestionsState: {
+        status: 'ready',
+        suggestions: [{ id: 'c1', name: 'Nebula', matchedUri: 'https://nebula.dev', matchType: 0, favorite: false, target: { frameId: 0, formId: 'f1' } }],
+      },
+    });
+    const fired = vi.fn();
+    el.addEventListener('vw-suggestion-fill', fired);
+    const pill = el.shadowRoot!.querySelector<HTMLButtonElement>('.fill-pill')!;
+    expect(pill).not.toBeNull();
+    pill.click();
+    expect(fired).toHaveBeenCalledWith(expect.objectContaining({ detail: { cipherId: 'c1', target: { frameId: 0, formId: 'f1' } } }));
   });
 });

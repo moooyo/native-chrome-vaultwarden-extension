@@ -1,5 +1,19 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// The reskinned view composes the (frozen) MiYu design system, whose i18n module imports
+// webextension-polyfill at the top of its graph. That polyfill throws when loaded outside an
+// extension, so we stub it. LocalizeController only subscribes on connect; no storage call happens
+// at mount, but the stub covers the surface it could touch.
+vi.mock('webextension-polyfill', () => ({
+  default: {
+    storage: {
+      local: { get: async () => ({}), set: async () => {} },
+      onChanged: { addListener: () => {} },
+    },
+  },
+}));
+
 import './account-security-view.js';
 import type { VwAccountSecurityView } from './account-security-view.js';
 import type { VwStatusMessage } from '../../components/status-message.js';
@@ -20,13 +34,39 @@ function set(el: VwAccountSecurityView, sel: string, value: string): void {
   q<HTMLInputElement>(el, sel).value = value;
 }
 
+/** Own shadow text plus every child status-message's `.message` property (which lives in that
+ *  element's own shadow root, so it is invisible to `textContent`). */
 function text(el: VwAccountSecurityView): string {
   const own = el.shadowRoot!.textContent ?? '';
   const messages = [...el.shadowRoot!.querySelectorAll('vw-status-message')]
     .map((node) => (node as VwStatusMessage).message ?? '')
     .join(' ');
-  return `${own} ${messages}`.toLowerCase();
+  return `${own} ${messages}`;
 }
+
+describe('vw-account-security-view structure', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it('renders the header and the three security sections as setting cards', async () => {
+    const el = await mount();
+    expect(el.shadowRoot!.querySelector('[data-back]')).toBeTruthy();
+    expect(el.shadowRoot!.textContent).toContain('账户安全'); // popup.accountSecurity
+    expect(el.shadowRoot!.querySelectorAll('vw-setting-card')).toHaveLength(3);
+    expect(q(el, '[data-change-password]')).toBeTruthy();
+    expect(q(el, '[data-change-kdf]')).toBeTruthy();
+    expect(q(el, '[data-rotate]')).toBeTruthy();
+  });
+
+  it('emits vw-item-back from the back button', async () => {
+    const el = await mount();
+    const back = vi.fn();
+    el.addEventListener('vw-item-back', back);
+    q<HTMLButtonElement>(el, '[data-back]').click();
+    expect(back).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('vw-account-security-view password change', () => {
   afterEach(() => {
@@ -40,7 +80,7 @@ describe('vw-account-security-view password change', () => {
     q<HTMLButtonElement>(el, '[data-change-password]').click();
     await el.updateComplete;
     expect(changed).not.toHaveBeenCalled();
-    expect(text(el)).toContain('enter your current and new password');
+    expect(text(el)).toContain('当前主密码和新主密码');
   });
 
   it('rejects a new password shorter than 8 characters', async () => {
@@ -53,7 +93,7 @@ describe('vw-account-security-view password change', () => {
     q<HTMLButtonElement>(el, '[data-change-password]').click();
     await el.updateComplete;
     expect(changed).not.toHaveBeenCalled();
-    expect(text(el)).toContain('at least 8 characters');
+    expect(text(el)).toContain('8 个字符');
   });
 
   it('rejects mismatched confirmation', async () => {
@@ -66,7 +106,7 @@ describe('vw-account-security-view password change', () => {
     q<HTMLButtonElement>(el, '[data-change-password]').click();
     await el.updateComplete;
     expect(changed).not.toHaveBeenCalled();
-    expect(text(el)).toContain('do not match');
+    expect(text(el)).toContain('不一致');
   });
 
   it('emits a validated password change', async () => {
@@ -95,7 +135,18 @@ describe('vw-account-security-view KDF change', () => {
     q<HTMLButtonElement>(el, '[data-change-kdf]').click();
     await el.updateComplete;
     expect(changed).not.toHaveBeenCalled();
-    expect(text(el)).toContain('at least 600000');
+    expect(text(el)).toContain('600000');
+  });
+
+  it('requires the current password before changing KDF', async () => {
+    const el = await mount();
+    const changed = vi.fn();
+    el.addEventListener('vw-change-kdf', changed);
+    set(el, '[data-iterations]', '600000');
+    q<HTMLButtonElement>(el, '[data-change-kdf]').click();
+    await el.updateComplete;
+    expect(changed).not.toHaveBeenCalled();
+    expect(text(el)).toContain('请输入当前主密码');
   });
 
   it('emits a KDF change at or above the minimum', async () => {
@@ -121,7 +172,7 @@ describe('vw-account-security-view key rotation', () => {
     expect(el.shadowRoot!.querySelector('[data-rotate-confirm]')).toBeNull();
     q<HTMLButtonElement>(el, '[data-rotate]').click();
     await el.updateComplete;
-    expect(text(el)).toContain("can't be undone");
+    expect(text(el)).toContain('无法撤销'); // can't be undone
     expect(el.shadowRoot!.querySelector('[data-rotate-confirm]')).toBeTruthy();
   });
 
@@ -134,7 +185,17 @@ describe('vw-account-security-view key rotation', () => {
     q<HTMLButtonElement>(el, '[data-rotate-confirm]').click();
     await el.updateComplete;
     expect(rotated).not.toHaveBeenCalled();
-    expect(text(el)).toContain('enter your current master password');
+    expect(text(el)).toContain('请输入当前主密码');
+  });
+
+  it('returns to the main view when rotation is cancelled', async () => {
+    const el = await mount();
+    q<HTMLButtonElement>(el, '[data-rotate]').click();
+    await el.updateComplete;
+    q<HTMLButtonElement>(el, '[data-rotate-cancel]').click();
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('[data-rotate-confirm]')).toBeNull();
+    expect(q(el, '[data-change-password]')).toBeTruthy();
   });
 
   it('emits the rotation with the confirmed password', async () => {

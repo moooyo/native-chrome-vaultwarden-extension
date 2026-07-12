@@ -479,7 +479,7 @@ describe('focused-fill command', () => {
   it('openPickerFor notices when no popover can be found after re-attach', () => {
     const notice = vi.spyOn(noticeModule, 'showNotice');
     openPickerFor(() => 'https://ex.com', 'missing');
-    expect(notice).toHaveBeenCalledWith("Multiple matches — click the field's Vaultwarden icon to choose");
+    expect(notice).toHaveBeenCalledWith('多个匹配项——点击输入框的密屿图标选择');
   });
 });
 

@@ -36,6 +36,7 @@ describe('vw-autofill-popover', () => {
       el.onOpen = onOpen;
     });
     const trigger = shadow(element).querySelector('#vw-open');
+    expect(trigger?.textContent).toContain('密屿');
     trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(onOpen).not.toHaveBeenCalled();
     trustedClick(trigger);
@@ -53,15 +54,16 @@ describe('vw-autofill-popover', () => {
   });
 
   it.each([
-    ['login', 'Fill from Vaultwarden', 'No matching logins'] as const,
-    ['card', 'Fill card', 'No saved cards'] as const,
-    ['identity', 'Fill identity', 'No saved identities'] as const,
+    ['login', '1 个匹配项', '没有匹配的登录项'] as const,
+    ['card', '填充银行卡', '没有保存的银行卡'] as const,
+    ['identity', '填充身份', '没有保存的身份'] as const,
   ])('renders the %s header and empty state', async (kind, header, empty) => {
     const withRows = await mount((el) => {
       el.kind = kind;
       el.view = 'list';
       el.candidates = [{ id: '1', name: 'Item', sub: 'sub', favorite: false }];
     });
+    expect(shadow(withRows).textContent).toContain('密屿');
     expect(shadow(withRows).textContent).toContain(header);
 
     const emptyEl = await mount((el) => {
@@ -70,6 +72,18 @@ describe('vw-autofill-popover', () => {
       el.candidates = [];
     });
     expect(shadow(emptyEl).textContent).toContain(empty);
+  });
+
+  it('renders each candidate as a MiYu row with a monogram tile and a 填充 action', async () => {
+    const element = await mount((el) => {
+      el.view = 'list';
+      el.candidates = [{ id: '1', name: 'Alpha', sub: 'a@example.com', favorite: false }];
+    });
+    const root = shadow(element);
+    expect(root.querySelector('.tile')?.textContent).toBe('A');
+    expect(root.querySelector('.fill')?.textContent).toContain('填充');
+    expect(root.textContent).toContain('Alpha');
+    expect(root.textContent).toContain('a@example.com');
   });
 
   it('calls onSelect with the candidate id resolved from the in-memory index', async () => {

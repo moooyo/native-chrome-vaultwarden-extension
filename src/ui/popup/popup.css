@@ -1,20 +1,20 @@
-/* Minimal popup document CSS. All UI, layout, and theming live inside the Lit root
-   (`vw-popup-app`) and its components; this only frames the popup: a fixed context-first width,
-   a solid panel backdrop, and light/dark awareness so native scrollbars and form controls adapt. */
+/* Popup document frame. All UI, layout, and theming live inside the Lit root (`vw-popup-app`) and
+   its components; this only sizes the popup window to the MiYu 372×560 panel, loads the bundled
+   fonts, and paints a theme-aware backdrop so there is no flash before the shadow tree renders. */
 
 html { color-scheme: light dark; }
 
 body {
   margin: 0;
-  width: fit-content;
-  min-width: 0;
+  width: 372px;
+  height: 560px;
   overflow: hidden;
-  font-family: "Segoe UI Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  background: #ffffff;
+  font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
+  background: #fcfcfb;
 }
 
 @media (prefers-color-scheme: dark) {
-  body { background: #171e2b; }
+  body { background: #1f2229; }
 }
 
-#app { display: block; }
+#app { display: block; width: 372px; height: 560px; }

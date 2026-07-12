@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('webextension-polyfill', () => ({
   default: {
     permissions: { request: vi.fn(async () => true) },
+    storage: {
+      local: { get: async () => ({}), set: async () => {} },
+      onChanged: { addListener: () => {} },
+    },
   },
 }));
 
@@ -88,7 +92,7 @@ function downloadButton(app: VwReceiveApp): HTMLButtonElement | null {
 
 it('renders a focused page task with a heading and constrained body', async () => {
   const app = await mount(makeDeps().deps);
-  expect(app.shadowRoot!.querySelector('[data-page-heading]')?.textContent).toContain('Receive a Send');
+  expect(app.shadowRoot!.querySelector('[data-page-heading]')?.textContent).toContain('接收 Send');
   expect(app.shadowRoot!.querySelector('[data-task-column]')).not.toBeNull();
 });
 
@@ -113,7 +117,7 @@ describe('vw-receive-app invalid link', () => {
     accessButton(app).click();
     await flushAsync();
     await app.updateComplete;
-    expect(app.state).toEqual({ status: 'error', message: 'Invalid Send link.' });
+    expect(app.state).toEqual({ status: 'error', message: '无效的 Send 链接' });
     expect(stubs.requestOrigin).not.toHaveBeenCalled();
     expect(stubs.fetchCalls).toHaveLength(0);
   });
@@ -164,7 +168,7 @@ describe('vw-receive-app password required', () => {
     linkInput(app).value = linkFor('acc1');
     accessButton(app).click();
     await settle(app);
-    expect(app.state).toEqual({ status: 'passwordRequired', message: 'This Send needs a password.' });
+    expect(app.state).toEqual({ status: 'passwordRequired', message: '此 Send 需要访问密码' });
     const pwInput = passwordInput(app);
     expect(pwInput).not.toBeNull();
     expect(app.shadowRoot!.activeElement).toBe(pwInput);
@@ -291,7 +295,7 @@ describe('vw-receive-app file send', () => {
     expect(app.state).toMatchObject({ status: 'fileReady' });
     downloadButton(app)!.click();
     await settle(app);
-    expect(app.state).toEqual({ status: 'error', message: 'This Send is no longer available.' });
+    expect(app.state).toEqual({ status: 'error', message: '此 Send 已过期或已达到访问次数上限' });
     expect(stubs.download).not.toHaveBeenCalled();
   });
 
@@ -313,7 +317,7 @@ describe('vw-receive-app file send', () => {
     await accessFor(app, linkFor('acc1'));
     downloadButton(app)!.click();
     await settle(app);
-    expect(app.state).toEqual({ status: 'error', message: 'Could not decrypt — the link or file may be corrupted.' });
+    expect(app.state).toEqual({ status: 'error', message: '无法解密，链接或文件可能已损坏' });
     expect(stubs.download).not.toHaveBeenCalled();
   });
 });
@@ -325,7 +329,7 @@ describe('vw-receive-app unavailable send', () => {
     const stubs = makeDeps({ fetchImpl: async () => new Response('', { status: 404 }) });
     const app = await mount(stubs.deps);
     await accessFor(app, linkFor('acc1'));
-    expect(app.state).toEqual({ status: 'error', message: 'This Send is no longer available.' });
+    expect(app.state).toEqual({ status: 'error', message: '此 Send 已过期或已达到访问次数上限' });
   });
 });
 

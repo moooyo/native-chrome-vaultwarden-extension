@@ -1,63 +1,59 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// The component composes the MiYu i18n module, which imports webextension-polyfill; that throws
+// outside an extension, so stub it (matching the project's test convention).
+vi.mock('webextension-polyfill', () => ({
+  default: {
+    storage: {
+      local: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) },
+      onChanged: { addListener: vi.fn() },
+    },
+  },
+}));
+
 import './popup-header.js';
 import type { VwPopupHeader } from './popup-header.js';
-import type { AccountInfo } from '../types.js';
 
-async function mount(accounts: AccountInfo[] = [{ email: 'me@example.com', active: true }]): Promise<VwPopupHeader> {
+async function mount(generatorActive = false): Promise<VwPopupHeader> {
   const el = document.createElement('vw-popup-header') as VwPopupHeader;
-  el.accounts = accounts;
-  el.pinEnabled = false;
-  el.deviceRemembered = false;
-  el.query = '';
+  el.generatorActive = generatorActive;
   document.body.append(el);
   await el.updateComplete;
   return el;
 }
 
+function buttons(el: VwPopupHeader): HTMLButtonElement[] {
+  return [...el.shadowRoot!.querySelectorAll<HTMLButtonElement>('button')];
+}
+
 describe('vw-popup-header', () => {
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
+  afterEach(() => document.body.replaceChildren());
 
-  it('renders the account and tools menus', async () => {
+  it('renders the brand and four action buttons', async () => {
     const el = await mount();
-    expect(el.shadowRoot?.querySelector('vw-account-menu')).not.toBeNull();
-    expect(el.shadowRoot?.querySelector('vw-tools-menu')).not.toBeNull();
+    expect(el.shadowRoot?.querySelector('vw-logo')).not.toBeNull();
+    expect(el.shadowRoot?.textContent).toContain('密屿');
+    expect(buttons(el)).toHaveLength(4);
   });
 
-  it('emits vw-add when the add control is used', async () => {
+  it.each([
+    ['vw-add', 0],
+    ['vw-generator-toggle', 1],
+    ['vw-open-settings', 2],
+    ['vw-lock', 3],
+  ] as const)('emits %s from its button', async (event, index) => {
     const el = await mount();
-    const added = vi.fn();
-    el.addEventListener('vw-add', added);
-    el.shadowRoot?.querySelector<HTMLButtonElement>('[data-add]')!.click();
-    expect(added).toHaveBeenCalledTimes(1);
+    const fired = vi.fn();
+    el.addEventListener(event, fired);
+    buttons(el)[index]!.click();
+    expect(fired).toHaveBeenCalledTimes(1);
   });
 
-  it('renders New item as the primary toolbar command', async () => {
-    const el = await mount();
-    expect(el.shadowRoot?.querySelector('[data-add]')?.textContent).toContain('New item');
-  });
-
-  it('emits the current search query', async () => {
-    const el = await mount();
-    const changed = vi.fn();
-    el.addEventListener('vw-search-change', changed);
-    const input = el.shadowRoot!.querySelector<HTMLInputElement>('[data-search]')!;
-    input.value = 'github';
-    input.dispatchEvent(new Event('input'));
-    expect(changed).toHaveBeenCalledWith(expect.objectContaining({ detail: { query: 'github' } }));
-  });
-
-  it('keeps generator in the tools menu rather than the primary toolbar', async () => {
-    const el = await mount();
-    expect(el.shadowRoot?.querySelector('[data-generator]')).toBeNull();
-  });
-
-  it('forwards the account list to the account menu', async () => {
-    const accounts: AccountInfo[] = [{ email: 'a@x', active: true }, { email: 'b@x', active: false }];
-    const el = await mount(accounts);
-    const menu = el.shadowRoot?.querySelector('vw-account-menu') as (Element & { accounts: AccountInfo[] }) | null;
-    expect(menu?.accounts).toEqual(accounts);
+  it('highlights the generator button while the generator view is open', async () => {
+    const el = await mount(true);
+    const generator = buttons(el)[1]!;
+    expect(generator.classList.contains('active')).toBe(true);
+    expect(generator.getAttribute('aria-pressed')).toBe('true');
   });
 });

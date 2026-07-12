@@ -1,18 +1,25 @@
 import { LitElement, css, html, nothing } from 'lit';
 import browser from 'webextension-polyfill';
 import { sendRequest } from '../../messaging/protocol.js';
-import type { SessionState } from '../../core/session/session-manager.js';
-import { themeTokens } from '../components/tokens.js';
-import { controlStyles } from '../components/styles.js';
-import type { SettingsRailItem } from '../components/page-shell.js';
-import '../components/page-shell.js';
+import type { SessionState, AccountSummary } from '../../core/session/session-manager.js';
+import type { SendSummary } from '../../core/vault/sends.js';
+import type { AsyncState } from '../components/async-state.js';
+import { initLocale, t } from '../i18n/index.js';
+import { initAppearance } from '../theme.js';
+import { initPrefs } from '../prefs.js';
+import './options-shell.js';
+import type { OptionsNavItem } from './options-shell.js';
 import './sections/connection-section.js';
 import './sections/security-section.js';
 import './sections/autofill-section.js';
+import './sections/generator-section.js';
+import './sections/send-section.js';
+import './sections/appearance-section.js';
 import './sections/data-section.js';
 import './sections/about-section.js';
 import type {
   AutofillSaveDetail,
+  ChangePasswordDetail,
   ConnectionSaveDetail,
   ExportDetail,
   ImportFileDetail,
@@ -23,25 +30,25 @@ import type {
   OptionsSectionId,
   SecuritySaveDetail,
   SectionStatus,
+  SendCreateDetail,
+  SendDeleteDetail,
 } from './types.js';
 
-const RAIL: SettingsRailItem[] = [
-  { id: 'connection', label: 'Connection', icon: 'globe' },
-  { id: 'security', label: 'Security', icon: 'lock' },
-  { id: 'autofill', label: 'Autofill', icon: 'key' },
-  { id: 'data', label: 'Data', icon: 'note' },
-  { id: 'about', label: 'About', icon: 'shield' },
+const RAIL: OptionsNavItem[] = [
+  { id: 'account', labelKey: 'options.nav.account' },
+  { id: 'security', labelKey: 'options.nav.security' },
+  { id: 'autofill', labelKey: 'options.nav.autofill' },
+  { id: 'generator', labelKey: 'options.nav.generator' },
+  { id: 'send', labelKey: 'options.nav.send' },
+  { id: 'appearance', labelKey: 'options.nav.appearance' },
+  { id: 'data', labelKey: 'options.nav.data' },
+  { id: 'about', labelKey: 'options.nav.about' },
 ];
 
-const NARROW_QUERY = '(max-width: 640px)';
-
-/** A password-protected Bitwarden export is a JSON document flagged both encrypted and
- *  password-protected; anything else (plain JSON, CSV) imports without a password. */
 function isPasswordProtectedExport(content: string): boolean {
   return /"encrypted"\s*:\s*true/.test(content) && /"passwordProtected"\s*:\s*true/.test(content);
 }
 
-/** The real dependency seam, backed by `webextension-polyfill` and the DOM. */
 function createDefaultDeps(): OptionsDeps {
   return {
     request: sendRequest,
@@ -68,22 +75,19 @@ function createDefaultDeps(): OptionsDeps {
 }
 
 /**
- * The dormant Lit options root. It owns the loaded settings, the active rail section, the vault
- * lock state, a single in-flight `pending` flag, and per-section status banners. It performs every
- * worker request itself (via the injectable `deps`) and hands only plain props to the section
- * components, reacting to their typed events.
+ * The MiYu options root. Owns loaded settings, the active section, vault lock state, the single
+ * in-flight `pending` flag, per-section status banners, the Sends list, and the account identity for
+ * the sidebar. Performs every worker request via the injectable `deps` and hands plain props to the
+ * section components, reacting to their typed events. Appearance (theme/language/density) and the
+ * UI-local preference toggles are managed by their sections directly via the appearance/prefs
+ * modules, so they need no root handler.
  *
- * Connection is the sole section that leads to a host-permission prompt: its save handler requests
- * the origin synchronously in the submit gesture (first await) before persisting. Autofill and the
- * lock timeout reuse the already-loaded server URL required by `settings.save` and never re-prompt.
- *
- * Not wired into `options.html` yet — `src/ui/options/options.ts` remains the live entry point
- * until a later task replaces it.
+ * Connection/account is the sole section that can lead to a host-permission prompt: its save handler
+ * requests the origin synchronously in the submit gesture (first await) before persisting.
  */
 export class VwOptionsApp extends LitElement {
   static override properties = {
     selected: { type: String },
-    narrow: { type: Boolean, reflect: true },
     settings: { attribute: false },
     locked: { type: Boolean },
     pending: { type: Boolean },
@@ -92,10 +96,16 @@ export class VwOptionsApp extends LitElement {
     securityStatus: { attribute: false },
     autofillStatus: { attribute: false },
     dataStatus: { attribute: false },
+    aboutStatus: { attribute: false },
+    sendsState: { attribute: false },
+    sendStatus: { attribute: false },
+    accountEmail: { type: String },
+    accountName: { type: String },
+    lastSync: { type: Number },
+    syncing: { type: Boolean },
   };
 
   declare selected: OptionsSectionId;
-  declare narrow: boolean;
   declare settings: LoadedSettings | undefined;
   declare locked: boolean;
   declare pending: boolean;
@@ -104,23 +114,21 @@ export class VwOptionsApp extends LitElement {
   declare securityStatus: SectionStatus | undefined;
   declare autofillStatus: SectionStatus | undefined;
   declare dataStatus: SectionStatus | undefined;
+  declare aboutStatus: SectionStatus | undefined;
+  declare sendsState: AsyncState<SendSummary[]>;
+  declare sendStatus: SectionStatus | undefined;
+  declare accountEmail: string;
+  declare accountName: string;
+  declare lastSync: number | undefined;
+  declare syncing: boolean;
 
-  /** Injectable dependency seam; defaults to the real `webextension-polyfill`/DOM implementation. */
   deps: OptionsDeps = createDefaultDeps();
 
-  /** The content of a password-protected import, held between reading the file and the user
-   *  supplying its export password. Never a decrypted secret — just the ciphertext document. */
   private pendingImportContent: string | undefined;
-
-  private mediaQuery: MediaQueryList | undefined;
-  private readonly onNarrowChange = (event: MediaQueryListEvent): void => {
-    this.narrow = event.matches;
-  };
 
   constructor() {
     super();
-    this.selected = 'connection';
-    this.narrow = false;
+    this.selected = 'account';
     this.settings = undefined;
     this.locked = true;
     this.pending = false;
@@ -129,62 +137,61 @@ export class VwOptionsApp extends LitElement {
     this.securityStatus = undefined;
     this.autofillStatus = undefined;
     this.dataStatus = undefined;
+    this.aboutStatus = undefined;
+    this.sendsState = { status: 'idle' };
+    this.sendStatus = undefined;
+    this.accountEmail = '';
+    this.accountName = '';
+    this.lastSync = undefined;
+    this.syncing = false;
     this.pendingImportContent = undefined;
   }
 
-  static override styles = [
-    themeTokens,
-    controlStyles,
-    css`
-      :host { display: block; }
-    `,
-  ];
+  static override styles = css`
+    :host { display: block; min-height: 100vh; }
+  `;
 
   override connectedCallback(): void {
     super.connectedCallback();
-    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-      this.mediaQuery = window.matchMedia(NARROW_QUERY);
-      this.narrow = this.mediaQuery.matches;
-      this.mediaQuery.addEventListener('change', this.onNarrowChange);
-    }
-    void this.init();
+    void this.bootstrap();
   }
 
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    this.mediaQuery?.removeEventListener('change', this.onNarrowChange);
+  private async bootstrap(): Promise<void> {
+    await Promise.all([initLocale(), initAppearance(), initPrefs()]);
+    await this.init();
   }
 
   private async init(): Promise<void> {
     const stateResponse = await this.deps.request({ type: 'auth.getState' });
-    this.locked = stateResponse.ok
-      ? (stateResponse.data as { state: SessionState }).state !== 'unlocked'
-      : true;
+    this.locked = stateResponse.ok ? (stateResponse.data as { state: SessionState }).state !== 'unlocked' : true;
     const settingsResponse = await this.deps.request({ type: 'settings.get' });
-    if (settingsResponse.ok) {
-      this.settings = settingsResponse.data as LoadedSettings;
+    if (settingsResponse.ok) this.settings = settingsResponse.data as LoadedSettings;
+    const accountsResponse = await this.deps.request({ type: 'auth.listAccounts' });
+    if (accountsResponse.ok) {
+      const accounts = (accountsResponse.data as { accounts?: AccountSummary[] } | null)?.accounts ?? [];
+      const active = accounts.find((a) => (a as { active?: boolean }).active) ?? accounts[0];
+      this.accountEmail = active?.email ?? '';
+      this.accountName = (active as { name?: string } | undefined)?.name ?? '';
     }
+    if (!this.locked) void this.loadSends();
   }
 
-  private onTab(event: CustomEvent<{ id: string }>): void {
+  private onNav(event: CustomEvent<{ id: string }>): void {
     const id = event.detail.id;
-    if (RAIL.some((item) => item.id === id)) {
-      this.selected = id as OptionsSectionId;
-    }
+    if (RAIL.some((item) => item.id === id)) this.selected = id as OptionsSectionId;
   }
 
+  // --- account & sync ------------------------------------------------------------------------
   private async handleConnectionSave(event: CustomEvent<ConnectionSaveDetail>): Promise<void> {
     if (this.pending) return;
     const serverUrl = event.detail.serverUrl;
-    // The detail is already a normalized URL; derive the origin pattern synchronously so the
-    // permission request is the first await, still inside the user gesture.
     const originPattern = `${new URL(serverUrl).origin}/*`;
     this.pending = true;
     this.connectionStatus = undefined;
     try {
       const granted = await this.deps.requestOrigins([originPattern]);
       if (!granted) {
-        this.connectionStatus = { message: 'Host permission was not granted.', tone: 'danger' };
+        this.connectionStatus = { message: t('common.error'), tone: 'danger' };
         return;
       }
       const response = await this.deps.request({ type: 'settings.save', serverUrl });
@@ -192,20 +199,31 @@ export class VwOptionsApp extends LitElement {
         this.connectionStatus = { message: response.error.message, tone: 'danger' };
         return;
       }
-      if (this.settings) {
-        this.settings = { ...this.settings, serverUrl };
-      }
-      this.connectionStatus = { message: 'Connection saved.', tone: 'success' };
+      if (this.settings) this.settings = { ...this.settings, serverUrl };
+      this.connectionStatus = { message: t('common.done'), tone: 'success' };
     } finally {
       this.pending = false;
     }
   }
 
+  private async handleSync(): Promise<void> {
+    if (this.syncing) return;
+    this.syncing = true;
+    try {
+      const response = await this.deps.request({ type: 'vault.sync' });
+      if (response.ok) this.lastSync = Date.now();
+      else this.connectionStatus = { message: response.error.message, tone: 'danger' };
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  // --- security ------------------------------------------------------------------------------
   private async handleAutofillSave(event: CustomEvent<AutofillSaveDetail>): Promise<void> {
     if (this.pending) return;
     const serverUrl = this.settings?.serverUrl;
     if (serverUrl === undefined) {
-      this.autofillStatus = { message: 'Set your server URL on the Connection tab first.', tone: 'danger' };
+      this.autofillStatus = { message: t('options.account.serverDesc'), tone: 'danger' };
       return;
     }
     this.pending = true;
@@ -220,10 +238,8 @@ export class VwOptionsApp extends LitElement {
         this.autofillStatus = { message: response.error.message, tone: 'danger' };
         return;
       }
-      if (this.settings) {
-        this.settings = { ...this.settings, defaultUriMatchStrategy: event.detail.defaultUriMatchStrategy };
-      }
-      this.autofillStatus = { message: 'Autofill settings saved.', tone: 'success' };
+      if (this.settings) this.settings = { ...this.settings, defaultUriMatchStrategy: event.detail.defaultUriMatchStrategy };
+      this.autofillStatus = { message: t('common.done'), tone: 'success' };
     } finally {
       this.pending = false;
     }
@@ -233,25 +249,19 @@ export class VwOptionsApp extends LitElement {
     if (this.pending) return;
     const serverUrl = this.settings?.serverUrl;
     if (serverUrl === undefined) {
-      this.securityStatus = { message: 'Set your server URL on the Connection tab first.', tone: 'danger' };
+      this.securityStatus = { message: t('options.account.serverDesc'), tone: 'danger' };
       return;
     }
     this.pending = true;
     this.securityStatus = undefined;
     try {
-      const response = await this.deps.request({
-        type: 'settings.save',
-        serverUrl,
-        lockTimeout: event.detail.lockTimeout,
-      });
+      const response = await this.deps.request({ type: 'settings.save', serverUrl, lockTimeout: event.detail.lockTimeout });
       if (!response.ok) {
         this.securityStatus = { message: response.error.message, tone: 'danger' };
         return;
       }
-      if (this.settings) {
-        this.settings = { ...this.settings, lockTimeout: event.detail.lockTimeout };
-      }
-      this.securityStatus = { message: 'Lock timeout saved.', tone: 'success' };
+      if (this.settings) this.settings = { ...this.settings, lockTimeout: event.detail.lockTimeout };
+      this.securityStatus = { message: t('common.done'), tone: 'success' };
     } finally {
       this.pending = false;
     }
@@ -269,37 +279,106 @@ export class VwOptionsApp extends LitElement {
       return;
     }
     if (this.settings) {
-      this.settings = {
-        ...this.settings,
-        onIdleAction: event.detail.onIdleAction,
-        clipboardClearSeconds: event.detail.clipboardClearSeconds,
-      };
+      this.settings = { ...this.settings, onIdleAction: event.detail.onIdleAction, clipboardClearSeconds: event.detail.clipboardClearSeconds };
     }
   }
 
+  private async handleChangePassword(event: CustomEvent<ChangePasswordDetail>): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    this.securityStatus = undefined;
+    try {
+      const response = await this.deps.request({
+        type: 'auth.changePassword',
+        currentPassword: event.detail.currentPassword,
+        newPassword: event.detail.newPassword,
+      });
+      this.securityStatus = response.ok
+        ? { message: t('common.done'), tone: 'success' }
+        : { message: response.error.message, tone: 'danger' };
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  // --- Send ----------------------------------------------------------------------------------
+  private async loadSends(): Promise<void> {
+    this.sendsState = { status: 'loading' };
+    const response = await this.deps.request({ type: 'sends.list' });
+    if (!response.ok) {
+      this.sendsState = { status: 'error', message: response.error.message };
+      return;
+    }
+    const sends = (response.data as { sends?: SendSummary[] } | null)?.sends ?? [];
+    this.sendsState = sends.length > 0 ? { status: 'ready', data: sends } : { status: 'empty' };
+  }
+
+  private async handleSendCreate(event: CustomEvent<SendCreateDetail>): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    this.sendStatus = undefined;
+    try {
+      const detail = event.detail;
+      const response = detail.kind === 'text'
+        ? await this.deps.request({ type: 'sends.createText', input: detail.input })
+        : await this.deps.request({ type: 'sends.createFile', input: detail.input, dataB64: detail.dataB64, fileName: detail.fileName });
+      if (!response.ok) {
+        this.sendStatus = { message: response.error.message, tone: 'danger' };
+        return;
+      }
+      const send = (response.data as { send?: SendSummary } | null)?.send;
+      if (send) {
+        await this.copyToClipboard(send.url);
+        this.sendStatus = { message: t('options.send.linkCopied'), tone: 'success' };
+      }
+      await this.loadSends();
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async handleSendDelete(event: CustomEvent<SendDeleteDetail>): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.deps.request({ type: 'sends.delete', id: event.detail.id });
+      if (!response.ok) this.sendStatus = { message: response.error.message, tone: 'danger' };
+      else await this.loadSends();
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async handleCopy(event: CustomEvent<{ value: string }>): Promise<void> {
+    await this.copyToClipboard(event.detail.value);
+    this.sendStatus = { message: t('options.send.linkCopied'), tone: 'success' };
+  }
+
+  private async copyToClipboard(value: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(value);
+      void this.deps.request({ type: 'clipboard.scheduleClear' });
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
+  // --- data ----------------------------------------------------------------------------------
   private async handleExport(event: CustomEvent<ExportDetail>): Promise<void> {
     if (this.pending) return;
     this.pending = true;
     this.dataStatus = undefined;
     try {
       const password = event.detail.password;
-      const response = await this.deps.request(
-        password === undefined ? { type: 'vault.export' } : { type: 'vault.export', password },
-      );
+      const response = await this.deps.request(password === undefined ? { type: 'vault.export' } : { type: 'vault.export', password });
       if (!response.ok) {
         this.dataStatus = { message: response.error.message, tone: 'danger' };
         return;
       }
       const json = (response.data as { json: string }).json;
-      const stamp = new Date().toISOString().slice(0, 10);
-      const fileName = `vaultwarden-export-${password === undefined ? '' : 'encrypted-'}${stamp}.json`;
+      const fileName = `miyu-export-${password === undefined ? '' : 'encrypted-'}vault.json`;
       this.deps.downloadText(json, fileName);
-      this.dataStatus = {
-        message: password === undefined
-          ? 'Exported decrypted vault. Store the file securely.'
-          : 'Exported an encrypted vault backup.',
-        tone: 'success',
-      };
+      this.dataStatus = { message: t('common.done'), tone: 'success' };
     } finally {
       this.pending = false;
     }
@@ -316,7 +395,7 @@ export class VwOptionsApp extends LitElement {
       try {
         content = await this.deps.readFile(event.detail.file);
       } catch {
-        this.dataStatus = { message: 'Could not read the import file.', tone: 'danger' };
+        this.dataStatus = { message: t('common.error'), tone: 'danger' };
         return;
       }
       if (isPasswordProtectedExport(content)) {
@@ -344,9 +423,7 @@ export class VwOptionsApp extends LitElement {
   }
 
   private async runImport(content: string, password?: string): Promise<void> {
-    const response = await this.deps.request(
-      password === undefined ? { type: 'vault.import', content } : { type: 'vault.import', content, password },
-    );
+    const response = await this.deps.request(password === undefined ? { type: 'vault.import', content } : { type: 'vault.import', content, password });
     if (!response.ok) {
       this.dataStatus = { message: response.error.message, tone: 'danger' };
       return;
@@ -354,14 +431,37 @@ export class VwOptionsApp extends LitElement {
     const imported = (response.data as { imported: number }).imported;
     this.awaitingImportPassword = false;
     this.pendingImportContent = undefined;
-    this.dataStatus = { message: `Imported ${imported} item${imported === 1 ? '' : 's'}.`, tone: 'success' };
+    this.dataStatus = { message: t('options.data.imported', { count: imported }), tone: 'success' };
   }
 
+  private async handleDeleteLocal(): Promise<void> {
+    if (this.pending) return;
+    // Removing local data signs the account out on this device; the cloud vault is untouched.
+    if (typeof window !== 'undefined' && !window.confirm(t('options.data.deleteLocalDesc'))) return;
+    this.pending = true;
+    try {
+      await this.deps.request({ type: 'auth.logout' });
+      this.locked = true;
+      this.dataStatus = { message: t('common.done'), tone: 'success' };
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private handleCheckUpdate(): void {
+    this.aboutStatus = { message: t('options.about.upToDate'), tone: 'info' };
+  }
+
+  // --- render --------------------------------------------------------------------------------
   private renderSection() {
     switch (this.selected) {
-      case 'connection':
+      case 'account':
         return html`<vw-connection-section
           .serverUrl=${this.settings?.serverUrl ?? ''}
+          .accountEmail=${this.accountEmail}
+          .accountName=${this.accountName}
+          .lastSync=${this.lastSync}
+          .syncing=${this.syncing}
           ?pending=${this.pending}
           .status=${this.connectionStatus}
         ></vw-connection-section>`;
@@ -379,6 +479,17 @@ export class VwOptionsApp extends LitElement {
           ?pending=${this.pending}
           .status=${this.autofillStatus}
         ></vw-autofill-section>`;
+      case 'generator':
+        return html`<vw-generator-section></vw-generator-section>`;
+      case 'send':
+        return html`<vw-send-section
+          .sends=${this.sendsState}
+          ?locked=${this.locked}
+          ?pending=${this.pending}
+          .status=${this.sendStatus}
+        ></vw-send-section>`;
+      case 'appearance':
+        return html`<vw-appearance-section></vw-appearance-section>`;
       case 'data':
         return html`<vw-data-section
           ?locked=${this.locked}
@@ -387,27 +498,36 @@ export class VwOptionsApp extends LitElement {
           .status=${this.dataStatus}
         ></vw-data-section>`;
       case 'about':
-        return html`<vw-about-section .version=${this.deps.extensionVersion()}></vw-about-section>`;
+        return html`<vw-about-section .version=${this.deps.extensionVersion()} .status=${this.aboutStatus}></vw-about-section>`;
     }
   }
 
   protected override render() {
     return html`
-      <vw-page-shell
+      <vw-options-shell
         .items=${RAIL}
         .selected=${this.selected}
-        .narrow=${this.narrow}
-        @vw-tab-change=${(e: CustomEvent<{ id: string }>) => this.onTab(e)}
+        .version=${this.deps.extensionVersion()}
+        .accountName=${this.accountName}
+        .accountEmail=${this.accountEmail}
+        @vw-nav-change=${(e: CustomEvent<{ id: string }>) => this.onNav(e)}
         @vw-connection-save=${(e: CustomEvent<ConnectionSaveDetail>) => void this.handleConnectionSave(e)}
+        @vw-sync-now=${() => void this.handleSync()}
         @vw-autofill-save=${(e: CustomEvent<AutofillSaveDetail>) => void this.handleAutofillSave(e)}
         @vw-lock-timeout-save=${(e: CustomEvent<LockTimeoutSaveDetail>) => void this.handleLockTimeoutSave(e)}
         @vw-security-save=${(e: CustomEvent<SecuritySaveDetail>) => void this.handleSecuritySave(e)}
+        @vw-change-password=${(e: CustomEvent<ChangePasswordDetail>) => void this.handleChangePassword(e)}
+        @vw-send-create=${(e: CustomEvent<SendCreateDetail>) => void this.handleSendCreate(e)}
+        @vw-send-delete=${(e: CustomEvent<SendDeleteDetail>) => void this.handleSendDelete(e)}
+        @vw-copy=${(e: CustomEvent<{ value: string }>) => void this.handleCopy(e)}
         @vw-export=${(e: CustomEvent<ExportDetail>) => void this.handleExport(e)}
         @vw-import-file=${(e: CustomEvent<ImportFileDetail>) => void this.handleImportFile(e)}
         @vw-import-password=${(e: CustomEvent<ImportPasswordDetail>) => void this.handleImportPassword(e)}
+        @vw-delete-local=${() => void this.handleDeleteLocal()}
+        @vw-check-update=${() => this.handleCheckUpdate()}
       >
         ${this.renderSection() ?? nothing}
-      </vw-page-shell>
+      </vw-options-shell>
     `;
   }
 }

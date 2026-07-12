@@ -12,5 +12,8 @@ app.browser = {
   openReceive: async () => {
     await browser.tabs.create({ url: browser.runtime.getURL('ui/receive/receive.html') });
   },
+  openUrl: async (url: string) => {
+    await browser.tabs.create({ url: url.includes('://') ? url : `https://${url}` });
+  },
 };
 document.getElementById('app')?.append(app);

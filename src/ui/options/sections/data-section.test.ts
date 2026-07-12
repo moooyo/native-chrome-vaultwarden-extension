@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+vi.mock('webextension-polyfill', () => ({ default: { storage: { local: { get: async () => ({}), set: async () => {} }, onChanged: { addListener: () => {} } } } }));
 import './data-section.js';
 import type { VwDataSection } from './data-section.js';
 import type { ExportDetail, ImportFileDetail, ImportPasswordDetail } from '../types.js';
@@ -21,11 +22,11 @@ describe('vw-data-section locked state', () => {
     document.body.replaceChildren();
   });
 
-  it('disables import/export and explains how to unlock while locked', async () => {
+  it('disables import, export, and delete while locked', async () => {
     const el = await mount(true);
-    expect(el.shadowRoot!.textContent?.toLowerCase()).toContain('unlock');
-    expect(q<HTMLButtonElement>(el, '[data-export]').disabled).toBe(true);
     expect(q<HTMLButtonElement>(el, '[data-import]').disabled).toBe(true);
+    expect(q<HTMLButtonElement>(el, '[data-export]').disabled).toBe(true);
+    expect(q<HTMLButtonElement>(el, '[data-delete-local]').disabled).toBe(true);
   });
 });
 
@@ -34,39 +35,21 @@ describe('vw-data-section export', () => {
     document.body.replaceChildren();
   });
 
-  it('requires a password for an encrypted export', async () => {
+  it('requires a password for the encrypted export', async () => {
     const el = await mount(false);
     const exported = vi.fn();
     el.addEventListener('vw-export', exported);
     q<HTMLButtonElement>(el, '[data-export]').click();
-    await el.updateComplete;
-    q<HTMLButtonElement>(el, '[data-export-encrypted]').click();
-    await el.updateComplete;
     expect(exported).not.toHaveBeenCalled();
-    expect(el.shadowRoot!.textContent?.toLowerCase()).toContain('password');
   });
 
   it('emits an encrypted export with the entered password', async () => {
     const el = await mount(false);
     const exported = vi.fn();
     el.addEventListener('vw-export', (e) => exported((e as CustomEvent<ExportDetail>).detail));
-    q<HTMLButtonElement>(el, '[data-export]').click();
-    await el.updateComplete;
     q<HTMLInputElement>(el, '[data-export-pwd]').value = 's3cret';
-    q<HTMLButtonElement>(el, '[data-export-encrypted]').click();
-    expect(exported).toHaveBeenCalledWith({ password: 's3cret' });
-  });
-
-  it('emits a plaintext export as an explicit second action', async () => {
-    const el = await mount(false);
-    const exported = vi.fn();
-    el.addEventListener('vw-export', (e) => exported((e as CustomEvent<ExportDetail>).detail));
-    // No plaintext control is exposed until the export panel is opened.
-    expect(el.shadowRoot!.querySelector('[data-export-plain]')).toBeNull();
     q<HTMLButtonElement>(el, '[data-export]').click();
-    await el.updateComplete;
-    q<HTMLButtonElement>(el, '[data-export-plain]').click();
-    expect(exported).toHaveBeenCalledWith({});
+    expect(exported).toHaveBeenCalledWith({ password: 's3cret' });
   });
 });
 
@@ -86,7 +69,7 @@ describe('vw-data-section import', () => {
     expect(imported).toHaveBeenCalledWith({ file });
   });
 
-  it('prompts for the export password when the root flags an encrypted import', async () => {
+  it('prompts for and emits the export password when awaiting an encrypted import', async () => {
     const el = await mount(false);
     el.awaitingImportPassword = true;
     await el.updateComplete;
@@ -95,5 +78,20 @@ describe('vw-data-section import', () => {
     q<HTMLInputElement>(el, '[data-import-pwd]').value = 'exportpw';
     q<HTMLButtonElement>(el, '[data-import-go]').click();
     expect(done).toHaveBeenCalledWith({ password: 'exportpw' });
+  });
+});
+
+describe('vw-data-section delete', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it('emits delete-local with no detail', async () => {
+    const el = await mount(false);
+    const deleted = vi.fn();
+    el.addEventListener('vw-delete-local', (e) => deleted((e as CustomEvent).detail));
+    q<HTMLButtonElement>(el, '[data-delete-local]').click();
+    expect(deleted).toHaveBeenCalledTimes(1);
+    expect(deleted).toHaveBeenCalledWith(null);
   });
 });

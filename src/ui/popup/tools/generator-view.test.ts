@@ -1,5 +1,19 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// The redesigned view composes the (frozen) MiYu design system, whose i18n module imports
+// webextension-polyfill at the top of its graph. That polyfill throws when loaded outside an
+// extension, so — like auth-views.test.ts — we stub it. LocalizeController only subscribes on
+// connect; no storage call happens at mount, but the stub covers the surface it could touch.
+vi.mock('webextension-polyfill', () => ({
+  default: {
+    storage: {
+      local: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) },
+      onChanged: { addListener: vi.fn() },
+    },
+  },
+}));
+
 import './generator-view.js';
 import type { VwGeneratorView } from './generator-view.js';
 
@@ -18,10 +32,24 @@ function output(el: VwGeneratorView): string {
   return q<HTMLElement>(el, '[data-output]').textContent ?? '';
 }
 
-async function setInput(el: VwGeneratorView, sel: string, value: string): Promise<void> {
-  const input = q<HTMLInputElement>(el, sel);
+async function setRange(el: VwGeneratorView, value: string): Promise<void> {
+  const input = q<HTMLInputElement>(el, '[data-length]');
   input.value = value;
   input.dispatchEvent(new Event('input'));
+  await el.updateComplete;
+}
+
+async function setMode(el: VwGeneratorView, id: string): Promise<void> {
+  q(el, '[data-mode]').dispatchEvent(
+    new CustomEvent('vw-segmented-change', { detail: { id }, bubbles: true, composed: true }),
+  );
+  await el.updateComplete;
+}
+
+async function setToggle(el: VwGeneratorView, marker: string, checked: boolean): Promise<void> {
+  q(el, `[data-toggle='${marker}']`).dispatchEvent(
+    new CustomEvent('vw-toggle-change', { detail: { checked }, bubbles: true, composed: true }),
+  );
   await el.updateComplete;
 }
 
@@ -35,65 +63,94 @@ describe('vw-generator-view modes', () => {
     document.body.replaceChildren();
   });
 
-  it('starts in password mode with a generated value', async () => {
+  it('starts in random mode with a value at the default length', async () => {
     const el = await mount();
-    expect(q<HTMLButtonElement>(el, '[data-mode-password]').getAttribute('aria-selected')).toBe('true');
-    expect(output(el).length).toBeGreaterThanOrEqual(4);
+    expect(q<HTMLElement & { value: string }>(el, '[data-mode]').value).toBe('random');
+    // Random default length is 14 (within the 8–40 slider range); output length matches exactly.
+    expect(output(el).length).toBe(14);
+    expect(q<HTMLElement>(el, '[data-length-value]').textContent).toBe('14');
   });
 
-  it('switches to passphrase mode and produces separator-joined words', async () => {
+  it('produces a passphrase of separator-joined words in memorable mode', async () => {
     const el = await mount();
-    await click(el, '[data-mode-passphrase]');
-    expect(q<HTMLButtonElement>(el, '[data-mode-passphrase]').getAttribute('aria-selected')).toBe('true');
-    expect(output(el).split('-').length).toBeGreaterThanOrEqual(3);
+    await setMode(el, 'memorable');
+    // numWords tracks the length slider (default 14, clamped to 3–20); one digit is appended to a
+    // single word by includeNumber, never a separator, so the word count is preserved.
+    expect(output(el).split('-').length).toBe(14);
   });
 
-  it('switches to username mode', async () => {
+  it('produces a numeric-only value in PIN mode', async () => {
     const el = await mount();
-    await click(el, '[data-mode-username]');
-    expect(q<HTMLButtonElement>(el, '[data-mode-username]').getAttribute('aria-selected')).toBe('true');
-    expect(q(el, '[data-ut-plus]')).toBeTruthy();
+    await setMode(el, 'pin');
+    expect(output(el)).toMatch(/^[0-9]+$/);
+    expect(output(el).length).toBe(14);
   });
 });
 
-describe('vw-generator-view option limits', () => {
+describe('vw-generator-view length + toggles', () => {
   afterEach(() => {
     document.body.replaceChildren();
   });
 
-  it('clamps password length to a maximum of 128', async () => {
+  it('regenerates the random password to the chosen slider length', async () => {
     const el = await mount();
-    await setInput(el, '[data-length]', '500');
-    expect(output(el).length).toBe(128);
+    await setRange(el, '40');
+    expect(output(el).length).toBe(40);
+    expect(q<HTMLElement>(el, '[data-length-value]').textContent).toBe('40');
+    await setRange(el, '8');
+    expect(output(el).length).toBe(8);
   });
 
-  it('clamps password length to a minimum of 4', async () => {
+  it('clamps memorable word count to a maximum of 20', async () => {
     const el = await mount();
-    await setInput(el, '[data-length]', '1');
-    expect(output(el).length).toBe(4);
-  });
-
-  it('clamps passphrase word count to a maximum of 20', async () => {
-    const el = await mount();
-    await click(el, '[data-mode-passphrase]');
-    await setInput(el, '[data-separator]', '-');
-    await setInput(el, '[data-words]', '99');
-    // includeNumber appends a digit to one word, never a separator, so word count is preserved.
+    await setMode(el, 'memorable');
+    await setRange(el, '40');
     expect(output(el).split('-').length).toBe(20);
   });
 
-  it('clamps username random length to a maximum of 32', async () => {
+  it('yields only lowercase letters when every character-set toggle is off', async () => {
     const el = await mount();
-    await click(el, '[data-mode-username]');
-    await setInput(el, '[data-base]', 'you@example.com');
-    await setInput(el, '[data-un-len]', '99');
-    const match = /^you\+([a-z0-9]+)@example\.com$/.exec(output(el));
-    expect(match).not.toBeNull();
-    expect(match?.[1]?.length).toBe(32);
+    await setToggle(el, 'upper', false);
+    await setToggle(el, 'number', false);
+    await setToggle(el, 'symbol', false);
+    // Lowercase is always on, so the pool is never empty and the value is all-lowercase.
+    expect(output(el)).toMatch(/^[a-z]+$/);
+  });
+
+  it('adds digits back to the random password when the numbers toggle is on', async () => {
+    const el = await mount();
+    await setToggle(el, 'upper', false);
+    await setToggle(el, 'symbol', false);
+    await setRange(el, '40');
+    // lowercase + numbers only.
+    expect(output(el)).toMatch(/^[a-z0-9]+$/);
+    expect(output(el)).toMatch(/[0-9]/);
   });
 });
 
-describe('vw-generator-view history and copy', () => {
+describe('vw-generator-view strength', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  function strengthLabel(el: VwGeneratorView): string {
+    return q<HTMLElement>(el, '[data-strength]').textContent?.trim() ?? '';
+  }
+
+  it('labels strength by output length', async () => {
+    const el = await mount();
+    // default length 14 → 强
+    expect(strengthLabel(el)).toBe('强');
+    await setRange(el, '40');
+    expect(strengthLabel(el)).toBe('极强');
+    await setRange(el, '10');
+    expect(strengthLabel(el)).toBe('中等');
+    await setRange(el, '8');
+    expect(strengthLabel(el)).toBe('较弱');
+  });
+});
+
+describe('vw-generator-view copy, history and back', () => {
   afterEach(() => {
     document.body.replaceChildren();
   });
@@ -107,7 +164,7 @@ describe('vw-generator-view history and copy', () => {
     expect(recorded).toHaveBeenCalledWith({ value: before });
   });
 
-  it('copies the current value with the mode label and records it', async () => {
+  it('copies the current value with the password label and records it', async () => {
     const el = await mount();
     const current = output(el);
     const copied = vi.fn();
@@ -115,42 +172,34 @@ describe('vw-generator-view history and copy', () => {
     el.addEventListener('vw-copy', (e) => copied((e as CustomEvent).detail));
     el.addEventListener('vw-history-add', (e) => recorded((e as CustomEvent).detail));
     await click(el, '[data-copy]');
-    expect(copied).toHaveBeenCalledWith({ value: current, label: 'Password' });
+    expect(copied).toHaveBeenCalledWith({ value: current, label: '密码' });
     expect(recorded).toHaveBeenCalledWith({ value: current });
   });
 
-  it('renders injected history with per-entry copy labelled Password', async () => {
+  it('copies a PIN with the PIN label', async () => {
     const el = await mount();
-    el.history = ['old-secret'];
-    await el.updateComplete;
+    await setMode(el, 'pin');
+    const current = output(el);
     const copied = vi.fn();
     el.addEventListener('vw-copy', (e) => copied((e as CustomEvent).detail));
-    await click(el, '[data-copy-hist]');
-    expect(copied).toHaveBeenCalledWith({ value: 'old-secret', label: 'Password' });
+    await click(el, '[data-copy]');
+    expect(copied).toHaveBeenCalledWith({ value: current, label: 'PIN' });
   });
 
-  it('emits vw-history-clear from the Clear control', async () => {
+  it('emits vw-item-back from the close control', async () => {
     const el = await mount();
-    el.history = ['a', 'b'];
-    await el.updateComplete;
-    const cleared = vi.fn();
-    el.addEventListener('vw-history-clear', cleared);
-    await click(el, '[data-clear]');
-    expect(cleared).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('vw-generator-view account-email prefill', () => {
-  afterEach(() => {
-    document.body.replaceChildren();
+    const back = vi.fn();
+    el.addEventListener('vw-item-back', back);
+    await click(el, '[data-close]');
+    expect(back).toHaveBeenCalledTimes(1);
   });
 
-  it('prefills the plus-addressed base email from the injected account email', async () => {
+  it('accepts injected history/accountEmail without rendering a history list', async () => {
     const el = await mount();
+    el.history = ['old-secret'];
     el.accountEmail = 'me@example.com';
-    await click(el, '[data-mode-username]');
     await el.updateComplete;
-    expect(q<HTMLInputElement>(el, '[data-base]').value).toBe('me@example.com');
-    expect(output(el)).toMatch(/^me\+[a-z0-9]+@example\.com$/);
+    // The redesigned view has no history UI; the props remain part of the public contract.
+    expect(output(el).length).toBeGreaterThan(0);
   });
 });

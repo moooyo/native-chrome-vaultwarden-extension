@@ -43,6 +43,7 @@ describe('vw-passkey-consent', () => {
       result = confirmed;
     });
     const confirm = shadowOf(element).querySelector('#vw-pk-confirm');
+    // An untrusted (page-forged) click must be ignored.
     confirm?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(result).toBeUndefined();
     trustedClick(confirm);
@@ -87,7 +88,7 @@ describe('vw-passkey-consent', () => {
 
   it('shows the rpId so the user knows where they are signing in', async () => {
     const element = await mountConsent('login.acme.com', () => {});
-    expect(shadowOf(element).querySelector('.rp')?.textContent).toContain('login.acme.com');
+    expect(shadowOf(element).querySelector('.domain')?.textContent).toContain('login.acme.com');
   });
 });
 
@@ -129,8 +130,18 @@ describe('vw-passkey-register', () => {
     const targets = root.querySelectorAll('button.target');
     trustedClick(targets[1] ?? null);
     expect(result).toEqual({ targetCipherId: 'c2' });
-    expect(root.querySelector('[data-target]')).toBeNull();
+    // The cipher id is selected by rendered index and must never reach the DOM.
     expect(root.innerHTML).not.toContain('c2');
+  });
+
+  it('ignores an untrusted (page-forged) target click', async () => {
+    let result: PasskeyRegisterResult | undefined;
+    const element = await mountRegister([{ id: 'c1', name: 'Example', username: 'me' }], (r) => {
+      result = r;
+    });
+    const target = shadowOf(element).querySelector('button.target');
+    target?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(result).toBeUndefined();
   });
 
   it('cancels on a trusted cancel click', async () => {
@@ -142,12 +153,30 @@ describe('vw-passkey-register', () => {
     expect(result).toEqual({ cancelled: true });
   });
 
+  it('cancels on a trusted click outside the card', async () => {
+    let result: PasskeyRegisterResult | undefined;
+    const element = await mountRegister([{ id: 'c1', name: 'Example' }], (r) => {
+      result = r;
+    });
+    trustedClick(shadowOf(element).querySelector('.overlay'));
+    expect(result).toEqual({ cancelled: true });
+  });
+
+  it('cancels on the Escape key', async () => {
+    let result: PasskeyRegisterResult | undefined;
+    await mountRegister([{ id: 'c1', name: 'Example' }], (r) => {
+      result = r;
+    });
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(result).toEqual({ cancelled: true });
+  });
+
   it('renders a long target list as locally scrollable', async () => {
     const element = await mountRegister(
       Array.from({ length: 14 }, (_, index) => ({ id: `c${index}`, name: `Item ${index}` })),
       () => {},
     );
-    expect(shadowOf(element).querySelector('.targets.scrollable')).not.toBeNull();
+    expect(shadowOf(element).querySelector('.list.scrollable')).not.toBeNull();
   });
 
   it('fires the result at most once', async () => {

@@ -40,6 +40,9 @@ describe('vw-save-bar', () => {
     });
     const root = shadow(element);
 
+    expect(root.querySelector('#vw-save-act')?.textContent).toContain('Save');
+    expect(root.querySelector('#vw-save-dismiss')?.textContent).toContain('暂不');
+
     root.querySelector('#vw-save-act')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(onAction).not.toHaveBeenCalled();
 

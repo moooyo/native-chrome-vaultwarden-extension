@@ -58,7 +58,7 @@ export function createContextMenu(deps: ContextMenuDeps) {
       if ((await deps.getState()) !== 'unlocked') return; // never leak item names when locked / logged out
       const [cards, identities] = await Promise.all([deps.findFillItems('card'), deps.findFillItems('identity')]);
       if (cards.length === 0 && identities.length === 0) return;
-      deps.menus.create({ id: ROOT_ID, title: 'Vaultwarden', contexts: ['editable'] });
+      deps.menus.create({ id: ROOT_ID, title: '密屿', contexts: ['editable'] });
       for (const group of GROUPS) {
         const items = group.kind === 'card' ? cards : identities;
         if (items.length === 0) continue;

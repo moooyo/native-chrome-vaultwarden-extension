@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+vi.mock('webextension-polyfill', () => ({ default: { storage: { local: { get: async () => ({}), set: async () => {} }, onChanged: { addListener: () => {} } } } }));
 import './autofill-section.js';
 import type { VwAutofillSection } from './autofill-section.js';
 import type { AutofillSaveDetail } from '../types.js';
@@ -21,27 +22,25 @@ describe('vw-autofill-section', () => {
     document.body.replaceChildren();
   });
 
-  it('shows plain-language help for the selected strategy', async () => {
+  it('renders the MiYu setting-cards: strategy select, both toggles, and the shortcut chip', async () => {
     const el = await mount(0);
-    expect(q<HTMLElement>(el, '[data-strategy-help]').textContent?.toLowerCase()).toContain('registrable domain');
+    expect(q(el, '[data-strategy]')).toBeTruthy();
+    expect(q(el, '[data-inline]')).toBeTruthy();
+    expect(q(el, '[data-auto-submit]')).toBeTruthy();
+    expect(q<HTMLElement>(el, '[data-shortcut]').textContent).toContain('Space');
   });
 
-  it('updates the help text when the strategy changes', async () => {
-    const el = await mount(0);
-    const select = q<HTMLSelectElement>(el, '[data-strategy]');
-    select.value = '5';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    await el.updateComplete;
-    expect(q<HTMLElement>(el, '[data-strategy-help]').textContent?.toLowerCase()).toContain('never');
-  });
-
-  it('emits the chosen strategy on save', async () => {
+  it('emits the chosen strategy when the dropdown changes', async () => {
     const el = await mount(0);
     const saved = vi.fn();
     el.addEventListener('vw-autofill-save', (e) => saved((e as CustomEvent<AutofillSaveDetail>).detail));
-    const select = q<HTMLSelectElement>(el, '[data-strategy]');
-    select.value = '1';
-    q<HTMLButtonElement>(el, '[data-strategy-save]').click();
+    const select = q<HTMLElement>(el, '[data-strategy]');
+    select.dispatchEvent(new CustomEvent('vw-select-change', { detail: { value: '1' }, bubbles: true, composed: true }));
     expect(saved).toHaveBeenCalledWith({ defaultUriMatchStrategy: 1 });
+  });
+
+  it('reflects the loaded strategy as the select value', async () => {
+    const el = await mount(5);
+    expect(q<HTMLElement & { value: string }>(el, '[data-strategy]').value).toBe('5');
   });
 });

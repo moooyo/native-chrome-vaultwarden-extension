@@ -1,100 +1,97 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
-import { controlStyles } from '../../components/styles.js';
-import { uiIcon } from '../../components/icon.js';
+import { LocalizeController, t } from '../../i18n/index.js';
+import { getPrefs, setPref, subscribePrefs } from '../../prefs.js';
+import '../../components/setting-card.js';
+import '../../components/toggle.js';
+import '../../components/select-menu.js';
 import '../../components/status-message.js';
+import type { SelectOption } from '../../components/select-menu.js';
 import { UriMatchStrategy, isUriMatchStrategySetting, type UriMatchStrategySetting } from '../../../core/vault/uri-match.js';
 import type { AutofillSaveDetail, SectionStatus } from '../types.js';
 
-const STRATEGY_LABELS: Record<UriMatchStrategySetting, string> = {
-  [UriMatchStrategy.Domain]: 'Base domain',
-  [UriMatchStrategy.Host]: 'Host',
-  [UriMatchStrategy.StartsWith]: 'Starts with',
-  [UriMatchStrategy.Exact]: 'Exact',
-  [UriMatchStrategy.RegularExpression]: 'Regular expression',
-  [UriMatchStrategy.Never]: 'Never',
-};
-
-/** Plain-language description of each match strategy, shown beneath the select. */
-const STRATEGY_HELP: Record<UriMatchStrategySetting, string> = {
-  [UriMatchStrategy.Domain]: 'Fills when the registrable domain matches — example.com matches app.example.com. The safe default for most sites.',
-  [UriMatchStrategy.Host]: 'Fills only when the host and port match exactly, so app.example.com and example.com are treated separately.',
-  [UriMatchStrategy.StartsWith]: 'Fills when the page address starts with the saved URI. Useful for path-scoped logins.',
-  [UriMatchStrategy.Exact]: 'Fills only when the full address matches the saved URI character for character.',
-  [UriMatchStrategy.RegularExpression]: 'Fills when the page address matches the saved URI as a regular expression. For advanced setups.',
-  [UriMatchStrategy.Never]: 'Never offers to fill automatically for these items.',
-};
-
-const STRATEGY_ORDER: UriMatchStrategySetting[] = [
-  UriMatchStrategy.Domain,
-  UriMatchStrategy.Host,
-  UriMatchStrategy.StartsWith,
-  UriMatchStrategy.Exact,
-  UriMatchStrategy.RegularExpression,
-  UriMatchStrategy.Never,
+/** Human labels for each URI-match strategy, in display order. The enum values are the contract;
+ *  the labels are section-local (there are no per-strategy i18n keys). */
+const STRATEGY_OPTIONS: SelectOption[] = [
+  { value: String(UriMatchStrategy.Domain), label: 'Base domain' },
+  { value: String(UriMatchStrategy.Host), label: 'Host' },
+  { value: String(UriMatchStrategy.StartsWith), label: 'Starts with' },
+  { value: String(UriMatchStrategy.Exact), label: 'Exact' },
+  { value: String(UriMatchStrategy.RegularExpression), label: 'Regular expression' },
+  { value: String(UriMatchStrategy.Never), label: 'Never' },
 ];
 
 /**
- * Autofill settings: the default URI match strategy with plain-language help that follows the
- * selection. The root persists the choice through `settings.save`, reusing the already-loaded
- * server URL (no host-permission prompt); this section only emits the typed strategy.
+ * Autofill settings, MiYu styling: the default URI match strategy (a real dropdown that saves on
+ * change) plus the inline-suggestion and auto-submit UI-local toggles and the fill shortcut. The
+ * strategy persists through the root's `settings.save`; this section only emits the typed strategy
+ * (`vw-autofill-save`). The toggles are UI-local prefs written straight to the prefs module.
  */
 export class VwAutofillSection extends LitElement {
   static override properties = {
     defaultUriMatchStrategy: { attribute: false },
     pending: { type: Boolean },
     status: { attribute: false },
-    selected: { state: true },
   };
 
   declare defaultUriMatchStrategy: UriMatchStrategySetting;
   declare pending: boolean;
   declare status: SectionStatus | undefined;
-  declare selected: UriMatchStrategySetting;
+
+  private i18n = new LocalizeController(this);
+  private unsubscribe: (() => void) | undefined = undefined;
 
   constructor() {
     super();
     this.defaultUriMatchStrategy = UriMatchStrategy.Domain;
     this.pending = false;
     this.status = undefined;
-    this.selected = UriMatchStrategy.Domain;
-  }
-
-  override willUpdate(changed: Map<PropertyKey, unknown>): void {
-    if (changed.has('defaultUriMatchStrategy')) {
-      this.selected = this.defaultUriMatchStrategy;
-    }
   }
 
   static override styles = [
     themeTokens,
-    controlStyles,
     css`
-      :host { display: block; max-width: 760px; }
-      h1 { margin: 0 0 4px; font-size: 28px; color: var(--vw-ink-strong); }
-      p.lede { margin: 0 0 24px; color: var(--vw-muted); font-size: 14px; }
-      form { display: flex; flex-direction: column; gap: 12px; max-width: 620px; padding: 16px 12px; border:1px solid var(--vw-line); border-radius:var(--vw-radius-row); background:var(--vw-panel); }
-      .select { width: 100%; box-sizing: border-box; }
-      .help { margin: 0; font-size: 12px; color: var(--vw-muted); }
-      .status { margin-top: 12px; }
+      :host { display: flex; flex-direction: column; gap: 8px; }
+      .shortcut { display: inline-flex; align-items: center; gap: 10px; }
+      .keychip {
+        font-family: var(--vw-font-mono);
+        font-size: 12px;
+        color: var(--vw-ink);
+        background: var(--vw-icon-hover);
+        border: 1px solid var(--vw-line-3);
+        border-radius: 6px;
+        padding: 3px 8px;
+      }
+      .btn-outline {
+        height: 30px;
+        padding: 0 13px;
+        border: 1px solid var(--vw-line-3);
+        border-radius: var(--vw-radius-input);
+        background: var(--vw-card);
+        color: var(--vw-text-4);
+        font-family: inherit;
+        font-size: 12.5px;
+        cursor: pointer;
+      }
+      .btn-outline:hover:not(:disabled) { background: var(--vw-row-hover); }
+      .btn-outline:disabled { opacity: 0.5; cursor: default; }
+      button:focus-visible { outline: none; box-shadow: var(--vw-focus); }
     `,
   ];
 
-  private onChange(event: Event): void {
-    const value = Number((event.target as HTMLSelectElement).value);
-    if (isUriMatchStrategySetting(value)) this.selected = value;
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.unsubscribe = subscribePrefs(() => this.requestUpdate());
   }
 
-  // Set the native <select> value after its <option>s render, so the loaded strategy shows.
-  protected override updated(): void {
-    const select = this.renderRoot.querySelector<HTMLSelectElement>('[data-strategy]');
-    if (select) select.value = String(this.selected);
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
   }
 
-  private save(event: Event): void {
-    event.preventDefault();
-    if (this.pending) return;
-    const raw = Number(this.renderRoot.querySelector<HTMLSelectElement>('[data-strategy]')?.value ?? '');
+  private onStrategyChange(value: string): void {
+    const raw = Number(value);
     if (!isUriMatchStrategySetting(raw)) return;
     this.dispatchEvent(new CustomEvent<AutofillSaveDetail>('vw-autofill-save', {
       detail: { defaultUriMatchStrategy: raw },
@@ -103,27 +100,47 @@ export class VwAutofillSection extends LitElement {
     }));
   }
 
-  private renderStatus() {
-    return this.status
-      ? html`<vw-status-message class="status" tone=${this.status.tone} .message=${this.status.message}></vw-status-message>`
-      : nothing;
-  }
-
   protected override render() {
+    const prefs = getPrefs();
     return html`
-      <h1>Autofill</h1>
-      <p class="lede">How saved logins are matched to the page you're on.</p>
-      <form @submit=${(e: Event) => this.save(e)}>
-        <label class="field">
-          <span>Default URI match detection</span>
-          <select class="select" data-strategy @change=${(e: Event) => this.onChange(e)}>
-            ${STRATEGY_ORDER.map((s) => html`<option value=${s}>${STRATEGY_LABELS[s]}</option>`)}
-          </select>
-        </label>
-        <p class="help" data-strategy-help>${STRATEGY_HELP[this.selected]}</p>
-        <button type="submit" class="button primary" data-strategy-save ?disabled=${this.pending}>${uiIcon('check')}<span>Save autofill</span></button>
-      </form>
-      ${this.renderStatus()}
+      <vw-setting-card heading=${t('options.autofill.matchTitle')} description=${t('options.autofill.matchDesc')}>
+        <vw-select
+          data-strategy
+          .options=${STRATEGY_OPTIONS}
+          .value=${String(this.defaultUriMatchStrategy)}
+          .label=${t('options.autofill.matchTitle')}
+          @vw-select-change=${(e: CustomEvent<{ value: string }>) => this.onStrategyChange(e.detail.value)}
+        ></vw-select>
+      </vw-setting-card>
+
+      <vw-setting-card heading=${t('options.autofill.inline')} description=${t('options.autofill.inlineDesc')}>
+        <vw-toggle
+          data-inline
+          .checked=${prefs.inlineSuggestions}
+          @vw-toggle-change=${(e: CustomEvent<{ checked: boolean }>) => setPref('inlineSuggestions', e.detail.checked)}
+        ></vw-toggle>
+      </vw-setting-card>
+
+      <vw-setting-card heading=${t('options.autofill.autoSubmit')} description=${t('options.autofill.autoSubmitDesc')}>
+        <vw-toggle
+          data-auto-submit
+          .checked=${prefs.autoSubmit}
+          @vw-toggle-change=${(e: CustomEvent<{ checked: boolean }>) => setPref('autoSubmit', e.detail.checked)}
+        ></vw-toggle>
+      </vw-setting-card>
+
+      <vw-setting-card heading=${t('options.autofill.shortcut')} description=${t('options.autofill.shortcutDesc')}>
+        <div class="shortcut">
+          <span class="keychip" data-shortcut>⌘⇧Space</span>
+          <button type="button" class="btn-outline" data-shortcut-change @click=${() => {}}>
+            ${t('options.autofill.change')}
+          </button>
+        </div>
+      </vw-setting-card>
+
+      ${this.status
+        ? html`<vw-status-message data-status .tone=${this.status.tone} .message=${this.status.message}></vw-status-message>`
+        : nothing}
     `;
   }
 }

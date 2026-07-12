@@ -1,7 +1,9 @@
 import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
 import { controlStyles } from '../../components/styles.js';
-import { uiIcon, type IconName } from '../../components/icon.js';
+import { uiIcon } from '../../components/icon.js';
+import { LocalizeController, t } from '../../i18n/index.js';
+import '../../components/logo.js';
 import '../../components/status-message.js';
 
 export type AuthViewMode = 'login' | 'register' | 'twoFactor' | 'unlock';
@@ -36,25 +38,25 @@ export interface EmailChangeDetail {
   email: string;
 }
 
-/** Friendly names for Bitwarden two-factor provider ids (unchanged from the live popup). */
+/** Friendly names for Bitwarden two-factor provider ids (unchanged behaviour from the live popup). */
 const TWO_FACTOR_NAMES: Record<number, string> = {
-  0: 'Authenticator app',
-  1: 'Email',
+  0: '验证器应用', // TODO i18n
+  1: '邮箱验证码', // TODO i18n
   2: 'Duo',
   3: 'YubiKey OTP',
-  6: 'Duo (organization)',
-  7: 'Security key (FIDO2)',
+  6: 'Duo（组织）', // TODO i18n
+  7: '安全密钥 (FIDO2)', // TODO i18n
 };
 
 /** Providers whose token is a code/OTP string the user can type (unchanged from the live popup). */
 const CODE_BASED_PROVIDERS = [0, 1, 2, 3, 6];
 
-/** Per-provider input hint for the code field (unchanged from the live popup). */
+/** Per-provider input hint for the code field (unchanged behaviour from the live popup). */
 function twoFactorHint(provider: number): string {
-  if (provider === 1) return 'Enter the code emailed to you.';
-  if (provider === 3) return 'Touch your YubiKey to emit its one-time code.';
-  if (provider === 2 || provider === 6) return 'Enter a passcode from the Duo Mobile app.';
-  return 'Enter the 6-digit code from your authenticator app.';
+  if (provider === 1) return '输入发送到你邮箱的验证码'; // TODO i18n
+  if (provider === 3) return '轻触 YubiKey 以生成一次性验证码'; // TODO i18n
+  if (provider === 2 || provider === 6) return '输入 Duo Mobile 应用中的验证码'; // TODO i18n
+  return '输入验证器应用中的 6 位验证码'; // TODO i18n
 }
 
 /**
@@ -81,6 +83,8 @@ export class VwAuthViews extends LitElement {
   declare deviceRemembered: boolean;
   declare deviceForgotten: boolean;
 
+  private i18n = new LocalizeController(this);
+
   /** Locally-tracked provider selection for the two-factor dropdown; presentation-only, never
    *  read by the root (it always resolves the provider from the submit event's detail). */
   private selectedProvider: number | undefined;
@@ -104,45 +108,52 @@ export class VwAuthViews extends LitElement {
         display: block;
         height: 100%;
       }
+
+      /* Shared column for login / register / two-factor ------------------------------------ */
       .auth {
         display: flex;
         flex-direction: column;
-        gap: 12px;
-        padding: 32px 20px 20px;
+        gap: 14px;
+        padding: 26px 28px;
         box-sizing: border-box;
       }
-      .auth-head {
+      .head {
         display: flex;
         flex-direction: column;
+        gap: 6px;
+      }
+      .brand {
+        display: flex;
         align-items: center;
-        gap: 4px;
-        text-align: center;
+        gap: 8px;
       }
-      .auth-head .brand-mark {
-        color: var(--vw-blue-600);
+      .brand-name {
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        color: var(--vw-ink);
       }
-      .auth svg {
-        width: 16px;
-        height: 16px;
-        flex: none;
-      }
-      .auth-head .brand-mark svg {
-        width: 28px;
-        height: 28px;
-      }
-      .auth-head h1 {
+      .title {
         margin: 0;
         font-size: 16px;
+        font-weight: 600;
+        color: var(--vw-ink);
       }
-      .auth-head p {
+      .subtitle {
         margin: 0;
-        font-size: 13px;
+        font-size: 12px;
         color: var(--vw-muted);
       }
+
       form {
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 12px;
+      }
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
       }
       .field-label {
         font-size: 12px;
@@ -156,37 +167,177 @@ export class VwAuthViews extends LitElement {
       .full {
         width: 100%;
       }
-      .button.danger {
-        border-color: var(--vw-danger);
-        color: var(--vw-danger);
-      }
-      .button.danger:hover {
-        background: var(--vw-danger);
-        border-color: var(--vw-danger);
-        color: #fff;
-      }
-      .link-button {
-        border: none;
-        background: none;
-        padding: 0;
-        color: var(--vw-blue-600);
-        font-size: 12px;
-        text-decoration: underline;
-        cursor: pointer;
+
+      .select {
+        width: 100%;
+        height: 36px;
+        padding: 0 10px;
+        border: 1px solid transparent;
+        border-radius: var(--vw-radius-control);
+        background: var(--vw-fill);
+        color: var(--vw-ink);
         font-family: var(--vw-font-ui);
+        font-size: 13px;
       }
+      .select:focus {
+        outline: none;
+        border-color: var(--vw-accent);
+      }
+
       .remember-row {
         display: flex;
         align-items: center;
-        gap: 6px;
-        font-size: 13px;
+        gap: 8px;
+        font-size: 12.5px;
+        color: var(--vw-text-2);
       }
-      .pin-unlock {
+      .remember-row input {
+        accent-color: var(--vw-accent);
+      }
+
+      .link {
+        align-self: center;
+        border: none;
+        background: none;
+        padding: 2px 4px;
+        color: var(--vw-teal-text);
+        font-family: var(--vw-font-ui);
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .link:hover {
+        text-decoration: underline;
+      }
+      .link:disabled {
+        opacity: 0.5;
+        cursor: default;
+        text-decoration: none;
+      }
+
+      /* Locked (unlock) screen — the primary, pixel-specced surface ------------------------- */
+      .locked {
+        flex: 1;
         display: flex;
         flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 24px;
+        box-sizing: border-box;
+        text-align: center;
+      }
+      .locked-title {
+        margin: 0;
+        font-size: 15.5px;
+        font-weight: 600;
+        color: var(--vw-ink);
+      }
+      .locked-sub {
+        margin: -6px 0 0;
+        font-size: 12px;
+        color: var(--vw-muted);
+      }
+      .locked-form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: 236px;
+      }
+      .locked-input {
+        width: 100%;
+        height: 36px;
+        padding: 0 12px;
+        border: 1px solid transparent;
+        border-radius: var(--vw-radius-control);
+        background: var(--vw-fill);
+        color: var(--vw-ink);
+        font-family: var(--vw-font-ui);
+        font-size: 13px;
+      }
+      .locked-input::placeholder {
+        color: var(--vw-placeholder);
+      }
+      .locked-input:focus {
+        outline: none;
+        border-color: var(--vw-accent);
+      }
+      .locked-btn {
+        width: 100%;
+        height: 36px;
+        border: none;
+        border-radius: var(--vw-radius-control);
+        background: var(--vw-primary-bg);
+        color: var(--vw-primary-fg);
+        font-family: var(--vw-font-ui);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background-color var(--vw-dur-fast);
+      }
+      .locked-btn:hover:not(:disabled) {
+        background: var(--vw-primary-bg-hover);
+      }
+      .locked-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+
+      .pin-row {
+        display: flex;
         gap: 8px;
-        padding-top: 8px;
-        border-top: 1px solid var(--vw-line);
+        width: 236px;
+        margin-top: 4px;
+      }
+      .pin-input {
+        flex: 1;
+      }
+      .pin-btn {
+        flex: none;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        border: 1px solid var(--vw-line-3);
+        background: transparent;
+        color: var(--vw-teal-text);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: background-color var(--vw-dur-fast);
+      }
+      .pin-btn:hover:not(:disabled) {
+        background: var(--vw-teal-10);
+      }
+      .pin-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .pin-btn svg {
+        width: 18px;
+        height: 18px;
+      }
+
+      .locked-logout {
+        margin-top: 2px;
+        border: none;
+        background: none;
+        padding: 2px 4px;
+        color: var(--vw-muted);
+        font-family: var(--vw-font-ui);
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .locked-logout:hover {
+        color: var(--vw-danger);
+      }
+      .locked-logout:disabled {
+        opacity: 0.5;
+        cursor: default;
+        color: var(--vw-muted);
+      }
+
+      .status {
+        width: 236px;
       }
     `,
   ];
@@ -213,12 +364,15 @@ export class VwAuthViews extends LitElement {
     this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
   }
 
-  private renderHead(iconName: IconName, title: string, subtitle: string) {
+  private renderBrandHead(title: string, subtitle: string) {
     return html`
-      <div class="auth-head">
-        <span class="brand-mark">${uiIcon(iconName)}</span>
-        <h1>${title}</h1>
-        <p>${subtitle}</p>
+      <div class="head">
+        <div class="brand">
+          <vw-logo variant="header"></vw-logo>
+          <span class="brand-name">${t('common.brand')}</span>
+        </div>
+        <h1 class="title">${title}</h1>
+        ${subtitle ? html`<p class="subtitle">${subtitle}</p>` : nothing}
       </div>
     `;
   }
@@ -238,12 +392,12 @@ export class VwAuthViews extends LitElement {
 
   private renderRememberForgetSlot() {
     if (this.deviceForgotten) {
-      return html`<p class="hint">This device is no longer remembered.</p>`;
+      return html`<p class="hint">此设备已不再被记住。<!-- TODO i18n --></p>`;
     }
     if (this.deviceRemembered) {
       return html`
-        <button type="button" class="link-button" @click=${() => this.emit('vw-auth-forget-device')}>
-          This device is remembered for 2-step login — Forget
+        <button type="button" class="link" @click=${() => this.emit('vw-auth-forget-device')}>
+          ${t('auth.forgetDevice')}
         </button>
       `;
     }
@@ -253,10 +407,10 @@ export class VwAuthViews extends LitElement {
   private renderLogin() {
     return html`
       <div class="auth">
-        ${this.renderHead('shield', 'Vaultwarden', 'Sign in to your self-hosted vault')}
+        ${this.renderBrandHead(t('auth.loginTitle'), '登录到你的密钥库')/* TODO i18n subtitle */}
         <form @submit=${(event: Event) => { event.preventDefault(); this.submitLogin(); }}>
           <label class="field">
-            <span class="field-label">Email</span>
+            <span class="field-label">${t('auth.email')}</span>
             <input
               id="email"
               class="input"
@@ -268,15 +422,15 @@ export class VwAuthViews extends LitElement {
             />
           </label>
           <label class="field">
-            <span class="field-label">Master password</span>
+            <span class="field-label">${t('auth.masterPassword')}</span>
             <input id="password" class="input" type="password" autocomplete="current-password" required ?disabled=${this.pending} />
           </label>
-          <button type="submit" class="button primary full" ?disabled=${this.pending}>${uiIcon('unlock')}<span>Log in</span></button>
-          <button type="button" class="button full" ?disabled=${this.pending} @click=${() => this.emit('vw-auth-go-register')}>
-            ${uiIcon('user')}<span>Create account</span>
-          </button>
+          <button type="submit" class="btn primary full" ?disabled=${this.pending}>${t('auth.login')}</button>
           ${this.renderError()}
         </form>
+        <button type="button" class="link" ?disabled=${this.pending} @click=${() => this.emit('vw-auth-go-register')}>
+          ${t('auth.goRegister')}
+        </button>
         ${this.renderRememberForgetSlot()}
       </div>
     `;
@@ -294,31 +448,31 @@ export class VwAuthViews extends LitElement {
   private renderRegister() {
     return html`
       <div class="auth">
-        ${this.renderHead('shield', 'Create account', 'Set up a new vault on your self-hosted server')}
+        ${this.renderBrandHead(t('auth.registerTitle'), '在你的服务器上创建一个新密钥库')/* TODO i18n subtitle */}
         <form @submit=${(event: Event) => { event.preventDefault(); this.submitRegister(); }}>
           <label class="field">
-            <span class="field-label">Email</span>
+            <span class="field-label">${t('auth.email')}</span>
             <input id="regEmail" class="input" type="email" autocomplete="username" required ?disabled=${this.pending} />
           </label>
           <label class="field">
-            <span class="field-label">Name (optional)</span>
+            <span class="field-label">${t('auth.name')}（可选）<!-- TODO i18n optional marker --></span>
             <input id="regName" class="input" type="text" autocomplete="name" ?disabled=${this.pending} />
           </label>
           <label class="field">
-            <span class="field-label">Master password</span>
+            <span class="field-label">${t('auth.masterPassword')}</span>
             <input id="regPassword" class="input" type="password" autocomplete="new-password" required ?disabled=${this.pending} />
           </label>
           <label class="field">
-            <span class="field-label">Confirm master password</span>
+            <span class="field-label">确认主密码<!-- TODO i18n --></span>
             <input id="regConfirm" class="input" type="password" autocomplete="new-password" required ?disabled=${this.pending} />
           </label>
-          <p class="hint">Your master password can't be recovered. It never leaves this device.</p>
-          <button type="submit" class="button primary full" ?disabled=${this.pending}>${uiIcon('shield')}<span>Create account</span></button>
-          <button type="button" class="button full" ?disabled=${this.pending} @click=${() => this.emit('vw-auth-back-to-login')}>
-            ${uiIcon('back')}<span>Back to sign in</span>
-          </button>
+          <p class="hint">主密码无法找回，且永不离开此设备。<!-- TODO i18n --></p>
+          <button type="submit" class="btn primary full" ?disabled=${this.pending}>${t('auth.createAccount')}</button>
           ${this.renderError()}
         </form>
+        <button type="button" class="link" ?disabled=${this.pending} @click=${() => this.emit('vw-auth-back-to-login')}>
+          ${t('auth.goLogin')}
+        </button>
       </div>
     `;
   }
@@ -337,17 +491,17 @@ export class VwAuthViews extends LitElement {
   private renderTwoFactor() {
     const usable = this.usableProviders;
     if (usable.length === 0) {
-      const names = this.providers.map((provider) => TWO_FACTOR_NAMES[provider] ?? `Method ${provider}`).join(', ');
+      const names = this.providers.map((provider) => TWO_FACTOR_NAMES[provider] ?? `方式 ${provider}`).join('、');
       return html`
         <div class="auth">
-          ${this.renderHead('shield', 'Two-step login', 'This method is not supported here yet')}
+          ${this.renderBrandHead(t('auth.twoFactorTitle'), '此验证方式暂不支持')/* TODO i18n subtitle */}
           <vw-status-message
             tone="danger"
             .icon=${'alert'}
-            message=${`Your account requires: ${names || 'an unsupported method'}. Use a Bitwarden client that supports it, or add an authenticator/email method.`}
+            message=${`你的账户需要：${names || '暂不支持的验证方式'}。请使用支持该方式的 Bitwarden 客户端，或改用验证器/邮箱验证。`/* TODO i18n */}
           ></vw-status-message>
-          <button type="button" class="button full" @click=${() => this.emit('vw-auth-back-to-login')}>
-            ${uiIcon('back')}<span>Back to login</span>
+          <button type="button" class="btn outline full" @click=${() => this.emit('vw-auth-back-to-login')}>
+            ${t('common.back')}
           </button>
           ${this.renderError()}
         </div>
@@ -356,10 +510,10 @@ export class VwAuthViews extends LitElement {
     const selected = this.selectedProvider ?? usable[0]!;
     return html`
       <div class="auth">
-        ${this.renderHead('shield', 'Two-step login', 'Enter your verification code to continue')}
+        ${this.renderBrandHead(t('auth.twoFactorTitle'), '输入验证码以继续登录')/* TODO i18n subtitle */}
         <form @submit=${(event: Event) => { event.preventDefault(); this.submitTwoFactor(); }}>
           <label class="field">
-            <span class="field-label">Provider</span>
+            <span class="field-label">验证方式<!-- TODO i18n --></span>
             <select
               id="provider"
               class="select"
@@ -370,29 +524,32 @@ export class VwAuthViews extends LitElement {
               }}
             >
               ${usable.map((provider) => html`
-                <option value=${provider} ?selected=${provider === selected}>${TWO_FACTOR_NAMES[provider] ?? `Method ${provider}`}</option>
+                <option value=${provider} ?selected=${provider === selected}>${TWO_FACTOR_NAMES[provider] ?? `方式 ${provider}`}</option>
               `)}
             </select>
           </label>
           <label class="field">
-            <span class="field-label">Code</span>
+            <span class="field-label">${t('auth.twoFactorCode')}</span>
             <input id="code" class="input mono" autocomplete="one-time-code" required ?disabled=${this.pending} />
             <span class="hint">${twoFactorHint(selected)}</span>
           </label>
           <label class="remember-row">
             <input id="tfRemember" type="checkbox" ?disabled=${this.pending} />
-            <span>Remember this device</span>
+            <span>${t('auth.rememberDevice')}</span>
           </label>
-          <button type="submit" class="button primary full" ?disabled=${this.pending}>${uiIcon('key')}<span>Continue</span></button>
+          <button type="submit" class="btn primary full" ?disabled=${this.pending}>继续<!-- TODO i18n --></button>
           ${usable.includes(1)
             ? html`
-                <button type="button" class="button full" ?disabled=${this.pending} @click=${() => this.emit('vw-auth-send-email-code')}>
-                  ${uiIcon('mail')}<span>Send email code</span>
+                <button type="button" class="btn outline full" ?disabled=${this.pending} @click=${() => this.emit('vw-auth-send-email-code')}>
+                  ${t('auth.sendEmailCode')}
                 </button>
               `
             : nothing}
           ${this.renderError()}
         </form>
+        <button type="button" class="link" ?disabled=${this.pending} @click=${() => this.emit('vw-auth-back-to-login')}>
+          ${t('common.back')}
+        </button>
       </div>
     `;
   }
@@ -405,13 +562,13 @@ export class VwAuthViews extends LitElement {
 
   private renderPinUnlock() {
     return html`
-      <div class="pin-unlock">
+      <div class="pin-row">
         <input
           id="pinUnlockInput"
-          class="input"
+          class="locked-input pin-input"
           inputmode="numeric"
           autocomplete="off"
-          placeholder="PIN"
+          placeholder=${t('auth.pin')}
           ?disabled=${this.pending}
           @keydown=${(event: KeyboardEvent) => {
             if (event.key === 'Enter') {
@@ -420,8 +577,15 @@ export class VwAuthViews extends LitElement {
             }
           }}
         />
-        <button type="button" class="button full" ?disabled=${this.pending} @click=${() => this.submitPinUnlock()}>
-          ${uiIcon('unlock')}<span>Unlock with PIN</span>
+        <button
+          type="button"
+          class="pin-btn"
+          aria-label=${t('auth.usePin')}
+          title=${t('auth.usePin')}
+          ?disabled=${this.pending}
+          @click=${() => this.submitPinUnlock()}
+        >
+          ${uiIcon('fingerprint')}
         </button>
       </div>
     `;
@@ -429,20 +593,33 @@ export class VwAuthViews extends LitElement {
 
   private renderUnlock() {
     return html`
-      <div class="auth">
-        ${this.renderHead('shield', 'Vault locked', 'Enter your master password to unlock')}
-        <form @submit=${(event: Event) => { event.preventDefault(); this.emit('vw-auth-unlock-submit', { masterPassword: this.inputValue('unlockPassword') } satisfies UnlockSubmitDetail); }}>
-          <label class="field">
-            <span class="field-label">Master password</span>
-            <input id="unlockPassword" class="input" type="password" autocomplete="current-password" required ?disabled=${this.pending} />
-          </label>
-          <button type="submit" class="button primary full" ?disabled=${this.pending}>${uiIcon('unlock')}<span>Unlock</span></button>
-          ${this.pinEnabled ? this.renderPinUnlock() : nothing}
-          <button type="button" class="button danger full" ?disabled=${this.pending} @click=${() => this.emit('vw-auth-logout')}>
-            ${uiIcon('logout')}<span>Log out</span>
-          </button>
-          ${this.renderError()}
+      <div class="locked">
+        <vw-logo variant="hero"></vw-logo>
+        <h1 class="locked-title">${t('auth.lockedTitle')}</h1>
+        <p class="locked-sub">${t('auth.unlockSubtitle')}</p>
+        <form
+          class="locked-form"
+          @submit=${(event: Event) => {
+            event.preventDefault();
+            this.emit('vw-auth-unlock-submit', { masterPassword: this.inputValue('unlockPassword') } satisfies UnlockSubmitDetail);
+          }}
+        >
+          <input
+            id="unlockPassword"
+            class="locked-input"
+            type="password"
+            autocomplete="current-password"
+            placeholder=${t('auth.masterPassword')}
+            required
+            ?disabled=${this.pending}
+          />
+          <button type="submit" class="locked-btn" ?disabled=${this.pending}>${t('auth.unlock')}</button>
         </form>
+        ${this.pinEnabled ? this.renderPinUnlock() : nothing}
+        ${this.error ? html`<div class="status">${this.renderError()}</div>` : nothing}
+        <button type="button" class="locked-logout" ?disabled=${this.pending} @click=${() => this.emit('vw-auth-logout')}>
+          ${t('auth.logout')}
+        </button>
       </div>
     `;
   }

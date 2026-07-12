@@ -6,13 +6,17 @@ import type { SessionState } from '../../core/session/session-manager.js';
 import type { CipherInput, CipherSummary, CollectionSummary, DecryptedCipher, FolderSummary } from '../../core/vault/models.js';
 import type { OrgPermission } from '../../core/vault/org-permissions.js';
 import type { TabFillOutcome, TabSuggestionsOutcome } from '../../messaging/protocol.js';
-import { themeTokens } from '../components/tokens.js';
+import { themeTokens, paletteTokens } from '../components/tokens.js';
+import { initLocale, t } from '../i18n/index.js';
+import { initAppearance, AppearanceController } from '../theme.js';
 import '../components/status-message.js';
+import '../components/toast.js';
 import './popup-frame.js';
 import './auth/auth-views.js';
 import './vault/popup-header.js';
 import './vault/vault-view.js';
-import './item/item-detail.js';
+import './vault/sync-bar.js';
+import type { CategoryId } from './vault/vault-view.js';
 import './item/reprompt-gate.js';
 import './editor/type-picker.js';
 import './editor/cipher-editor.js';
@@ -55,7 +59,6 @@ import type {
   SuggestionFillDetail,
   SuggestionsViewState,
   ToolActionDetail,
-  PopupLayoutMode,
 } from './types.js';
 import type {
   ChangeKdfDetail,
@@ -109,6 +112,10 @@ function createDefaultBrowser(): PopupBrowser {
     async openReceive() {
       await browser.tabs.create({ url: browser.runtime.getURL('ui/receive/receive.html') });
     },
+    async openUrl(url: string) {
+      const normalized = url.includes('://') ? url : `https://${url}`;
+      await browser.tabs.create({ url: normalized });
+    },
   };
 }
 
@@ -154,6 +161,10 @@ export class VwPopupApp extends LitElement {
     toolStatus: { attribute: false },
     vaultScope: { type: String },
     selectedCipherId: { attribute: false },
+    category: { type: String },
+    syncing: { type: Boolean },
+    lastSync: { type: Number },
+    toastMessage: { type: String },
   };
 
   declare route: PopupRoute;
@@ -201,6 +212,14 @@ export class VwPopupApp extends LitElement {
   declare toolStatus: DetailStatus | undefined;
   declare vaultScope: 'suggestions' | 'all';
   declare selectedCipherId: string | null;
+  /** The active category-chip filter for the vault list. */
+  declare category: CategoryId;
+  /** True while a manual/auto vault sync is in flight (drives the sync-bar spinner). */
+  declare syncing: boolean;
+  /** Epoch-ms of the last successful sync, or undefined when never synced this session. */
+  declare lastSync: number | undefined;
+  /** Transient copy-confirmation toast text (empty = hidden). */
+  declare toastMessage: string;
 
   /** Injectable worker request function; defaults to the real messaging channel. */
   request: PopupRequest = sendRequest;
@@ -261,32 +280,44 @@ export class VwPopupApp extends LitElement {
     this.toolStatus = undefined;
     this.vaultScope = 'suggestions';
     this.selectedCipherId = null;
+    this.category = 'all';
+    this.syncing = false;
+    this.lastSync = undefined;
+    this.toastMessage = '';
   }
 
   static override styles = [
+    paletteTokens,
     themeTokens,
     css`
       :host {
         display: block;
-        min-width: 0;
-        width: fit-content;
-      }
-      .detail-route {
-        display: block;
-        min-width: 0;
+        width: 100%;
         height: 100%;
         min-height: 0;
-        overflow: hidden;
       }
-      .detail-route > * {
-        height: 100%;
+      .body {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
       }
     `,
   ];
 
+  /** Mirrors the theme + density prefs onto this root host so the palette re-themes at runtime. */
+  private appearance = new AppearanceController(this);
+
   override connectedCallback(): void {
     super.connectedCallback();
-    void this.init();
+    void this.bootstrap();
+  }
+
+  /** Load persisted language + appearance prefs (so the first paint is themed/localized), then route. */
+  private async bootstrap(): Promise<void> {
+    await Promise.all([initLocale(), initAppearance()]);
+    await this.init();
   }
 
   override disconnectedCallback(): void {
@@ -610,6 +641,58 @@ export class VwPopupApp extends LitElement {
       this.vaultScope = id;
       this.navigate({ name: 'vault', scope: id });
     }
+  }
+
+  /** Expand/collapse an item's inline detail card. Selecting clears any stale reprompt/extras cache. */
+  private handleItemToggle(cipherId: string): void {
+    this.selectedCipherId = cipherId ? cipherId : null;
+    this.detailStatus = undefined;
+    this.detailExtrasCache = undefined;
+  }
+
+  private handleCategoryChange(category: CategoryId): void {
+    this.category = category;
+    this.selectedCipherId = null;
+  }
+
+  /** "Open and fill" from the inline card: fill the current tab when this item is a live suggestion,
+   *  otherwise open its first URL in a new tab. */
+  private async handleItemFill(cipherId: string): Promise<void> {
+    const suggestion = this.suggestionsState.status === 'ready'
+      ? this.suggestionsState.suggestions.find((s) => s.id === cipherId)
+      : undefined;
+    if (suggestion?.target) {
+      await this.handleSuggestionFill({ cipherId, target: suggestion.target });
+      return;
+    }
+    const uri = this.items.find((item) => item.id === cipherId)?.uris[0];
+    if (uri) await this.browser.openUrl(uri);
+  }
+
+  /** Manual vault sync from the bottom sync bar: drives the spinner + last-synced label. */
+  private async handleSync(): Promise<void> {
+    if (this.syncing) return;
+    this.syncing = true;
+    try {
+      const response = await this.request({ type: 'vault.sync' });
+      if (response.ok) {
+        this.applyListingResponse(response);
+        this.lastSync = Date.now();
+        await this.loadSuggestions();
+      }
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  /** Toggle the generator overlay from the top bar (returns to the vault list when already open). */
+  private handleGeneratorToggle(): void {
+    if (this.route.name === 'generator') this.navigate({ name: 'vault', scope: this.vaultScope });
+    else this.navigate({ name: 'generator' });
+  }
+
+  private showToast(message: string): void {
+    this.toastMessage = message;
   }
 
   private isUnlockedWorkspace(): boolean {
@@ -1102,6 +1185,7 @@ export class VwPopupApp extends LitElement {
       await navigator.clipboard.writeText(value);
       void this.request({ type: 'clipboard.scheduleClear' });
       this.detailStatus = { message: `${label} copied to clipboard`, tone: 'success' };
+      this.showToast(t('common.copiedClear'));
     } catch {
       this.detailStatus = { message: `Failed to copy ${label.toLowerCase()}`, tone: 'danger' };
     }
@@ -1112,10 +1196,10 @@ export class VwPopupApp extends LitElement {
   }
 
   /** Fetch a masked secret and copy it straight to the clipboard — the plaintext never passes
-   *  through the detail component. */
+   *  through the detail component. Keyed to the inline-expanded item in the vault list. */
   private async handleSecretRequest(detail: SecretRequestDetail): Promise<void> {
-    if (this.route.name !== 'detail') return;
-    const id = this.route.cipherId;
+    const id = this.selectedCipherId;
+    if (!id) return;
     const mp = this.repromptMp(id);
     const response = detail.kind === 'field'
       ? await this.request(mp === undefined ? { type: 'vault.getField', id, field: detail.field } : { type: 'vault.getField', id, field: detail.field, masterPassword: mp })
@@ -1243,7 +1327,7 @@ export class VwPopupApp extends LitElement {
     }
     const input = (response.data as { input: CipherInput | null }).input;
     if (!input) {
-      this.editorStatus = { message: 'This item type cannot be edited yet', tone: 'danger' };
+      this.editorStatus = { message: '此条目类型暂不支持编辑', tone: 'danger' };
       return;
     }
     this.editorInput = input;
@@ -1282,7 +1366,7 @@ export class VwPopupApp extends LitElement {
         return;
       }
       await this.loadListing();
-      this.editorStatus = { message: 'Collections updated', tone: 'success' };
+      this.editorStatus = { message: '集合已更新', tone: 'success' };
     } finally {
       this.pending = false;
     }
@@ -1363,65 +1447,30 @@ export class VwPopupApp extends LitElement {
     `;
   }
 
-  private renderPopupHeader() {
+  private renderUnlocked(route: PopupRoute) {
     return html`
       <vw-popup-header
-        .accounts=${this.accounts}
-        .query=${this.query}
-        .pinEnabled=${this.pinConfigured}
-        .deviceRemembered=${this.vaultDeviceRemembered}
+        .generatorActive=${route.name === 'generator'}
         @vw-add=${() => this.navigate({ name: 'editor', mode: 'create' })}
-        @vw-search-change=${(event: CustomEvent<{ query: string }>) => {
-          this.query = event.detail.query;
-          if (event.detail.query.trim()) this.vaultScope = 'all';
-        }}
-        @vw-account-action=${(event: CustomEvent<AccountActionDetail>) => void this.handleAccountAction(event.detail)}
-        @vw-tool-action=${(event: CustomEvent<ToolActionDetail>) => void this.handleToolAction(event.detail)}
-      ></vw-popup-header>`;
-  }
-
-  private renderVaultList() {
-    return html`
-      <vw-vault-view
-        .scope=${this.vaultScope}
-        .suggestionsState=${this.suggestionsState}
-        .fill=${this.fillResult}
-        .items=${this.items}
-        .folders=${this.folders}
-        .collections=${this.collections}
-        .orgPermissions=${this.orgPermissions}
-        .selectedFolderId=${this.selectedFolderId}
-        .selectedCollectionId=${this.selectedCollectionId}
-        .query=${this.query}
-        .showTrash=${this.showTrash}
-        .skippedOrgCount=${this.skippedOrgCount}
-        .selectedCipherId=${this.selectedCipherId}
-        @vw-tab-change=${(event: CustomEvent<{ id: string }>) => this.handleScopeChange(event.detail.id)}
-        @vw-suggestion-fill=${(event: CustomEvent<SuggestionFillDetail>) => void this.handleSuggestionFill(event.detail)}
-        @vw-item-open=${(event: CustomEvent<ItemOpenDetail>) => this.navigate({ name: 'detail', cipherId: event.detail.cipherId })}
-        @vw-filter-change=${(event: CustomEvent<FilterChangeDetail>) => this.applyFilterPatch(event.detail)}
-        @vw-folder-mutate=${(event: CustomEvent<FolderMutateDetail>) => void this.handleFolderMutate(event.detail)}
-        @vw-collection-mutate=${(event: CustomEvent<CollectionMutateDetail>) => void this.handleCollectionMutate(event.detail)}
-      ></vw-vault-view>
+        @vw-generator-toggle=${() => this.handleGeneratorToggle()}
+        @vw-open-settings=${() => void this.browser.openOptions()}
+        @vw-lock=${() => void this.handleAccountAction({ action: 'lock' })}
+      ></vw-popup-header>
+      <div class="body">${this.renderBody(route)}</div>
+      <vw-sync-bar
+        .syncing=${this.syncing}
+        .lastSync=${this.lastSync}
+        @vw-sync-now=${() => void this.handleSync()}
+      ></vw-sync-bar>
     `;
   }
 
-  private layoutMode(): PopupLayoutMode {
-    const name = this.route.name;
-    if (name === 'login' || name === 'register' || name === 'twoFactor' || name === 'unlock') return 'auth';
-    return 'double';
-  }
-
-  private renderRightPane(route: PopupRoute) {
+  private renderBody(route: PopupRoute) {
     switch (route.name) {
-      case 'vault':
-        return html`<vw-status-message tone="info" .icon=${'shield'} message="Select an item to view its details."></vw-status-message>`;
-      case 'detail':
-        return this.renderDetail(route);
-      case 'editor':
-        return this.renderEditor(route);
       case 'generator':
         return this.renderGenerator();
+      case 'editor':
+        return this.renderEditor(route);
       case 'health':
         return this.renderHealth();
       case 'sends':
@@ -1430,62 +1479,31 @@ export class VwPopupApp extends LitElement {
         return this.renderAccountSecurity();
       case 'pin':
         return this.renderPin();
-      case 'trash':
-        return nothing;
-      case 'loading':
-      case 'login':
-      case 'register':
-      case 'twoFactor':
-      case 'unlock':
-        return nothing;
+      default:
+        return this.renderVault();
     }
   }
 
-  private renderUnlockedWorkspace(route: PopupRoute) {
+  /** The single-column vault: search + category chips + list with inline-expanding detail cards. */
+  private renderVault() {
+    const extras = this.selectedCipherId ? this.detailExtras(this.selectedCipherId) : undefined;
     return html`
-      <vw-popup-frame mode=${this.layoutMode()}>
-        <div slot="toolbar">${this.renderPopupHeader()}</div>
-        <div slot="list">${this.renderVaultList()}</div>
-        <section slot="detail" class="detail-route">${this.renderRightPane(route)}</section>
-      </vw-popup-frame>
-    `;
-  }
-
-  private renderDetail(route: Extract<PopupRoute, { name: 'detail' }>) {
-    const id = route.cipherId;
-    const summary = this.items.find((item) => item.id === id);
-    if (!summary) {
-      return html`<vw-status-message tone="warning" .icon=${'alert'} message="This item is no longer available."></vw-status-message>`;
-    }
-    // Reprompt gate: a protected item must clear master-password re-verification before any view
-    // that can reveal/copy its secrets. The worker also enforces this — the gate is the UX.
-    if (summary.reprompt && this.repromptCredential?.cipherId !== id) {
-      return html`
-        <vw-reprompt-gate
-          .name=${summary.name}
-          .pending=${this.pending}
-          .error=${this.repromptError}
-          @vw-reprompt-submit=${(event: CustomEvent<RepromptSubmitDetail>) => void this.handleReprompt(id, event.detail.password)}
-          @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'all' })}
-        ></vw-reprompt-gate>
-      `;
-    }
-    return html`
-      <vw-item-detail
-        .summary=${summary}
-        .cipher=${this.detailCipher}
-        .extras=${this.detailExtras(id)}
-        .status=${this.detailStatus}
+      <vw-vault-view
+        .items=${this.items}
+        .suggestionsState=${this.suggestionsState}
+        .query=${this.query}
+        .category=${this.category}
+        .selectedCipherId=${this.selectedCipherId}
+        .extras=${extras}
+        @vw-search-change=${(event: CustomEvent<{ query: string }>) => { this.query = event.detail.query; }}
+        @vw-category-change=${(event: CustomEvent<{ category: CategoryId }>) => this.handleCategoryChange(event.detail.category)}
+        @vw-item-toggle=${(event: CustomEvent<{ cipherId: string }>) => this.handleItemToggle(event.detail.cipherId)}
+        @vw-suggestion-fill=${(event: CustomEvent<SuggestionFillDetail>) => void this.handleSuggestionFill(event.detail)}
+        @vw-item-fill=${(event: CustomEvent<{ cipherId: string }>) => void this.handleItemFill(event.detail.cipherId)}
         @vw-copy=${(event: CustomEvent<CopyDetail>) => this.handleCopy(event.detail)}
         @vw-secret-request=${(event: CustomEvent<SecretRequestDetail>) => void this.handleSecretRequest(event.detail)}
         @vw-edit-item=${(event: CustomEvent<ItemRefDetail>) => this.navigate({ name: 'editor', mode: 'edit', cipherId: event.detail.cipherId })}
-        @vw-delete-item=${(event: CustomEvent<DeleteItemDetail>) => void this.handleDeleteItem(event.detail)}
-        @vw-restore-item=${(event: CustomEvent<ItemRefDetail>) => void this.handleRestoreItem(event.detail)}
-        @vw-attachment-download=${(event: CustomEvent<AttachmentRefDetail>) => void this.handleAttachmentDownload(event.detail)}
-        @vw-attachment-add=${(event: CustomEvent<AttachmentAddDetail>) => void this.handleAttachmentAdd(event.detail)}
-        @vw-attachment-delete=${(event: CustomEvent<AttachmentRefDetail>) => void this.handleAttachmentDelete(event.detail)}
-        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'all' })}
-      ></vw-item-detail>
+      ></vw-vault-view>
     `;
   }
 
@@ -1614,17 +1632,28 @@ export class VwPopupApp extends LitElement {
 
   protected override render() {
     const route = this.route;
-    switch (route.name) {
-      case 'loading':
-        return html`<vw-popup-frame mode="auth">${this.renderLoading()}</vw-popup-frame>`;
-      case 'login':
-      case 'register':
-      case 'twoFactor':
-      case 'unlock':
-        return html`<vw-popup-frame mode="auth">${this.renderAuth(route)}</vw-popup-frame>`;
-      default:
-        return this.renderUnlockedWorkspace(route);
-    }
+    const isAuth =
+      route.name === 'loading' ||
+      route.name === 'login' ||
+      route.name === 'register' ||
+      route.name === 'twoFactor' ||
+      route.name === 'unlock';
+    return html`
+      <vw-popup-frame>
+        ${isAuth
+          ? route.name === 'loading'
+            ? this.renderLoading()
+            : this.renderAuth(route as AuthRoute)
+          : this.renderUnlocked(route)}
+        ${this.toastMessage
+          ? html`<vw-toast
+              .message=${this.toastMessage}
+              .offset=${42}
+              @vw-toast-dismiss=${() => { this.toastMessage = ''; }}
+            ></vw-toast>`
+          : nothing}
+      </vw-popup-frame>
+    `;
   }
 }
 

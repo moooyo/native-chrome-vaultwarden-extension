@@ -1,85 +1,215 @@
 import { css } from 'lit';
 
+/**
+ * MiYu (密屿) design tokens.
+ *
+ * `paletteTokens` defines every token *value* on `:host`, with dark overrides gated on a
+ * `data-theme` attribute (and on `prefers-color-scheme` when the theme is `system`). It is composed
+ * by the three page roots (`vw-popup-app`, `vw-options-app`, `vw-receive-app`) and by the
+ * self-contained content-script surfaces. Because CSS custom properties inherit across shadow
+ * boundaries, child components do NOT redefine values — they inherit them from the nearest root and
+ * only compose `themeTokens` (base font/color). This is what makes the Appearance theme switch work
+ * at runtime: the theme controller flips `data-theme` on the root host and every descendant re-reads
+ * the inherited variables.
+ *
+ * The moss-green block color (`--vw-teal-solid`, the logo) is identical in both themes; the themed
+ * accent (`--vw-accent`) shifts lighter in dark, and the toggle-on track uses its own value
+ * (`#2FBF9C` in dark, not the accent — a confirmed spec correction over the README).
+ *
+ * The dark declarations are intentionally written twice (for `[data-theme='dark']` and, under the
+ * media query, `[data-theme='system']`) — Lit's `css` cannot interpolate a rule body into two
+ * selectors, and the duplication is clearer than an `unsafeCSS` indirection.
+ */
+export const paletteTokens = css`
+  :host {
+    /* text */
+    --vw-ink:#16181D;
+    --vw-ink-hover:#2A2D34;
+    --vw-text-2:#565B66;
+    --vw-text-3:#6A6F7A;
+    --vw-text-4:#3F444E;
+    --vw-muted:#8A8F99;
+    --vw-faint:#9AA0AA;
+    /* teal / accent */
+    --vw-teal-solid:#0E8A72;
+    --vw-accent:#0E8A72;
+    --vw-teal-text:#0B7A65;
+    --vw-teal-10:rgba(14,138,114,.1);
+    --vw-teal-12:rgba(14,138,114,.12);
+    --vw-teal-18:rgba(14,138,114,.18);
+    --vw-teal-25:rgba(14,138,114,.25);
+    /* surfaces */
+    --vw-panel:#FCFCFB;
+    --vw-options-bg:#FAFAF8;
+    --vw-card:#ffffff;
+    --vw-fill:#F1F1EE;
+    --vw-fill-2:#F7F7F4;
+    --vw-row-hover:#F2F2EF;
+    --vw-icon-hover:rgba(22,24,29,.06);
+    /* lines */
+    --vw-line-1:rgba(22,24,29,.07);
+    --vw-line-2:rgba(22,24,29,.09);
+    --vw-line-3:rgba(22,24,29,.14);
+    --vw-card-border:rgba(22,24,29,.08);
+    /* primary (ink) button */
+    --vw-primary-bg:#16181D;
+    --vw-primary-bg-hover:#2A2D34;
+    --vw-primary-fg:#ffffff;
+    /* status */
+    --vw-danger:#C6453D;
+    --vw-danger-border:rgba(198,69,61,.3);
+    --vw-danger-10:rgba(198,69,61,.08);
+    --vw-sync-amber:#B8860B;
+    --vw-chevron:#C4C7CC;
+    /* controls */
+    --vw-toggle-on:#0E8A72;
+    --vw-toggle-off:rgba(22,24,29,.15);
+    --vw-track:rgba(22,24,29,.08);
+    --vw-scrollbar:rgba(0,0,0,.16);
+    --vw-placeholder:#9a9a9a;
+    /* strength + generator coloring */
+    --vw-strength-strong:#0E8A72;
+    --vw-strength-good:#4C8A0E;
+    --vw-strength-mid:#A66A00;
+    --vw-strength-weak:#C6453D;
+    --vw-gen-digit:#0B7A65;
+    --vw-gen-symbol:#C6453D;
+    /* fonts */
+    --vw-font-ui:'Instrument Sans','Segoe UI',system-ui,sans-serif;
+    --vw-font-mono:'JetBrains Mono',ui-monospace,monospace;
+    /* radii */
+    --vw-radius-dialog:16px;
+    --vw-radius-panel:14px;
+    --vw-radius-pill:13px;
+    --vw-radius-card:12px;
+    --vw-radius-control:10px;
+    --vw-radius-input:9px;
+    --vw-radius-chip:8px;
+    --vw-radius-small:7px;
+    --vw-radius-xs:6px;
+    /* shadows */
+    --vw-popup-shadow:0 18px 44px rgba(20,24,32,.22);
+    --vw-panel-shadow:0 16px 40px rgba(20,24,32,.16);
+    --vw-dialog-shadow:0 24px 56px rgba(20,24,32,.28);
+    --vw-card-shadow:0 2px 10px rgba(20,24,32,.05);
+    --vw-knob-shadow:0 1px 2px rgba(0,0,0,.25);
+    --vw-seg-shadow:0 1px 3px rgba(0,0,0,.14);
+    /* durations */
+    --vw-dur-fast:150ms;
+    --vw-dur:180ms;
+    /* focus */
+    --vw-focus:0 0 0 2px rgba(14,138,114,.55);
+  }
+
+  :host([data-theme='dark']) {
+    --vw-ink:#F2F3F5;
+    --vw-ink-hover:#ffffff;
+    --vw-text-2:#9AA0AC;
+    --vw-text-3:#9AA0AC;
+    --vw-text-4:#D6D9DE;
+    --vw-muted:#9AA0AC;
+    --vw-faint:#7B818B;
+    --vw-accent:#45D6B5;
+    --vw-teal-text:#45D6B5;
+    --vw-teal-10:rgba(69,214,181,.14);
+    --vw-teal-12:rgba(69,214,181,.16);
+    --vw-teal-18:rgba(69,214,181,.22);
+    --vw-teal-25:rgba(69,214,181,.3);
+    --vw-panel:#1F2229;
+    --vw-options-bg:#17191E;
+    --vw-card:#262A33;
+    --vw-fill:#262A33;
+    --vw-fill-2:#262A33;
+    --vw-row-hover:rgba(255,255,255,.05);
+    --vw-icon-hover:rgba(255,255,255,.07);
+    --vw-line-1:rgba(255,255,255,.07);
+    --vw-line-2:rgba(255,255,255,.09);
+    --vw-line-3:rgba(255,255,255,.16);
+    --vw-card-border:rgba(255,255,255,.07);
+    --vw-primary-bg:#F2F3F5;
+    --vw-primary-bg-hover:#ffffff;
+    --vw-primary-fg:#16181D;
+    --vw-chevron:#565B66;
+    --vw-toggle-on:#2FBF9C;
+    --vw-toggle-off:rgba(255,255,255,.18);
+    --vw-track:rgba(255,255,255,.12);
+    --vw-scrollbar:rgba(255,255,255,.2);
+    --vw-placeholder:#8a8a8a;
+    --vw-strength-strong:#45D6B5;
+    --vw-strength-good:#45D6B5;
+    --vw-strength-mid:#E0B23C;
+    --vw-strength-weak:#E5675D;
+    --vw-gen-digit:#45D6B5;
+    --vw-gen-symbol:#E5675D;
+    --vw-popup-shadow:0 18px 44px rgba(0,0,0,.5);
+    --vw-knob-shadow:0 1px 2px rgba(0,0,0,.35);
+    --vw-focus:0 0 0 2px rgba(69,214,181,.6);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :host([data-theme='system']) {
+      --vw-ink:#F2F3F5;
+      --vw-ink-hover:#ffffff;
+      --vw-text-2:#9AA0AC;
+      --vw-text-3:#9AA0AC;
+      --vw-text-4:#D6D9DE;
+      --vw-muted:#9AA0AC;
+      --vw-faint:#7B818B;
+      --vw-accent:#45D6B5;
+      --vw-teal-text:#45D6B5;
+      --vw-teal-10:rgba(69,214,181,.14);
+      --vw-teal-12:rgba(69,214,181,.16);
+      --vw-teal-18:rgba(69,214,181,.22);
+      --vw-teal-25:rgba(69,214,181,.3);
+      --vw-panel:#1F2229;
+      --vw-options-bg:#17191E;
+      --vw-card:#262A33;
+      --vw-fill:#262A33;
+      --vw-fill-2:#262A33;
+      --vw-row-hover:rgba(255,255,255,.05);
+      --vw-icon-hover:rgba(255,255,255,.07);
+      --vw-line-1:rgba(255,255,255,.07);
+      --vw-line-2:rgba(255,255,255,.09);
+      --vw-line-3:rgba(255,255,255,.16);
+      --vw-card-border:rgba(255,255,255,.07);
+      --vw-primary-bg:#F2F3F5;
+      --vw-primary-bg-hover:#ffffff;
+      --vw-primary-fg:#16181D;
+      --vw-chevron:#565B66;
+      --vw-toggle-on:#2FBF9C;
+      --vw-toggle-off:rgba(255,255,255,.18);
+      --vw-track:rgba(255,255,255,.12);
+      --vw-scrollbar:rgba(255,255,255,.2);
+      --vw-placeholder:#8a8a8a;
+      --vw-strength-strong:#45D6B5;
+      --vw-strength-good:#45D6B5;
+      --vw-strength-mid:#E0B23C;
+      --vw-strength-weak:#E5675D;
+      --vw-gen-digit:#45D6B5;
+      --vw-gen-symbol:#E5675D;
+      --vw-popup-shadow:0 18px 44px rgba(0,0,0,.5);
+      --vw-knob-shadow:0 1px 2px rgba(0,0,0,.35);
+      --vw-focus:0 0 0 2px rgba(69,214,181,.6);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :host { --vw-dur-fast:0ms; --vw-dur:0ms; }
+  }
+`;
+
+/**
+ * Base per-component tokens: sets the inherited font + text color on every component's `:host`
+ * without redefining palette *values* (so the runtime theme switch on the root host is not
+ * shadowed). Every component composes this; page roots additionally compose `paletteTokens`.
+ */
 export const themeTokens = css`
   :host {
-    --vw-popup-double-width:600px;
-    --vw-popup-single-width:350px;
-    --vw-popup-height:450px;
-    --vw-pane-list-width:260px;
-    --vw-pane-detail-width:340px;
-    --vw-ink-strong:#090a0c;
-    --vw-ink:rgb(0 0 0 / 82%);
-    --vw-muted:rgb(0 0 0 / 62%);
-    --vw-disabled:rgb(0 0 0 / 36%);
-    --vw-panel:#fff;
-    --vw-canvas:#fafafa;
-    --vw-blue:hsl(212 96% 47%);
-    --vw-blue-hover:hsl(216 100% 39%);
-    --vw-blue-pressed:hsl(224 100% 33%);
-    --vw-blue-text:hsl(212 100% 35%);
-    --vw-blue-weak:hsl(214 100% 96%);
-    --vw-row-selected:hsl(215 100% 94%);
-    --vw-line:rgb(0 0 0 / 13%);
-    --vw-line-weak:rgb(0 0 0 / 7%);
-    --vw-ok:hsl(116 100% 20%);
-    --vw-warning:hsl(42 100% 22%);
-    --vw-danger:hsl(14 100% 32%);
-    --vw-radius-small:4px;
-    --vw-radius-row:8px;
-    --vw-radius-large:12px;
-    --vw-space-2xs:4px;
-    --vw-space-xs:8px;
-    --vw-space-small:12px;
-    --vw-space-medium:16px;
-    --vw-space-large:24px;
-    --vw-space-xl:32px;
-    --vw-font-size-title:20px;
-    --vw-font-size-view:16px;
-    --vw-font-size-body:14px;
-    --vw-font-size-meta:12px;
-    --vw-duration-fast:75ms;
-    --vw-duration-normal:175ms;
-    --vw-focus:0 0 0 2px hsl(215 63% 53%);
-    --vw-font-ui:"Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-    --vw-font-mono:"Cascadia Code", Consolas, ui-monospace, monospace;
-
-    /* Transitional aliases keep existing components coherent while they migrate. */
-    --vw-blue-800:var(--vw-blue-pressed);
-    --vw-blue-700:var(--vw-blue-hover);
-    --vw-blue-600:var(--vw-blue);
-    --vw-blue-200:hsl(215 84% 76%);
-    --vw-blue-100:var(--vw-row-selected);
-    --vw-blue-50:var(--vw-blue-weak);
-    --vw-radius-control:var(--vw-radius-row);
-    --vw-radius-group:var(--vw-radius-row);
-    --vw-radius-shell:var(--vw-radius-large);
-    --vw-duration:var(--vw-duration-normal);
-    color:var(--vw-ink);
-    font-family:var(--vw-font-ui);
-    font-size:var(--vw-font-size-body);
+    color: var(--vw-ink);
+    font-family: var(--vw-font-ui);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
   }
-  @media (prefers-color-scheme:dark) {
-    :host {
-      --vw-ink-strong:#fff;
-      --vw-ink:rgb(255 255 255 / 89%);
-      --vw-muted:rgb(255 255 255 / 78.5%);
-      --vw-disabled:rgb(255 255 255 / 56%);
-      --vw-panel:hsl(0 0% 13%);
-      --vw-canvas:hsl(0 0% 8%);
-      --vw-blue-text:hsl(215 100% 85%);
-      --vw-blue-weak:hsl(227 40% 16%);
-      --vw-row-selected:hsl(214 100% 16%);
-      --vw-line:rgb(255 255 255 / 28%);
-      --vw-line-weak:rgb(255 255 255 / 9%);
-      --vw-blue-200:hsl(215 63% 53%);
-      --vw-focus:0 0 0 2px hsl(215 84% 76%);
-    }
-  }
-  @media (prefers-reduced-motion:reduce) {
-    :host {
-      --vw-duration-fast:0ms;
-      --vw-duration-normal:0ms;
-      --vw-duration:0ms;
-    }
-  }
+  *, *::before, *::after { box-sizing: border-box; }
 `;

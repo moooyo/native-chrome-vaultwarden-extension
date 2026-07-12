@@ -31,7 +31,10 @@ describe('vw-notice', () => {
     const bar = shadow(element).querySelector('.bar');
     expect(bar?.querySelector('b')).toBeNull();
     expect(bar?.textContent).toContain('keep');
-    expect(styleTextOf(VwNotice)).toContain('overflow-wrap');
+    const styleText = styleTextOf(VwNotice);
+    expect(styleText).toContain('overflow-wrap');
+    expect(styleText).toContain('prefers-color-scheme: dark');
+    expect(styleText).toContain('prefers-reduced-motion: reduce');
   });
 
   it('presentNotice mounts a closed surface and auto-dismisses after four seconds', () => {

@@ -1,8 +1,23 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// The component now composes the (frozen) MiYu design system, whose i18n module imports
+// webextension-polyfill at the top of its graph. That polyfill throws when loaded outside an
+// extension, so — like app.test.ts — we stub it. LocalizeController only subscribes on connect;
+// no storage call happens at mount, but the stub covers the surface it could touch.
+vi.mock('webextension-polyfill', () => ({
+  default: {
+    storage: {
+      local: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) },
+      onChanged: { addListener: vi.fn() },
+    },
+  },
+}));
+
 import './auth-views.js';
 import type { VwAuthViews } from './auth-views.js';
 import type { VwStatusMessage } from '../../components/status-message.js';
+import { t } from '../../i18n/index.js';
 
 async function mount(mode: VwAuthViews['mode']): Promise<VwAuthViews> {
   const el = document.createElement('vw-auth-views') as VwAuthViews;
@@ -24,11 +39,19 @@ function select(el: VwAuthViews, id: string): HTMLSelectElement {
   return node;
 }
 
+function buttons(el: VwAuthViews): HTMLButtonElement[] {
+  return Array.from(el.shadowRoot?.querySelectorAll('button') ?? []);
+}
+
+/** Finds a button by (substring of) its rendered text. Text is now Chinese via `t()`. */
 function button(el: VwAuthViews, text: string): HTMLButtonElement {
-  const buttons = Array.from(el.shadowRoot?.querySelectorAll('button') ?? []);
-  const found = buttons.find((b) => b.textContent?.includes(text));
+  const found = buttons(el).find((b) => b.textContent?.includes(text));
   if (!found) throw new Error(`missing button with text "${text}"`);
   return found;
+}
+
+function hasButton(el: VwAuthViews, text: string): boolean {
+  return buttons(el).some((b) => b.textContent?.includes(text));
 }
 
 describe('vw-auth-views', () => {
@@ -36,14 +59,19 @@ describe('vw-auth-views', () => {
     document.body.replaceChildren();
   });
 
-  it('never imports or calls sendRequest', async () => {
-    // The module graph for this component must stay network-free; importing it must not touch
-    // webextension-polyfill (unmocked here) or throw.
-    await mount('login');
+  it('mounts every mode from props without throwing', async () => {
+    for (const mode of ['login', 'register', 'twoFactor', 'unlock'] as const) {
+      const el = await mount(mode);
+      expect(el.shadowRoot).not.toBeNull();
+      el.remove();
+    }
   });
+
+  // --- login ---------------------------------------------------------------------------------
 
   it('renders the login form and emits vw-auth-login-submit with email + password', async () => {
     const el = await mount('login');
+    expect(el.shadowRoot!.querySelector('form')).not.toBeNull();
     input(el, 'email').value = 'user@example.com';
     input(el, 'password').value = 'hunter2';
     const submitted = vi.fn();
@@ -54,11 +82,11 @@ describe('vw-auth-views', () => {
     }));
   });
 
-  it('emits vw-auth-go-register when "Create account" is clicked from login', async () => {
+  it('emits vw-auth-go-register when the register link is clicked from login', async () => {
     const el = await mount('login');
     const goRegister = vi.fn();
     el.addEventListener('vw-auth-go-register', goRegister);
-    button(el, 'Create account').click();
+    button(el, t('auth.goRegister')).click();
     expect(goRegister).toHaveBeenCalledTimes(1);
   });
 
@@ -71,14 +99,14 @@ describe('vw-auth-views', () => {
     expect(changed).toHaveBeenCalledWith(expect.objectContaining({ detail: { email: 'user@example.com' } }));
   });
 
-  it('shows the forget-device link only when deviceRemembered is true, and emits vw-auth-forget-device', async () => {
+  it('shows the forget-device control only when deviceRemembered is true, and emits vw-auth-forget-device', async () => {
     const el = await mount('login');
-    expect(el.shadowRoot!.querySelector('.link-button')).toBeNull();
+    expect(hasButton(el, t('auth.forgetDevice'))).toBe(false);
     el.deviceRemembered = true;
     await el.updateComplete;
     const forgotten = vi.fn();
     el.addEventListener('vw-auth-forget-device', forgotten);
-    (el.shadowRoot!.querySelector('.link-button') as HTMLButtonElement).click();
+    button(el, t('auth.forgetDevice')).click();
     expect(forgotten).toHaveBeenCalledTimes(1);
   });
 
@@ -86,7 +114,7 @@ describe('vw-auth-views', () => {
     const el = await mount('login');
     el.deviceForgotten = true;
     await el.updateComplete;
-    expect(el.shadowRoot!.textContent).toContain('no longer remembered');
+    expect(el.shadowRoot!.textContent).toContain('此设备已不再被记住');
   });
 
   it('renders a danger vw-status-message when error is set, with its icon actually reaching the component', async () => {
@@ -108,6 +136,8 @@ describe('vw-auth-views', () => {
     expect(input(el, 'email').disabled).toBe(true);
     expect(input(el, 'password').disabled).toBe(true);
   });
+
+  // --- register ------------------------------------------------------------------------------
 
   it('renders the register form and emits vw-auth-register-submit with trimmed email/name and confirm', async () => {
     const el = await mount('register');
@@ -145,9 +175,11 @@ describe('vw-auth-views', () => {
     const el = await mount('register');
     const back = vi.fn();
     el.addEventListener('vw-auth-back-to-login', back);
-    button(el, 'Back to sign in').click();
+    button(el, t('auth.goLogin')).click();
     expect(back).toHaveBeenCalledTimes(1);
   });
+
+  // --- two-factor ----------------------------------------------------------------------------
 
   it('lists only the code-based providers in the two-factor dropdown', async () => {
     const el = await mount('twoFactor');
@@ -165,12 +197,12 @@ describe('vw-auth-views', () => {
     // vw-status-message renders its "message" prop inside its own shadow root, so assert on the
     // attribute we bind rather than walking the outer element's (non-piercing) textContent.
     const status = el.shadowRoot!.querySelector<VwStatusMessage>('vw-status-message');
-    expect(status?.getAttribute('message')).toContain('Security key (FIDO2)');
+    expect(status?.getAttribute('message')).toContain('安全密钥 (FIDO2)');
     await status?.updateComplete;
     expect(status?.shadowRoot?.querySelector('svg')).not.toBeNull();
     const back = vi.fn();
     el.addEventListener('vw-auth-back-to-login', back);
-    button(el, 'Back to login').click();
+    button(el, t('common.back')).click();
     expect(back).toHaveBeenCalledTimes(1);
   });
 
@@ -190,18 +222,20 @@ describe('vw-auth-views', () => {
     }));
   });
 
-  it('only renders "Send email code" when provider 1 is offered, and it emits vw-auth-send-email-code', async () => {
+  it('only renders the email-code button when provider 1 is offered, and it emits vw-auth-send-email-code', async () => {
     const el = await mount('twoFactor');
     el.providers = [0];
     await el.updateComplete;
-    expect(el.shadowRoot!.textContent).not.toContain('Send email code');
+    expect(hasButton(el, t('auth.sendEmailCode'))).toBe(false);
     el.providers = [0, 1];
     await el.updateComplete;
     const sent = vi.fn();
     el.addEventListener('vw-auth-send-email-code', sent);
-    button(el, 'Send email code').click();
+    button(el, t('auth.sendEmailCode')).click();
     expect(sent).toHaveBeenCalledTimes(1);
   });
+
+  // --- unlock (locked screen) ----------------------------------------------------------------
 
   it('renders the unlock form and emits vw-auth-unlock-submit with the password', async () => {
     const el = await mount('unlock');
@@ -212,11 +246,11 @@ describe('vw-auth-views', () => {
     expect(submitted).toHaveBeenCalledWith(expect.objectContaining({ detail: { masterPassword: 'my-master-password' } }));
   });
 
-  it('emits vw-auth-logout when "Log out" is clicked on the unlock screen', async () => {
+  it('emits vw-auth-logout when the log-out control is clicked on the unlock screen', async () => {
     const el = await mount('unlock');
     const loggedOut = vi.fn();
     el.addEventListener('vw-auth-logout', loggedOut);
-    button(el, 'Log out').click();
+    button(el, t('auth.logout')).click();
     expect(loggedOut).toHaveBeenCalledTimes(1);
   });
 
@@ -228,8 +262,19 @@ describe('vw-auth-views', () => {
     input(el, 'pinUnlockInput').value = ' 4321 ';
     const submitted = vi.fn();
     el.addEventListener('vw-auth-pin-unlock-submit', submitted);
-    button(el, 'Unlock with PIN').click();
+    (el.shadowRoot!.querySelector('.pin-btn') as HTMLButtonElement).click();
     expect(submitted).toHaveBeenCalledWith(expect.objectContaining({ detail: { pin: '4321' } }));
+  });
+
+  it('submits the PIN when Enter is pressed in the PIN field', async () => {
+    const el = await mount('unlock');
+    el.pinEnabled = true;
+    await el.updateComplete;
+    input(el, 'pinUnlockInput').value = '1234';
+    const submitted = vi.fn();
+    el.addEventListener('vw-auth-pin-unlock-submit', submitted);
+    input(el, 'pinUnlockInput').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', cancelable: true }));
+    expect(submitted).toHaveBeenCalledWith(expect.objectContaining({ detail: { pin: '1234' } }));
   });
 
   it('does not emit vw-auth-pin-unlock-submit for a blank PIN', async () => {
@@ -239,7 +284,7 @@ describe('vw-auth-views', () => {
     input(el, 'pinUnlockInput').value = '   ';
     const submitted = vi.fn();
     el.addEventListener('vw-auth-pin-unlock-submit', submitted);
-    button(el, 'Unlock with PIN').click();
+    (el.shadowRoot!.querySelector('.pin-btn') as HTMLButtonElement).click();
     expect(submitted).not.toHaveBeenCalled();
   });
 });

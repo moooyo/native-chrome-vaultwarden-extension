@@ -3,15 +3,17 @@ import { themeTokens } from '../../components/tokens.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
 import '../../components/status-message.js';
+import '../../components/setting-card.js';
+import { LocalizeController, t } from '../../i18n/index.js';
 import type { ChangeKdfDetail, ChangePasswordDetail, DetailStatus, RotateKeyDetail } from '../types.js';
 
 const MIN_KDF_ITERATIONS = 600_000;
 
 /**
- * Account security: change the master password, change the PBKDF2 iteration count, or rotate the
- * account encryption key (a deliberate two-step warning + confirm). All validation is local and
- * synchronous; the view only emits typed, already-validated commands and the root performs the
- * `auth.changePassword` / `auth.changeKdf` / `auth.rotateAccountKey` requests. No secret is held
+ * Account security (MiYu design): change the master password, change the PBKDF2 iteration count, or
+ * rotate the account encryption key (a deliberate two-step warning + confirm). All validation is
+ * local and synchronous; the view only emits typed, already-validated commands and the root performs
+ * the `auth.changePassword` / `auth.changeKdf` / `auth.rotateAccountKey` requests. No secret is held
  * beyond the inputs, and no request is issued here.
  */
 export class VwAccountSecurityView extends LitElement {
@@ -27,6 +29,8 @@ export class VwAccountSecurityView extends LitElement {
   declare view: 'main' | 'rotate';
   declare validationError: string | undefined;
 
+  private i18n = new LocalizeController(this);
+
   constructor() {
     super();
     this.pending = false;
@@ -40,60 +44,90 @@ export class VwAccountSecurityView extends LitElement {
     controlStyles,
     css`
       :host {
-        display: block;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        flex: 1;
       }
       .head {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 6px 0 12px;
+        padding: 10px 14px;
+        flex: none;
       }
       .head h1 {
         margin: 0;
-        font-size: 15px;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--vw-ink);
       }
-      .card {
-        border: 1px solid var(--vw-line);
-        border-radius: var(--vw-radius-control);
-        padding: 12px;
-        margin-bottom: 12px;
+      .content {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 2px 14px 14px;
+        scrollbar-width: thin;
+        scrollbar-color: var(--vw-scrollbar) transparent;
+      }
+      .content::-webkit-scrollbar {
+        width: 8px;
+      }
+      .content::-webkit-scrollbar-thumb {
+        background: var(--vw-scrollbar);
+        border-radius: 4px;
+        border: 2px solid transparent;
+        background-clip: content-box;
+      }
+
+      .form {
         display: flex;
         flex-direction: column;
         gap: 8px;
       }
-      .card.danger {
-        border-color: var(--vw-danger);
+      .input.bordered {
+        background: var(--vw-fill-2);
+        border-color: var(--vw-line-1);
       }
-      .section-label {
-        font-size: 12px;
-        color: var(--vw-muted);
-      }
-      .input {
-        width: 100%;
-        box-sizing: border-box;
-      }
-      .block {
+      .btn.wide {
         width: 100%;
       }
+      .btn svg {
+        width: 16px;
+        height: 16px;
+      }
+
       .warning {
         display: flex;
-        gap: 8px;
-        font-size: 13px;
+        gap: 10px;
+        padding: 12px;
+        border: 1px solid var(--vw-danger-border);
+        border-radius: var(--vw-radius-card);
+        background: var(--vw-danger-10);
         color: var(--vw-danger);
+        font-size: 12.5px;
+        line-height: 1.5;
+      }
+      .warning svg {
+        width: 18px;
+        height: 18px;
+        flex: none;
+        margin-top: 1px;
+      }
+      .rotate-form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
       }
       .row {
         display: flex;
         gap: 8px;
       }
-      .row .button {
+      .row .btn {
         flex: 1;
-      }
-      .status {
-        margin-top: 10px;
-      }
-      svg {
-        width: 16px;
-        height: 16px;
       }
     `,
   ];
@@ -106,15 +140,20 @@ export class VwAccountSecurityView extends LitElement {
     this.dispatchEvent(new CustomEvent('vw-item-back', { bubbles: true, composed: true }));
   }
 
+  private toMain(): void {
+    this.view = 'main';
+    this.validationError = undefined;
+  }
+
   private changePassword(): void {
     if (this.pending) return;
     this.validationError = undefined;
     const currentPassword = this.read('[data-current]');
     const newPassword = this.read('[data-new]');
     const confirm = this.read('[data-confirm]');
-    if (!currentPassword || !newPassword) { this.validationError = 'Enter your current and new password'; return; }
-    if (newPassword.length < 8) { this.validationError = 'New master password must be at least 8 characters'; return; }
-    if (newPassword !== confirm) { this.validationError = 'New passwords do not match'; return; }
+    if (!currentPassword || !newPassword) { this.validationError = '请输入当前主密码和新主密码'; return; } // TODO i18n
+    if (newPassword.length < 8) { this.validationError = '新主密码至少需要 8 个字符'; return; } // TODO i18n
+    if (newPassword !== confirm) { this.validationError = '两次输入的新主密码不一致'; return; } // TODO i18n
     this.dispatchEvent(new CustomEvent<ChangePasswordDetail>('vw-change-password', { detail: { currentPassword, newPassword }, bubbles: true, composed: true }));
   }
 
@@ -123,8 +162,8 @@ export class VwAccountSecurityView extends LitElement {
     this.validationError = undefined;
     const currentPassword = this.read('[data-kdf-current]');
     const iterations = Number(this.read('[data-iterations]'));
-    if (!currentPassword) { this.validationError = 'Enter your current master password'; return; }
-    if (!Number.isFinite(iterations) || iterations < MIN_KDF_ITERATIONS) { this.validationError = 'Use at least 600000 iterations'; return; }
+    if (!currentPassword) { this.validationError = '请输入当前主密码'; return; } // TODO i18n
+    if (!Number.isFinite(iterations) || iterations < MIN_KDF_ITERATIONS) { this.validationError = '迭代次数至少为 600000'; return; } // TODO i18n
     this.dispatchEvent(new CustomEvent<ChangeKdfDetail>('vw-change-kdf', { detail: { currentPassword, iterations }, bubbles: true, composed: true }));
   }
 
@@ -132,58 +171,81 @@ export class VwAccountSecurityView extends LitElement {
     if (this.pending) return;
     this.validationError = undefined;
     const masterPassword = this.read('[data-rotate-current]');
-    if (!masterPassword) { this.validationError = 'Enter your current master password'; return; }
+    if (!masterPassword) { this.validationError = '请输入当前主密码'; return; } // TODO i18n
     this.dispatchEvent(new CustomEvent<RotateKeyDetail>('vw-rotate-key', { detail: { masterPassword }, bubbles: true, composed: true }));
   }
 
   private renderStatus() {
-    if (this.validationError) return html`<vw-status-message class="status" tone="danger" .icon=${'alert'} .message=${this.validationError}></vw-status-message>`;
-    if (this.status) return html`<vw-status-message class="status" tone=${this.status.tone} .message=${this.status.message}></vw-status-message>`;
+    if (this.validationError) return html`<vw-status-message tone="danger" .icon=${'alert'} .message=${this.validationError}></vw-status-message>`;
+    if (this.status) return html`<vw-status-message tone=${this.status.tone} .message=${this.status.message}></vw-status-message>`;
     return nothing;
   }
 
   private renderRotate() {
     return html`
       <div class="head">
-        <button type="button" class="icon-button" data-back title="Back" aria-label="Back" @click=${() => { this.view = 'main'; this.validationError = undefined; }}>${uiIcon('back')}</button>
-        <h1>Rotate encryption key</h1>
+        <button type="button" class="icon-btn" data-back title=${t('common.back')} aria-label=${t('common.back')} @click=${() => this.toMain()}>
+          ${uiIcon('back')}
+        </button>
+        <h1>${t('security.rotateKey')}</h1>
       </div>
-      <div class="card danger">
-        <p class="warning">${uiIcon('alert')}<span>This generates a new encryption key and re-encrypts your entire vault. You and all other signed-in devices will need to sign in again. This can't be undone.</span></p>
-        <input class="input" data-rotate-current type="password" autocomplete="current-password" placeholder="Current master password" />
-        <div class="row">
-          <button type="button" class="button primary" data-rotate-confirm ?disabled=${this.pending} @click=${() => this.confirmRotate()}>${uiIcon('key')}<span>Rotate encryption key</span></button>
-          <button type="button" class="button" data-rotate-cancel @click=${() => { this.view = 'main'; this.validationError = undefined; }}>Cancel</button>
+      <div class="content">
+        <div class="warning">
+          ${uiIcon('alert')}
+          <span>${t('security.rotateKeyWarn')}。所有已登录设备需要重新登录，且此操作无法撤销。</span>
+          <!-- TODO i18n: second sentence -->
         </div>
+        <input class="input bordered" data-rotate-current type="password" autocomplete="current-password" placeholder=${t('auth.masterPassword')} />
+        <div class="row">
+          <button type="button" class="btn danger" data-rotate-confirm ?disabled=${this.pending} @click=${() => this.confirmRotate()}>
+            ${uiIcon('key')}<span>${t('security.rotateKey')}</span>
+          </button>
+          <button type="button" class="btn outline" data-rotate-cancel @click=${() => this.toMain()}>${t('common.cancel')}</button>
+        </div>
+        ${this.renderStatus()}
       </div>
-      ${this.renderStatus()}
     `;
   }
 
   private renderMain() {
     return html`
       <div class="head">
-        <button type="button" class="icon-button" data-back title="Back" aria-label="Back" @click=${() => this.back()}>${uiIcon('back')}</button>
-        <h1>Account security</h1>
+        <button type="button" class="icon-btn" data-back title=${t('common.back')} aria-label=${t('common.back')} @click=${() => this.back()}>
+          ${uiIcon('back')}
+        </button>
+        <h1>${t('popup.accountSecurity')}</h1>
       </div>
-      <div class="card">
-        <span class="section-label">Change master password</span>
-        <input class="input" data-current type="password" autocomplete="current-password" placeholder="Current master password" />
-        <input class="input" data-new type="password" autocomplete="new-password" placeholder="New master password" />
-        <input class="input" data-confirm type="password" autocomplete="new-password" placeholder="Confirm new password" />
-        <button type="button" class="button primary block" data-change-password ?disabled=${this.pending} @click=${() => this.changePassword()}>${uiIcon('check')}<span>Change password</span></button>
+      <div class="content">
+        <vw-setting-card stacked emphasized heading=${t('security.changePassword.title')}>
+          <div class="form">
+            <input class="input bordered" data-current type="password" autocomplete="current-password" placeholder=${t('security.currentPassword')} />
+            <input class="input bordered" data-new type="password" autocomplete="new-password" placeholder=${t('security.newPassword')} />
+            <input class="input bordered" data-confirm type="password" autocomplete="new-password" placeholder=${t('security.confirmPassword')} />
+            <button type="button" class="btn primary wide" data-change-password ?disabled=${this.pending} @click=${() => this.changePassword()}>
+              ${uiIcon('check')}<span>${t('security.changePassword.title')}</span>
+            </button>
+          </div>
+        </vw-setting-card>
+
+        <vw-setting-card stacked emphasized heading=${t('security.changeKdf')} description="PBKDF2 · 至少 600000 次迭代">
+          <div class="form">
+            <input class="input bordered" data-kdf-current type="password" autocomplete="current-password" placeholder=${t('security.currentPassword')} />
+            <input class="input bordered" data-iterations type="number" min="600000" step="100000" placeholder="迭代次数（至少 600000）" />
+            <button type="button" class="btn primary wide" data-change-kdf ?disabled=${this.pending} @click=${() => this.changeKdf()}>
+              ${uiIcon('refresh')}<span>${t('common.save')}</span>
+            </button>
+          </div>
+          <!-- TODO i18n: description + iterations placeholder -->
+        </vw-setting-card>
+
+        <vw-setting-card stacked danger heading=${t('security.rotateKey')} description=${t('security.rotateKeyWarn')}>
+          <button type="button" class="btn danger wide" data-rotate ?disabled=${this.pending} @click=${() => { this.view = 'rotate'; this.validationError = undefined; }}>
+            ${uiIcon('key')}<span>${t('security.rotateKey')}</span>
+          </button>
+        </vw-setting-card>
+
+        ${this.renderStatus()}
       </div>
-      <div class="card">
-        <span class="section-label">Change KDF iterations (PBKDF2)</span>
-        <input class="input" data-kdf-current type="password" autocomplete="current-password" placeholder="Current master password" />
-        <input class="input" data-iterations type="number" min="600000" step="100000" placeholder="KDF iterations (e.g. 600000)" />
-        <button type="button" class="button block" data-change-kdf ?disabled=${this.pending} @click=${() => this.changeKdf()}>${uiIcon('refresh')}<span>Change KDF iterations</span></button>
-      </div>
-      <div class="card danger">
-        <span class="section-label">Danger zone</span>
-        <button type="button" class="button block" data-rotate ?disabled=${this.pending} @click=${() => { this.view = 'rotate'; this.validationError = undefined; }}>${uiIcon('key')}<span>Rotate encryption key</span></button>
-      </div>
-      ${this.renderStatus()}
     `;
   }
 

@@ -193,6 +193,13 @@ Use `npm.cmd run watch` for incremental development builds. Live tests under
 `test/live` require a separately configured Vaultwarden test environment and
 are skipped by the default test command when that environment is unavailable.
 
+`npm.cmd run test:ui` builds `dist/` and loads the unpacked extension in a real
+Chromium to smoke-test that the popup, options, and receive pages render the
+MiYu design with no console errors (`tools/verify-render.mjs`). `npm.cmd run
+verify:e2e` additionally logs into the configured Vaultwarden test server and
+checks the popup reaches the vault. Both drive the real built extension rather
+than isolated component fixtures.
+
 ## Release for maintainers
 
 Git tags are the only release trigger and source of release identity. Before

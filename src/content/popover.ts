@@ -1,4 +1,4 @@
-// The autofill hover popover: a Vaultwarden shield anchored to a detected login/card/identity form.
+// The autofill hover popover: a 密屿 (MiYu) mini-logo anchored to a detected login/card/identity form.
 // The visible surface is the closed-shadow Lit element `vw-autofill-popover`; this factory owns only
 // the positioned host, the anchor-relative placement, and the small imperative handle the autofill
 // controller drives (open / show status / show candidates / remove). The page can neither read the
@@ -67,9 +67,10 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
   };
 }
 
-/** Position the popover under the anchor, flipping above and clamping to the
- *  viewport when there isn't room — so it stays usable at any zoom or window size. */
-function reposition(host: HTMLElement, anchor: HTMLElement): void {
+/** Position a surface under the anchor, flipping above and clamping to the
+ *  viewport when there isn't room — so it stays usable at any zoom or window size. Shared by the
+ *  login/card/identity popover and the 2FA / generate panels. */
+export function reposition(host: HTMLElement, anchor: HTMLElement): void {
   const rect = anchor.getBoundingClientRect();
   const vw = window.innerWidth || document.documentElement.clientWidth || 0;
   const vh = window.innerHeight || document.documentElement.clientHeight || 0;

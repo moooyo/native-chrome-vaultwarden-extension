@@ -38,6 +38,7 @@ export interface PopupBrowser {
   getActiveTabId(): Promise<number | undefined>;
   openOptions(): Promise<void>;
   openReceive(): Promise<void>;
+  openUrl(url: string): Promise<void>;
 }
 
 /** A logged-in account as surfaced by `auth.listAccounts`; non-secret display data only. */

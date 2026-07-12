@@ -59,14 +59,14 @@ describe('autofill popover factory', () => {
     const anchor = document.getElementById('pass') as HTMLElement;
     const popover = createAutofillPopover({ anchor, kind: 'card', onOpen: vi.fn(), onSelect: vi.fn() });
     popover.showCandidates([{ id: '1', name: 'Visa', sub: '•••• 4242', favorite: false }]);
-    expect((await content(popover)).textContent).toContain('Fill card');
+    expect((await content(popover)).textContent).toContain('填充银行卡');
   });
 
   it('uses an identity header when kind is identity', async () => {
     const anchor = document.getElementById('pass') as HTMLElement;
     const popover = createAutofillPopover({ anchor, kind: 'identity', onOpen: vi.fn(), onSelect: vi.fn() });
     popover.showCandidates([{ id: '1', name: 'Ada Lovelace', sub: '1 Analytical Way', favorite: false }]);
-    expect((await content(popover)).textContent).toContain('Fill identity');
+    expect((await content(popover)).textContent).toContain('填充身份');
   });
 
   it('ignores untrusted candidate clicks', async () => {

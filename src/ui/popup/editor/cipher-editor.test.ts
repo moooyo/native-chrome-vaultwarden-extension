@@ -1,5 +1,18 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// The reskinned editor composes the (frozen) MiYu design system, whose i18n module imports
+// webextension-polyfill at the top of its graph. That polyfill throws when loaded outside an
+// extension, so we stub it before importing the component.
+vi.mock('webextension-polyfill', () => ({
+  default: {
+    storage: {
+      local: { get: async () => ({}), set: async () => {} },
+      onChanged: { addListener: () => {} },
+    },
+  },
+}));
+
 import './cipher-editor.js';
 import type { VwCipherEditor } from './cipher-editor.js';
 import type { CipherInput, CipherSummary, CollectionSummary, FolderSummary } from '../../../core/vault/models.js';
@@ -50,6 +63,18 @@ async function setInput(el: VwCipherEditor, sel: string, value: string): Promise
   await el.updateComplete;
 }
 
+/** The reskin swaps native flag checkboxes for `<vw-toggle>`; drive it through its custom event. */
+async function toggle(el: VwCipherEditor, sel: string, checked: boolean): Promise<void> {
+  q(el, sel).dispatchEvent(new CustomEvent('vw-toggle-change', { detail: { checked }, bubbles: true, composed: true }));
+  await el.updateComplete;
+}
+
+/** The folder picker is now a `<vw-select>`; drive it through its custom event. */
+async function selectValue(el: VwCipherEditor, sel: string, value: string): Promise<void> {
+  q(el, sel).dispatchEvent(new CustomEvent('vw-select-change', { detail: { value }, bubbles: true, composed: true }));
+  await el.updateComplete;
+}
+
 function saveDetail(el: VwCipherEditor): Promise<CipherInput> {
   return new Promise((resolve) => {
     el.addEventListener('vw-editor-save', (e) => resolve((e as CustomEvent<CipherInput>).detail), { once: true });
@@ -57,10 +82,11 @@ function saveDetail(el: VwCipherEditor): Promise<CipherInput> {
   });
 }
 
-it('keeps editor content and actions in dedicated regions', async () => {
+it('lays out a scroll region under a header with back + save controls', async () => {
   const el = await mount(ctx());
-  expect(el.shadowRoot!.querySelector('[data-view-scroll]')).not.toBeNull();
-  expect(el.shadowRoot!.querySelector('[data-view-actions]')).not.toBeNull();
+  expect(el.shadowRoot!.querySelector('[data-scroll]')).not.toBeNull();
+  expect(el.shadowRoot!.querySelector('[data-back]')).not.toBeNull();
+  expect(el.shadowRoot!.querySelector('[data-save]')).not.toBeNull();
 });
 
 describe('vw-cipher-editor login', () => {
@@ -81,12 +107,9 @@ describe('vw-cipher-editor login', () => {
     await setInput(el, '[data-password]', 's3cret');
     await setInput(el, '[data-field="totp"]', 'OTPSEED');
     await setInput(el, '[data-uri]', 'https://github.com');
-    q<HTMLInputElement>(el, '[data-favorite]').click();
-    q<HTMLInputElement>(el, '[data-reprompt]').click();
-    const folder = q<HTMLSelectElement>(el, '[data-folder]');
-    folder.value = 'f1';
-    folder.dispatchEvent(new Event('change'));
-    await el.updateComplete;
+    await toggle(el, '[data-favorite]', true);
+    await toggle(el, '[data-reprompt]', true);
+    await selectValue(el, '[data-folder]', 'f1');
 
     const detail = await saveDetail(el);
     expect(detail).toEqual({
@@ -128,7 +151,7 @@ describe('vw-cipher-editor login', () => {
     q<HTMLButtonElement>(el, '[data-save]').click();
     await el.updateComplete;
     expect(handler).not.toHaveBeenCalled();
-    expect(statusText(el)).toContain('Name is required');
+    expect(statusText(el)).toContain('请输入名称');
   });
 
   it('toggles password visibility without leaking the value into an attribute', async () => {
@@ -189,9 +212,9 @@ describe('vw-cipher-editor custom fields', () => {
     // Linked field is read-only (no type select) and shows its label.
     const linkedRow = q<HTMLElement>(el, '[data-cf-type="3"]');
     expect(linkedRow.querySelector('[data-cf-type-sel]')).toBeNull();
-    expect(linkedRow.textContent).toContain('Linked');
+    expect(linkedRow.textContent).toContain('关联');
 
-    // Add a Boolean field, check it, and an empty nameless field that must be dropped.
+    // Add a Boolean field, turn it on, and an empty nameless field that must be dropped.
     q<HTMLButtonElement>(el, '[data-add-field]').click();
     await el.updateComplete;
     const newSel = qa<HTMLSelectElement>(el, '[data-cf-type-sel]').at(-1)!;
@@ -203,8 +226,9 @@ describe('vw-cipher-editor custom fields', () => {
     boolName.value = 'Enabled';
     boolName.dispatchEvent(new Event('input'));
     await el.updateComplete;
-    const boolCheck = qa<HTMLElement>(el, '[data-cf-type="2"]').at(-1)!.querySelector<HTMLInputElement>('[data-cf-value]')!;
-    boolCheck.click();
+    // The boolean value control is now a <vw-toggle>; drive it through its custom event.
+    const boolToggle = qa<HTMLElement>(el, '[data-cf-type="2"]').at(-1)!.querySelector<HTMLElement>('[data-cf-value]')!;
+    boolToggle.dispatchEvent(new CustomEvent('vw-toggle-change', { detail: { checked: true }, bubbles: true, composed: true }));
     await el.updateComplete;
 
     q<HTMLButtonElement>(el, '[data-add-field]').click(); // nameless Text row → dropped
@@ -277,7 +301,7 @@ describe('vw-cipher-editor collections and sharing', () => {
       summary({ hasPasskey: true }),
     );
     expect(el.shadowRoot!.querySelector('[data-move-confirm]')).toBeNull();
-    expect(q<HTMLElement>(el, '[data-move-guard]').textContent).toContain('web vault');
+    expect(q<HTMLElement>(el, '[data-move-guard]').textContent).toContain('网页版');
   });
 
   it('rejects a move that spans multiple organizations', async () => {
@@ -293,7 +317,7 @@ describe('vw-cipher-editor collections and sharing', () => {
     q<HTMLButtonElement>(el, '[data-move-confirm]').click();
     await el.updateComplete;
     expect(handler).not.toHaveBeenCalled();
-    expect(statusText(el)).toContain('same organization');
+    expect(statusText(el)).toContain('同一组织');
   });
 });
 

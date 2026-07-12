@@ -38,10 +38,10 @@ export class VwStatusMessage extends LitElement {
         gap: 8px;
         padding: 8px 12px;
         border-radius: var(--vw-radius-control);
-        border: 1px solid var(--vw-line);
-        background: var(--vw-blue-50);
+        border: 1px solid var(--vw-line-1);
+        background: var(--vw-fill-2);
         color: var(--vw-ink);
-        font-size: var(--vw-font-size-meta);
+        font-size: 12px;
       }
       .status svg {
         width: 16px;
@@ -49,14 +49,16 @@ export class VwStatusMessage extends LitElement {
         flex: none;
       }
       .status.tone-success {
-        border-color: var(--vw-ok);
+        border-color: var(--vw-teal-25);
+        color: var(--vw-teal-text);
       }
       .status.tone-warning {
-        border-color: var(--vw-blue-600);
+        border-color: var(--vw-sync-amber);
       }
       .status.tone-danger {
-        border-color: var(--vw-danger);
-        background: transparent;
+        border-color: var(--vw-danger-border);
+        color: var(--vw-danger);
+        background: var(--vw-danger-10);
       }
     `,
   ];

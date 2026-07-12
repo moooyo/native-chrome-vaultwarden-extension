@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+vi.mock('webextension-polyfill', () => ({ default: { storage: { local: { get: async () => ({}), set: async () => {} }, onChanged: { addListener: () => {} } } } }));
 import './about-section.js';
 import type { VwAboutSection } from './about-section.js';
 
@@ -11,6 +12,10 @@ async function mount(version = '0.1.0'): Promise<VwAboutSection> {
   return el;
 }
 
+function q<T extends Element>(el: VwAboutSection, sel: string): T {
+  return el.shadowRoot!.querySelector<T>(sel)!;
+}
+
 describe('vw-about-section', () => {
   afterEach(() => {
     document.body.replaceChildren();
@@ -18,13 +23,28 @@ describe('vw-about-section', () => {
 
   it('shows the extension version', async () => {
     const el = await mount('1.2.3');
-    expect(el.shadowRoot!.querySelector('[data-version]')?.textContent).toContain('1.2.3');
+    expect(q(el, '[data-version]').textContent).toContain('1.2.3');
   });
 
-  it('states that secrets stay on the local device', async () => {
+  it('renders the hero logo and brand name', async () => {
     const el = await mount();
-    const text = el.shadowRoot!.textContent?.toLowerCase() ?? '';
-    expect(text).toContain('local');
-    expect(text).toContain('device');
+    expect(q(el, 'vw-logo')).toBeTruthy();
+    expect(el.shadowRoot!.textContent).toContain('MiYu');
+  });
+
+  it('emits check-update when the button is clicked', async () => {
+    const el = await mount();
+    const checked = vi.fn();
+    el.addEventListener('vw-check-update', checked);
+    q<HTMLButtonElement>(el, '[data-check-update]').click();
+    expect(checked).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the status message when the root supplies one', async () => {
+    const el = await mount();
+    expect(el.shadowRoot!.querySelector('[data-status]')).toBeNull();
+    el.status = { message: 'up to date', tone: 'info' };
+    await el.updateComplete;
+    expect(q(el, '[data-status]')).toBeTruthy();
   });
 });

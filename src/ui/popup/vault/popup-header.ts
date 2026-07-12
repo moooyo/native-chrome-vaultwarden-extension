@@ -1,96 +1,53 @@
 import { LitElement, css, html } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
-import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
-import '../menus/account-menu.js';
-import '../menus/tools-menu.js';
-import type { AccountInfo } from '../types.js';
+import { LocalizeController, t } from '../../i18n/index.js';
+import '../../components/logo.js';
 
 /**
- * The unlocked-vault header: search, a New item command, and grouped account/tools controls.
- * It performs no requests. New item raises `vw-add`; account and tool actions are
- * raised by the nested menus and bubble through unchanged.
+ * The MiYu popup top bar: the logo + brand, then four 28px icon buttons — new item, password
+ * generator (highlighted while the generator view is open), settings (opens the options page), and
+ * lock. Emits `vw-add`, `vw-generator-toggle`, `vw-open-settings`, `vw-lock`. Search lives in the
+ * vault body below, not here, matching the design.
  */
 export class VwPopupHeader extends LitElement {
   static override properties = {
-    accounts: { attribute: false },
-    pinEnabled: { type: Boolean },
-    deviceRemembered: { type: Boolean },
-    query: { type: String },
+    generatorActive: { type: Boolean },
   };
 
-  declare accounts: AccountInfo[];
-  declare pinEnabled: boolean;
-  declare deviceRemembered: boolean;
-  declare query: string;
+  declare generatorActive: boolean;
+
+  private i18n = new LocalizeController(this);
 
   constructor() {
     super();
-    this.accounts = [];
-    this.pinEnabled = false;
-    this.deviceRemembered = false;
-    this.query = '';
+    this.generatorActive = false;
   }
 
   static override styles = [
     themeTokens,
-    controlStyles,
     css`
-      :host {
-        display: block;
-      }
-      .header {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        height: 100%;
-        padding: 0 10px;
-        box-sizing: border-box;
-      }
-      .spacer {
-        flex: 1;
-      }
-      .brand {
+      :host { display: block; flex: none; }
+      .bar { display: flex; align-items: center; gap: 8px; padding: 12px 14px 9px; }
+      .brand { font-size: 14px; font-weight: 600; color: var(--vw-ink); letter-spacing: 0.01em; }
+      .spacer { flex: 1; }
+      button {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        color: var(--vw-blue-600);
-        font-weight: 600;
-        font-size: 14px;
-      }
-      .brand svg {
-        width: 18px;
-        height: 18px;
-      }
-      .search {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        width: min(220px, 38vw);
-        min-width: 120px;
-        height: 34px;
-        padding: 0 9px;
-        border: 1px solid var(--vw-line);
-        border-radius: var(--vw-radius-row);
-        background: var(--vw-panel);
-      }
-      .search svg {
-        width: 16px;
-        height: 16px;
-        color: var(--vw-muted);
-      }
-      .search input {
-        flex: 1;
-        min-width: 0;
-        border: 0;
-        outline: 0;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border: none;
+        border-radius: var(--vw-radius-chip);
         background: transparent;
-        color: var(--vw-ink);
-        font: inherit;
+        color: var(--vw-text-2);
+        cursor: pointer;
+        transition: background-color var(--vw-dur-fast), color var(--vw-dur-fast);
       }
-      .new-item {
-        min-width: 92px;
-      }
+      button:hover { background: var(--vw-icon-hover); }
+      button:focus-visible { outline: none; box-shadow: var(--vw-focus); }
+      button svg { width: 15px; height: 15px; }
+      button.active { color: var(--vw-teal-text); background: var(--vw-teal-10); }
     `,
   ];
 
@@ -98,39 +55,31 @@ export class VwPopupHeader extends LitElement {
     this.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true }));
   }
 
-  private emitSearch(query: string): void {
-    this.dispatchEvent(new CustomEvent('vw-search-change', {
-      detail: { query },
-      bubbles: true,
-      composed: true,
-    }));
-  }
-
   protected override render() {
     return html`
-      <div class="header">
-        <span class="brand">${uiIcon('shield')}<span>Vaultwarden</span></span>
+      <div class="bar">
+        <vw-logo variant="header"></vw-logo>
+        <span class="brand">${t('common.brand')}</span>
         <span class="spacer"></span>
-        <label class="search">
-          ${uiIcon('search')}
-          <input
-            data-search
-            type="search"
-            aria-label="Search vault"
-            placeholder="Search Vaultwarden"
-            .value=${this.query}
-            @input=${(event: Event) => this.emitSearch((event.target as HTMLInputElement).value)}
-          />
-        </label>
-        <button type="button" class="button primary new-item" data-add @click=${() => this.emit('vw-add')}>
-          ${uiIcon('plus')}<span>New item</span>
+        <button type="button" title=${t('popup.newItem')} aria-label=${t('popup.newItem')} @click=${() => this.emit('vw-add')}>
+          ${uiIcon('plus')}
         </button>
-        <vw-tools-menu></vw-tools-menu>
-        <vw-account-menu
-          .accounts=${this.accounts}
-          .pinEnabled=${this.pinEnabled}
-          .deviceRemembered=${this.deviceRemembered}
-        ></vw-account-menu>
+        <button
+          type="button"
+          class=${this.generatorActive ? 'active' : ''}
+          title=${t('popup.generator')}
+          aria-label=${t('popup.generator')}
+          aria-pressed=${this.generatorActive ? 'true' : 'false'}
+          @click=${() => this.emit('vw-generator-toggle')}
+        >
+          ${uiIcon('wand')}
+        </button>
+        <button type="button" title=${t('popup.settings')} aria-label=${t('popup.settings')} @click=${() => this.emit('vw-open-settings')}>
+          ${uiIcon('sliders')}
+        </button>
+        <button type="button" title=${t('popup.lock')} aria-label=${t('popup.lock')} @click=${() => this.emit('vw-lock')}>
+          ${uiIcon('lock')}
+        </button>
       </div>
     `;
   }

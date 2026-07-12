@@ -36,7 +36,31 @@ export interface SectionStatus {
 }
 
 /** The rail sections, in display order. */
-export type OptionsSectionId = 'connection' | 'security' | 'autofill' | 'data' | 'about';
+export type OptionsSectionId =
+  | 'account'
+  | 'security'
+  | 'autofill'
+  | 'generator'
+  | 'send'
+  | 'appearance'
+  | 'data'
+  | 'about';
+
+/** `vw-change-password`: a validated master-password change the root performs via `auth.changePassword`. */
+export interface ChangePasswordDetail {
+  currentPassword: string;
+  newPassword: string;
+}
+
+/** `vw-send-create`: a text or file Send the root creates (file variant carries the read bytes). */
+export type SendCreateDetail =
+  | { kind: 'text'; input: import('../../core/vault/sends.js').SendInput }
+  | { kind: 'file'; input: import('../../core/vault/sends.js').SendInput; dataB64: string; fileName: string };
+
+/** `vw-send-delete`: the Send to delete. */
+export interface SendDeleteDetail {
+  id: string;
+}
 
 /** `vw-connection-save`: the already-normalized server URL the root should persist (after it has
  *  requested host permission for the URL's origin). */

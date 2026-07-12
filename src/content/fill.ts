@@ -20,7 +20,7 @@ export function fillLoginForm(form: DetectedLoginForm, credentials: AutofillCred
   return filled;
 }
 
-function setInputValue(input: HTMLInputElement, value: string): void {
+export function setInputValue(input: HTMLInputElement, value: string): void {
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
   input.dispatchEvent(new Event('change', { bubbles: true }));

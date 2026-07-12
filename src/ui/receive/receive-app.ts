@@ -1,8 +1,10 @@
 import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import browser from 'webextension-polyfill';
-import { themeTokens } from '../components/tokens.js';
+import { paletteTokens, themeTokens } from '../components/tokens.js';
 import { controlStyles } from '../components/styles.js';
 import { uiIcon } from '../components/icon.js';
+import { LocalizeController, t } from '../i18n/index.js';
+import '../components/logo.js';
 import '../components/status-message.js';
 import {
   parseSendUrl,
@@ -17,15 +19,24 @@ import {
 } from '../../core/vault/send-access.js';
 import type { ReceiveDeps, ReceiveState } from './types.js';
 
-const MESSAGES: Record<SendAccessError, string> = {
-  invalid_link: 'Invalid Send link.',
-  password_required: 'This Send needs a password.',
-  unavailable: 'This Send is no longer available.',
-  decrypt_failed: 'Could not decrypt — the link or file may be corrupted.',
-};
-
 function isSendAccessErrorCode(value: string): value is SendAccessError {
   return value === 'invalid_link' || value === 'password_required' || value === 'unavailable' || value === 'decrypt_failed';
+}
+
+/** Localised copy for each tagged Send-access failure. `unavailable` reuses the existing
+ *  `receive.expired` catalog string; the others have no key yet, so they are inline Chinese with a
+ *  `// TODO i18n` marker. Resolved at the point the error state is set. */
+function sendErrorMessage(code: SendAccessError): string {
+  switch (code) {
+    case 'invalid_link':
+      return '无效的 Send 链接'; // TODO i18n
+    case 'password_required':
+      return '此 Send 需要访问密码'; // TODO i18n
+    case 'unavailable':
+      return t('receive.expired');
+    case 'decrypt_failed':
+      return '无法解密，链接或文件可能已损坏'; // TODO i18n
+  }
 }
 
 /** Narrows a caught `unknown` to the tagged error `sendAccessError` throws, without ever casting
@@ -66,18 +77,19 @@ function createDefaultDeps(): ReceiveDeps {
 }
 
 /**
- * The dormant Lit Receive root. It owns the whole recipient-side flow — parsing the share link,
- * requesting host permission, accessing/decrypting the Send, and downloading/decrypting a file —
- * performing every side effect itself through the injectable `deps`, and reusing the existing
- * `send-access` helpers for every crypto/protocol step (no duplicated logic here).
+ * The Lit Receive root — the live entry point for `receive.html` (mounted by `receive.ts`). It owns
+ * the whole recipient-side flow — parsing the share link, requesting host permission,
+ * accessing/decrypting the Send, and downloading/decrypting a file — performing every side effect
+ * itself through the injectable `deps`, and reusing the existing `send-access` helpers for every
+ * crypto/protocol step (no duplicated logic here).
  *
  * The Access button's click handler parses the link synchronously and then calls
  * `deps.requestOrigin` as its very first `await`, preserving the user-gesture window
  * `permissions.request` needs. Only Download reads the resulting `passwordHash`/`fetch`, and only
  * after that permission has already been granted.
  *
- * Not wired into `receive.html` yet — `src/ui/receive/receive.ts` remains the live entry point
- * until a later task replaces it.
+ * As a page root it composes `paletteTokens` (so every `--vw-*` token resolves) on top of the base
+ * `themeTokens` + shared `controlStyles`, and localises through `LocalizeController` / `t`.
  */
 export class VwReceiveApp extends LitElement {
   static override properties = {
@@ -89,45 +101,124 @@ export class VwReceiveApp extends LitElement {
   /** Injectable dependency seam; defaults to the real `webextension-polyfill`/DOM implementation. */
   deps: ReceiveDeps = createDefaultDeps();
 
+  /** Re-renders on locale change so the Appearance language switch takes effect live. */
+  private i18n = new LocalizeController(this);
+
   constructor() {
     super();
     this.state = { status: 'idle' };
   }
 
   static override styles = [
+    paletteTokens,
     themeTokens,
     controlStyles,
     css`
       :host {
         display: block;
+        min-height: 100vh;
       }
-      .task-column { max-width: 620px; margin: 0 auto; }
-      .page-heading { margin-bottom: 24px; }
-      .page-heading h1 { margin: 0 0 4px; font-size: 28px; color: var(--vw-ink-strong); }
-      .page-heading p { margin: 0; color: var(--vw-muted); }
-      .receive {
+      .page {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 32px 16px;
+        background: var(--vw-options-bg);
+      }
+      .card {
+        width: 100%;
+        max-width: 420px;
+        background: var(--vw-card);
+        border: 1px solid var(--vw-card-border);
+        border-radius: var(--vw-radius-panel);
+        box-shadow: var(--vw-card-shadow);
+        padding: 28px 28px 26px;
+      }
+      .brand {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        align-items: center;
+        text-align: center;
+        gap: 4px;
+        margin-bottom: 22px;
       }
-      .actions {
+      .brand h1 {
+        margin: 8px 0 0;
+        font-size: 20px;
+        font-weight: 600;
+        color: var(--vw-ink);
+      }
+      .brand p {
+        margin: 2px 0 0;
+        font-size: 12.5px;
+        color: var(--vw-muted);
+        line-height: 1.5;
+      }
+      .form {
         display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .field-label {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        color: var(--vw-faint);
+      }
+      .btn.block {
+        width: 100%;
+      }
+      .result {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
       }
       .send-name {
-        font-weight: 650;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--vw-ink);
       }
       .send-text {
         white-space: pre-wrap;
         word-break: break-word;
         font-family: var(--vw-font-mono);
-        background: var(--vw-blue-50);
-        padding: 10px 12px;
-        border-radius: var(--vw-radius-control);
+        font-size: 12.5px;
+        line-height: 1.6;
+        color: var(--vw-ink);
+        background: var(--vw-fill-2);
+        padding: 12px 14px;
+        border-radius: var(--vw-radius-card);
       }
       .send-file {
         display: flex;
         align-items: center;
         gap: 10px;
+        padding: 12px 14px;
+        background: var(--vw-fill-2);
+        border-radius: var(--vw-radius-card);
+      }
+      .send-file .file-icon {
+        display: grid;
+        place-items: center;
+        flex: none;
+        color: var(--vw-teal-text);
+      }
+      .send-file .file-icon svg {
+        width: 20px;
+        height: 20px;
+      }
+      .send-file .file-meta {
+        flex: 1;
+        min-width: 0;
+        font-size: 12.5px;
+        color: var(--vw-ink);
+        word-break: break-word;
       }
     `,
   ];
@@ -155,7 +246,7 @@ export class VwReceiveApp extends LitElement {
     try {
       parsed = parseSendUrl(this.linkValue());
     } catch {
-      this.state = { status: 'error', message: MESSAGES.invalid_link };
+      this.state = { status: 'error', message: sendErrorMessage('invalid_link') };
       return;
     }
     // Read the password field (if any) before switching to the busy state below — that render
@@ -167,7 +258,8 @@ export class VwReceiveApp extends LitElement {
     this.state = { status: 'accessing' };
     const granted = await this.deps.requestOrigin(originPattern);
     if (!granted) {
-      this.state = { status: 'error', message: `Grant access to ${hostOf(parsed.serverUrl)} to receive this Send.` };
+      // TODO i18n
+      this.state = { status: 'error', message: `请授予对 ${hostOf(parsed.serverUrl)} 的访问权限以接收此 Send` };
       return;
     }
     try {
@@ -183,9 +275,9 @@ export class VwReceiveApp extends LitElement {
       }
     } catch (err) {
       if (isSendAccessError(err) && err.code === 'password_required') {
-        this.state = { status: 'passwordRequired', message: MESSAGES.password_required };
+        this.state = { status: 'passwordRequired', message: sendErrorMessage('password_required') };
       } else {
-        this.state = { status: 'error', message: isSendAccessError(err) ? MESSAGES[err.code] : 'Something went wrong.' };
+        this.state = { status: 'error', message: isSendAccessError(err) ? sendErrorMessage(err.code) : t('common.error') };
       }
     }
   }
@@ -196,7 +288,7 @@ export class VwReceiveApp extends LitElement {
       return;
     }
     if (!send.fileId || !send.id) {
-      this.state = { status: 'error', message: MESSAGES.unavailable };
+      this.state = { status: 'error', message: sendErrorMessage('unavailable') };
       return;
     }
     this.state = { status: 'downloading' };
@@ -208,7 +300,8 @@ export class VwReceiveApp extends LitElement {
         ? { status: 'fileReady', parsed, send }
         : { status: 'fileReady', parsed, send, passwordHash };
     } catch (err) {
-      this.state = { status: 'error', message: isSendAccessError(err) ? MESSAGES[err.code] : 'Download failed.' };
+      // TODO i18n
+      this.state = { status: 'error', message: isSendAccessError(err) ? sendErrorMessage(err.code) : '下载失败' };
     }
   }
 
@@ -216,23 +309,27 @@ export class VwReceiveApp extends LitElement {
     switch (this.state.status) {
       case 'textReady':
         return html`
-          <div class="send-name">${this.state.name}</div>
-          <div class="send-text">${this.state.text}</div>
+          <div class="result">
+            <div class="send-name">${this.state.name}</div>
+            <div class="send-text">${this.state.text}</div>
+          </div>
         `;
       case 'fileReady': {
         const { parsed, send, passwordHash } = this.state;
         return html`
-          <div class="send-name">${send.name}</div>
-          <div class="send-file">
-            ${uiIcon('note')}
-            <span>${send.fileName ?? 'file'}${send.sizeName ? ` · ${send.sizeName}` : ''}</span>
+          <div class="result">
+            <div class="send-name">${send.name}</div>
+            <div class="send-file">
+              <span class="file-icon">${uiIcon('file')}</span>
+              <span class="file-meta">${send.fileName ?? 'file'}${send.sizeName ? ` · ${send.sizeName}` : ''}</span>
+            </div>
             <button
               type="button"
-              class="button"
+              class="btn primary block"
               data-download
               @click=${() => void this.onDownload(parsed, send, passwordHash)}
             >
-              ${uiIcon('key')}<span>Download</span>
+              ${uiIcon('file')}<span>${this.i18n.t('receive.download')}</span>
             </button>
           </div>
         `;
@@ -247,7 +344,7 @@ export class VwReceiveApp extends LitElement {
       case 'passwordRequired':
         return html`<vw-status-message tone="danger" .icon=${'alert'} .message=${this.state.message}></vw-status-message>`;
       case 'downloading':
-        return html`<vw-status-message tone="info" .message=${'Downloading and decrypting…'}></vw-status-message>`;
+        return html`<vw-status-message tone="info" .message=${this.i18n.t('receive.loading')}></vw-status-message>`;
       case 'error':
         return html`<vw-status-message tone="danger" .icon=${'alert'} .message=${this.state.message}></vw-status-message>`;
       default:
@@ -258,36 +355,42 @@ export class VwReceiveApp extends LitElement {
   protected override render() {
     const busy = this.state.status === 'accessing' || this.state.status === 'downloading';
     return html`
-      <section class="task-column" data-task-column>
-      <header class="page-heading" data-page-heading><h1>Receive a Send</h1><p>Open secure text or download a shared file on this device.</p></header>
-      <div class="receive field-group">
-        <label class="field">
-          <span class="field-label">Send link</span>
-          <input
-            class="input mono"
-            data-link
-            type="url"
-            placeholder="https://vault.example/#/send/…/…"
-            ?disabled=${busy}
-          />
-        </label>
-        ${this.state.status === 'passwordRequired'
-          ? html`
-              <label class="field">
-                <span class="field-label">Password</span>
-                <input class="input" data-password type="password" autocomplete="off" />
-              </label>
-            `
-          : nothing}
-        <div class="actions">
-          <button type="button" class="button primary" data-access ?disabled=${busy} @click=${() => void this.onAccess()}>
-            ${uiIcon('unlock')}<span>Access Send</span>
-          </button>
-        </div>
-        ${this.renderResult()}
-        ${this.renderStatus()}
+      <div class="page">
+        <section class="card" data-task-column>
+          <header class="brand" data-page-heading>
+            <vw-logo variant="hero"></vw-logo>
+            <h1>${this.i18n.t('receive.title')}</h1>
+            <!-- TODO i18n -->
+            <p>在此设备上查看安全文本或下载共享文件</p>
+          </header>
+          <div class="form">
+            <label class="field">
+              <!-- TODO i18n -->
+              <span class="field-label">Send 链接</span>
+              <input
+                class="input mono"
+                data-link
+                type="url"
+                placeholder="https://vault.example/#/send/…/…"
+                ?disabled=${busy}
+              />
+            </label>
+            ${this.state.status === 'passwordRequired'
+              ? html`
+                  <label class="field">
+                    <span class="field-label">${this.i18n.t('receive.password')}</span>
+                    <input class="input" data-password type="password" autocomplete="off" />
+                  </label>
+                `
+              : nothing}
+            <button type="button" class="btn primary block" data-access ?disabled=${busy} @click=${() => void this.onAccess()}>
+              ${uiIcon('unlock')}<span>${this.i18n.t('receive.unlock')}</span>
+            </button>
+            ${this.renderResult()}
+            ${this.renderStatus()}
+          </div>
+        </section>
       </div>
-      </section>
     `;
   }
 }

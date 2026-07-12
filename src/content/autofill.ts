@@ -4,10 +4,10 @@ import type { FillItemCandidate, CardFillData, IdentityFillData, FillKind } from
 import type { ContentCommand, FillCommand } from '../messaging/protocol.js';
 import type { FrameAutofillMessage, FrameInspection, TabFillOutcome } from '../messaging/protocol.js';
 import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
-import { fillLoginForm } from './fill.js';
+import { fillLoginForm, setInputValue } from './fill.js';
 import { createFrameAutofillController, type FrameAutofillController } from './frame-autofill.js';
 import { fillCardForm, fillIdentityForm } from './fill-card-identity.js';
-import type { DetectedLoginForm } from './form-detection.js';
+import { isFillableInput, isTotpCandidate, type DetectedLoginForm } from './form-detection.js';
 import { detectCardForms, detectIdentityForms, isFillableField, type DetectedFillForm } from './field-detection.js';
 import type { FillFieldElement } from './field-detection.js';
 import { classifyCardField, classifyIdentityField, type CardRole, type IdentityRole } from './field-map.js';
@@ -17,6 +17,11 @@ import type { PopoverCandidate } from './popover.js';
 import { startSaveCapture, type CapturedLogin } from './capture.js';
 import { createSaveBar } from './save-bar.js';
 import { showNotice } from './notice.js';
+import { ensureMiyuFonts } from './ui/fonts.js';
+import { createTotpPanel, type TotpPanel } from './totp-fill.js';
+import { createGeneratePanel, type GeneratePanel } from './generate-fill.js';
+import { matchRegistrationField, type DetectedRegistrationField } from './registration-detection.js';
+import { generatePassword } from '../core/generator/password.js';
 
 type FrameUrlProvider = () => string;
 
@@ -39,6 +44,7 @@ export function startAutofill(frameUrlOrProvider: string | FrameUrlProvider = ()
   const getFrameUrl = typeof frameUrlOrProvider === 'function' ? frameUrlOrProvider : () => frameUrlOrProvider;
   frameUrlProvider = getFrameUrl;
   if (!isHttpUrl(getFrameUrl())) return;
+  ensureMiyuFonts();
   ensureFrameController();
   const attach = () => attachPopovers(getFrameUrl);
   attach();
@@ -78,8 +84,8 @@ function showSaveBar(frameUrl: string, login: CapturedLogin, prompt: Exclude<Sav
   const onDismiss = () => dismissedCaptures.add(key);
   if (prompt.action === 'save') {
     createSaveBar({
-      message: `Save this login for ${hostLabel(frameUrl)} in Vaultwarden?`,
-      actionLabel: 'Save',
+      message: `在密屿中保存 ${hostLabel(frameUrl)} 的登录？`,
+      actionLabel: '保存',
       onAction: () => void sendRequest({
         type: 'autofill.saveLogin',
         frameUrl,
@@ -90,8 +96,8 @@ function showSaveBar(frameUrl: string, login: CapturedLogin, prompt: Exclude<Sav
     });
   } else {
     createSaveBar({
-      message: `Update the saved password for “${prompt.name}”?`,
-      actionLabel: 'Update',
+      message: `更新“${prompt.name}”的已保存密码？`,
+      actionLabel: '更新',
       onAction: () => void sendRequest({ type: 'autofill.updateLogin', cipherId: prompt.cipherId, frameUrl, password: login.password }),
       onDismiss,
     });
@@ -316,11 +322,186 @@ document.addEventListener('contextmenu', (event) => { lastContextElement = event
 // the recently-used form first. Metadata only — the controller never reads or retains field values.
 document.addEventListener('focusin', (event) => {
   const target = event.target;
-  if (target instanceof HTMLInputElement) ensureFrameController().noteFocus(target);
+  if (!(target instanceof HTMLInputElement)) return;
+  ensureFrameController().noteFocus(target);
+  maybeAttachTotpPanel(target);
+  maybeAttachGeneratePanel(target);
 }, true);
 
 /** form.id → its hover popover, so the keyboard shortcut can open the right picker on a multi-match. */
 export const popoverRegistry = new Map<string, ReturnType<typeof createAutofillPopover>>();
+
+// --- 2FA verification-code panel (design 3a) ---------------------------------------------------
+// A standalone verification-code step (a one-time-code field with no password in scope) gets a
+// dedicated panel showing the live TOTP for the top matching login plus a fill action. Mounted on
+// focus of the code field so it never appears unbidden.
+
+interface ActiveTotpPanel { panel: TotpPanel; timer: number; }
+const totpPanels = new Map<string, ActiveTotpPanel>();
+const pendingTotp = new Set<string>();
+let totpSeq = 0;
+
+function isStandaloneTotpField(input: HTMLInputElement): boolean {
+  if (!isTotpCandidate(input) || !isFillableInput(input)) return false;
+  const container = input.form ?? input.closest('form, section, main, article') ?? document;
+  return !Array.from(container.querySelectorAll<HTMLInputElement>('input[type="password"]')).some(isFillableInput);
+}
+
+function totpFieldId(input: HTMLInputElement): string {
+  if (!input.dataset.vwAutofillId) input.dataset.vwAutofillId = `vw-form-totp-${totpSeq++}`;
+  return input.dataset.vwAutofillId;
+}
+
+function maybeAttachTotpPanel(input: HTMLInputElement): void {
+  if (!isStandaloneTotpField(input)) return;
+  const id = totpFieldId(input);
+  if (totpPanels.has(id) || pendingTotp.has(id)) return;
+  void attachTotpPanel(id, input);
+}
+
+async function attachTotpPanel(id: string, totpInput: HTMLInputElement): Promise<void> {
+  pendingTotp.add(id);
+  try {
+    const frameUrl = frameUrlProvider();
+    const candResp = await sendRequest({ type: 'autofill.findCandidates', frameUrl });
+    if (!candResp.ok || !Array.isArray(candResp.data) || !isAutofillCandidates(candResp.data) || candResp.data.length === 0) return;
+    const top = candResp.data[0]!;
+    const credResp = await sendRequest({ type: 'autofill.getCredentials', cipherId: top.id, frameUrl });
+    if (!credResp.ok || !isAutofillCredentials(credResp.data) || !credResp.data.totp) return;
+    if (!totpInput.isConnected) return;
+
+    let code = credResp.data.totp;
+    const cipherId = top.id;
+    const panel = createTotpPanel({
+      anchor: totpInput,
+      onFill: () => {
+        if (isFillableInput(totpInput)) setInputValue(totpInput, code);
+        panel.showFilled();
+        stopTotp(id);
+      },
+      onCopy: () => { void navigator.clipboard?.writeText?.(code); },
+      onUndo: () => {
+        if (isFillableInput(totpInput)) setInputValue(totpInput, '');
+        removeTotp(id);
+      },
+    });
+    panel.element.dataset.vwPopoverFor = id;
+
+    let last = -1;
+    const render = (): void => {
+      const remaining = 30 - (Math.floor(Date.now() / 1000) % 30);
+      panel.update({ itemName: top.name, itemUser: top.username ?? '', code, remaining });
+      last = remaining;
+    };
+    render();
+    const timer = window.setInterval(() => {
+      if (!totpInput.isConnected) { removeTotp(id); return; }
+      const remaining = 30 - (Math.floor(Date.now() / 1000) % 30);
+      if (remaining > last) {
+        // Period rolled over — refresh the code from the worker, then re-render.
+        void sendRequest({ type: 'autofill.getCredentials', cipherId, frameUrl: frameUrlProvider() }).then((r) => {
+          if (r.ok && isAutofillCredentials(r.data) && r.data.totp) code = r.data.totp;
+          render();
+        });
+      } else {
+        render();
+      }
+    }, 1000);
+    totpPanels.set(id, { panel, timer });
+  } finally {
+    pendingTotp.delete(id);
+  }
+}
+
+function stopTotp(id: string): void {
+  const active = totpPanels.get(id);
+  if (active) window.clearInterval(active.timer);
+}
+
+function removeTotp(id: string): void {
+  const active = totpPanels.get(id);
+  if (!active) return;
+  window.clearInterval(active.timer);
+  active.panel.remove();
+  totpPanels.delete(id);
+}
+
+// --- Inline registration password generation (design 2e) ---------------------------------------
+// On focus of a registration new-password field, suggest a strong password with in-place rule
+// tuning; "使用此密码" fills the field and saves the login. The generator runs locally (pure core
+// function over crypto.getRandomValues) so no plaintext round-trips the worker to be generated.
+
+interface GenState { password: string; length: number; numbers: boolean; symbols: boolean; }
+const genPanels = new Map<string, { panel: GeneratePanel }>();
+
+function maybeAttachGeneratePanel(input: HTMLInputElement): void {
+  const target = matchRegistrationField(input);
+  if (!target || genPanels.has(target.id)) return;
+  attachGeneratePanel(target);
+}
+
+function attachGeneratePanel(target: DetectedRegistrationField): void {
+  const state: GenState = { password: '', length: 18, numbers: true, symbols: true };
+  const regen = (): void => {
+    state.password = generatePassword({
+      length: state.length,
+      lowercase: true,
+      uppercase: true,
+      numbers: state.numbers,
+      special: state.symbols,
+      minNumbers: state.numbers ? 1 : 0,
+      minSpecial: state.symbols ? 1 : 0,
+      avoidAmbiguous: true,
+    });
+  };
+  regen();
+
+  const panel = createGeneratePanel({
+    anchor: target.anchor,
+    onRegenerate: () => { regen(); push(); },
+    onLength: (n) => { state.length = clampLength(n); regen(); push(); },
+    onNumbers: (on) => { state.numbers = on; regen(); push(); },
+    onSymbols: (on) => { state.symbols = on; regen(); push(); },
+    onUse: () => { void useGenerated(); },
+    onUndo: () => {
+      if (isFillableInput(target.input)) setInputValue(target.input, '');
+      panel.remove();
+      genPanels.delete(target.id);
+    },
+  });
+  panel.element.dataset.vwPopoverFor = target.id;
+
+  const push = (): void => panel.update({
+    password: state.password,
+    strength: strengthLabel(state.length),
+    length: state.length,
+    numbers: state.numbers,
+    symbols: state.symbols,
+  });
+  push();
+
+  async function useGenerated(): Promise<void> {
+    if (!isFillableInput(target.input)) return;
+    setInputValue(target.input, state.password);
+    const frameUrl = frameUrlProvider();
+    const username = target.usernameInput?.value?.trim() || undefined;
+    await sendRequest({ type: 'autofill.saveLogin', frameUrl, ...(username ? { username } : {}), password: state.password });
+    panel.showSaved({ name: hostLabel(frameUrl), user: username ?? '' });
+  }
+
+  genPanels.set(target.id, { panel });
+}
+
+function clampLength(n: number): number {
+  return Math.max(8, Math.min(40, Math.round(n)));
+}
+
+function strengthLabel(len: number): string {
+  if (len >= 16) return '极强';
+  if (len >= 12) return '强';
+  if (len >= 10) return '中等';
+  return '较弱';
+}
 
 browser.runtime.onMessage.addListener((message: unknown): Promise<FrameInspection | TabFillOutcome> | undefined => {
   // Frame inspect/commit are the only content messages that return a value: the background awaits a
@@ -363,7 +544,7 @@ export function openPickerFor(getFrameUrl: FrameUrlProvider, formId: string): vo
   attachPopovers(getFrameUrl); // idempotent (attachIfNew de-dupes) — re-attach for the current form
   pop = popoverRegistry.get(formId);
   if (pop && pop.element.isConnected) pop.open();
-  else showNotice("Multiple matches — click the field's Vaultwarden icon to choose");
+  else showNotice('多个匹配项——点击输入框的密屿图标选择');
 }
 
 function focusedFillDeps(getFrameUrl: FrameUrlProvider): FocusedFillDeps {

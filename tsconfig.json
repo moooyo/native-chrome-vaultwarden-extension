@@ -15,5 +15,5 @@
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": ["src", "test", "build.mjs", "vitest.config.ts", "playwright.config.ts"]
+  "include": ["src", "test", "build.mjs", "vitest.config.ts"]
 }
