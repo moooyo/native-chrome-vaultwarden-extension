@@ -19,7 +19,7 @@
   "dependencies": {
     "lit": "^3.3.3",
     "safe-regex2": "^5.1.1",
-    "tldts": "^7.4.4",
+    "tldts": "^7.4.8",
     "webextension-polyfill": "^0.12.0"
   },
   "devDependencies": {
