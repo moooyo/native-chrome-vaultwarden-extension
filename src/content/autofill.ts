@@ -248,8 +248,16 @@ async function fillSelected(
   }
   if (isAutofillCredentials(response.data)) {
     const filled = fillLoginForm(form, response.data);
-    if (filled) popover.showFilled();
-    else popover.showStatus('No fillable fields');
+    if (filled) {
+      popover.showFilled();
+      // 已填充 confirmation shows briefly, then the panel auto-dismisses (design: no persistent bar).
+      window.setTimeout(() => {
+        popover.hide();
+        unregisterDismissable(popover.element);
+      }, FILLED_DISMISS_MS);
+    } else {
+      popover.showStatus('No fillable fields');
+    }
   } else {
     popover.showStatus('Unexpected autofill response');
   }
@@ -362,6 +370,14 @@ function registerDismissable(host: HTMLElement, keep: HTMLElement, dismiss: () =
   dismissables.set(host, { keep, dismiss });
 }
 
+function unregisterDismissable(host: HTMLElement): void {
+  dismissables.delete(host);
+}
+
+/** After a successful fill/save the confirmation bar shows briefly, then the whole panel auto-dismisses
+ *  so it never lingers over the form. Shared 1s delay for login / 2FA / generator. */
+const FILLED_DISMISS_MS = 1000;
+
 document.addEventListener('pointerdown', (event) => {
   const target = event.target;
   if (!(target instanceof Node)) return;
@@ -425,6 +441,8 @@ async function attachTotpPanel(id: string, totpInput: HTMLInputElement): Promise
         if (isFillableInput(totpInput)) setInputValue(totpInput, code);
         panel.showFilled();
         stopTotp(id);
+        // 已填充验证码 confirmation shows briefly, then the panel auto-dismisses.
+        window.setTimeout(() => removeTotp(id), FILLED_DISMISS_MS);
       },
       onCopy: () => { void navigator.clipboard?.writeText?.(code); },
       onUndo: () => {
@@ -470,6 +488,7 @@ function removeTotp(id: string): void {
   const active = totpPanels.get(id);
   if (!active) return;
   window.clearInterval(active.timer);
+  unregisterDismissable(active.panel.element);
   active.panel.remove();
   totpPanels.delete(id);
 }
@@ -547,6 +566,12 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
     }
     await sendRequest({ type: 'autofill.saveLogin', frameUrl, ...(username ? { username } : {}), password: state.password });
     panel.showSaved({ name: hostLabel(frameUrl), user: username ?? '' });
+    // 已保存到密屿 confirmation shows briefly, then the panel auto-dismisses.
+    window.setTimeout(() => {
+      panel.remove();
+      genPanels.delete(target.id);
+      unregisterDismissable(panel.element);
+    }, FILLED_DISMISS_MS);
   }
 
   genPanels.set(target.id, { panel });

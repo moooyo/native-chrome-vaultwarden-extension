@@ -330,6 +330,30 @@ describe('autofill controller', () => {
     expect(current.showFilled).toHaveBeenCalled();
   });
 
+  it('auto-dismisses the login panel roughly one second after a successful fill', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(fillLoginForm).mockReturnValue(true);
+      vi.mocked(sendRequest)
+        .mockResolvedValueOnce({ ok: true, data: [{ id: '1', name: 'T', username: 'u', matchedUri: 'https://example.com', matchType: 0, favorite: false }] })
+        .mockResolvedValueOnce({ ok: true, data: { username: 'u', password: 'p' } });
+
+      startAutofill('https://example.com/login');
+      const current = popover();
+      current.options.onOpen();
+      await vi.advanceTimersByTimeAsync(0);
+      current.options.onSelect('1');
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(current.showFilled).toHaveBeenCalled();
+      expect(current.hide).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(current.hide).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('fills a standalone verification-code step without reporting it unavailable', async () => {
     document.body.innerHTML = '<form><input type="text" autocomplete="one-time-code" name="otp"><button>Verify</button></form>';
     vi.mocked(fillLoginForm).mockReturnValue(true);
