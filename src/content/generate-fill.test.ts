@@ -17,15 +17,16 @@ function anchor(): HTMLElement {
 }
 
 function opts() {
-  return { anchor: anchor(), onRegenerate: vi.fn(), onLength: vi.fn(), onNumbers: vi.fn(), onSymbols: vi.fn(), onUse: vi.fn(), onUndo: vi.fn() };
+  return { anchor: anchor(), onUsername: vi.fn(), onRegenerate: vi.fn(), onLength: vi.fn(), onNumbers: vi.fn(), onSymbols: vi.fn(), onUse: vi.fn(), onUndo: vi.fn() };
 }
 
 describe('createGeneratePanel', () => {
   it('mounts a closed-shadow host and pushes the suggestion via update()', () => {
     const panel = createGeneratePanel(opts());
     expect(panel.element.shadowRoot).toBeNull();
-    panel.update({ password: 'Kp7$mn2Q', strength: '极强', length: 18, numbers: true, symbols: true });
+    panel.update({ username: 'me@x.dev', password: 'Kp7$mn2Q', strength: '极强', length: 18, numbers: true, symbols: true });
     expect(panel.root.querySelector('.suggest')!.textContent).toBe('Kp7$mn2Q');
+    expect(panel.root.querySelector<HTMLInputElement>('.user input')!.value).toBe('me@x.dev');
     panel.remove();
   });
 

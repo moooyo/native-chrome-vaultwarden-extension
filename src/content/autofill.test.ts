@@ -7,6 +7,7 @@ interface FakePopover {
   showStatus: ReturnType<typeof vi.fn>;
   showCandidates: ReturnType<typeof vi.fn>;
   showFilled: ReturnType<typeof vi.fn>;
+  hide: ReturnType<typeof vi.fn>;
   remove: ReturnType<typeof vi.fn>;
   options: {
     kind?: 'login' | 'card' | 'identity';
@@ -42,6 +43,7 @@ vi.mock('./popover.js', () => ({
       showStatus: vi.fn(),
       showCandidates: vi.fn(),
       showFilled: vi.fn(),
+      hide: vi.fn(),
       remove: vi.fn(),
       options,
     };
@@ -87,6 +89,21 @@ describe('autofill controller', () => {
     emailInput.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
 
     expect(current.open).toHaveBeenCalled();
+  });
+
+  it('dismisses the login side panel on a pointer-down outside the field and panel', () => {
+    vi.mocked(sendRequest).mockResolvedValue({ ok: true, data: [] });
+
+    startAutofill('https://example.com/login');
+    const current = popover();
+    const emailInput = document.querySelector('input[type="email"]') as HTMLInputElement;
+    emailInput.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+
+    const outside = document.createElement('button');
+    document.body.append(outside);
+    outside.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+
+    expect(current.hide).toHaveBeenCalled();
   });
 
   it('uses the current frame URL after same-document navigation', async () => {

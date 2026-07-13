@@ -28,6 +28,8 @@ export interface AutofillPopover {
   showCandidates(candidates: PopoverCandidate[]): void;
   /** Show the post-fill 已填充 confirmation (login side panel, design 2c). */
   showFilled(): void;
+  /** Collapse the side panel back to nothing (dismiss-on-click-away); reopens on the next focus. */
+  hide(): void;
   remove(): void;
 }
 
@@ -86,6 +88,10 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
     },
     showFilled() {
       state.view = 'filled';
+      draw();
+    },
+    hide() {
+      state.view = 'hidden';
       draw();
     },
     remove() {

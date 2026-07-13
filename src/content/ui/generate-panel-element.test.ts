@@ -24,6 +24,7 @@ function mount(over: Partial<GeneratePanelViewState> = {}, handlers: GeneratePan
   document.body.append(container);
   const state: GeneratePanelViewState = {
     view: 'panel',
+    username: '',
     password: 'Ab3$xz9K',
     strength: '极强',
     length: 18,
@@ -83,6 +84,18 @@ describe('generate panel surface', () => {
     expect(onUse).not.toHaveBeenCalled();
     trustedClick(root.querySelector('.use')!);
     expect(onUse).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the editable username row and emits edits on trusted input', () => {
+    const onUsername = vi.fn();
+    const root = mount({ username: 'zhang@orbit.mail' }, { onUsername });
+    const userInput = root.querySelector('.user input') as HTMLInputElement;
+    expect(userInput.value).toBe('zhang@orbit.mail');
+    userInput.value = 'new@quill.app';
+    const evt = new Event('input', { bubbles: true });
+    Object.defineProperty(evt, 'isTrusted', { value: true });
+    userInput.dispatchEvent(evt);
+    expect(onUsername).toHaveBeenCalledWith('new@quill.app');
   });
 
   it('shows the saved confirmation in the saved view', () => {

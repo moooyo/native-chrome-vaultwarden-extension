@@ -9,9 +9,10 @@ import {
   type GeneratePanelHandlers,
   type GeneratePanelViewState,
 } from './ui/generate-panel-element.js';
-import { reposition } from './popover.js';
+import { repositionSidePanel } from './ui/side-panel.js';
 
 export interface GeneratePanelState {
+  username: string;
   password: string;
   strength: string;
   length: number;
@@ -29,6 +30,7 @@ export interface GeneratePanel {
 
 export interface GeneratePanelOptions {
   anchor: HTMLElement;
+  onUsername(value: string): void;
   onRegenerate(): void;
   onLength(length: number): void;
   onNumbers(on: boolean): void;
@@ -40,6 +42,7 @@ export interface GeneratePanelOptions {
 export function createGeneratePanel(options: GeneratePanelOptions): GeneratePanel {
   const state: GeneratePanelViewState = {
     view: 'panel',
+    username: '',
     password: '',
     strength: '极强',
     length: 18,
@@ -49,6 +52,7 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
     savedUser: '',
   };
   const handlers: GeneratePanelHandlers = {
+    onUsername: options.onUsername,
     onRegenerate: options.onRegenerate,
     onLength: options.onLength,
     onNumbers: options.onNumbers,
@@ -61,11 +65,11 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
   host.style.position = 'absolute';
   host.style.zIndex = '2147483647';
 
-  // Render, then re-place under the anchor. `render()` is synchronous, so the surface's size is final
-  // by the time we measure it — the panel tracks the anchor as its content changes (panel → saved).
+  // Render, then re-place as a side panel to the right of the new-password field. `render()` is
+  // synchronous, so the surface's size is final by the time we measure it (panel → saved).
   const draw = (): void => {
     surface.render(renderGeneratePanel(state, handlers));
-    reposition(host, options.anchor);
+    repositionSidePanel(host, options.anchor);
   };
   draw();
 
@@ -73,6 +77,7 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
     element: host,
     root: surface.root,
     update(next) {
+      state.username = next.username;
       state.password = next.password;
       state.strength = next.strength;
       state.length = next.length;

@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from 'lit';
 import { uiIcon } from '../../ui/components/icon.js';
+import { SIDE_PANEL_CSS, sideWrap } from './side-panel.js';
 
 // TODO i18n: content-script surfaces are isolated from the extension i18n module, so these
 // user-facing strings are hardcoded in Chinese to match the 密屿/MiYu design.
@@ -13,6 +14,8 @@ export type GeneratePanelView = 'panel' | 'saved';
  */
 export interface GeneratePanelViewState {
   view: GeneratePanelView;
+  /** The detected registration username/email, editable in the panel; saved with the login on use. */
+  username: string;
   password: string;
   strength: string;
   length: number;
@@ -23,8 +26,9 @@ export interface GeneratePanelViewState {
 }
 
 /** Privileged callbacks. Every click/input that reaches them is gated on `Event.isTrusted` in the
- *  template, so a page script cannot synthesize an event to tune, regenerate, use, or undo. */
+ *  template, so a page script cannot synthesize an event to tune, regenerate, use, undo, or edit. */
 export interface GeneratePanelHandlers {
+  onUsername?: (value: string) => void;
   onRegenerate?: () => void;
   onLength?: (length: number) => void;
   onNumbers?: (on: boolean) => void;
@@ -61,6 +65,11 @@ export const GENERATE_PANEL_STYLES = `
     .glyph { position: relative; width: 8px; height: 8px; }
     .ring { position: absolute; inset: 0; border: 1.5px solid #fff; border-radius: 50%; }
     .dot { position: absolute; left: 3px; top: 3px; width: 2px; height: 2px; border-radius: 50%; background: #fff; }
+
+    .user { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .user .lab { font-size: 11.5px; color: var(--mi-text-3); flex: none; }
+    .user input { flex: 1; min-width: 0; height: 30px; padding: 0 9px; border: 1px solid var(--mi-line-3); border-radius: 8px; background: var(--mi-panel); color: var(--mi-ink); font: 400 12px/1 "Instrument Sans", "Segoe UI", system-ui, sans-serif; }
+    .user input:focus { outline: none; border-color: var(--mi-teal); box-shadow: 0 0 0 2px var(--mi-teal-12); }
 
     .suggest { background: var(--mi-fill-2); border: 1px solid var(--mi-line); border-radius: 10px; padding: 9px 11px; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12.5px; line-height: 1.55; word-break: break-all; }
     .suggest .d { color: var(--mi-teal-text); }
@@ -103,12 +112,12 @@ export const GENERATE_PANEL_STYLES = `
       .use:hover { background: #fff; }
     }
     @media (prefers-reduced-motion: reduce) { .box { animation: none; } }
-  `;
+  ` + SIDE_PANEL_CSS;
 
 /** Render the generation panel for the given state. The page cannot forge the privileged events: each
- *  handler bails unless `event.isTrusted`. */
+ *  handler bails unless `event.isTrusted`. Mounts as a right-side panel (design 2c/3a-consistent). */
 export function renderGeneratePanel(state: GeneratePanelViewState, handlers: GeneratePanelHandlers): TemplateResult {
-  return html`<div class="box">${state.view === 'saved' ? renderSaved(state, handlers) : renderPanel(state, handlers)}</div>`;
+  return sideWrap(html`<div class="box">${state.view === 'saved' ? renderSaved(state, handlers) : renderPanel(state, handlers)}</div>`);
 }
 
 function colorize(password: string) {
@@ -125,6 +134,11 @@ function renderPanel(state: GeneratePanelViewState, handlers: GeneratePanelHandl
     <div class="head">
       ${logoGlyph()}<span class="brand">密屿 · 强密码建议</span>
       <span class="meta">${meta}</span>
+    </div>
+    <div class="user">
+      <span class="lab">用户名</span>
+      <input type="text" .value=${state.username} placeholder="用户名（可编辑）"
+        @input=${(e: Event) => { if (e.isTrusted) handlers.onUsername?.((e.target as HTMLInputElement).value); }} />
     </div>
     <div class="suggest">${colorize(state.password)}</div>
     <div class="len">

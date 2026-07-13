@@ -343,8 +343,37 @@ function maybeOpenLoginPanel(input: HTMLInputElement): void {
     attachPopovers(frameUrlProvider); // idempotent (attachIfNew de-dupes) — ensure the panel exists
     pop = popoverRegistry.get(form.id);
   }
-  if (pop && pop.element.isConnected) pop.open();
+  if (!pop || !pop.element.isConnected) return;
+  const opened = pop;
+  opened.open();
+  // Dismiss when a pointer lands outside the panel and outside the login form (any of its fields).
+  const keep = input.form ?? input.closest('form') ?? input;
+  registerDismissable(opened.element, keep, () => opened.hide());
 }
+
+// --- Dismiss-on-click-away -----------------------------------------------------------------------
+// An autofill surface disappears once focus/click leaves its field. Keyed by host so re-opening the
+// same surface replaces its entry. Uses pointerdown (not focusout): clicking a button inside a panel
+// blurs the field, so a focusout-based dismiss would tear the panel down before the click lands.
+
+const dismissables = new Map<HTMLElement, { keep: HTMLElement; dismiss(): void }>();
+
+function registerDismissable(host: HTMLElement, keep: HTMLElement, dismiss: () => void): void {
+  dismissables.set(host, { keep, dismiss });
+}
+
+document.addEventListener('pointerdown', (event) => {
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  for (const [host, { keep, dismiss }] of [...dismissables]) {
+    if (!host.isConnected) { dismissables.delete(host); continue; }
+    // A pointerdown inside the panel's closed root retargets to the host, so `target === host` catches
+    // panel clicks; `keep` (the field / login form) keeps the panel while the user works in it.
+    if (target === host || host.contains(target) || target === keep || keep.contains(target)) continue;
+    dismissables.delete(host);
+    dismiss();
+  }
+}, true);
 
 /** form.id → its hover popover, so the keyboard shortcut can open the right picker on a multi-match. */
 export const popoverRegistry = new Map<string, ReturnType<typeof createAutofillPopover>>();
@@ -404,6 +433,7 @@ async function attachTotpPanel(id: string, totpInput: HTMLInputElement): Promise
       },
     });
     panel.element.dataset.vwPopoverFor = id;
+    registerDismissable(panel.element, totpInput, () => removeTotp(id));
 
     let last = -1;
     const render = (): void => {
@@ -449,7 +479,7 @@ function removeTotp(id: string): void {
 // tuning; "使用此密码" fills the field and saves the login. The generator runs locally (pure core
 // function over crypto.getRandomValues) so no plaintext round-trips the worker to be generated.
 
-interface GenState { password: string; length: number; numbers: boolean; symbols: boolean; }
+interface GenState { username: string; password: string; length: number; numbers: boolean; symbols: boolean; }
 const genPanels = new Map<string, { panel: GeneratePanel }>();
 
 function maybeAttachGeneratePanel(input: HTMLInputElement): void {
@@ -459,7 +489,7 @@ function maybeAttachGeneratePanel(input: HTMLInputElement): void {
 }
 
 function attachGeneratePanel(target: DetectedRegistrationField): void {
-  const state: GenState = { password: '', length: 18, numbers: true, symbols: true };
+  const state: GenState = { username: target.usernameInput?.value?.trim() ?? '', password: '', length: 18, numbers: true, symbols: true };
   const regen = (): void => {
     state.password = generatePassword({
       length: state.length,
@@ -476,6 +506,9 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
 
   const panel = createGeneratePanel({
     anchor: target.anchor,
+    // Editing the username must NOT re-render (it would reset the field and drop the caret) — just
+    // record it; the next push (regen/length/rule change) re-renders with the recorded value.
+    onUsername: (value) => { state.username = value; },
     onRegenerate: () => { regen(); push(); },
     onLength: (n) => { state.length = clampLength(n); regen(); push(); },
     onNumbers: (on) => { state.numbers = on; regen(); push(); },
@@ -488,8 +521,13 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
     },
   });
   panel.element.dataset.vwPopoverFor = target.id;
+  registerDismissable(panel.element, target.input, () => {
+    panel.remove();
+    genPanels.delete(target.id);
+  });
 
   const push = (): void => panel.update({
+    username: state.username,
     password: state.password,
     strength: strengthLabel(state.length),
     length: state.length,
@@ -502,7 +540,11 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
     if (!isFillableInput(target.input)) return;
     setInputValue(target.input, state.password);
     const frameUrl = frameUrlProvider();
-    const username = target.usernameInput?.value?.trim() || undefined;
+    // Also write the (possibly edited) username back into the page's username field, then save both.
+    const username = state.username.trim() || undefined;
+    if (username && target.usernameInput && isFillableInput(target.usernameInput)) {
+      setInputValue(target.usernameInput, username);
+    }
     await sendRequest({ type: 'autofill.saveLogin', frameUrl, ...(username ? { username } : {}), password: state.password });
     panel.showSaved({ name: hostLabel(frameUrl), user: username ?? '' });
   }
