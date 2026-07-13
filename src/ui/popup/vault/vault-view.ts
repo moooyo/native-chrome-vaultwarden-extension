@@ -1,0 +1,434 @@
+import { LitElement, css, html, nothing } from 'lit';
+import { themeTokens } from '../../components/tokens.js';
+import { uiIcon } from '../../components/icon.js';
+import { tileColor, tileInitial } from '../../components/tile-color.js';
+import { LocalizeController, t } from '../../i18n/index.js';
+import type { MessageKey } from '../../i18n/index.js';
+import type { CipherSummary } from '../../../core/vault/models.js';
+import type { DetailExtras, SuggestionsViewState, TotpSnapshot } from '../types.js';
+import type { TabAutofillSuggestion } from '../../../messaging/protocol.js';
+import '../../components/totp-meter.js';
+
+export type CategoryId = 'all' | 'login' | 'card' | 'totp' | 'note' | 'identity';
+
+const CATEGORIES: ReadonlyArray<{ id: CategoryId; key: MessageKey }> = [
+  { id: 'all', key: 'cat.all' },
+  { id: 'login', key: 'cat.login' },
+  { id: 'card', key: 'cat.card' },
+  { id: 'note', key: 'cat.note' },
+  { id: 'identity', key: 'cat.identity' },
+];
+
+const DOTS = '••••••••••••';
+
+/** Which category an item belongs to. TOTP is a facet of logins that carry a TOTP secret. */
+function matchesCategory(item: CipherSummary, category: CategoryId): boolean {
+  switch (category) {
+    case 'all': return true;
+    case 'login': return item.type === 1;
+    case 'card': return item.type === 3;
+    case 'identity': return item.type === 4;
+    case 'note': return item.type === 2;
+    case 'totp': return item.type === 1 && Boolean(item.hasTotp);
+  }
+}
+
+function typeLabelKey(item: CipherSummary): MessageKey {
+  switch (item.type) {
+    case 3: return 'cat.card';
+    case 4: return 'cat.identity';
+    case 2: return 'cat.note';
+    default: return 'cat.login';
+  }
+}
+
+/**
+ * The MiYu vault view: the search box, category chips, the "current site" suggestions group with a
+ * Fill pill, and the main list — each row expanding into an inline detail card (username / password /
+ * one-time code / open-and-fill / edit). It owns the local reveal + TOTP-countdown state for the
+ * expanded item and drives secrets only through the injected `extras` loaders, so plaintext never
+ * flows through a prop. Consolidates the old vault-view / item-row / filters / suggestions views.
+ */
+export class VwVaultView extends LitElement {
+  static override properties = {
+    items: { attribute: false },
+    suggestionsState: { attribute: false },
+    query: { type: String },
+    category: { type: String },
+    selectedCipherId: { attribute: false },
+    extras: { attribute: false },
+    currentDomain: { type: String },
+  };
+
+  declare items: CipherSummary[];
+  declare suggestionsState: SuggestionsViewState;
+  declare query: string;
+  declare category: CategoryId;
+  declare selectedCipherId: string | null;
+  declare extras: DetailExtras | undefined;
+  declare currentDomain: string;
+
+  private i18n = new LocalizeController(this);
+  private revealed = false;
+  private password = '';
+  private totp: TotpSnapshot | undefined;
+  private totpTimer: number | undefined;
+
+  constructor() {
+    super();
+    this.items = [];
+    this.suggestionsState = { status: 'loading' };
+    this.query = '';
+    this.category = 'all';
+    this.selectedCipherId = null;
+    this.extras = undefined;
+    this.currentDomain = '';
+  }
+
+  static override styles = [
+    themeTokens,
+    css`
+      :host { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+
+      .search {
+        display: flex; align-items: center; gap: 8px; margin: 0 14px; height: 34px; padding: 0 11px;
+        border-radius: var(--vw-radius-control); background: var(--vw-fill); flex: none;
+      }
+      .search svg { width: 14px; height: 14px; color: var(--vw-muted); flex: none; }
+      .search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--vw-ink); font: inherit; font-size: 12.5px; }
+      .search input::placeholder { color: var(--vw-placeholder); }
+
+      .chips { display: flex; gap: 6px; margin: 10px 14px; flex-wrap: wrap; flex: none; }
+      .chip {
+        height: 25px; padding: 0 11px; display: inline-flex; align-items: center; border-radius: var(--vw-radius-pill);
+        font-size: 11.5px; font-weight: 500; cursor: pointer; border: 1px solid var(--vw-line-3);
+        background: transparent; color: var(--vw-text-2); transition: background-color var(--vw-dur-fast), color var(--vw-dur-fast), border-color var(--vw-dur-fast), opacity var(--vw-dur-fast); font-family: inherit;
+      }
+      .chip:hover { opacity: 0.85; }
+      .chip.on { background: var(--vw-ink); color: var(--vw-primary-fg); border-color: transparent; font-weight: 600; }
+
+      .list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; scrollbar-width: thin; scrollbar-color: var(--vw-scrollbar) transparent; }
+      .list::-webkit-scrollbar { width: 8px; }
+      .list::-webkit-scrollbar-thumb { background: var(--vw-scrollbar); border-radius: 4px; border: 2px solid transparent; background-clip: content-box; }
+      .group-label { font-size: 11px; font-weight: 600; color: var(--vw-muted); padding: 6px 8px 3px; }
+      .group-label.main { padding-top: 8px; }
+
+      .row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: var(--vw-radius-control); cursor: pointer; animation: mvStag 0.3s ease-out both; }
+      .row:hover { background: var(--vw-row-hover); }
+      .tile { width: 34px; height: 34px; border-radius: var(--vw-radius-control); display: grid; place-items: center; color: #fff; font-size: 13px; font-weight: 700; flex: none; }
+      .meta { flex: 1; min-width: 0; }
+      .title-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+      .title { font-size: 13px; font-weight: 600; color: var(--vw-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .pk { width: 12px; height: 12px; color: var(--vw-teal-text); flex: none; display: inline-flex; }
+      .sub { font-size: 11.5px; color: var(--vw-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+      .fill-pill { height: 25px; padding: 0 11px; border-radius: var(--vw-radius-pill); border: none; background: var(--vw-teal-10); color: var(--vw-teal-text); font-size: 11.5px; font-weight: 600; cursor: pointer; flex: none; font-family: inherit; }
+      .fill-pill:hover { background: var(--vw-teal-18); }
+      .row-copy { width: 26px; height: 26px; border-radius: var(--vw-radius-small); display: grid; place-items: center; color: var(--vw-faint); background: transparent; border: none; cursor: pointer; opacity: 0.6; flex: none; }
+      .row:hover .row-copy { opacity: 1; }
+      .row-copy:hover { background: var(--vw-icon-hover); }
+      .row-copy svg { width: 13px; height: 13px; }
+      .chev { width: 13px; height: 13px; color: var(--vw-chevron); flex: none; display: inline-flex; }
+
+      .empty { padding: 40px 20px; text-align: center; color: var(--vw-muted); font-size: 12.5px; }
+
+      .card { margin: 2px 4px 8px; background: var(--vw-card); border: 1px solid var(--vw-card-border); border-radius: var(--vw-radius-card); padding: 11px 13px; display: flex; flex-direction: column; gap: 9px; animation: mvGrow 0.2s ease-out; transform-origin: top; }
+      .field-label { font-size: 10px; font-weight: 600; letter-spacing: 0.05em; color: var(--vw-faint); margin-bottom: 2px; }
+      .field-row { display: flex; align-items: center; gap: 6px; }
+      .field-val { flex: 1; min-width: 0; font-size: 12.5px; color: var(--vw-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .field-val.mono { font-family: var(--vw-font-mono); font-size: 12px; }
+      .field-val.masked { letter-spacing: 2px; }
+      .icon-sm { width: 26px; height: 26px; border-radius: var(--vw-radius-small); display: grid; place-items: center; color: var(--vw-muted); background: transparent; border: none; cursor: pointer; flex: none; }
+      .icon-sm:hover { background: var(--vw-icon-hover); }
+      .icon-sm svg { width: 13px; height: 13px; }
+      .icon-sm.eye svg { width: 14px; height: 14px; }
+      .actions { display: flex; gap: 7px; margin-top: 2px; }
+      .btn-primary { flex: 1; height: 31px; border-radius: var(--vw-radius-input); border: none; background: var(--vw-primary-bg); color: var(--vw-primary-fg); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+      .btn-primary:hover { background: var(--vw-primary-bg-hover); }
+      .btn-outline { height: 31px; padding: 0 13px; border-radius: var(--vw-radius-input); border: 1px solid var(--vw-line-3); background: var(--vw-card); color: var(--vw-text-4); font-size: 12px; cursor: pointer; font-family: inherit; }
+      .btn-outline:hover { background: var(--vw-row-hover); }
+      button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--vw-focus); }
+    `,
+  ];
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.stopTotp();
+  }
+
+  protected override updated(changed: Map<string, unknown>): void {
+    if (changed.has('selectedCipherId')) {
+      this.revealed = false;
+      this.password = '';
+      this.stopTotp();
+      const item = this.selected();
+      if (item?.hasTotp && this.extras) void this.loadTotp();
+    }
+  }
+
+  private selected(): CipherSummary | undefined {
+    return this.selectedCipherId ? this.items.find((i) => i.id === this.selectedCipherId) : undefined;
+  }
+
+  private emit(type: string, detail?: unknown): void {
+    this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
+  }
+
+  private onSearch(value: string): void {
+    this.emit('vw-search-change', { query: value });
+  }
+
+  private selectCategory(id: CategoryId): void {
+    this.emit('vw-category-change', { category: id });
+  }
+
+  private toggleItem(id: string): void {
+    this.emit('vw-item-toggle', { cipherId: this.selectedCipherId === id ? '' : id });
+  }
+
+  private async reveal(): Promise<void> {
+    if (this.revealed) {
+      this.revealed = false;
+      this.requestUpdate();
+      return;
+    }
+    if (!this.extras) return;
+    const result = await this.extras.getField('password');
+    if (result.ok) {
+      this.password = result.value ?? '';
+      this.revealed = true;
+      this.requestUpdate();
+    }
+  }
+
+  private async loadTotp(): Promise<void> {
+    if (!this.extras) return;
+    const result = await this.extras.getTotp();
+    if (!result.ok || !result.totp) return;
+    this.totp = result.totp;
+    this.requestUpdate();
+    this.startTotpTick();
+  }
+
+  private startTotpTick(): void {
+    this.stopTotp();
+    this.totpTimer = window.setInterval(() => {
+      if (!this.totp) return;
+      if (this.totp.remaining <= 1) {
+        void this.loadTotp();
+      } else {
+        this.totp = { ...this.totp, remaining: this.totp.remaining - 1 };
+        this.requestUpdate();
+      }
+    }, 1000);
+  }
+
+  private stopTotp(): void {
+    if (this.totpTimer !== undefined) {
+      clearInterval(this.totpTimer);
+      this.totpTimer = undefined;
+    }
+    this.totp = undefined;
+  }
+
+  private copySecret(field: 'password', label: string): void {
+    this.emit('vw-secret-request', { kind: 'field', field, label });
+  }
+
+  private copyValue(value: string, label: string): void {
+    if (value) this.emit('vw-copy', { value, label });
+  }
+
+  protected override render() {
+    return html`
+      ${this.renderSearch()}
+      ${this.renderChips()}
+      <div class="list">${this.renderList()}</div>
+    `;
+  }
+
+  private renderSearch() {
+    return html`
+      <label class="search">
+        ${uiIcon('search')}
+        <input
+          type="search"
+          aria-label=${t('popup.search')}
+          placeholder=${t('popup.search')}
+          .value=${this.query}
+          @input=${(e: Event) => this.onSearch((e.target as HTMLInputElement).value)}
+        />
+      </label>
+    `;
+  }
+
+  private renderChips() {
+    return html`
+      <div class="chips" role="tablist">
+        ${CATEGORIES.map(
+          (cat) => html`
+            <button
+              type="button"
+              role="tab"
+              class="chip ${this.category === cat.id ? 'on' : ''}"
+              aria-selected=${this.category === cat.id ? 'true' : 'false'}
+              @click=${() => this.selectCategory(cat.id)}
+            >
+              ${t(cat.key)}
+            </button>
+          `,
+        )}
+      </div>
+    `;
+  }
+
+  private filteredItems(): CipherSummary[] {
+    const q = this.query.trim().toLowerCase();
+    return this.items.filter((item) => {
+      if (item.deletedDate) return false;
+      if (!matchesCategory(item, this.category)) return false;
+      if (!q) return true;
+      return (
+        item.name.toLowerCase().includes(q) ||
+        (item.username ?? '').toLowerCase().includes(q) ||
+        item.uris.some((u) => u.toLowerCase().includes(q))
+      );
+    });
+  }
+
+  private suggestions(): TabAutofillSuggestion[] {
+    return this.suggestionsState.status === 'ready' ? this.suggestionsState.suggestions : [];
+  }
+
+  private renderList() {
+    const items = this.filteredItems();
+    const showSuggestions = !this.query.trim() && this.category === 'all' && this.suggestions().length > 0;
+    if (items.length === 0 && !showSuggestions) {
+      return html`<div class="empty">${this.query.trim() ? t('list.emptySearch') : t('list.empty')}</div>`;
+    }
+    const mainLabel = this.query.trim()
+      ? t('list.results', { count: items.length })
+      : this.category === 'all'
+        ? t('list.allItems')
+        : t(CATEGORIES.find((c) => c.id === this.category)!.key);
+    return html`
+      ${showSuggestions ? this.renderSuggestionGroup() : nothing}
+      <div class="group-label main">${mainLabel}</div>
+      ${items.map((item, i) => this.renderItem(item, false, undefined, `calc(${i} * 40ms + 120ms)`))}
+    `;
+  }
+
+  private renderSuggestionGroup() {
+    const domain = this.currentDomain || t('list.currentSiteBare');
+    const suggestions = this.suggestions();
+    const byId = new Map(this.items.map((i) => [i.id, i] as const));
+    return html`
+      <div class="group-label">${t('list.currentSite', { domain })}</div>
+      ${suggestions.map((s, i) => {
+        const item = byId.get(s.id);
+        return item ? this.renderItem(item, true, s, `calc(${i} * 45ms)`) : nothing;
+      })}
+    `;
+  }
+
+  private renderItem(item: CipherSummary, isSuggestion: boolean, suggestion?: TabAutofillSuggestion, rowDelay?: string) {
+    const expanded = this.selectedCipherId === item.id;
+    return html`
+      <div>
+        <div class="row" style=${rowDelay ? `animation-delay:${rowDelay}` : nothing} @click=${() => this.toggleItem(item.id)}>
+          <div class="tile" style=${`background:${tileColor(item.id)}`}>${tileInitial(item.name)}</div>
+          <div class="meta">
+            <div class="title-row">
+              <span class="title">${item.name}</span>
+              ${item.hasPasskey
+                ? html`<span class="pk" title=${t('list.passkeySupported')}>${uiIcon('passkey')}</span>`
+                : nothing}
+            </div>
+            <div class="sub">${item.username ?? item.subtitle ?? ''}</div>
+          </div>
+          ${isSuggestion && suggestion
+            ? html`<button
+                type="button"
+                class="fill-pill"
+                @click=${(e: Event) => { e.stopPropagation(); this.fillSuggestion(suggestion); }}
+              >${t('list.fill')}</button>`
+            : html`
+                <button
+                  type="button"
+                  class="row-copy"
+                  title=${t('list.copyPassword')}
+                  aria-label=${t('list.copyPassword')}
+                  @click=${(e: Event) => { e.stopPropagation(); this.copySecret('password', t('detail.password')); }}
+                >${uiIcon('copy')}</button>
+                <span class="chev">${uiIcon('chevron')}</span>
+              `}
+        </div>
+        ${expanded ? this.renderCard(item, suggestion) : nothing}
+      </div>
+    `;
+  }
+
+  private fillSuggestion(suggestion: TabAutofillSuggestion): void {
+    if (suggestion.target) this.emit('vw-suggestion-fill', { cipherId: suggestion.id, target: suggestion.target });
+    else this.emit('vw-item-fill', { cipherId: suggestion.id });
+  }
+
+  private renderCard(item: CipherSummary, suggestion?: TabAutofillSuggestion) {
+    const isLogin = item.type === 1;
+    return html`
+      <div class="card" @click=${(e: Event) => e.stopPropagation()}>
+        ${item.username
+          ? html`
+              <div>
+                <div class="field-label">${t('detail.username')}</div>
+                <div class="field-row">
+                  <span class="field-val">${item.username}</span>
+                  <button class="icon-sm" title=${t('common.copy')} @click=${() => this.copyValue(item.username!, t('detail.username'))}>${uiIcon('copy')}</button>
+                </div>
+              </div>`
+          : nothing}
+        ${isLogin
+          ? html`
+              <div>
+                <div class="field-label">${t('detail.password')}</div>
+                <div class="field-row">
+                  <span class="field-val mono ${this.revealed ? '' : 'masked'}">${this.revealed ? this.password : DOTS}</span>
+                  <button class="icon-sm eye" title=${t('detail.reveal')} @click=${() => void this.reveal()}>${uiIcon(this.revealed ? 'eyeOff' : 'eye')}</button>
+                  <button class="icon-sm" title=${t('common.copy')} @click=${() => this.copySecret('password', t('detail.password'))}>${uiIcon('copy')}</button>
+                </div>
+              </div>`
+          : nothing}
+        ${item.hasTotp && this.totp
+          ? html`
+              <div>
+                <div class="field-label">${t('detail.totp')}</div>
+                <div class="field-row">
+                  <vw-totp-meter style="flex:1" .code=${this.totp.code} .period=${this.totp.period} .remaining=${this.totp.remaining}></vw-totp-meter>
+                  <button class="icon-sm" title=${t('detail.copyCode')} @click=${() => this.copyValue(this.totp!.code, t('detail.totp'))}>${uiIcon('copy')}</button>
+                </div>
+              </div>`
+          : nothing}
+        ${!isLogin && item.subtitle
+          ? html`<div><div class="field-label">${t(typeLabelKey(item))}</div><div class="field-val">${item.subtitle}</div></div>`
+          : nothing}
+        <div class="actions">
+          <button class="btn-primary" @click=${() => this.openAndFill(item, suggestion)}>${t('detail.openAndFill')}</button>
+          <button class="btn-outline" @click=${() => this.emit('vw-edit-item', { cipherId: item.id })}>${t('common.edit')}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  private openAndFill(item: CipherSummary, suggestion?: TabAutofillSuggestion): void {
+    if (suggestion?.target) this.emit('vw-suggestion-fill', { cipherId: item.id, target: suggestion.target });
+    else this.emit('vw-item-fill', { cipherId: item.id });
+  }
+}
+
+customElements.define('vw-vault-view', VwVaultView);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'vw-vault-view': VwVaultView;
+  }
+}

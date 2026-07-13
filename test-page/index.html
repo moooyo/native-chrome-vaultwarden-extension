@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MiYu · Autofill &amp; Passkey Test Page</title>
+<style>
+  :root {
+    --bg: #0f1512;
+    --panel: #161d19;
+    --panel-2: #1c2621;
+    --line: #263630;
+    --text: #e7efe9;
+    --muted: #93a79c;
+    --accent: #2ecC8f;
+    --accent-dim: #1c7d5c;
+    --danger: #ff6b6b;
+    --warn: #f4bf4f;
+    --ok: #43d19e;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f8f5; --panel: #ffffff; --panel-2: #f0f5f1; --line: #dbe6df;
+      --text: #12241c; --muted: #5e7268; --accent: #12a06e; --accent-dim: #0c7c53;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    padding: 24px 16px 96px;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  header.page {
+    display: flex; align-items: center; gap: 14px; margin-bottom: 8px;
+  }
+  .logo {
+    width: 40px; height: 40px; border-radius: 11px;
+    background: linear-gradient(140deg, var(--accent), var(--accent-dim));
+    display: grid; place-items: center; color: #06120d; font-weight: 800; font-size: 20px;
+    box-shadow: 0 6px 18px -8px var(--accent);
+  }
+  header.page h1 { font-size: 20px; margin: 0; letter-spacing: .2px; }
+  header.page p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+
+  /* Environment banner */
+  .env {
+    margin: 16px 0 22px; padding: 12px 14px; border-radius: 12px;
+    border: 1px solid var(--line); background: var(--panel);
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 18px;
+    font-size: 13px;
+  }
+  .env .kv { display: flex; flex-direction: column; gap: 2px; }
+  .env .kv b { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .env .kv span { font-family: var(--mono); word-break: break-all; }
+  .env.bad { border-color: var(--danger); }
+  .env-warn { grid-column: 1 / -1; color: var(--warn); font-size: 12.5px; display: none; }
+  .env-warn.show { display: block; }
+
+  section.card {
+    border: 1px solid var(--line); background: var(--panel);
+    border-radius: 14px; padding: 18px 18px 20px; margin: 0 0 18px;
+  }
+  section.card > h2 {
+    font-size: 15px; margin: 0 0 4px; display: flex; align-items: center; gap: 10px;
+  }
+  .num {
+    display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 7px;
+    background: var(--panel-2); border: 1px solid var(--line); font-size: 12px; color: var(--muted);
+  }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 0 0 14px; }
+  .hint kbd {
+    font-family: var(--mono); font-size: 11px; background: var(--panel-2);
+    border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px;
+  }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  .grid .full { grid-column: 1 / -1; }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+
+  label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 4px; }
+  input:not([type="checkbox"]), select {
+    width: 100%; padding: 9px 11px; border-radius: 9px; font-size: 14px;
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    font-family: var(--sans); outline: none; transition: border-color .12s, box-shadow .12s;
+  }
+  input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+  .field { margin: 0 0 2px; }
+
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  button {
+    font-family: var(--sans); font-size: 13.5px; font-weight: 600; cursor: pointer;
+    padding: 9px 16px; border-radius: 9px; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--text); transition: filter .12s, transform .05s;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: translateY(1px); }
+  button.primary { background: linear-gradient(140deg, var(--accent), var(--accent-dim)); color: #06120d; border-color: transparent; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  .chip {
+    font-size: 11px; font-weight: 700; letter-spacing: .3px; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); background: var(--panel-2);
+    display: inline-flex; align-items: center; gap: 6px; margin-left: auto; white-space: nowrap;
+  }
+  .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .chip.detected { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+  .chip.detected .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .chip.panel { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+  .chip.panel .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+
+  /* Passkey result */
+  .pk-opts { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin: 10px 0 2px; font-size: 13px; color: var(--muted); }
+  .pk-opts label.inline { display: inline-flex; align-items: center; gap: 7px; margin: 0; color: var(--text); cursor: pointer; }
+  .result {
+    margin-top: 14px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: none;
+  }
+  .result.show { display: block; }
+  .result .rhead {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; font-size: 12.5px; font-weight: 700;
+    background: var(--panel-2); border-bottom: 1px solid var(--line);
+  }
+  .result.miyu .rhead { color: var(--ok); }
+  .result.native .rhead { color: var(--warn); }
+  .result.err .rhead { color: var(--danger); }
+  .result pre { margin: 0; padding: 12px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 340px; overflow: auto; }
+
+  /* Event log */
+  .logwrap { position: sticky; bottom: 0; }
+  #log {
+    font-family: var(--mono); font-size: 11.5px; background: #0a0f0c; color: #b9c9c0;
+    border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; height: 168px; overflow: auto;
+  }
+  #log .t { color: #5e7268; }
+  #log .g { color: var(--ok); }
+  #log .a { color: var(--accent); }
+  #log .w { color: var(--warn); }
+  #log .r { color: var(--danger); }
+  .logbar { display: flex; align-items: center; gap: 10px; margin: 26px 0 8px; }
+  .logbar h2 { font-size: 14px; margin: 0; }
+  .footer { color: var(--muted); font-size: 12px; margin-top: 14px; }
+  code.i { font-family: var(--mono); background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="page">
+    <div class="logo">密</div>
+    <div>
+      <h1>MiYu · Autofill &amp; Passkey Test Page</h1>
+      <p>Exercises every autofill surface the extension exposes, plus passkey register &amp; authenticate.</p>
+    </div>
+  </header>
+
+  <div class="env" id="env">
+    <div class="kv"><b>Origin</b><span id="env-origin">—</span></div>
+    <div class="kv"><b>Secure context</b><span id="env-secure">—</span></div>
+    <div class="kv"><b>Passkey rpId</b><span id="env-rpid">—</span></div>
+    <div class="kv"><b>Content script</b><span id="env-cs">probing…</span></div>
+    <div class="env-warn" id="env-warn"></div>
+  </div>
+
+  <!-- 1. Basic login -->
+  <section class="card">
+    <h2><span class="num">1</span> Login (single step)
+      <span class="chip" data-chip="1"><span class="dot"></span>waiting</span>
+    </h2>
+    <p class="hint">Focus the username or password field — the MiYu match panel opens to the right automatically. Pick an item to fill both fields.</p>
+    <form autocomplete="on" data-section="1" action="javascript:void 0">
+      <div class="grid">
+        <div class="field full">
+          <label>Username / email</label>
+          <input type="text" name="username" autocomplete="username" placeholder="you@example.com" />
+        </div>
+        <div class="field full">
+          <label>Password</label>
+          <input type="password" name="password" autocomplete="current-password" placeholder="••••••••" />
+        </div>
+      </div>
+      <div class="row"><button class="primary" type="submit">Sign in</button></div>
+    </form>
+  </section>
+
+  <!-- 2. Two-step login -->
+  <section class="card">
+    <h2><span class="num">2</span> Two-step login (username first)
+      <span class="chip" data-chip="2"><span class="dot"></span>waiting</span>
+    </h2>
+    <p class="hint">A username-only step (no password in scope) with a submit button. Focus the field — the panel offers a username to fill for the first step.</p>
+    <form data-section="2" action="javascript:void 0">
+      <div class="field full">
+        <label>Email</label>
+        <input type="email" name="email" autocomplete="username" placeholder="you@example.com" />
+      </div>
+      <div class="row"><button class="primary" type="submit">Next</button></div>
+    </form>
+  </section>
+
+  <!-- 3. Standalone 2FA / one-time code -->
+  <section class="card">
+    <h2><span class="num">3</span> Two-factor code (standalone step)
+      <span class="chip" data-chip="3"><span class="dot"></span>waiting</span>
+    </h2>
+    <p class="hint">A lone <code class="i">autocomplete="one-time-code"</code> field. Focus it — MiYu shows a live TOTP panel for the top matching login. <b>Requires</b> a vault login whose URI matches <code class="i">localhost</code> and that carries a TOTP secret.</p>
+    <form data-section="3" action="javascript:void 0">
+      <div class="field full">
+        <label>Verification code</label>
+        <input type="text" name="otp" autocomplete="one-time-code" inputmode="numeric" maxlength="6" placeholder="123456" />
+      </div>
+      <div class="row"><button class="primary" type="submit">Verify</button></div>
+    </form>
+  </section>
+
+  <!-- 4. Registration / password generator -->
+  <section class="card">
+    <h2><span class="num">4</span> Registration (password generator)
+      <span class="chip" data-chip="4"><span class="dot"></span>waiting</span>
+    </h2>
+    <p class="hint">Focus the <b>Create password</b> field (a <code class="i">new-password</code> field) — the inline generator panel offers a strong password and can save the new login. The confirm field is ignored on purpose.</p>
+    <form data-section="4" action="javascript:void 0">
+      <div class="grid">
+        <div class="field full">
+          <label>New username</label>
+          <input type="text" name="new-username" autocomplete="username" placeholder="pick a username" />
+        </div>
+        <div class="field">
+          <label>Create password</label>
+          <input type="password" name="new-password" autocomplete="new-password" placeholder="create a password" />
+        </div>
+        <div class="field">
+          <label>Confirm password</label>
+          <input type="password" name="confirm-password" autocomplete="new-password" placeholder="repeat it" />
+        </div>
+      </div>
+      <div class="row"><button class="primary" type="submit">Create account</button></div>
+    </form>
+  </section>
+
+  <!-- 5. Credit card (autocomplete tokens) -->
+  <section class="card">
+    <h2><span class="num">5</span> Credit card
+      <span class="chip" data-chip="5"><span class="dot"></span>waiting</span>
+    </h2>
+    <p class="hint">Card fields tagged with <code class="i">cc-*</code> autocomplete tokens. A 密屿 trigger appears under a field — click it and choose a card. Also works via right-click → 密屿, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> on a focused field.</p>
+    <form data-section="5" action="javascript:void 0">
+      <div class="grid">
+        <div class="field full">
+          <label>Name on card</label>
+          <input type="text" name="ccname" autocomplete="cc-name" placeholder="Full name" />
+        </div>
+        <div class="field full">
+          <label>Card number</label>
+          <input type="text" name="cardnumber" autocomplete="cc-number" inputmode="numeric" placeholder="1234 5678 9012 3456" />
+        </div>
+        <div class="field">
+          <label>Expiry (MM/YY)</label>
+          <input type="text" name="cc-exp" autocomplete="cc-exp" placeholder="MM/YY" />
+        </div>
+        <div class="field">
+          <label>CVC</label>
+          <input type="text" name="cvc" autocomplete="cc-csc" inputmode="numeric" placeholder="123" />
+        </div>
+      </div>
+    </form>
+  </section>
+
+  <!-- 6. Identity / address -->
+  <section class="card">
+    <h2><span class="num">6</span> Identity &amp; address
+      <span class="chip" data-chip="6"><span class="dot"></span>waiting</span>
+    </h2>
+    <p class="hint">Name + address fields tagged with identity autocomplete tokens. Same triggers as the card: click the 密屿 icon, right-click → 密屿, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd>.</p>
+    <form data-section="6" action="javascript:void 0">
+      <div class="grid">
+        <div class="field"><label>First name</label><input autocomplete="given-name" name="fname" /></div>
+        <div class="field"><label>Last name</label><input autocomplete="family-name" name="lname" /></div>
+        <div class="field"><label>Email</label><input type="email" autocomplete="email" name="idemail" /></div>
+        <div class="field"><label>Phone</label><input type="tel" autocomplete="tel" name="phone" /></div>
+        <div class="field full"><label>Company</label><input autocomplete="organization" name="company" /></div>
+        <div class="field full"><label>Street address</label><input autocomplete="street-address" name="street" /></div>
+        <div class="field"><label>City</label><input autocomplete="address-level2" name="city" /></div>
+        <div class="field"><label>State / region</label><input autocomplete="address-level1" name="state" /></div>
+        <div class="field"><label>Postal code</label><input autocomplete="postal-code" name="zip" inputmode="numeric" /></div>
+        <div class="field">
+          <label>Country</label>
+          <select autocomplete="country-name" name="country">
+            <option value="">Select…</option>
+            <option>China</option><option>United States</option><option>Japan</option><option>Germany</option>
+          </select>
+        </div>
+      </div>
+    </form>
+  </section>
+
+  <!-- 7. Card + Identity via hint-only fallback (no autocomplete) -->
+  <section class="card">
+    <h2><span class="num">7</span> Hint-only fallback (no <code class="i">autocomplete</code>)
+      <span class="chip" data-chip="7"><span class="dot"></span>waiting</span>
+    </h2>
+    <p class="hint">Same card + identity data but classified only by <code class="i">name</code>/<code class="i">id</code>/<code class="i">placeholder</code> text — exercises the regex fallback classifier when a site omits autocomplete tokens.</p>
+    <form data-section="7" action="javascript:void 0">
+      <div class="grid">
+        <div class="field full"><label>Card number</label><input name="card_number" placeholder="Card number" inputmode="numeric" /></div>
+        <div class="field"><label>Expiration</label><input name="card_expiry" placeholder="Expiration date" /></div>
+        <div class="field"><label>Security code</label><input name="cvv" placeholder="CVV" inputmode="numeric" /></div>
+        <div class="field"><label>First name</label><input name="firstName" placeholder="First name" /></div>
+        <div class="field"><label>Last name</label><input name="lastName" placeholder="Last name" /></div>
+        <div class="field full"><label>Address line 1</label><input name="addressLine1" placeholder="Street address" /></div>
+        <div class="field"><label>ZIP</label><input name="postcode" placeholder="ZIP / Postcode" inputmode="numeric" /></div>
+      </div>
+    </form>
+  </section>
+
+  <!-- 8. Passkey (NEW) -->
+  <section class="card">
+    <h2><span class="num">8</span> Passkey — register &amp; authenticate
+      <span class="chip" data-chip="8"><span class="dot"></span>ready</span>
+    </h2>
+    <p class="hint">
+      This is the new section. Order matters: <b>Register</b> first (stores a passkey in the unlocked MiYu vault, attached to a login you pick), then <b>Authenticate</b>.
+      A result panel labelled <span style="color:var(--ok)">MiYu</span> means the extension handled the ceremony (duck-typed credential, not a real <code class="i">PublicKeyCredential</code>);
+      <span style="color:var(--warn)">Native</span> means it fell through to the browser/OS authenticator.
+      <b>Prerequisites:</b> open the popup and unlock the vault, and use <code class="i">http://localhost</code> (an IP rpId is rejected).
+    </p>
+
+    <div class="pk-opts">
+      <label class="inline"><input type="checkbox" id="pk-uv" checked /> require user verification (UV)</label>
+      <label class="inline"><input type="checkbox" id="pk-allowlist" /> get(): restrict to last-created id (non-discoverable)</label>
+    </div>
+
+    <div class="row">
+      <button class="primary" id="pk-register" type="button">① Register passkey · create()</button>
+      <button id="pk-authenticate" type="button">② Authenticate · get()</button>
+      <button id="pk-clear" type="button">Clear result</button>
+    </div>
+
+    <div class="result" id="pk-result">
+      <div class="rhead"><span id="pk-result-badge">—</span><span id="pk-result-title"></span></div>
+      <pre id="pk-result-body"></pre>
+    </div>
+  </section>
+
+  <div class="logbar">
+    <h2>Event log</h2>
+    <span class="chip" id="log-chip"><span class="dot"></span>live</span>
+    <button id="log-clear" type="button" style="margin-left:auto; padding:5px 12px; font-size:12px;">Clear</button>
+  </div>
+  <div class="logwrap"><div id="log" aria-live="polite"></div></div>
+
+  <p class="footer">
+    Serve this over <code class="i">http://localhost</code> (run <code class="i">npm run serve:testpage</code>) — the content scripts only inject on http/https, and passkeys need a secure context. Opening the file directly (<code class="i">file://</code>) disables everything.
+  </p>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---- tiny helpers ----------------------------------------------------------
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const logEl = $('#log');
+  const cls = { info: '', good: 'g', accent: 'a', warn: 'w', err: 'r' };
+  function log(msg, kind = 'info') {
+    const line = document.createElement('div');
+    const ts = new Date().toTimeString().slice(0, 8);
+    line.innerHTML = `<span class="t">${ts}</span> <span class="${cls[kind] || ''}">${msg}</span>`;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  const b64url = {
+    encode(buf) {
+      const bytes = new Uint8Array(buf);
+      let s = '';
+      for (const b of bytes) s += String.fromCharCode(b);
+      return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    },
+    toBytes(str) {
+      const pad = str.length % 4 === 2 ? '==' : str.length % 4 === 3 ? '=' : '';
+      const bin = atob(str.replace(/-/g, '+').replace(/_/g, '/') + pad);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    },
+  };
+  const rand = (n) => crypto.getRandomValues(new Uint8Array(n));
+  const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const decodeJSON = (buf) => { try { return JSON.parse(new TextDecoder().decode(buf)); } catch { return '(unparseable)'; } };
+
+  // ---- environment banner ----------------------------------------------------
+  const host = location.hostname;
+  const secure = window.isSecureContext;
+  const rpId = host; // MiYu uses location.hostname as the default rpId
+  $('#env-origin').textContent = location.origin;
+  $('#env-secure').textContent = secure ? 'true ✓' : 'false ✗';
+  $('#env-rpid').textContent = rpId;
+  const warn = $('#env-warn');
+  const problems = [];
+  const isIp = /^\d+\.\d+\.\d+\.\d+$/.test(host) || (host.includes(':') && host !== 'localhost');
+  if (location.protocol === 'file:') problems.push('Opened as file:// — the extension injects no content scripts here. Serve over http://localhost.');
+  if (!secure) problems.push('Not a secure context — passkey create()/get() will not be intercepted.');
+  if (isIp) problems.push('Reached via an IP address — MiYu rejects a non-registrable rpId. Open http://localhost:PORT instead.');
+  if (problems.length) {
+    $('#env').classList.add('bad');
+    warn.classList.add('show');
+    warn.innerHTML = '⚠ ' + problems.join('<br>⚠ ');
+    problems.forEach((p) => log(p, 'warn'));
+  }
+
+  // ---- live MiYu-detection via the data-vw-* attributes the content script sets
+  // The content script tags detected inputs (data-vw-autofill-id / data-vw-fill-id /
+  // data-vw-gen-id) and mounts panel hosts carrying data-vw-popover-for. We can't see
+  // the closed shadow UI, but these attributes prove the extension engaged this page.
+  const chips = {};
+  document.querySelectorAll('[data-chip]').forEach((c) => (chips[c.dataset.chip] = c));
+  const sectionOf = (el) => { const s = el.closest('[data-section]'); return s ? s.dataset.section : null; };
+  function markChip(section, state, label) {
+    const chip = chips[section];
+    if (!chip) return;
+    if (state === 'panel') chip.className = 'chip panel';
+    else if (state === 'detected' && !chip.classList.contains('panel')) chip.className = 'chip detected';
+    else if (state === 'detected') return;
+    chip.innerHTML = `<span class="dot"></span>${label}`;
+  }
+
+  let csSeen = false;
+  function noteContentScript() {
+    if (csSeen) return;
+    csSeen = true;
+    $('#env-cs').textContent = 'active ✓';
+    $('#env-cs').style.color = 'var(--ok)';
+    log('MiYu content script detected on this page.', 'good');
+  }
+
+  function scanExisting() {
+    document.querySelectorAll('[data-vw-autofill-id],[data-vw-fill-id],[data-vw-gen-id]').forEach((el) => {
+      const s = sectionOf(el);
+      if (s) markChip(s, 'detected', 'field detected');
+    });
+    if (document.querySelector('[data-vw-autofill-id],[data-vw-fill-id],[data-vw-gen-id],[data-vw-popover-for]')) noteContentScript();
+  }
+
+  const obs = new MutationObserver((records) => {
+    for (const r of records) {
+      if (r.type === 'attributes') {
+        const el = r.target;
+        if (!(el instanceof Element)) continue;
+        if (['data-vw-autofill-id', 'data-vw-fill-id', 'data-vw-gen-id'].includes(r.attributeName)) {
+          noteContentScript();
+          const s = sectionOf(el);
+          if (s) { markChip(s, 'detected', 'field detected'); log(`§${s}: field detected (${r.attributeName})`, 'good'); }
+        }
+      }
+      for (const node of r.addedNodes || []) {
+        if (!(node instanceof Element)) continue;
+        const popHosts = node.matches?.('[data-vw-popover-for]') ? [node] : [...(node.querySelectorAll?.('[data-vw-popover-for]') || [])];
+        for (const h of popHosts) {
+          noteContentScript();
+          const id = h.getAttribute('data-vw-popover-for') || '';
+          // Map the panel back to its section via the anchor it was placed near, if resolvable.
+          log(`MiYu panel mounted (popover-for="${id}")`, 'accent');
+          // Best-effort: find which section's input currently owns that fill id.
+          const anchor = document.querySelector(`[data-vw-autofill-id="${CSS.escape(id)}"],[data-vw-fill-id="${CSS.escape(id)}"],[data-vw-gen-id="${CSS.escape(id)}"]`);
+          const s = anchor ? sectionOf(anchor) : null;
+          if (s) markChip(s, 'panel', 'panel open');
+        }
+      }
+    }
+  });
+  obs.observe(document.documentElement, {
+    subtree: true, childList: true, attributes: true,
+    attributeFilter: ['data-vw-autofill-id', 'data-vw-fill-id', 'data-vw-gen-id'],
+  });
+  // The content script runs at document_idle and re-scans on mutation; give it a beat, then probe.
+  setTimeout(scanExisting, 400);
+  setTimeout(() => {
+    scanExisting();
+    if (!csSeen) {
+      $('#env-cs').textContent = 'not detected';
+      $('#env-cs').style.color = 'var(--warn)';
+      log('No MiYu markers yet. Focus a field to trigger detection, or confirm the extension is installed & the vault is unlocked.', 'warn');
+    }
+  }, 1500);
+  // Focusing a field is what makes MiYu attach a login/2FA/generator panel — nudge detection then.
+  document.addEventListener('focusin', () => setTimeout(scanExisting, 120), true);
+
+  // ---- Passkey ---------------------------------------------------------------
+  const resultEl = $('#pk-result');
+  const badgeEl = $('#pk-result-badge');
+  const titleEl = $('#pk-result-title');
+  const bodyEl = $('#pk-result-body');
+  let lastCredentialId = null; // base64url, from the most recent create()
+
+  // A MiYu-handled credential is a duck-typed plain object, NOT a real PublicKeyCredential.
+  const handledByMiyu = (cred) =>
+    typeof PublicKeyCredential === 'undefined' ? null : !(cred instanceof PublicKeyCredential);
+
+  function showResult(kind, title, obj) {
+    resultEl.className = 'result show ' + kind;
+    badgeEl.textContent = kind === 'miyu' ? '● handled by MiYu' : kind === 'native' ? '● native authenticator' : '● error';
+    titleEl.textContent = title;
+    bodyEl.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+  }
+
+  function describeFlags(authDataBytes) {
+    const f = authDataBytes[32] ?? 0;
+    return {
+      raw: '0x' + f.toString(16).padStart(2, '0'),
+      UP: !!(f & 0x01), UV: !!(f & 0x04), BE: !!(f & 0x08), BS: !!(f & 0x10),
+      signCount: authDataBytes.length >= 37
+        ? ((authDataBytes[33] << 24) | (authDataBytes[34] << 16) | (authDataBytes[35] << 8) | authDataBytes[36]) >>> 0
+        : null,
+    };
+  }
+
+  $('#pk-register').addEventListener('click', async () => {
+    if (!secure) { showResult('err', 'create() needs a secure context', 'Serve over http://localhost.'); return; }
+    const uv = $('#pk-uv').checked ? 'required' : 'discouraged';
+    const userId = rand(16);
+    const challenge = rand(32);
+    const publicKey = {
+      rp: { name: 'MiYu Test Page', id: rpId },
+      user: { id: userId, name: 'test@localhost', displayName: 'MiYu Test User' },
+      challenge,
+      // alg -7 (ES256) is required for MiYu to intercept; keep a native fallback (-257 / RS256).
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      // No authenticatorAttachment:'cross-platform' — that would opt out of interception.
+      authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: uv },
+      timeout: 60000,
+      attestation: 'none',
+      excludeCredentials: [],
+    };
+    log(`create(): rpId=${rpId}, UV=${uv} — approve the MiYu dialog (or pick where to save the passkey)…`, 'accent');
+    try {
+      const cred = await navigator.credentials.create({ publicKey });
+      if (!cred) { showResult('err', 'create() returned null', 'No credential was produced.'); log('create() → null', 'warn'); return; }
+      const miyu = handledByMiyu(cred);
+      lastCredentialId = cred.id;
+      const r = cred.response;
+      const out = {
+        handledBy: miyu === null ? 'unknown' : miyu ? 'MiYu extension (duck-typed)' : 'native PublicKeyCredential',
+        id: cred.id,
+        type: cred.type,
+        authenticatorAttachment: cred.authenticatorAttachment,
+        publicKeyAlgorithm: r.getPublicKeyAlgorithm?.(),
+        transports: r.getTransports?.(),
+        clientData: decodeJSON(r.clientDataJSON),
+        authData: r.getAuthenticatorData ? { flags: describeFlags(new Uint8Array(r.getAuthenticatorData())) } : '(n/a)',
+        attestationObject_b64url: b64url.encode(r.attestationObject),
+      };
+      showResult(miyu ? 'miyu' : 'native', 'Passkey registered — create()', out);
+      log(`create() ✓ ${miyu ? 'MiYu' : 'native'} · id=${cred.id.slice(0, 12)}…`, miyu ? 'good' : 'warn');
+    } catch (e) {
+      showResult('err', 'create() failed', `${e.name}: ${e.message}`);
+      log(`create() ✗ ${e.name}: ${e.message}`, 'err');
+    }
+  });
+
+  $('#pk-authenticate').addEventListener('click', async () => {
+    if (!secure) { showResult('err', 'get() needs a secure context', 'Serve over http://localhost.'); return; }
+    const uv = $('#pk-uv').checked ? 'required' : 'discouraged';
+    const challenge = rand(32);
+    const allowList = $('#pk-allowlist').checked;
+    if (allowList && !lastCredentialId) {
+      showResult('err', 'No credential id yet', 'Register a passkey first, or uncheck the allow-list option to use a discoverable credential.');
+      return;
+    }
+    const publicKey = {
+      challenge,
+      rpId,
+      userVerification: uv,
+      timeout: 60000,
+      allowCredentials: allowList
+        ? [{ type: 'public-key', id: b64url.toBytes(lastCredentialId) }]
+        : [],
+    };
+    log(`get(): rpId=${rpId}, UV=${uv}, allowList=${allowList} — approve the MiYu dialog…`, 'accent');
+    try {
+      const cred = await navigator.credentials.get({ publicKey });
+      if (!cred) { showResult('err', 'get() returned null', 'No assertion produced.'); log('get() → null', 'warn'); return; }
+      const miyu = handledByMiyu(cred);
+      const r = cred.response;
+      const authData = new Uint8Array(r.authenticatorData);
+      const out = {
+        handledBy: miyu === null ? 'unknown' : miyu ? 'MiYu extension (duck-typed)' : 'native PublicKeyCredential',
+        id: cred.id,
+        type: cred.type,
+        authenticatorAttachment: cred.authenticatorAttachment,
+        clientData: decodeJSON(r.clientDataJSON),
+        authenticatorData: { rpIdHash: hex(authData.slice(0, 32)), ...describeFlags(authData) },
+        userHandle_b64url: r.userHandle ? b64url.encode(r.userHandle) : null,
+        signature_b64url: b64url.encode(r.signature),
+      };
+      showResult(miyu ? 'miyu' : 'native', 'Assertion produced — get()', out);
+      log(`get() ✓ ${miyu ? 'MiYu' : 'native'} · UV=${out.authenticatorData.UV} · id=${cred.id.slice(0, 12)}…`, miyu ? 'good' : 'warn');
+    } catch (e) {
+      showResult('err', 'get() failed', `${e.name}: ${e.message}`);
+      log(`get() ✗ ${e.name}: ${e.message}`, 'err');
+    }
+  });
+
+  $('#pk-clear').addEventListener('click', () => { resultEl.className = 'result'; });
+  $('#log-clear').addEventListener('click', () => { logEl.innerHTML = ''; });
+
+  // Prevent the demo forms from actually navigating; log the "submit" so save-prompt behaviour is visible.
+  document.querySelectorAll('form[data-section]').forEach((f) => {
+    f.addEventListener('submit', (e) => {
+      e.preventDefault();
+      log(`§${f.dataset.section}: form submitted (autofill save/capture may prompt)`, 'info');
+    });
+  });
+
+  log('Test page ready. Focus a field to trigger autofill, or use section 8 for passkeys.', 'info');
+})();
+</script>
+</body>
+</html>

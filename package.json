@@ -1,0 +1,42 @@
+{
+  "name": "vaultwarden-extension",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:prod": "node build.mjs --prod && node tools/assert-build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "node build.mjs && node tools/verify-render.mjs",
+    "verify:render": "node tools/verify-render.mjs",
+    "verify:e2e": "node tools/verify-e2e.mjs",
+    "serve:testpage": "node test-page/serve.mjs",
+    "seed:testvault": "esbuild tools/seed-test-vault.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/miyu-seed.mjs && node node_modules/.cache/miyu-seed.mjs",
+    "release:prepare": "node tools/release.mjs",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "lit": "^3.3.3",
+    "safe-regex2": "^5.1.1",
+    "tldts": "^7.4.4",
+    "webextension-polyfill": "^0.12.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^26.0.1",
+    "@types/webextension-polyfill": "^0.12.5",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.6.0",
+    "fflate": "^0.8.3",
+    "globals": "^17.7.0",
+    "happy-dom": "^20.10.6",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.62.0",
+    "vitest": "^4.1.9",
+    "yaml": "^2.9.0"
+  }
+}

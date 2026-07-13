@@ -1,0 +1,19 @@
+/* Receive document frame. All UI, layout, and theming live inside the Lit root (`vw-receive-app`)
+   and its components; this only loads the bundled fonts and paints a theme-aware MiYu backdrop so
+   there is no flash before the shadow tree renders. Mirrors src/ui/popup/popup.css. */
+
+html { color-scheme: light dark; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
+  background: #fafaf8;
+  color: #16181d;
+}
+
+@media (prefers-color-scheme: dark) {
+  body { background: #17191e; color: #f2f3f5; }
+}
+
+#app { display: block; min-height: 100vh; }
