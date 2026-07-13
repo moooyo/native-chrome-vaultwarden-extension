@@ -1,9 +1,14 @@
 // Factory for the 密屿/MiYu inline password-generation panel (design 2e). Owns the positioned
 // closed-shadow host and the imperative handle the autofill controller drives (push generated
-// state / mark saved / remove). Closed root + `Event.isTrusted` gating live in the element.
+// state / mark saved / remove). Closed root + `Event.isTrusted` gating live in the render module.
 
-import { mountClosedSurface } from './ui/closed-surface.js';
-import { VwGeneratePanel } from './ui/generate-panel-element.js';
+import { mountRenderSurface } from './ui/render-surface.js';
+import {
+  GENERATE_PANEL_STYLES,
+  renderGeneratePanel,
+  type GeneratePanelHandlers,
+  type GeneratePanelViewState,
+} from './ui/generate-panel-element.js';
 import { reposition } from './popover.js';
 
 export interface GeneratePanelState {
@@ -33,38 +38,53 @@ export interface GeneratePanelOptions {
 }
 
 export function createGeneratePanel(options: GeneratePanelOptions): GeneratePanel {
-  const surface = mountClosedSurface<VwGeneratePanel>('vw-generate-panel', (element) => {
-    element.view = 'panel';
-    element.onRegenerate = options.onRegenerate;
-    element.onLength = options.onLength;
-    element.onNumbers = options.onNumbers;
-    element.onSymbols = options.onSymbols;
-    element.onUse = options.onUse;
-    element.onUndo = options.onUndo;
-  });
+  const state: GeneratePanelViewState = {
+    view: 'panel',
+    password: '',
+    strength: '极强',
+    length: 18,
+    numbers: true,
+    symbols: true,
+    savedName: '',
+    savedUser: '',
+  };
+  const handlers: GeneratePanelHandlers = {
+    onRegenerate: options.onRegenerate,
+    onLength: options.onLength,
+    onNumbers: options.onNumbers,
+    onSymbols: options.onSymbols,
+    onUse: options.onUse,
+    onUndo: options.onUndo,
+  };
+  const surface = mountRenderSurface(GENERATE_PANEL_STYLES);
   const host = surface.host;
   host.style.position = 'absolute';
   host.style.zIndex = '2147483647';
 
-  const place = (): void => reposition(host, options.anchor);
-  void surface.element.updateComplete.then(place);
+  // Render, then re-place under the anchor. `render()` is synchronous, so the surface's size is final
+  // by the time we measure it — the panel tracks the anchor as its content changes (panel → saved).
+  const draw = (): void => {
+    surface.render(renderGeneratePanel(state, handlers));
+    reposition(host, options.anchor);
+  };
+  draw();
 
   return {
     element: host,
     root: surface.root,
-    update(state) {
-      surface.element.password = state.password;
-      surface.element.strength = state.strength;
-      surface.element.length = state.length;
-      surface.element.numbers = state.numbers;
-      surface.element.symbols = state.symbols;
-      void surface.element.updateComplete.then(place);
+    update(next) {
+      state.password = next.password;
+      state.strength = next.strength;
+      state.length = next.length;
+      state.numbers = next.numbers;
+      state.symbols = next.symbols;
+      draw();
     },
     showSaved(info) {
-      surface.element.savedName = info.name;
-      surface.element.savedUser = info.user;
-      surface.element.view = 'saved';
-      void surface.element.updateComplete.then(place);
+      state.savedName = info.name;
+      state.savedUser = info.user;
+      state.view = 'saved';
+      draw();
     },
     remove() {
       surface.remove();

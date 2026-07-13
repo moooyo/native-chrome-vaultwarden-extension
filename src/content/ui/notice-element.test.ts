@@ -1,40 +1,38 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { NOTICE_TIMEOUT_MS, VwNotice, presentNotice } from './notice-element.js';
-import './notice-element.js';
+import { render } from 'lit';
+import { NOTICE_STYLES, NOTICE_TIMEOUT_MS, presentNotice, renderNotice } from './notice-element.js';
+
+// The notice is a render-based surface (no custom element — content scripts run in an isolated world
+// with no custom-element registry, Chromium 41118431). The view test renders its template into a
+// container and asserts on the produced DOM; presentNotice mounts the same template into a closed
+// shadow root and auto-dismisses.
+
+let container: HTMLElement | undefined;
 
 afterEach(() => {
+  container?.remove();
+  container = undefined;
   document.body.replaceChildren();
   document.documentElement.querySelectorAll('[data-vw-notice]').forEach((node) => node.remove());
 });
 
-async function mount(configure: (element: VwNotice) => void): Promise<VwNotice> {
-  const element = document.createElement('vw-notice') as VwNotice;
-  configure(element);
-  document.body.append(element);
-  await element.updateComplete;
-  return element;
+function mount(message: string): HTMLElement {
+  container = document.createElement('div');
+  document.body.append(container);
+  render(renderNotice({ message }), container);
+  return container;
 }
 
-function shadow(element: VwNotice): ShadowRoot {
-  if (!element.shadowRoot) {
-    throw new Error('element has no render root');
-  }
-  return element.shadowRoot;
-}
-
-describe('vw-notice', () => {
-  it('renders the message inertly and allows long words to wrap', async () => {
-    const element = await mount((el) => {
-      el.message = '<b>keep</b> aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-    });
-    const bar = shadow(element).querySelector('.bar');
+describe('notice surface', () => {
+  it('renders the message inertly and allows long words to wrap', () => {
+    const root = mount('<b>keep</b> aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    const bar = root.querySelector('.bar');
     expect(bar?.querySelector('b')).toBeNull();
     expect(bar?.textContent).toContain('keep');
-    const styleText = styleTextOf(VwNotice);
-    expect(styleText).toContain('overflow-wrap');
-    expect(styleText).toContain('prefers-color-scheme: dark');
-    expect(styleText).toContain('prefers-reduced-motion: reduce');
+    expect(NOTICE_STYLES).toContain('overflow-wrap');
+    expect(NOTICE_STYLES).toContain('prefers-color-scheme: dark');
+    expect(NOTICE_STYLES).toContain('prefers-reduced-motion: reduce');
   });
 
   it('presentNotice mounts a closed surface and auto-dismisses after four seconds', () => {
@@ -53,9 +51,3 @@ describe('vw-notice', () => {
     }
   });
 });
-
-function styleTextOf(ctor: typeof VwNotice): string {
-  const styles = ctor.styles;
-  const list = Array.isArray(styles) ? styles : [styles];
-  return list.map((style) => String((style as { cssText: string }).cssText)).join('\n');
-}

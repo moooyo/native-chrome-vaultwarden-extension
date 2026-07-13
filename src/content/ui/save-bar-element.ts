@@ -1,38 +1,33 @@
-import { defineContentElement } from './define.js';
-import { LitElement, css, html } from 'lit';
+import { html, type TemplateResult } from 'lit';
 
 /**
- * Dormant Lit surface backing the save/update bar. Mounted inside a closed root so the page cannot
- * read it or forge its actions; only trusted clicks act. The site-controlled `message` is bound with
- * `${}` so it always renders inert. Callbacks are non-reflected properties.
+ * Render-based surface backing the save/update bar. Content scripts run in an isolated world with no
+ * custom-element registry (Chromium 41118431), so this is a plain lit-html template rendered into a
+ * closed shadow root by the factory (see save-bar.ts) rather than a LitElement. Mounted inside a closed
+ * root so the page cannot read it or forge its actions; only trusted clicks act. The site-controlled
+ * `message` is bound with `${}` so it always renders inert.
  *
  * Styled for the 密屿/MiYu design: a top-center card with an ink primary action and a ghost dismiss.
  * As a closed-shadow surface on arbitrary host pages it cannot use the extension's `--vw-*` tokens,
  * so the MiYu palette is defined locally on `:host` with a `prefers-color-scheme: dark` override
  * (the primary button inverts to a light fill with ink text in dark mode).
  */
-export class VwSaveBar extends LitElement {
-  static override properties = {
-    message: { type: String },
-    actionLabel: { type: String },
-    onAction: { attribute: false },
-    onDismiss: { attribute: false },
-  };
 
-  declare message: string;
-  declare actionLabel: string;
-  declare onAction: (() => void) | undefined;
-  declare onDismiss: (() => void) | undefined;
+/** The render state of the save bar. Held by the factory and passed to `renderSaveBar` on each change. */
+export interface SaveBarState {
+  /** Plain-text message (no HTML); bound with `${}` so site data can't inject markup. */
+  message: string;
+  actionLabel: string;
+}
 
-  constructor() {
-    super();
-    this.message = '';
-    this.actionLabel = '';
-    this.onAction = undefined;
-    this.onDismiss = undefined;
-  }
+/** Privileged callbacks. Every click that reaches them is gated on `Event.isTrusted` in the template,
+ *  so a page script cannot synthesize a click to save or dismiss. */
+export interface SaveBarHandlers {
+  onAction?: () => void;
+  onDismiss?: () => void;
+}
 
-  static override styles = css`
+export const SAVE_BAR_STYLES = `
     :host { all: initial; }
     :host {
       --mi-panel: #fff;
@@ -88,36 +83,17 @@ export class VwSaveBar extends LitElement {
     @media (prefers-reduced-motion: reduce) { .bar { animation: none; } }
   `;
 
-  private handleAction(event: MouseEvent): void {
-    if (event.isTrusted) {
-      this.onAction?.();
-    }
-  }
-
-  private handleDismiss(event: MouseEvent): void {
-    if (event.isTrusted) {
-      this.onDismiss?.();
-    }
-  }
-
-  protected override render() {
-    // TODO i18n: content-script surfaces are isolated from the extension i18n module, so the dismiss
-    // label / aria strings are hardcoded in Chinese here (message + actionLabel come from the caller).
-    return html`
-      <div class="bar" role="dialog" aria-label="保存到密屿">
-        <span class="logo"><span class="glyph"><span class="ring"></span><span class="dot"></span></span></span>
-        <span class="msg">${this.message}</span>
-        <button type="button" class="act" id="vw-save-act" @click=${this.handleAction}>${this.actionLabel}</button>
-        <button type="button" class="dismiss" id="vw-save-dismiss" aria-label="关闭" @click=${this.handleDismiss}>暂不</button>
-      </div>
-    `;
-  }
-}
-
-defineContentElement('vw-save-bar', VwSaveBar);
-
-declare global {
-  interface HTMLElementTagNameMap {
-    'vw-save-bar': VwSaveBar;
-  }
+/** Render the save bar for the given state. The page cannot forge the privileged clicks: each handler
+ *  bails unless `event.isTrusted`. */
+export function renderSaveBar(state: SaveBarState, handlers: SaveBarHandlers): TemplateResult {
+  // TODO i18n: content-script surfaces are isolated from the extension i18n module, so the dismiss
+  // label / aria strings are hardcoded in Chinese here (message + actionLabel come from the caller).
+  return html`
+    <div class="bar" role="dialog" aria-label="保存到密屿">
+      <span class="logo"><span class="glyph"><span class="ring"></span><span class="dot"></span></span></span>
+      <span class="msg">${state.message}</span>
+      <button type="button" class="act" id="vw-save-act" @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onAction?.(); }}>${state.actionLabel}</button>
+      <button type="button" class="dismiss" id="vw-save-dismiss" aria-label="关闭" @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onDismiss?.(); }}>暂不</button>
+    </div>
+  `;
 }

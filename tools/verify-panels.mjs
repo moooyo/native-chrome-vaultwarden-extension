@@ -3,11 +3,11 @@
 // new-password field, and confirms a closed-shadow panel host appears — then screenshots it. The 2FA
 // panel (3a) needs a matching vault item with a TOTP, so it's covered by unit/factory tests instead.
 //
-// NOTE: run this against REAL Chrome. Playwright's bundled Chromium exposes `customElements` as null
-// in the content-script isolated world, so no content-script custom element (this project's popover,
-// save-bar, passkey dialog, or these panels) can upgrade there — the panels render only where
-// content-script custom elements are supported. The extension pages (popup/options/receive) are
-// verified separately by tools/verify-render.mjs, which passes.
+// NOTE: content surfaces are render-based (lit-html `render()` into a closed shadow root), NOT custom
+// elements — content scripts run in an isolated world with no custom-element registry (`customElements`
+// is null and `createElement` never upgrades a defined tag; Chromium 41118431). That is exactly why this
+// check runs GREEN in Playwright's bundled Chromium: nothing depends on custom-element upgrade. The
+// extension pages (popup/options/receive) are verified separately by tools/verify-render.mjs.
 import { chromium } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';

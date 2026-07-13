@@ -10,8 +10,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ext = join(root, 'dist');
 const SERVER = 'http://10.0.1.20:8080';
-const EMAIL = 'test@winvaultwarden.local';
-const PASSWORD = 'Test-Master-Password-1!';
+const EMAIL = process.env.MIYU_EMAIL || 'test@winvaultwarden.local';
+const PASSWORD = process.env.MIYU_PASSWORD || 'Test-Master-Password-1!';
 
 // Grant the server host in the built manifest so `permissions.request` resolves without a prompt.
 const manifestPath = join(ext, 'manifest.json');
@@ -58,6 +58,11 @@ try {
 } catch {
   outcome = 'no-vault';
 }
+// Pull the vault from the server, then let the list populate.
+try {
+  await pop.locator('vw-sync-bar button').click({ timeout: 5000 });
+  await pop.waitForTimeout(4000);
+} catch { /* sync button not present */ }
 await pop.waitForTimeout(500);
 const deepText = await pop.evaluate(() => {
   const out = [];
@@ -71,6 +76,7 @@ console.log('\n=== E2E result ===');
 console.log('login outcome:', outcome);
 console.log('vault search present:', deepText.includes('搜索密钥库'));
 console.log('has category chips:', deepText.includes('全部') && deepText.includes('登录'));
+console.log('items after sync:', ['GitHub', 'Nebula', 'Forge', '北岸银行', '家庭 Wi-Fi', '张之航'].filter((n) => deepText.includes(n)).join(', ') || '(none visible)');
 console.log('page errors:', errors.length);
 for (const e of errors.slice(0, 6)) console.log('  -', e);
 console.log('screenshot: /tmp/miyu-e2e-popup.png');

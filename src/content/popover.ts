@@ -4,8 +4,15 @@
 // controller drives (open / show status / show candidates / remove). The page can neither read the
 // element's state nor forge its callbacks (closed root + Event.isTrusted gating live in the element).
 
-import { mountClosedSurface } from './ui/closed-surface.js';
-import { VwAutofillPopover, type PopoverCandidate, type PopoverKind } from './ui/autofill-popover-element.js';
+import { mountRenderSurface } from './ui/render-surface.js';
+import {
+  POPOVER_STYLES,
+  renderPopover,
+  type PopoverCandidate,
+  type PopoverHandlers,
+  type PopoverKind,
+  type PopoverState,
+} from './ui/autofill-popover-element.js';
 
 export type { PopoverCandidate } from './ui/autofill-popover-element.js';
 
@@ -30,20 +37,20 @@ export interface AutofillPopoverOptions {
 
 export function createAutofillPopover(options: AutofillPopoverOptions): AutofillPopover {
   const kind = options.kind ?? 'login';
-  const surface = mountClosedSurface<VwAutofillPopover>('vw-autofill-popover', (element) => {
-    element.kind = kind;
-    element.view = 'trigger';
-    element.onOpen = options.onOpen;
-    element.onSelect = options.onSelect;
-  });
+  const state: PopoverState = { kind, view: 'trigger', statusMessage: '', candidates: [] };
+  const handlers: PopoverHandlers = { onOpen: options.onOpen, onSelect: options.onSelect };
+  const surface = mountRenderSurface(POPOVER_STYLES);
   const host = surface.host;
   host.style.position = 'absolute';
   host.style.zIndex = '2147483647';
 
-  // Re-place after each render so the panel tracks the anchor as its size changes (trigger →
-  // status/list). `updateComplete` resolves once the element's next render has flushed.
-  const place = (): void => reposition(host, options.anchor);
-  void surface.element.updateComplete.then(place);
+  // Render, then re-place under the anchor. `render()` is synchronous, so the surface's size is final
+  // by the time we measure it — the panel tracks the anchor as its content grows (trigger → status/list).
+  const draw = (): void => {
+    surface.render(renderPopover(state, handlers));
+    reposition(host, options.anchor);
+  };
+  draw();
 
   return {
     element: host,
@@ -52,14 +59,14 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
       options.onOpen();
     },
     showStatus(message: string) {
-      surface.element.statusMessage = message;
-      surface.element.view = 'status';
-      void surface.element.updateComplete.then(place);
+      state.statusMessage = message;
+      state.view = 'status';
+      draw();
     },
     showCandidates(candidates: PopoverCandidate[]) {
-      surface.element.candidates = candidates;
-      surface.element.view = 'list';
-      void surface.element.updateComplete.then(place);
+      state.candidates = candidates;
+      state.view = 'list';
+      draw();
     },
     remove() {
       surface.remove();

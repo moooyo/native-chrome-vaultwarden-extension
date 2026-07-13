@@ -1,5 +1,4 @@
-import { defineContentElement } from './define.js';
-import { LitElement, css, html, nothing } from 'lit';
+import { html, nothing, type TemplateResult } from 'lit';
 import { uiIcon } from '../../ui/components/icon.js';
 
 // NOTE: These dialogs render inside a CLOSED shadow root on arbitrary host pages, so they cannot
@@ -8,7 +7,12 @@ import { uiIcon } from '../../ui/components/icon.js';
 // with a `@media (prefers-color-scheme: dark)` block. `:host{all:initial}` isolates us from the
 // host page's cascade (it does not reset custom properties). Values mirror `paletteTokens` in
 // `src/ui/components/tokens.ts`; the moss logo block (`--mv-teal`) is identical in both themes.
-const dialogStyles = css`
+//
+// Content scripts run in an isolated world with no custom-element registry (`customElements` is null;
+// Chromium 41118431), so these surfaces render via lit-html `render()` into a closed shadow root
+// rather than as custom elements. The styles are exported as a plain string applied once by
+// `mountRenderSurface`; the render functions below are pure `(state, handlers) => TemplateResult`.
+export const DIALOG_STYLES = `
   :host {
     all: initial;
     --mv-overlay: rgba(18, 22, 30, 0.28);
@@ -193,6 +197,45 @@ const dialogStyles = css`
 /** Above this many rows the target list scrolls locally instead of growing without bound. */
 const SCROLL_THRESHOLD = 6;
 
+export interface PasskeyRegisterTarget {
+  id: string;
+  name: string;
+  username?: string;
+}
+
+export type PasskeyRegisterResult = { cancelled: true } | { targetCipherId?: string };
+
+/** The render state of the consent dialog. Held by the factory (see passkey-consent.ts). */
+export interface PasskeyConsentState {
+  rpId: string;
+}
+
+/** Privileged callbacks for the consent dialog. Every click that reaches them is gated on
+ *  `Event.isTrusted` in the template, so a page script cannot synthesize a click to confirm/cancel. */
+export interface PasskeyConsentHandlers {
+  onConfirm?: () => void;
+  onCancel?: () => void;
+  /** Fired when the user clicks the backdrop outside the card (a trusted click on the overlay itself). */
+  onOverlay?: () => void;
+}
+
+/** The render state of the registration picker. Target identities stay in this in-memory array and are
+ *  selected by rendered index — their ids never reach the DOM. */
+export interface PasskeyRegisterState {
+  rpId: string;
+  targets: PasskeyRegisterTarget[];
+}
+
+/** Privileged callbacks for the registration picker. Gated on `Event.isTrusted` in the template. */
+export interface PasskeyRegisterHandlers {
+  onNew?: () => void;
+  onCancel?: () => void;
+  /** Select an existing target by its rendered index (its cipher id never enters the DOM). */
+  onSelectTarget?: (index: number) => void;
+  /** Fired when the user clicks the backdrop outside the card (a trusted click on the overlay itself). */
+  onOverlay?: () => void;
+}
+
 /** First visible character of a label, uppercased, for the account tile. Falls back to a dot. */
 function tileInitial(name: string): string {
   const first = [...name.trim()][0];
@@ -201,7 +244,7 @@ function tileInitial(name: string): string {
 
 /** Shared dialog header: the 16px moss mini-logo, the 密屿 wordmark, and the requesting domain.
  *  `// TODO i18n` — content surfaces don't import the extension i18n module, so strings are inline. */
-function renderHeader(rpId: string) {
+function renderHeader(rpId: string): TemplateResult {
   return html`
     <div class="header">
       <span class="logo" aria-hidden="true">
@@ -213,228 +256,119 @@ function renderHeader(rpId: string) {
   `;
 }
 
-/**
- * Dormant consent dialog: shown before a vault-stored passkey signs a WebAuthn assertion. Lives in a
- * closed root the page cannot reach. `onResult` fires exactly once; confirm requires a trusted click,
- * while cancel / outside-click / Escape resolve false.
- */
-export class VwPasskeyConsent extends LitElement {
-  static override properties = {
-    rpId: { type: String },
-    onResult: { attribute: false },
-  };
-
-  declare rpId: string;
-  declare onResult: ((confirmed: boolean) => void) | undefined;
-
-  private settled = false;
-
-  constructor() {
-    super();
-    this.rpId = '';
-    this.onResult = undefined;
-  }
-
-  static override styles = dialogStyles;
-
-  private readonly handleKeydown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      this.finish(false);
-    }
-  };
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    window.addEventListener('keydown', this.handleKeydown, true);
-  }
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    window.removeEventListener('keydown', this.handleKeydown, true);
-  }
-
-  private finish(confirmed: boolean): void {
-    if (this.settled) {
-      return;
-    }
-    this.settled = true;
-    window.removeEventListener('keydown', this.handleKeydown, true);
-    this.onResult?.(confirmed);
-  }
-
-  private handleConfirm(event: MouseEvent): void {
-    if (event.isTrusted) {
-      this.finish(true);
-    }
-  }
-
-  private handleCancel(event: MouseEvent): void {
-    if (event.isTrusted) {
-      this.finish(false);
-    }
-  }
-
-  private handleOverlay(event: MouseEvent): void {
+/** Only a trusted click on the overlay itself (not bubbling from the card) counts as an outside click. */
+function overlayHandler(handlers: { onOverlay?: () => void }) {
+  return (event: MouseEvent): void => {
     if (event.isTrusted && event.target === event.currentTarget) {
-      this.finish(false);
+      handlers.onOverlay?.();
     }
-  }
-
-  protected override render() {
-    // Hardcoded Chinese — content surfaces don't import the i18n module. // TODO i18n
-    return html`
-      <div class="overlay" @click=${this.handleOverlay}>
-        <div class="card" role="dialog" aria-modal="true" aria-label="使用通行密钥">
-          ${renderHeader(this.rpId)}
-          <div class="body">
-            <div class="icon-circle">${uiIcon('key')}</div>
-            <h1 class="title">使用通行密钥登录</h1>
-            <p class="sub">此网站请求使用通行密钥验证身份</p>
-            <button type="button" class="primary" id="vw-pk-confirm" @click=${this.handleConfirm}>使用通行密钥</button>
-          </div>
-          <button type="button" class="footer" id="vw-pk-cancel" @click=${this.handleCancel}>改用密码登录</button>
-        </div>
-      </div>
-    `;
-  }
+  };
 }
-
-export interface PasskeyRegisterTarget {
-  id: string;
-  name: string;
-  username?: string;
-}
-
-export type PasskeyRegisterResult = { cancelled: true } | { targetCipherId?: string };
 
 /**
- * Dormant registration picker: choose where to store a new passkey (a new item, or an existing
- * same-domain item). Lives in a closed root. `onResult` fires exactly once. Target identities stay in
- * the in-memory `targets` array and are selected by rendered index — their ids never reach the DOM.
+ * Consent dialog: shown before a vault-stored passkey signs a WebAuthn assertion. Confirm requires a
+ * trusted click; cancel / outside-click resolve false (Escape is handled by the factory's key listener).
  */
-export class VwPasskeyRegister extends LitElement {
-  static override properties = {
-    rpId: { type: String },
-    targets: { attribute: false },
-    onResult: { attribute: false },
-  };
-
-  declare rpId: string;
-  declare targets: PasskeyRegisterTarget[];
-  declare onResult: ((result: PasskeyRegisterResult) => void) | undefined;
-
-  private settled = false;
-
-  constructor() {
-    super();
-    this.rpId = '';
-    this.targets = [];
-    this.onResult = undefined;
-  }
-
-  static override styles = dialogStyles;
-
-  private readonly handleKeydown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      this.finish({ cancelled: true });
-    }
-  };
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    window.addEventListener('keydown', this.handleKeydown, true);
-  }
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    window.removeEventListener('keydown', this.handleKeydown, true);
-  }
-
-  private finish(result: PasskeyRegisterResult): void {
-    if (this.settled) {
-      return;
-    }
-    this.settled = true;
-    window.removeEventListener('keydown', this.handleKeydown, true);
-    this.onResult?.(result);
-  }
-
-  private handleNew(event: MouseEvent): void {
-    if (event.isTrusted) {
-      this.finish({});
-    }
-  }
-
-  private handleCancel(event: MouseEvent): void {
-    if (event.isTrusted) {
-      this.finish({ cancelled: true });
-    }
-  }
-
-  private handleTarget(event: MouseEvent, index: number): void {
-    if (!event.isTrusted) {
-      return;
-    }
-    const target = this.targets[index];
-    if (target) {
-      this.finish({ targetCipherId: target.id });
-    }
-  }
-
-  private handleOverlay(event: MouseEvent): void {
-    if (event.isTrusted && event.target === event.currentTarget) {
-      this.finish({ cancelled: true });
-    }
-  }
-
-  protected override render() {
-    const scrollable = this.targets.length > SCROLL_THRESHOLD;
-    // Hardcoded Chinese — content surfaces don't import the i18n module. // TODO i18n
-    return html`
-      <div class="overlay" @click=${this.handleOverlay}>
-        <div class="card" role="dialog" aria-modal="true" aria-label="保存通行密钥">
-          ${renderHeader(this.rpId)}
-          <div class="body">
-            <div class="icon-circle">${uiIcon('key')}</div>
-            <h1 class="title">保存通行密钥</h1>
-            <p class="sub">选择要保存的登录项，或新建一个</p>
-            <button type="button" class="primary" id="vw-pk-new" @click=${this.handleNew}>创建通行密钥</button>
-            ${this.targets.length
-              ? html`
-                  <div class="list ${scrollable ? 'scrollable' : ''}">
-                    ${this.targets.map((target, index) => this.renderTarget(target, index))}
-                  </div>
-                `
-              : nothing}
-          </div>
-          <button type="button" class="footer" id="vw-pk-cancel" @click=${this.handleCancel}>取消</button>
+export function renderPasskeyConsent(
+  state: PasskeyConsentState,
+  handlers: PasskeyConsentHandlers,
+): TemplateResult {
+  // Hardcoded Chinese — content surfaces don't import the i18n module. // TODO i18n
+  return html`
+    <div class="overlay" @click=${overlayHandler(handlers)}>
+      <div class="card" role="dialog" aria-modal="true" aria-label="使用通行密钥">
+        ${renderHeader(state.rpId)}
+        <div class="body">
+          <div class="icon-circle">${uiIcon('key')}</div>
+          <h1 class="title">使用通行密钥登录</h1>
+          <p class="sub">此网站请求使用通行密钥验证身份</p>
+          <button
+            type="button"
+            class="primary"
+            id="vw-pk-confirm"
+            @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onConfirm?.(); }}
+          >
+            使用通行密钥
+          </button>
         </div>
+        <button
+          type="button"
+          class="footer"
+          id="vw-pk-cancel"
+          @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onCancel?.(); }}
+        >
+          改用密码登录
+        </button>
       </div>
-    `;
-  }
-
-  private renderTarget(target: PasskeyRegisterTarget, index: number) {
-    return html`
-      <button type="button" class="row target" @click=${(event: MouseEvent) => this.handleTarget(event, index)}>
-        <span class="tile" aria-hidden="true">${tileInitial(target.name)}</span>
-        <span class="row-text">
-          <span class="row-name">${target.name}</span>
-          ${target.username ? html`<span class="row-user">${target.username}</span>` : nothing}
-        </span>
-        <span class="row-chev" aria-hidden="true">${uiIcon('chevron')}</span>
-      </button>
-    `;
-  }
+    </div>
+  `;
 }
 
-defineContentElement('vw-passkey-consent', VwPasskeyConsent);
-defineContentElement('vw-passkey-register', VwPasskeyRegister);
+/**
+ * Registration picker: choose where to store a new passkey (a new item, or an existing same-domain
+ * item). Confirm / target selection require a trusted click; cancel / outside-click resolve cancelled
+ * (Escape is handled by the factory's key listener).
+ */
+export function renderPasskeyRegister(
+  state: PasskeyRegisterState,
+  handlers: PasskeyRegisterHandlers,
+): TemplateResult {
+  const scrollable = state.targets.length > SCROLL_THRESHOLD;
+  // Hardcoded Chinese — content surfaces don't import the i18n module. // TODO i18n
+  return html`
+    <div class="overlay" @click=${overlayHandler(handlers)}>
+      <div class="card" role="dialog" aria-modal="true" aria-label="保存通行密钥">
+        ${renderHeader(state.rpId)}
+        <div class="body">
+          <div class="icon-circle">${uiIcon('key')}</div>
+          <h1 class="title">保存通行密钥</h1>
+          <p class="sub">选择要保存的登录项，或新建一个</p>
+          <button
+            type="button"
+            class="primary"
+            id="vw-pk-new"
+            @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onNew?.(); }}
+          >
+            创建通行密钥
+          </button>
+          ${state.targets.length
+            ? html`
+                <div class="list ${scrollable ? 'scrollable' : ''}">
+                  ${state.targets.map((target, index) => renderTarget(target, index, handlers))}
+                </div>
+              `
+            : nothing}
+        </div>
+        <button
+          type="button"
+          class="footer"
+          id="vw-pk-cancel"
+          @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onCancel?.(); }}
+        >
+          取消
+        </button>
+      </div>
+    </div>
+  `;
+}
 
-declare global {
-  interface HTMLElementTagNameMap {
-    'vw-passkey-consent': VwPasskeyConsent;
-    'vw-passkey-register': VwPasskeyRegister;
-  }
+function renderTarget(
+  target: PasskeyRegisterTarget,
+  index: number,
+  handlers: PasskeyRegisterHandlers,
+): TemplateResult {
+  return html`
+    <button
+      type="button"
+      class="row target"
+      @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onSelectTarget?.(index); }}
+    >
+      <span class="tile" aria-hidden="true">${tileInitial(target.name)}</span>
+      <span class="row-text">
+        <span class="row-name">${target.name}</span>
+        ${target.username ? html`<span class="row-user">${target.username}</span>` : nothing}
+      </span>
+      <span class="row-chev" aria-hidden="true">${uiIcon('chevron')}</span>
+    </button>
+  `;
 }

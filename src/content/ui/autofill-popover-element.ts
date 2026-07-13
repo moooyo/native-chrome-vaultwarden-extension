@@ -1,5 +1,4 @@
-import { defineContentElement } from './define.js';
-import { LitElement, css, html, nothing, svg } from 'lit';
+import { html, nothing, svg, type TemplateResult } from 'lit';
 import { uiIcon } from '../../ui/components/icon.js';
 
 export interface PopoverCandidate {
@@ -13,6 +12,22 @@ export interface PopoverCandidate {
 
 export type PopoverKind = 'login' | 'card' | 'identity';
 export type PopoverView = 'trigger' | 'status' | 'list';
+
+/** The full render state of the popover surface. Held by the factory (see popover.ts) and passed to
+ *  `renderPopover` on every view/state change — candidate ids live only here, never in the DOM. */
+export interface PopoverState {
+  kind: PopoverKind;
+  view: PopoverView;
+  statusMessage: string;
+  candidates: PopoverCandidate[];
+}
+
+/** Privileged callbacks. Every click that reaches them is gated on `Event.isTrusted` in the template,
+ *  so a page script cannot synthesize a click to open the panel or pick a candidate. */
+export interface PopoverHandlers {
+  onOpen?: () => void;
+  onSelect?: (cipherId: string) => void;
+}
 
 // TODO i18n: content-script surfaces are isolated from the extension i18n module, so these
 // user-facing strings are hardcoded in Chinese to match the 密屿/MiYu design.
@@ -36,43 +51,11 @@ const SCROLL_THRESHOLD = 6;
 const STAR = svg`<path d="M12 4l2.3 4.7 5.2.8-3.7 3.6.9 5.1L12 15.8 7.3 18.3l.9-5.1L4.5 9.5l5.2-.8z"/>`;
 
 /**
- * Dormant Lit surface backing the autofill popover. It is mounted inside a closed root (see
- * mountClosedSurface) so the page cannot read its state or forge its callbacks. Callbacks are
- * non-reflected properties, every privileged click is gated on `Event.isTrusted`, and candidate
- * identities live only in the in-memory `candidates` array — their ids never reach the DOM.
- *
- * Styled for the 密屿/MiYu design. Because this element lives in a closed shadow root on arbitrary
- * host pages it cannot use the extension's `--vw-*` tokens, so the MiYu palette is defined locally on
- * `:host` with a `prefers-color-scheme: dark` override.
+ * Styles for the autofill popover surface. Because the surface lives in a closed shadow root on
+ * arbitrary host pages it cannot use the extension's `--vw-*` tokens, so the MiYu palette is defined
+ * locally on `:host` (the surface host div) with a `prefers-color-scheme: dark` override.
  */
-export class VwAutofillPopover extends LitElement {
-  static override properties = {
-    kind: { type: String },
-    view: { type: String },
-    statusMessage: { type: String },
-    candidates: { attribute: false },
-    onOpen: { attribute: false },
-    onSelect: { attribute: false },
-  };
-
-  declare kind: PopoverKind;
-  declare view: PopoverView;
-  declare statusMessage: string;
-  declare candidates: PopoverCandidate[];
-  declare onOpen: (() => void) | undefined;
-  declare onSelect: ((cipherId: string) => void) | undefined;
-
-  constructor() {
-    super();
-    this.kind = 'login';
-    this.view = 'trigger';
-    this.statusMessage = '';
-    this.candidates = [];
-    this.onOpen = undefined;
-    this.onSelect = undefined;
-  }
-
-  static override styles = css`
+export const POPOVER_STYLES = `
     :host { all: initial; }
     :host {
       --mi-panel: #fff;
@@ -161,103 +144,87 @@ export class VwAutofillPopover extends LitElement {
     @media (prefers-reduced-motion: reduce) { .box { animation: none; } }
   `;
 
-  private handleOpen(event: MouseEvent): void {
-    if (!event.isTrusted) {
-      return;
-    }
-    this.onOpen?.();
-  }
+/** Render the popover surface for the given state. The page cannot forge the privileged clicks: each
+ *  handler bails unless `event.isTrusted`. */
+export function renderPopover(state: PopoverState, handlers: PopoverHandlers): TemplateResult {
+  return html`<div class="box">${renderBody(state, handlers)}</div>`;
+}
 
-  private handleSelect(event: MouseEvent, index: number): void {
-    if (!event.isTrusted) {
-      return;
-    }
-    const candidate = this.candidates[index];
-    if (candidate) {
-      this.onSelect?.(candidate.id);
-    }
+function renderBody(state: PopoverState, handlers: PopoverHandlers): TemplateResult {
+  if (state.view === 'status') {
+    return renderStatus(state.statusMessage);
   }
-
-  protected override render() {
-    return html`<div class="box">${this.renderBody()}</div>`;
+  if (state.view === 'list') {
+    return renderList(state, handlers);
   }
+  return html`
+    <button id="vw-open" type="button" class="trigger" @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onOpen?.(); }}>
+      ${logoGlyph()}
+      <span class="brand">密屿</span>
+      <span class="chev">${uiIcon('chevron')}</span>
+    </button>
+  `;
+}
 
-  private renderBody() {
-    if (this.view === 'status') {
-      return this.renderStatus(this.statusMessage);
-    }
-    if (this.view === 'list') {
-      return this.renderList();
-    }
-    return html`
-      <button id="vw-open" type="button" class="trigger" @click=${this.handleOpen}>
-        ${logoGlyph()}
-        <span class="brand">密屿</span>
-        <span class="chev">${uiIcon('chevron')}</span>
-      </button>
-    `;
+function renderHeader(state: PopoverState): TemplateResult {
+  return html`
+    <div class="head">
+      ${logoGlyph()}
+      <span class="brand">密屿</span>
+      <span class="meta">${headerMeta(state)}</span>
+    </div>
+  `;
+}
+
+function headerMeta(state: PopoverState): string {
+  if (state.kind === 'login') {
+    return state.candidates.length > 0 ? `${state.candidates.length} 个匹配项` : '';
   }
+  return META_LABELS[state.kind];
+}
 
-  private renderHeader() {
-    return html`
-      <div class="head">
-        ${logoGlyph()}
-        <span class="brand">密屿</span>
-        <span class="meta">${this.headerMeta()}</span>
-      </div>
-    `;
+function renderStatus(message: string): TemplateResult {
+  return html`
+    <div class="status">
+      <span class="status-ico">${uiIcon('lock')}</span>
+      <span class="status-msg">${message}</span>
+    </div>
+  `;
+}
+
+function renderList(state: PopoverState, handlers: PopoverHandlers): TemplateResult {
+  if (state.candidates.length === 0) {
+    return html`${renderHeader(state)}${renderStatus(EMPTY_STATES[state.kind])}`;
   }
+  const scrollable = state.candidates.length > SCROLL_THRESHOLD;
+  return html`
+    ${renderHeader(state)}
+    <div class="list ${scrollable ? 'scrollable' : ''}">
+      ${state.candidates.map((candidate, index) => renderCandidate(candidate, index, handlers))}
+    </div>
+  `;
+}
 
-  private headerMeta(): string {
-    if (this.kind === 'login') {
-      return this.candidates.length > 0 ? `${this.candidates.length} 个匹配项` : '';
-    }
-    return META_LABELS[this.kind];
-  }
-
-  private renderStatus(message: string) {
-    return html`
-      <div class="status">
-        <span class="status-ico">${uiIcon('lock')}</span>
-        <span class="status-msg">${message}</span>
-      </div>
-    `;
-  }
-
-  private renderList() {
-    if (this.candidates.length === 0) {
-      return html`${this.renderHeader()}${this.renderStatus(EMPTY_STATES[this.kind])}`;
-    }
-    const scrollable = this.candidates.length > SCROLL_THRESHOLD;
-    return html`
-      ${this.renderHeader()}
-      <div class="list ${scrollable ? 'scrollable' : ''}">
-        ${this.candidates.map((candidate, index) => this.renderCandidate(candidate, index))}
-      </div>
-    `;
-  }
-
-  private renderCandidate(candidate: PopoverCandidate, index: number) {
-    return html`
-      <button type="button" class="candidate" role="option" aria-selected=${index === 0 ? 'true' : 'false'} @click=${(event: MouseEvent) => this.handleSelect(event, index)}>
-        <span class="tile" style="background:${tileColor(candidate.name)}">${monogramLetter(candidate.name)}</span>
-        <span class="meta-col">
-          <span class="title">
-            ${candidate.favorite
-              ? svg`<svg class="star" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">${STAR}</svg>`
-              : nothing}
-            <span class="t">${candidate.name}</span>
-          </span>
-          <span class="sub">${candidate.sub ?? ''}</span>
+function renderCandidate(candidate: PopoverCandidate, index: number, handlers: PopoverHandlers): TemplateResult {
+  return html`
+    <button type="button" class="candidate" role="option" aria-selected=${index === 0 ? 'true' : 'false'} @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onSelect?.(candidate.id); }}>
+      <span class="tile" style="background:${tileColor(candidate.name)}">${monogramLetter(candidate.name)}</span>
+      <span class="meta-col">
+        <span class="title">
+          ${candidate.favorite
+            ? svg`<svg class="star" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">${STAR}</svg>`
+            : nothing}
+          <span class="t">${candidate.name}</span>
         </span>
-        <span class="fill">填充</span>
-      </button>
-    `;
-  }
+        <span class="sub">${candidate.sub ?? ''}</span>
+      </span>
+      <span class="fill">填充</span>
+    </button>
+  `;
 }
 
 /** The 密屿 concentric-circle glyph on its moss-green block — pure static markup, no page data. */
-function logoGlyph() {
+function logoGlyph(): TemplateResult {
   return html`<span class="logo"><span class="glyph"><span class="ring"></span><span class="dot"></span></span></span>`;
 }
 
@@ -274,12 +241,4 @@ function tileColor(name: string): string {
     hash = (hash * 31 + name.charCodeAt(index)) >>> 0;
   }
   return `hsl(${hash % 360} 52% 42%)`;
-}
-
-defineContentElement('vw-autofill-popover', VwAutofillPopover);
-
-declare global {
-  interface HTMLElementTagNameMap {
-    'vw-autofill-popover': VwAutofillPopover;
-  }
 }

@@ -2,6 +2,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGeneratePanel } from './generate-fill.js';
 
+// The factory mounts a render-based surface inside a CLOSED shadow root (no custom element — content
+// scripts run in an isolated world with no custom-element registry, Chromium 41118431). The closed root
+// is exposed only through the returned handle's `.root`; the host's own `.shadowRoot` stays null.
+// Rendering is synchronous, so no update flush is needed between drive and assert.
+
 afterEach(() => document.body.replaceChildren());
 
 function anchor(): HTMLElement {
@@ -16,22 +21,26 @@ function opts() {
 }
 
 describe('createGeneratePanel', () => {
-  it('mounts a closed-shadow host and pushes the suggestion via update()', async () => {
+  it('mounts a closed-shadow host and pushes the suggestion via update()', () => {
     const panel = createGeneratePanel(opts());
     expect(panel.element.shadowRoot).toBeNull();
     panel.update({ password: 'Kp7$mn2Q', strength: '极强', length: 18, numbers: true, symbols: true });
-    const el = panel.root.querySelector('vw-generate-panel')!;
-    await (el as unknown as { updateComplete: Promise<unknown> }).updateComplete;
-    expect(el.shadowRoot!.querySelector('.suggest')!.textContent).toBe('Kp7$mn2Q');
+    expect(panel.root.querySelector('.suggest')!.textContent).toBe('Kp7$mn2Q');
     panel.remove();
   });
 
-  it('switches to the saved view', async () => {
+  it('switches to the saved view', () => {
     const panel = createGeneratePanel(opts());
     panel.showSaved({ name: 'quill.app', user: 'me@x.dev' });
-    const el = panel.root.querySelector('vw-generate-panel')!;
-    await (el as unknown as { updateComplete: Promise<unknown> }).updateComplete;
-    expect(el.shadowRoot!.querySelector('.saved')).not.toBeNull();
+    expect(panel.root.querySelector('.saved')).not.toBeNull();
+    expect(panel.root.querySelector('.saved .s')!.textContent).toContain('me@x.dev');
     panel.remove();
+  });
+
+  it('remove() detaches the host from the page', () => {
+    const panel = createGeneratePanel(opts());
+    expect(panel.element.isConnected).toBe(true);
+    panel.remove();
+    expect(panel.element.isConnected).toBe(false);
   });
 });

@@ -1,32 +1,21 @@
-import { defineContentElement } from './define.js';
-import { LitElement, css, html } from 'lit';
-import { mountClosedSurface } from './closed-surface.js';
+import { html, type TemplateResult } from 'lit';
+import { mountRenderSurface } from './render-surface.js';
 
 /** How long a notice stays on screen before it self-dismisses. */
 export const NOTICE_TIMEOUT_MS = 4000;
 
+/** The render state of the notice bar — just the (page-inert) message text. */
+export interface NoticeState {
+  message: string;
+}
+
 /**
- * Dormant Lit surface backing the self-dismissing notice bar. Mounted inside a closed root so nothing
- * is exposed to the page. The `message` is bound with `${}` so it renders inert, and long words wrap
- * instead of overflowing.
- *
- * Styled as a compact 密屿/MiYu toast pill (bottom-center). As a closed-shadow surface on arbitrary
- * host pages it cannot use the extension's `--vw-*` tokens, so its colors are hardcoded locally with
- * a `prefers-color-scheme: dark` override (the pill inverts to a light fill with ink text in dark).
+ * Styles for the self-dismissing notice bar. Because the surface lives in a closed shadow root on
+ * arbitrary host pages it cannot use the extension's `--vw-*` tokens, so its colors are hardcoded
+ * locally with a `prefers-color-scheme: dark` override (the pill inverts to a light fill with ink
+ * text in dark). Styled as a compact 密屿/MiYu toast pill (bottom-center).
  */
-export class VwNotice extends LitElement {
-  static override properties = {
-    message: { type: String },
-  };
-
-  declare message: string;
-
-  constructor() {
-    super();
-    this.message = '';
-  }
-
-  static override styles = css`
+export const NOTICE_STYLES = `
     :host { all: initial; }
     .bar {
       position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 2147483647;
@@ -44,12 +33,13 @@ export class VwNotice extends LitElement {
     @media (prefers-reduced-motion: reduce) { .bar { animation: none; } }
   `;
 
-  protected override render() {
-    return html`<div class="bar">${this.message}</div>`;
-  }
+/**
+ * Render the notice bar. The `message` is bound with `${}` so it renders inert, and long words wrap
+ * instead of overflowing.
+ */
+export function renderNotice(state: NoticeState): TemplateResult {
+  return html`<div class="bar">${state.message}</div>`;
 }
-
-defineContentElement('vw-notice', VwNotice);
 
 export interface NoticeHandle {
   remove(): void;
@@ -60,9 +50,8 @@ export interface NoticeHandle {
  * NOTICE_TIMEOUT_MS. Returns a handle so callers can remove it early.
  */
 export function presentNotice(message: string): NoticeHandle {
-  const surface = mountClosedSurface<VwNotice>('vw-notice', (element) => {
-    element.message = message;
-  });
+  const surface = mountRenderSurface(NOTICE_STYLES);
+  surface.render(renderNotice({ message }));
   surface.host.dataset.vwNotice = '';
   const view = surface.host.ownerDocument.defaultView;
   const timer = view?.setTimeout(() => surface.remove(), NOTICE_TIMEOUT_MS);
@@ -74,10 +63,4 @@ export function presentNotice(message: string): NoticeHandle {
       surface.remove();
     },
   };
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    'vw-notice': VwNotice;
-  }
 }

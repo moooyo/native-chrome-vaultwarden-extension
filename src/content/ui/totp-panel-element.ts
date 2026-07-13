@@ -1,56 +1,37 @@
-import { LitElement, css, html, nothing } from 'lit';
+import { html, nothing, type TemplateResult } from 'lit';
 import { uiIcon } from '../../ui/components/icon.js';
-import { defineContentElement } from './define.js';
 
 // TODO i18n: content-script surfaces are isolated from the extension i18n module, so these
 // user-facing strings are hardcoded in Chinese to match the 密屿/MiYu design.
 
 export type TotpPanelView = 'panel' | 'filled' | 'status';
 
+/** The full render state of the 2FA panel surface. Held by the factory (see totp-fill.ts) and passed
+ *  to `renderTotpPanel` on every state change — no cipher id ever reaches this state or the DOM. */
+export interface TotpPanelState {
+  view: TotpPanelView;
+  itemName: string;
+  itemUser: string;
+  code: string;
+  remaining: number;
+  statusMessage: string;
+}
+
+/** Privileged callbacks. Every click that reaches them is gated on `Event.isTrusted` in the template,
+ *  so a page script cannot synthesize a click to fill / copy / undo. */
+export interface TotpPanelHandlers {
+  onFill?: () => void;
+  onCopy?: () => void;
+  onUndo?: () => void;
+}
+
 /**
- * The 密屿/MiYu 2FA side panel (design 3a): a standalone verification-code step shows the matching
- * item, a live one-time code with a 30s meter, and a "填充验证码" action. Lives in a CLOSED shadow
- * root on arbitrary host pages (so the MiYu palette is defined locally on `:host`), gates every
- * privileged click on `Event.isTrusted`, and exposes only imperative properties + callbacks — no
- * cipher id ever reaches the DOM.
+ * Styles for the 密屿/MiYu 2FA side panel (design 3a): a standalone verification-code step showing the
+ * matching item, a live one-time code with a 30s meter, and a "填充验证码" action. Because the surface
+ * lives in a closed shadow root on arbitrary host pages it cannot use the extension's `--vw-*` tokens,
+ * so the MiYu palette is defined locally on `:host` with a `prefers-color-scheme: dark` override.
  */
-export class VwTotpPanel extends LitElement {
-  static override properties = {
-    view: { type: String },
-    itemName: { type: String },
-    itemUser: { type: String },
-    code: { type: String },
-    remaining: { type: Number },
-    statusMessage: { type: String },
-    onFill: { attribute: false },
-    onCopy: { attribute: false },
-    onUndo: { attribute: false },
-  };
-
-  declare view: TotpPanelView;
-  declare itemName: string;
-  declare itemUser: string;
-  declare code: string;
-  declare remaining: number;
-  declare statusMessage: string;
-  declare onFill: (() => void) | undefined;
-  declare onCopy: (() => void) | undefined;
-  declare onUndo: (() => void) | undefined;
-
-  constructor() {
-    super();
-    this.view = 'panel';
-    this.itemName = '';
-    this.itemUser = '';
-    this.code = '';
-    this.remaining = 30;
-    this.statusMessage = '';
-    this.onFill = undefined;
-    this.onCopy = undefined;
-    this.onUndo = undefined;
-  }
-
-  static override styles = css`
+export const TOTP_PANEL_STYLES = `
     :host { all: initial; }
     :host {
       --mi-panel: #fff;
@@ -129,67 +110,68 @@ export class VwTotpPanel extends LitElement {
     @media (prefers-reduced-motion: reduce) { .box { animation: none; } }
   `;
 
-  private trusted(event: Event, fn: (() => void) | undefined): void {
-    if (!event.isTrusted) return;
-    fn?.();
-  }
-
-  private grouped(): string {
-    const c = this.code ?? '';
-    return c.length === 6 ? `${c.slice(0, 3)} ${c.slice(3)}` : c;
-  }
-
-  protected override render() {
-    return html`<div class="box">${this.renderBody()}</div>`;
-  }
-
-  private renderBody() {
-    if (this.view === 'status') {
-      return html`<div class="head">${logoGlyph()}<span class="brand">密屿</span></div>
-        <div class="status"><span class="status-msg">${this.statusMessage}</span></div>`;
-    }
-    return html`
-      <div class="head">
-        ${logoGlyph()}<span class="brand">密屿</span>
-        <span class="meta">1 个匹配项 · 2FA</span>
-      </div>
-      <div class="row">
-        <span class="tile" style="background:${tileColor(this.itemName)}">${monogramLetter(this.itemName)}</span>
-        <span class="meta-col">
-          <span class="title">${this.itemName}</span>
-          <span class="sub">${this.itemUser}</span>
-        </span>
-      </div>
-      ${this.view === 'filled' ? this.renderFilled() : this.renderPanel()}
-    `;
-  }
-
-  private renderPanel() {
-    const pct = Math.max(0, Math.min(100, Math.round((this.remaining / 30) * 100)));
-    return html`
-      <div class="code-box">
-        <span class="code">${this.grouped()}</span>
-        <span class="secs">${this.remaining}s</span>
-        <span class="track"><span class="fill-bar" style="width:${pct}%"></span></span>
-      </div>
-      <div class="actions">
-        <button type="button" class="btn-primary" @click=${(e: MouseEvent) => this.trusted(e, this.onFill)}>填充验证码</button>
-        <button type="button" class="icon-btn" title="复制验证码" @click=${(e: MouseEvent) => this.trusted(e, this.onCopy)}>${uiIcon('copy')}</button>
-      </div>
-    `;
-  }
-
-  private renderFilled() {
-    return html`
-      <div class="filled">
-        <span class="badge">${uiIcon('check')}已填充验证码</span>
-        ${this.onUndo ? html`<button type="button" class="undo" @click=${(e: MouseEvent) => this.trusted(e, this.onUndo)}>撤销</button>` : nothing}
-      </div>
-    `;
-  }
+function trusted(event: Event, fn: (() => void) | undefined): void {
+  if (!event.isTrusted) return;
+  fn?.();
 }
 
-function logoGlyph() {
+function grouped(code: string): string {
+  const c = code ?? '';
+  return c.length === 6 ? `${c.slice(0, 3)} ${c.slice(3)}` : c;
+}
+
+/** Render the 2FA panel surface for the given state. The page cannot forge the privileged clicks: each
+ *  handler bails unless `event.isTrusted`. */
+export function renderTotpPanel(state: TotpPanelState, handlers: TotpPanelHandlers): TemplateResult {
+  return html`<div class="box">${renderBody(state, handlers)}</div>`;
+}
+
+function renderBody(state: TotpPanelState, handlers: TotpPanelHandlers): TemplateResult {
+  if (state.view === 'status') {
+    return html`<div class="head">${logoGlyph()}<span class="brand">密屿</span></div>
+      <div class="status"><span class="status-msg">${state.statusMessage}</span></div>`;
+  }
+  return html`
+    <div class="head">
+      ${logoGlyph()}<span class="brand">密屿</span>
+      <span class="meta">1 个匹配项 · 2FA</span>
+    </div>
+    <div class="row">
+      <span class="tile" style="background:${tileColor(state.itemName)}">${monogramLetter(state.itemName)}</span>
+      <span class="meta-col">
+        <span class="title">${state.itemName}</span>
+        <span class="sub">${state.itemUser}</span>
+      </span>
+    </div>
+    ${state.view === 'filled' ? renderFilled(handlers) : renderPanel(state, handlers)}
+  `;
+}
+
+function renderPanel(state: TotpPanelState, handlers: TotpPanelHandlers): TemplateResult {
+  const pct = Math.max(0, Math.min(100, Math.round((state.remaining / 30) * 100)));
+  return html`
+    <div class="code-box">
+      <span class="code">${grouped(state.code)}</span>
+      <span class="secs">${state.remaining}s</span>
+      <span class="track"><span class="fill-bar" style="width:${pct}%"></span></span>
+    </div>
+    <div class="actions">
+      <button type="button" class="btn-primary" @click=${(e: MouseEvent) => trusted(e, handlers.onFill)}>填充验证码</button>
+      <button type="button" class="icon-btn" title="复制验证码" @click=${(e: MouseEvent) => trusted(e, handlers.onCopy)}>${uiIcon('copy')}</button>
+    </div>
+  `;
+}
+
+function renderFilled(handlers: TotpPanelHandlers): TemplateResult {
+  return html`
+    <div class="filled">
+      <span class="badge">${uiIcon('check')}已填充验证码</span>
+      ${handlers.onUndo ? html`<button type="button" class="undo" @click=${(e: MouseEvent) => trusted(e, handlers.onUndo)}>撤销</button>` : nothing}
+    </div>
+  `;
+}
+
+function logoGlyph(): TemplateResult {
   return html`<span class="logo"><span class="glyph"><span class="ring"></span><span class="dot"></span></span></span>`;
 }
 
@@ -202,12 +184,4 @@ function tileColor(name: string): string {
   let hash = 0;
   for (let index = 0; index < name.length; index += 1) hash = (hash * 31 + name.charCodeAt(index)) >>> 0;
   return `hsl(${hash % 360} 52% 42%)`;
-}
-
-defineContentElement('vw-totp-panel', VwTotpPanel);
-
-declare global {
-  interface HTMLElementTagNameMap {
-    'vw-totp-panel': VwTotpPanel;
-  }
 }

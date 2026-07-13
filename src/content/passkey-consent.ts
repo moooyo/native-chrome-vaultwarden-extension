@@ -1,16 +1,24 @@
-// User-consent surfaces shown before a vault-stored passkey is used or registered. Both are the
-// closed-shadow Lit elements `vw-passkey-consent` / `vw-passkey-register`, mounted here and removed
-// once the user chooses. The page cannot reach the closed root or forge the choice: the elements
-// gate confirm on Event.isTrusted and resolve cancel on Escape / outside click. This supplies the
-// user presence/consent a silent worker assertion would otherwise skip.
+// User-consent surfaces shown before a vault-stored passkey is used or registered. Both render a
+// centered overlay dialog into a CLOSED shadow root the page cannot reach (content scripts run in an
+// isolated world with no custom-element registry — `customElements` is null, Chromium 41118431 — so
+// these surfaces render via lit-html rather than as custom elements). The page cannot reach the closed
+// root or forge the choice: the templates gate confirm/select on Event.isTrusted, and cancel resolves
+// on Escape / outside click. This supplies the user presence/consent a silent worker assertion skips.
 
-import { mountClosedSurface } from './ui/closed-surface.js';
+import { mountRenderSurface } from './ui/render-surface.js';
 import {
-  VwPasskeyConsent,
-  VwPasskeyRegister,
+  DIALOG_STYLES,
+  renderPasskeyConsent,
+  renderPasskeyRegister,
+  type PasskeyConsentHandlers,
+  type PasskeyConsentState,
+  type PasskeyRegisterHandlers,
   type PasskeyRegisterResult,
+  type PasskeyRegisterState,
   type PasskeyRegisterTarget,
 } from './ui/passkey-dialog-element.js';
+
+export type { PasskeyRegisterResult, PasskeyRegisterTarget } from './ui/passkey-dialog-element.js';
 
 export type PasskeyPickerResult = PasskeyRegisterResult;
 
@@ -20,13 +28,29 @@ export type PasskeyPickerResult = PasskeyRegisterResult;
  */
 export function confirmPasskeyUse(rpId: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const surface = mountClosedSurface<VwPasskeyConsent>('vw-passkey-consent', (element) => {
-      element.rpId = rpId;
-    });
-    surface.element.onResult = (confirmed) => {
+    const surface = mountRenderSurface(DIALOG_STYLES);
+    let settled = false;
+    const finish = (confirmed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('keydown', handleKeydown, true);
       surface.remove();
       resolve(confirmed);
     };
+    const handleKeydown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        finish(false);
+      }
+    };
+    const state: PasskeyConsentState = { rpId };
+    const handlers: PasskeyConsentHandlers = {
+      onConfirm: () => finish(true),
+      onCancel: () => finish(false),
+      onOverlay: () => finish(false),
+    };
+    window.addEventListener('keydown', handleKeydown, true);
+    surface.render(renderPasskeyConsent(state, handlers));
   });
 }
 
@@ -40,13 +64,34 @@ export function choosePasskeyTarget(
   targets: PasskeyRegisterTarget[],
 ): Promise<PasskeyPickerResult> {
   return new Promise((resolve) => {
-    const surface = mountClosedSurface<VwPasskeyRegister>('vw-passkey-register', (element) => {
-      element.rpId = rpId;
-      element.targets = targets;
-    });
-    surface.element.onResult = (result) => {
+    const surface = mountRenderSurface(DIALOG_STYLES);
+    let settled = false;
+    const finish = (result: PasskeyRegisterResult): void => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('keydown', handleKeydown, true);
       surface.remove();
       resolve(result);
     };
+    const handleKeydown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        finish({ cancelled: true });
+      }
+    };
+    const state: PasskeyRegisterState = { rpId, targets };
+    const handlers: PasskeyRegisterHandlers = {
+      onNew: () => finish({}),
+      onCancel: () => finish({ cancelled: true }),
+      onSelectTarget: (index) => {
+        const target = state.targets[index];
+        if (target) {
+          finish({ targetCipherId: target.id });
+        }
+      },
+      onOverlay: () => finish({ cancelled: true }),
+    };
+    window.addEventListener('keydown', handleKeydown, true);
+    surface.render(renderPasskeyRegister(state, handlers));
   });
 }
