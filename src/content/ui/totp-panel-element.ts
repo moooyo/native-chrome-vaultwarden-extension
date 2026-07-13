@@ -74,11 +74,15 @@ export const TOTP_PANEL_STYLES = `
     .title { font-size: 12.5px; font-weight: 600; color: var(--mi-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sub { font-size: 11px; color: var(--mi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    .code-box { margin: 0 13px; padding: 9px 11px; background: var(--mi-fill-2); border: 1px solid var(--mi-line); border-radius: 10px; display: flex; align-items: center; gap: 8px; }
-    .code { font-family: "JetBrains Mono", ui-monospace, monospace; font-weight: 600; font-size: 18px; color: var(--mi-teal-text); letter-spacing: .08em; }
+    .code-box { margin: 0 13px; padding: 9px 11px; background: var(--mi-fill-2); border: 1px solid var(--mi-line); border-radius: 10px; display: flex; align-items: center; gap: 9px; }
+    .code { flex: 1; font-family: "JetBrains Mono", ui-monospace, monospace; font-weight: 600; font-size: 18px; color: var(--mi-teal-text); letter-spacing: .08em; }
     .secs { font-size: 10.5px; color: var(--mi-faint); flex: none; }
-    .track { flex: 1; height: 3px; border-radius: 2px; background: var(--mi-track); overflow: hidden; }
-    .fill-bar { height: 100%; background: var(--mi-teal); transition: width 1s linear; }
+    /* Circular countdown: an arc that drains clockwise from the top as the seconds tick down.
+       (Named cd-* to avoid the logo glyph's own .ring/.dot classes.) */
+    .cd-ring { width: 18px; height: 18px; flex: none; }
+    .cd-ring circle { fill: none; }
+    .cd-track { stroke: var(--mi-track); stroke-width: 2.5; }
+    .cd-arc { stroke: var(--mi-teal); stroke-width: 2.5; stroke-linecap: round; transform: rotate(-90deg); transform-origin: center; transform-box: fill-box; transition: stroke-dashoffset 1s linear; }
 
     .actions { display: flex; gap: 8px; padding: 10px 13px 13px; }
     .btn-primary { flex: 1; height: 31px; border: 0; border-radius: 9px; background: var(--mi-ink-btn); color: var(--mi-ink-btn-fg); font: 600 12px/1 "Instrument Sans", system-ui, sans-serif; cursor: pointer; }
@@ -149,12 +153,18 @@ function renderBody(state: TotpPanelState, handlers: TotpPanelHandlers): Templat
 }
 
 function renderPanel(state: TotpPanelState, handlers: TotpPanelHandlers): TemplateResult {
-  const pct = Math.max(0, Math.min(100, Math.round((state.remaining / 30) * 100)));
+  const R = 8;
+  const CIRC = 2 * Math.PI * R;
+  const frac = Math.max(0, Math.min(1, state.remaining / 30));
+  const offset = CIRC * (1 - frac);
   return html`
     <div class="code-box">
       <span class="code">${grouped(state.code)}</span>
       <span class="secs">${state.remaining}s</span>
-      <span class="track"><span class="fill-bar" style="width:${pct}%"></span></span>
+      <svg class="cd-ring" viewBox="0 0 20 20" aria-hidden="true">
+        <circle class="cd-track" cx="10" cy="10" r="8"></circle>
+        <circle class="cd-arc" cx="10" cy="10" r="8" stroke-dasharray="${CIRC.toFixed(2)}" stroke-dashoffset="${offset.toFixed(2)}"></circle>
+      </svg>
     </div>
     <div class="actions">
       <button type="button" class="btn-primary" @click=${(e: MouseEvent) => trusted(e, handlers.onFill)}>填充验证码</button>

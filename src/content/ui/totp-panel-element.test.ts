@@ -42,12 +42,17 @@ function trustedClick(el: Element): void {
 }
 
 describe('totp panel surface', () => {
-  it('renders the item, grouped code, seconds, and a draining meter', () => {
+  it('renders the item, grouped code, seconds, and a draining ring', () => {
     const root = mount();
     expect(root.textContent).toContain('Forge');
     expect(root.querySelector('.code')!.textContent).toBe('123 456');
     expect(root.querySelector('.secs')!.textContent).toContain('15s');
-    expect((root.querySelector('.fill-bar') as HTMLElement).getAttribute('style')).toContain('width:50%');
+    // Circular countdown: at 15/30s remaining the arc is half-drained (dashoffset ≈ half the circumference).
+    const arc = root.querySelector('.cd-arc') as SVGCircleElement;
+    const circ = Number(arc.getAttribute('stroke-dasharray'));
+    const offset = Number(arc.getAttribute('stroke-dashoffset'));
+    expect(circ).toBeGreaterThan(0);
+    expect(offset).toBeCloseTo(circ / 2, 1);
   });
 
   it('fills only on a trusted click', () => {
