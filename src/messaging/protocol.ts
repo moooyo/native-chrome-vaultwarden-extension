@@ -263,5 +263,28 @@ export type ResponseMessage =
   | { ok: false; error: { code: AppErrorCode; message: string } };
 
 export async function sendRequest(request: RequestMessage): Promise<ResponseMessage> {
-  return browser.runtime.sendMessage(request) as Promise<ResponseMessage>;
+  // A content script orphaned by an extension reload / update / disable keeps running in an already-open
+  // tab but loses its runtime connection: `browser.runtime` (or its `.id`) becomes undefined and any
+  // sendMessage throws "Extension context invalidated". Fail closed with a typed error so callers see
+  // `ok:false` instead of an uncaught promise rejection (and recurring surfaces stop hammering a dead
+  // channel). In a live context (popup/options/valid content script) this is a plain sendMessage.
+  const runtime = (browser as { runtime?: { id?: string; sendMessage(msg: unknown): Promise<unknown> } }).runtime;
+  if (!runtime?.id) {
+    return { ok: false, error: { code: 'error', message: 'Extension context invalidated' } };
+  }
+  try {
+    return (await runtime.sendMessage(request)) as ResponseMessage;
+  } catch (cause) {
+    return { ok: false, error: { code: 'error', message: cause instanceof Error ? cause.message : String(cause) } };
+  }
+}
+
+/** Whether this (content-script) context still has a live connection to the extension. False once the
+ *  extension is reloaded/updated and the current script is an orphan — callers can then go dormant. */
+export function isExtensionContextAlive(): boolean {
+  try {
+    return Boolean((browser as { runtime?: { id?: string } }).runtime?.id);
+  } catch {
+    return false;
+  }
 }

@@ -1,5 +1,5 @@
 import browser from 'webextension-polyfill';
-import { sendRequest, type AutofillCandidate, type AutofillCredentials } from '../messaging/protocol.js';
+import { sendRequest, isExtensionContextAlive, type AutofillCandidate, type AutofillCredentials } from '../messaging/protocol.js';
 import type { FillItemCandidate, CardFillData, IdentityFillData, FillKind } from '../messaging/protocol.js';
 import type { ContentCommand, FillCommand } from '../messaging/protocol.js';
 import type { FrameAutofillMessage, FrameInspection, TabFillOutcome } from '../messaging/protocol.js';
@@ -118,6 +118,7 @@ function hostLabel(frameUrl: string): string {
 }
 
 function attachPopovers(getFrameUrl: FrameUrlProvider): void {
+  if (!isExtensionContextAlive()) return; // orphaned after an extension reload — stay dormant
   if (!isHttpUrl(getFrameUrl())) return;
   const { loginForms, exclude } = computeFillExclusion(document);
   for (const form of loginForms) {
@@ -335,6 +336,7 @@ document.addEventListener('focusin', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) return;
   ensureFrameController().noteFocus(target);
+  if (!isExtensionContextAlive()) return; // orphaned after an extension reload — don't attach panels
   maybeOpenLoginPanel(target);
   maybeAttachTotpPanel(target);
   maybeAttachGeneratePanel(target);
@@ -462,7 +464,7 @@ async function attachTotpPanel(id: string, totpInput: HTMLInputElement): Promise
     };
     render();
     const timer = window.setInterval(() => {
-      if (!totpInput.isConnected) { removeTotp(id); return; }
+      if (!totpInput.isConnected || !isExtensionContextAlive()) { removeTotp(id); return; }
       const remaining = 30 - (Math.floor(Date.now() / 1000) % 30);
       if (remaining > last) {
         // Period rolled over — refresh the code from the worker, then re-render.

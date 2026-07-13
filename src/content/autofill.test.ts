@@ -27,6 +27,7 @@ vi.mock('webextension-polyfill', () => ({
 
 vi.mock('../messaging/protocol.js', () => ({
   sendRequest: vi.fn(),
+  isExtensionContextAlive: () => true,
 }));
 
 vi.mock('./fill.js', () => ({
