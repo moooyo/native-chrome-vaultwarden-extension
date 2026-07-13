@@ -1,9 +1,13 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0TefrEOlT8AmPlzs9BWitgBw3tNCFrvW22wKryGWc3F2p+IxIgnqVSdPRwVBE0iXVRpLW/Qq/GRhLrplJF7OR+bEkTmGc8n+ustIHGQxqXlny03JW0v1yFisBd5Imd+TM1zjXii9aeEn2K++ZjQtukDx1IJrcTGhGRCB9ad99EWKUo9g6NPrQ+VCg7mhK6ysjmOfsLq5s9/47yJhsZ/6eOHjEj7Xo2tm6DdpZhxgGArZwlE1m8MbzjfEMMsTMP4wDOtvqHkb0a0/DDoGSFXX4fzJLxXSIVvuXT2/GJceaCDunkR9pQfx4eT6o5drEKJeBAinyQm/qoBQgkPEZZryOwIDAQAB",
   "name": "密屿 MiYu",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "密屿 · 兼容 Bitwarden / Vaultwarden 的原生 MV3 密码管理器。",
-  "background": { "service_worker": "background.js", "type": "module" },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -20,41 +24,82 @@
       "128": "icons/icon128.png"
     }
   },
-  "options_ui": { "page": "ui/options/options.html", "open_in_tab": true },
-  "permissions": ["storage", "alarms", "clipboardRead", "clipboardWrite", "contextMenus", "idle", "offscreen", "activeTab", "webNavigation"],
-  "host_permissions": ["https://api.pwnedpasswords.com/*"],
-  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "options_ui": {
+    "page": "ui/options/options.html",
+    "open_in_tab": true
+  },
+  "permissions": [
+    "storage",
+    "alarms",
+    "clipboardRead",
+    "clipboardWrite",
+    "contextMenus",
+    "idle",
+    "offscreen",
+    "activeTab",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "https://api.pwnedpasswords.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content/autofill.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content/autofill.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     },
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content/page-webauthn.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content/page-webauthn.js"
+      ],
       "run_at": "document_start",
       "all_frames": true,
       "world": "MAIN"
     },
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content/webauthn-bridge.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content/webauthn-bridge.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     }
   ],
   "commands": {
     "autofill-focused": {
-      "suggested_key": { "default": "Ctrl+Shift+F", "mac": "Command+Shift+F" },
+      "suggested_key": {
+        "default": "Ctrl+Shift+F",
+        "mac": "Command+Shift+F"
+      },
       "description": "从密屿填充当前聚焦的登录 / 银行卡 / 身份字段"
     }
   },
   "web_accessible_resources": [
     {
-      "resources": ["ui/fonts/*.woff2"],
-      "matches": ["http://*/*", "https://*/*"]
+      "resources": [
+        "ui/fonts/*.woff2"
+      ],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ]
     }
   ]
 }
