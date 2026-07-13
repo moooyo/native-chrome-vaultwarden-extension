@@ -157,6 +157,11 @@ export const DIALOG_STYLES = `
     cursor: pointer;
   }
   .row:hover { background: var(--mv-row-hover); }
+  .row.target { animation: mvStag 0.3s ease-out both; }
+  @keyframes mvStag {
+    from { opacity: 0; transform: translateY(7px); }
+    to { opacity: 1; transform: none; }
+  }
   .tile {
     width: 30px;
     height: 30px;
@@ -191,7 +196,7 @@ export const DIALOG_STYLES = `
   .footer:hover { background: var(--mv-row-hover); }
 
   button:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(14, 138, 114, 0.55); }
-  @media (prefers-reduced-motion: reduce) { .card { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
 `;
 
 /** Above this many rows the target list scrolls locally instead of growing without bound. */
@@ -361,6 +366,7 @@ function renderTarget(
     <button
       type="button"
       class="row target"
+      style="animation-delay:${index * 60}ms"
       @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onSelectTarget?.(index); }}
     >
       <span class="tile" aria-hidden="true">${tileInitial(target.name)}</span>

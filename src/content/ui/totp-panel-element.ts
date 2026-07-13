@@ -96,8 +96,9 @@ export const TOTP_PANEL_STYLES = `
     svg { stroke-width: 1.8; }
 
     .filled { display: flex; align-items: center; gap: 8px; padding: 10px 13px 13px; }
-    .badge { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 14px; background: var(--mi-teal-10); border: 1px solid var(--mi-teal-20); color: var(--mi-teal-text); font-size: 11.5px; font-weight: 600; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 14px; background: var(--mi-teal-10); border: 1px solid var(--mi-teal-20); color: var(--mi-teal-text); font-size: 11.5px; font-weight: 600; animation: mvPop .28s ease-out both; }
     .badge svg { width: 12px; height: 12px; stroke-width: 2.4; }
+    @keyframes mvPop { 0% { transform: scale(.4); opacity: 0; } 65% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
     .undo { font-size: 11.5px; color: var(--mi-muted); cursor: pointer; background: none; border: 0; font-family: inherit; }
     .undo:hover { color: var(--mi-ink); text-decoration: underline; }
 
@@ -114,7 +115,7 @@ export const TOTP_PANEL_STYLES = `
       }
       .btn-primary:hover { background: #fff; }
     }
-    @media (prefers-reduced-motion: reduce) { .box { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
   ` + SIDE_PANEL_CSS;
 
 function trusted(event: Event, fn: (() => void) | undefined): void {

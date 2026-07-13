@@ -65,9 +65,9 @@ export const GENERATE_PANEL_STYLES = `
       font: 400 14px/1.4 "Instrument Sans", "Segoe UI", system-ui, sans-serif;
       color: var(--mi-ink); background: var(--mi-panel);
       border: 1px solid var(--mi-line); border-radius: 14px; box-shadow: var(--mi-shadow);
-      width: 300px; padding: 11px 13px 13px; animation: mvIn .16s ease-out;
+      width: 300px; padding: 11px 13px 13px; animation: mvGrow .22s ease-out; transform-origin: top;
     }
-    @keyframes mvIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: none; } }
+    @keyframes mvGrow { from { opacity: 0; transform: translateY(-6px) scaleY(.95); } to { opacity: 1; transform: none; } }
     .head { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
     .brand { font-size: 11.5px; font-weight: 600; color: var(--mi-teal-text); }
     .head .meta { margin-left: auto; font-size: 10.5px; font-weight: 600; color: var(--mi-teal-text); }
@@ -121,8 +121,9 @@ export const GENERATE_PANEL_STYLES = `
     svg { stroke-width: 1.7; }
 
     .saved { display: flex; align-items: center; gap: 9px; }
-    .saved-ico { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--mi-teal-12); color: var(--mi-teal-text); flex: none; }
+    .saved-ico { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--mi-teal-12); color: var(--mi-teal-text); flex: none; animation: mvPop .3s ease-out both; }
     .saved-ico svg { width: 13px; height: 13px; stroke-width: 2.4; }
+    @keyframes mvPop { 0% { transform: scale(.4); opacity: 0; } 65% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
     .saved .col { flex: 1; min-width: 0; }
     .saved .t { font-size: 12px; font-weight: 600; color: var(--mi-ink); }
     .saved .s { font-size: 10.5px; color: var(--mi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -138,7 +139,7 @@ export const GENERATE_PANEL_STYLES = `
       }
       .use:hover { background: #fff; }
     }
-    @media (prefers-reduced-motion: reduce) { .box { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
   ` + SIDE_PANEL_CSS;
 
 /** Render the generation panel for the given state. The page cannot forge the privileged events: each

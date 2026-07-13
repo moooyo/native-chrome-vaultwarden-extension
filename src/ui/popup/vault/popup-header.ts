@@ -28,7 +28,7 @@ export class VwPopupHeader extends LitElement {
     themeTokens,
     css`
       :host { display: block; flex: none; }
-      .bar { display: flex; align-items: center; gap: 8px; padding: 12px 14px 9px; }
+      .bar { display: flex; align-items: center; gap: 8px; padding: 12px 14px 9px; animation: mvIn 0.25s ease-out; }
       .brand { font-size: 14px; font-weight: 600; color: var(--vw-ink); letter-spacing: 0.01em; }
       .spacer { flex: 1; }
       button {

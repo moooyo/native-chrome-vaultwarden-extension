@@ -1,4 +1,5 @@
 import { LitElement, css, html, nothing } from 'lit';
+import { keyed } from 'lit/directives/keyed.js';
 import { themeTokens, paletteTokens } from '../components/tokens.js';
 import { LocalizeController, t } from '../i18n/index.js';
 import type { MessageKey } from '../i18n/index.js';
@@ -85,7 +86,7 @@ export class VwOptionsShell extends LitElement {
       .inner { max-width: 720px; padding: 28px 40px 44px; }
       .eyebrow { font-size: 12px; color: var(--vw-muted); }
       .title { font-size: 24px; font-weight: 650; letter-spacing: -0.01em; margin: 2px 0 18px; color: var(--vw-ink); }
-      .section { display: flex; flex-direction: column; gap: 8px; }
+      .section { display: flex; flex-direction: column; gap: 8px; animation: mvIn .2s ease-out; }
     `,
   ];
 
@@ -137,7 +138,7 @@ export class VwOptionsShell extends LitElement {
         <div class="inner">
           <div class="eyebrow">${t('options.eyebrow')}</div>
           <h1 class="title">${this.currentLabel()}</h1>
-          <div class="section"><slot></slot></div>
+          ${keyed(this.selected, html`<div class="section"><slot></slot></div>`)}
         </div>
       </div>
     `;

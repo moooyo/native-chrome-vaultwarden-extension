@@ -88,6 +88,7 @@ export class VwGeneratorView extends LitElement {
         flex-direction: column;
         gap: 12px;
         padding: 12px 14px;
+        animation: mvIn 0.2s ease-out;
       }
       .head {
         display: flex;

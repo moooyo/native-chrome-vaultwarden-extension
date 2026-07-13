@@ -5,6 +5,7 @@ import type { ContentCommand, FillCommand } from '../messaging/protocol.js';
 import type { FrameAutofillMessage, FrameInspection, TabFillOutcome } from '../messaging/protocol.js';
 import type { SaveLoginPrompt } from '../core/vault/vault-service.js';
 import { fillLoginForm, setInputValue } from './fill.js';
+import { flashFill } from './fill-highlight.js';
 import { createFrameAutofillController, type FrameAutofillController } from './frame-autofill.js';
 import { fillCardForm, fillIdentityForm } from './fill-card-identity.js';
 import { isFillableInput, isTotpCandidate, type DetectedLoginForm } from './form-detection.js';
@@ -600,11 +601,13 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
   async function useGenerated(): Promise<void> {
     if (!isFillableInput(target.input)) return;
     setInputValue(target.input, state.password);
+    flashFill(target.input); // mvFill highlight on the just-filled new-password field
     const frameUrl = frameUrlProvider();
     // Also write the (possibly edited) username back into the page's username field, then save both.
     const username = state.username.trim() || undefined;
     if (username && target.usernameInput && isFillableInput(target.usernameInput)) {
       setInputValue(target.usernameInput, username);
+      flashFill(target.usernameInput, 130);
     }
     await sendRequest({ type: 'autofill.saveLogin', frameUrl, ...(username ? { username } : {}), password: state.password });
     panel.showSaved({ name: hostLabel(frameUrl), user: username ?? '' });

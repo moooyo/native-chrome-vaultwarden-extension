@@ -115,7 +115,9 @@ export const POPOVER_STYLES = `
       font: inherit; width: 100%; text-align: left;
       border: 0; background: transparent;
       padding: 8px; border-radius: 10px; cursor: pointer; color: inherit;
+      animation: mvStag .3s ease-out both;
     }
+    @keyframes mvStag { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
     button.candidate:hover { background: var(--mi-row-hover); }
     button.candidate:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--mi-teal); }
     .tile { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: 9px; color: #fff; font-weight: 700; font-size: 13px; text-transform: uppercase; }
@@ -136,8 +138,9 @@ export const POPOVER_STYLES = `
 
     /* Filled confirmation (design 2c) */
     .filled { display: flex; align-items: center; gap: 8px; padding: 10px 13px 13px; }
-    .badge { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 14px; background: var(--mi-teal-10); border: 1px solid var(--mi-teal-20); color: var(--mi-teal-text); font-size: 11.5px; font-weight: 600; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 14px; background: var(--mi-teal-10); border: 1px solid var(--mi-teal-20); color: var(--mi-teal-text); font-size: 11.5px; font-weight: 600; animation: mvPop .3s ease-out both; }
     .badge svg { width: 12px; height: 12px; stroke-width: 2.4; }
+    @keyframes mvPop { 0% { transform: scale(.4); opacity: 0; } 65% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
 
     @media (prefers-color-scheme: dark) {
       :host {
@@ -154,7 +157,7 @@ export const POPOVER_STYLES = `
         --mi-shadow: 0 18px 48px rgba(0,0,0,.5);
       }
     }
-    @media (prefers-reduced-motion: reduce) { .box { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
   ` + SIDE_PANEL_CSS + `
     .side .box { width: 272px; min-width: 0; max-width: none; }
   `;
@@ -234,7 +237,7 @@ function renderList(state: PopoverState, handlers: PopoverHandlers): TemplateRes
 
 function renderCandidate(candidate: PopoverCandidate, index: number, handlers: PopoverHandlers): TemplateResult {
   return html`
-    <button type="button" class="candidate" role="option" aria-selected=${index === 0 ? 'true' : 'false'} @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onSelect?.(candidate.id); }}>
+    <button type="button" class="candidate" role="option" aria-selected=${index === 0 ? 'true' : 'false'} style="animation-delay:${index * 60}ms" @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onSelect?.(candidate.id); }}>
       <span class="tile" style="background:${tileColor(candidate.name)}">${monogramLetter(candidate.name)}</span>
       <span class="meta-col">
         <span class="title">

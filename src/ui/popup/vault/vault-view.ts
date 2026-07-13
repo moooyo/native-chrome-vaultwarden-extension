@@ -114,7 +114,7 @@ export class VwVaultView extends LitElement {
       .group-label { font-size: 11px; font-weight: 600; color: var(--vw-muted); padding: 6px 8px 3px; }
       .group-label.main { padding-top: 8px; }
 
-      .row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: var(--vw-radius-control); cursor: pointer; }
+      .row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: var(--vw-radius-control); cursor: pointer; animation: mvStag 0.3s ease-out both; }
       .row:hover { background: var(--vw-row-hover); }
       .tile { width: 34px; height: 34px; border-radius: var(--vw-radius-control); display: grid; place-items: center; color: #fff; font-size: 13px; font-weight: 700; flex: none; }
       .meta { flex: 1; min-width: 0; }
@@ -133,7 +133,7 @@ export class VwVaultView extends LitElement {
 
       .empty { padding: 40px 20px; text-align: center; color: var(--vw-muted); font-size: 12.5px; }
 
-      .card { margin: 2px 4px 8px; background: var(--vw-card); border: 1px solid var(--vw-card-border); border-radius: var(--vw-radius-card); padding: 11px 13px; display: flex; flex-direction: column; gap: 9px; }
+      .card { margin: 2px 4px 8px; background: var(--vw-card); border: 1px solid var(--vw-card-border); border-radius: var(--vw-radius-card); padding: 11px 13px; display: flex; flex-direction: column; gap: 9px; animation: mvGrow 0.2s ease-out; transform-origin: top; }
       .field-label { font-size: 10px; font-weight: 600; letter-spacing: 0.05em; color: var(--vw-faint); margin-bottom: 2px; }
       .field-row { display: flex; align-items: center; gap: 6px; }
       .field-val { flex: 1; min-width: 0; font-size: 12.5px; color: var(--vw-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -315,7 +315,7 @@ export class VwVaultView extends LitElement {
     return html`
       ${showSuggestions ? this.renderSuggestionGroup() : nothing}
       <div class="group-label main">${mainLabel}</div>
-      ${items.map((item) => this.renderItem(item, false))}
+      ${items.map((item, i) => this.renderItem(item, false, undefined, `calc(${i} * 40ms + 120ms)`))}
     `;
   }
 
@@ -325,18 +325,18 @@ export class VwVaultView extends LitElement {
     const byId = new Map(this.items.map((i) => [i.id, i] as const));
     return html`
       <div class="group-label">${t('list.currentSite', { domain })}</div>
-      ${suggestions.map((s) => {
+      ${suggestions.map((s, i) => {
         const item = byId.get(s.id);
-        return item ? this.renderItem(item, true, s) : nothing;
+        return item ? this.renderItem(item, true, s, `calc(${i} * 45ms)`) : nothing;
       })}
     `;
   }
 
-  private renderItem(item: CipherSummary, isSuggestion: boolean, suggestion?: TabAutofillSuggestion) {
+  private renderItem(item: CipherSummary, isSuggestion: boolean, suggestion?: TabAutofillSuggestion, rowDelay?: string) {
     const expanded = this.selectedCipherId === item.id;
     return html`
       <div>
-        <div class="row" @click=${() => this.toggleItem(item.id)}>
+        <div class="row" style=${rowDelay ? `animation-delay:${rowDelay}` : nothing} @click=${() => this.toggleItem(item.id)}>
           <div class="tile" style=${`background:${tileColor(item.id)}`}>${tileInitial(item.name)}</div>
           <div class="meta">
             <div class="title-row">

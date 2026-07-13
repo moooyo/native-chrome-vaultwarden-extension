@@ -16,10 +16,12 @@ export const SIDE_PANEL_CSS = `
     .side { display: flex; align-items: flex-start; }
     .conn { position: relative; flex: none; width: ${CONN_W}px; align-self: stretch; }
     .conn::before { content: ''; position: absolute; left: 0; top: ${CONN_Y}px; width: ${CONN_W}px; height: 1.5px; background: rgba(22,24,29,.22); }
-    .conn-dot { position: absolute; left: 0; top: ${CONN_Y - 3.5}px; width: 7px; height: 7px; border-radius: 50%; background: var(--mi-teal); }
+    .conn-dot { position: absolute; left: 0; top: ${CONN_Y - 3.5}px; width: 7px; height: 7px; border-radius: 50%; background: var(--mi-teal); animation: mvPulse 2s ease-out infinite; }
     :host([data-pos="below"]) .side { display: block; }
     :host([data-pos="below"]) .conn { display: none; }
     @media (prefers-color-scheme: dark) { .conn::before { background: rgba(255,255,255,.18); } }
+    @keyframes mvPulse { 0% { box-shadow: 0 0 0 0 rgba(14,138,114,.45); } 70% { box-shadow: 0 0 0 6px rgba(14,138,114,0); } 100% { box-shadow: 0 0 0 0 rgba(14,138,114,0); } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
   `;
 
 /** Wrap a surface's `.box` template with the connector, so it renders as `[dot——line] [box]`. */

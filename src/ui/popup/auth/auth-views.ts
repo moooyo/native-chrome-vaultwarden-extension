@@ -225,6 +225,7 @@ export class VwAuthViews extends LitElement {
         padding: 24px;
         box-sizing: border-box;
         text-align: center;
+        animation: mvIn 0.22s ease-out;
       }
       .locked-title {
         margin: 0;

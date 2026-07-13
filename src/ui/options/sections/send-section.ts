@@ -63,7 +63,7 @@ export class VwSendSection extends LitElement {
       .btn-primary:hover { background: var(--vw-primary-bg-hover); }
       .btn-primary svg { width: 13px; height: 13px; }
       .btn-outline { height: 32px; padding: 0 14px; border: 1px solid var(--vw-line-3); border-radius: var(--vw-radius-input); background: var(--vw-card); color: var(--vw-text-4); font-family: inherit; font-size: 12.5px; cursor: pointer; }
-      .form { border-color: var(--vw-teal-25); display: flex; flex-direction: column; gap: 12px; }
+      .form { border-color: var(--vw-teal-25); display: flex; flex-direction: column; gap: 12px; animation: mvGrow .22s ease-out; transform-origin: top; }
       .form-head { display: flex; align-items: center; }
       .form-head .t { font-size: 12.5px; font-weight: 600; flex: 1; }
       .field { display: flex; flex-direction: column; gap: 4px; }

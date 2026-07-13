@@ -193,8 +193,19 @@ export const paletteTokens = css`
     }
   }
 
+  /* Motion keyframes (animations-handoff.md) — lightweight, ease-out. Components opt in per element;
+     every animation is disabled under prefers-reduced-motion below. */
+  @keyframes mvIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes mvUp { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+  @keyframes mvGrow { from { opacity: 0; transform: translateY(-6px) scaleY(.95); } to { opacity: 1; transform: none; } }
+  @keyframes mvStag { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+  @keyframes mvPop { 0% { transform: scale(.4); opacity: 0; } 65% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+  @keyframes mvPulse { 0% { box-shadow: 0 0 0 0 rgba(14,138,114,.45); } 70% { box-shadow: 0 0 0 6px rgba(14,138,114,0); } 100% { box-shadow: 0 0 0 0 rgba(14,138,114,0); } }
+  @keyframes mvSpin { to { transform: rotate(360deg); } }
+
   @media (prefers-reduced-motion: reduce) {
     :host { --vw-dur-fast:0ms; --vw-dur:0ms; }
+    *, *::before, *::after { animation: none !important; }
   }
 `;
 
