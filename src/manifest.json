@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0TefrEOlT8AmPlzs9BWitgBw3tNCFrvW22wKryGWc3F2p+IxIgnqVSdPRwVBE0iXVRpLW/Qq/GRhLrplJF7OR+bEkTmGc8n+ustIHGQxqXlny03JW0v1yFisBd5Imd+TM1zjXii9aeEn2K++ZjQtukDx1IJrcTGhGRCB9ad99EWKUo9g6NPrQ+VCg7mhK6ysjmOfsLq5s9/47yJhsZ/6eOHjEj7Xo2tm6DdpZhxgGArZwlE1m8MbzjfEMMsTMP4wDOtvqHkb0a0/DDoGSFXX4fzJLxXSIVvuXT2/GJceaCDunkR9pQfx4eT6o5drEKJeBAinyQm/qoBQgkPEZZryOwIDAQAB",
   "name": "密屿 MiYu",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "密屿 · 兼容 Bitwarden / Vaultwarden 的原生 MV3 密码管理器。",
   "background": {
     "service_worker": "background.js",

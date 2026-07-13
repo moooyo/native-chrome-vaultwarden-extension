@@ -19,20 +19,30 @@ export interface GeneratePanelViewState {
   password: string;
   strength: string;
   length: number;
+  uppercase: boolean;
+  lowercase: boolean;
   numbers: boolean;
   symbols: boolean;
+  minNumbers: number;
+  minSymbols: number;
+  avoidAmbiguous: boolean;
   savedName: string;
   savedUser: string;
 }
 
 /** Privileged callbacks. Every click/input that reaches them is gated on `Event.isTrusted` in the
- *  template, so a page script cannot synthesize an event to tune, regenerate, use, undo, or edit. */
+ *  template, so a page script cannot synthesize an event to tune, regenerate, use, edit, or save. */
 export interface GeneratePanelHandlers {
   onUsername?: (value: string) => void;
-  onRegenerate?: () => void;
   onLength?: (length: number) => void;
+  onUppercase?: (on: boolean) => void;
+  onLowercase?: (on: boolean) => void;
   onNumbers?: (on: boolean) => void;
   onSymbols?: (on: boolean) => void;
+  onMinNumbers?: (n: number) => void;
+  onMinSymbols?: (n: number) => void;
+  onAvoidAmbiguous?: (on: boolean) => void;
+  onRegenerate?: () => void;
   onUse?: () => void;
   onUndo?: () => void;
 }
@@ -75,18 +85,35 @@ export const GENERATE_PANEL_STYLES = `
     .suggest .d { color: var(--mi-teal-text); }
     .suggest .s { color: var(--mi-red); }
 
-    .len { display: flex; align-items: center; gap: 9px; margin: 10px 0 8px; }
+    .len { display: flex; align-items: center; gap: 9px; margin: 10px 0 10px; }
     .len .lab { font-size: 11.5px; color: var(--mi-text-3); flex: none; }
     .len input[type=range] { flex: 1; accent-color: var(--mi-teal); }
     .len .val { font-size: 11.5px; font-weight: 600; color: var(--mi-teal-text); min-width: 20px; text-align: right; }
 
-    .rules { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
-    .pill { height: 26px; padding: 0 11px; display: inline-flex; align-items: center; border-radius: 13px; font: 600 11.5px/1 "JetBrains Mono", ui-monospace, monospace; cursor: pointer; background: transparent; color: var(--mi-muted); border: 1px solid var(--mi-line-3); }
+    /* Character sets — one pill per class, spread to fill the row, with regenerate at the end. */
+    .pills { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+    .pill { height: 26px; padding: 0 10px; display: inline-flex; align-items: center; border-radius: 13px; font: 600 11.5px/1 "JetBrains Mono", ui-monospace, monospace; cursor: pointer; background: transparent; color: var(--mi-muted); border: 1px solid var(--mi-line-3); }
     .pill.on { background: var(--mi-teal-12); color: var(--mi-teal-text); border-color: var(--mi-teal-25); }
     .spacer { flex: 1; }
-    .refresh { width: 28px; height: 28px; border: 1px solid var(--mi-line-3); border-radius: 8px; background: var(--mi-panel); color: #3F444E; display: grid; place-items: center; cursor: pointer; }
+    .refresh { width: 28px; height: 28px; flex: none; border: 1px solid var(--mi-line-3); border-radius: 8px; background: var(--mi-panel); color: #3F444E; display: grid; place-items: center; cursor: pointer; }
     .refresh:hover { background: var(--mi-row-hover); }
     .refresh svg { width: 13px; height: 13px; }
+
+    /* Per-class minimums — compact −/value/+ steppers. */
+    .mins { display: flex; gap: 10px; margin-bottom: 10px; }
+    .min { flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .min .lab { font-size: 11px; color: var(--mi-text-3); }
+    .step { display: inline-flex; align-items: center; border: 1px solid var(--mi-line-3); border-radius: 8px; overflow: hidden; }
+    .step button { width: 22px; height: 24px; border: 0; background: transparent; color: var(--mi-text-3); font: 400 15px/1 "Instrument Sans", system-ui, sans-serif; cursor: pointer; }
+    .step button:hover { background: var(--mi-row-hover); color: var(--mi-ink); }
+    .step .val { min-width: 18px; text-align: center; font-size: 12px; font-weight: 600; color: var(--mi-ink); font-variant-numeric: tabular-nums; }
+
+    /* Avoid-ambiguous — a full-width checkbox pill. */
+    .ambig { width: 100%; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; margin-bottom: 10px; border: 1px solid var(--mi-line-3); border-radius: 9px; background: transparent; color: var(--mi-text-3); font: 500 11.5px/1 "Instrument Sans", "Segoe UI", system-ui, sans-serif; cursor: pointer; }
+    .ambig.on { background: var(--mi-teal-12); color: var(--mi-teal-text); border-color: var(--mi-teal-25); }
+    .ambig .check { display: inline-grid; place-items: center; width: 15px; height: 15px; border: 1.5px solid currentColor; border-radius: 4px; flex: none; }
+    .ambig .check svg { width: 11px; height: 11px; stroke-width: 2.6; }
+
     .use { width: 100%; height: 32px; border: 0; border-radius: 9px; background: var(--mi-ink-btn); color: var(--mi-ink-btn-fg); font: 600 12px/1 "Instrument Sans", system-ui, sans-serif; cursor: pointer; }
     .use:hover { background: #2A2D34; }
     .foot { font-size: 10.5px; color: var(--mi-faint); margin-top: 8px; }
@@ -128,6 +155,24 @@ function colorize(password: string) {
   });
 }
 
+function pill(label: string, on: boolean, toggle: (on: boolean) => void): TemplateResult {
+  return html`<button type="button" class="pill ${on ? 'on' : ''}" aria-pressed=${on ? 'true' : 'false'}
+    @click=${(e: MouseEvent) => { if (e.isTrusted) toggle(!on); }}>${label}</button>`;
+}
+
+function stepper(label: string, value: number, set: (n: number) => void): TemplateResult {
+  return html`
+    <div class="min">
+      <span class="lab">${label}</span>
+      <span class="step">
+        <button type="button" aria-label="${label} 减少" @click=${(e: MouseEvent) => { if (e.isTrusted) set(value - 1); }}>−</button>
+        <span class="val">${value}</span>
+        <button type="button" aria-label="${label} 增加" @click=${(e: MouseEvent) => { if (e.isTrusted) set(value + 1); }}>+</button>
+      </span>
+    </div>
+  `;
+}
+
 function renderPanel(state: GeneratePanelViewState, handlers: GeneratePanelHandlers): TemplateResult {
   const meta = `${state.strength} · ${state.length} 字符${state.symbols ? ' · 含符号' : ''}`;
   return html`
@@ -147,14 +192,22 @@ function renderPanel(state: GeneratePanelViewState, handlers: GeneratePanelHandl
         @input=${(e: Event) => { if (e.isTrusted) handlers.onLength?.(Number((e.target as HTMLInputElement).value)); }} />
       <span class="val">${state.length}</span>
     </div>
-    <div class="rules">
-      <button type="button" class="pill ${state.numbers ? 'on' : ''}" title="包含数字"
-        @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onNumbers?.(!state.numbers); }}>0–9</button>
-      <button type="button" class="pill ${state.symbols ? 'on' : ''}" title="包含符号"
-        @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onSymbols?.(!state.symbols); }}>!@#$</button>
+    <div class="pills">
+      ${pill('A-Z', state.uppercase, (on) => handlers.onUppercase?.(on))}
+      ${pill('a-z', state.lowercase, (on) => handlers.onLowercase?.(on))}
+      ${pill('0-9', state.numbers, (on) => handlers.onNumbers?.(on))}
+      ${pill('!@#$', state.symbols, (on) => handlers.onSymbols?.(on))}
       <span class="spacer"></span>
       <button type="button" class="refresh" title="换一个" @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onRegenerate?.(); }}>${uiIcon('refresh')}</button>
     </div>
+    <div class="mins">
+      ${stepper('最少数字', state.minNumbers, (n) => handlers.onMinNumbers?.(n))}
+      ${stepper('最少符号', state.minSymbols, (n) => handlers.onMinSymbols?.(n))}
+    </div>
+    <button type="button" class="ambig ${state.avoidAmbiguous ? 'on' : ''}" aria-pressed=${state.avoidAmbiguous ? 'true' : 'false'}
+      @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onAvoidAmbiguous?.(!state.avoidAmbiguous); }}>
+      <span class="check">${state.avoidAmbiguous ? uiIcon('check') : nothing}</span>避免易混淆字符
+    </button>
     <button type="button" class="use" @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onUse?.(); }}>使用此密码</button>
     <div class="foot">使用后将自动保存到你的密钥库</div>
   `;

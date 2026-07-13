@@ -16,8 +16,13 @@ export interface GeneratePanelState {
   password: string;
   strength: string;
   length: number;
+  uppercase: boolean;
+  lowercase: boolean;
   numbers: boolean;
   symbols: boolean;
+  minNumbers: number;
+  minSymbols: number;
+  avoidAmbiguous: boolean;
 }
 
 export interface GeneratePanel {
@@ -33,8 +38,13 @@ export interface GeneratePanelOptions {
   onUsername(value: string): void;
   onRegenerate(): void;
   onLength(length: number): void;
+  onUppercase(on: boolean): void;
+  onLowercase(on: boolean): void;
   onNumbers(on: boolean): void;
   onSymbols(on: boolean): void;
+  onMinNumbers(n: number): void;
+  onMinSymbols(n: number): void;
+  onAvoidAmbiguous(on: boolean): void;
   onUse(): void;
   onUndo(): void;
 }
@@ -46,8 +56,13 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
     password: '',
     strength: '极强',
     length: 18,
+    uppercase: true,
+    lowercase: true,
     numbers: true,
     symbols: true,
+    minNumbers: 1,
+    minSymbols: 0,
+    avoidAmbiguous: true,
     savedName: '',
     savedUser: '',
   };
@@ -55,8 +70,13 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
     onUsername: options.onUsername,
     onRegenerate: options.onRegenerate,
     onLength: options.onLength,
+    onUppercase: options.onUppercase,
+    onLowercase: options.onLowercase,
     onNumbers: options.onNumbers,
     onSymbols: options.onSymbols,
+    onMinNumbers: options.onMinNumbers,
+    onMinSymbols: options.onMinSymbols,
+    onAvoidAmbiguous: options.onAvoidAmbiguous,
     onUse: options.onUse,
     onUndo: options.onUndo,
   };
@@ -81,8 +101,13 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
       state.password = next.password;
       state.strength = next.strength;
       state.length = next.length;
+      state.uppercase = next.uppercase;
+      state.lowercase = next.lowercase;
       state.numbers = next.numbers;
       state.symbols = next.symbols;
+      state.minNumbers = next.minNumbers;
+      state.minSymbols = next.minSymbols;
+      state.avoidAmbiguous = next.avoidAmbiguous;
       draw();
     },
     showSaved(info) {

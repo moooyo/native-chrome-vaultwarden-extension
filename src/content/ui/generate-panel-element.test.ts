@@ -28,8 +28,13 @@ function mount(over: Partial<GeneratePanelViewState> = {}, handlers: GeneratePan
     password: 'Ab3$xz9K',
     strength: '极强',
     length: 18,
+    uppercase: true,
+    lowercase: true,
     numbers: true,
     symbols: true,
+    minNumbers: 1,
+    minSymbols: 0,
+    avoidAmbiguous: true,
     savedName: '',
     savedUser: '',
     ...over,
@@ -54,13 +59,32 @@ describe('generate panel surface', () => {
     expect(root.querySelector('.meta')!.textContent).toContain('含符号');
   });
 
-  it('reflects the rule pills and emits toggles on trusted click', () => {
+  it('reflects the four character-set pills and emits toggles on trusted click', () => {
+    const onUppercase = vi.fn();
     const onNumbers = vi.fn();
-    const root = mount({}, { onNumbers });
+    const root = mount({}, { onUppercase, onNumbers });
     const pills = root.querySelectorAll('.pill');
+    expect([...pills].map((p) => p.textContent)).toEqual(['A-Z', 'a-z', '0-9', '!@#$']);
     expect(pills[0]!.classList.contains('on')).toBe(true);
-    trustedClick(pills[0]!);
+    trustedClick(pills[0]!); // A-Z on → off
+    expect(onUppercase).toHaveBeenCalledWith(false);
+    trustedClick(pills[2]!); // 0-9 on → off
     expect(onNumbers).toHaveBeenCalledWith(false);
+  });
+
+  it('emits min-count changes via the steppers and toggles avoid-ambiguous', () => {
+    const onMinNumbers = vi.fn();
+    const onMinSymbols = vi.fn();
+    const onAvoidAmbiguous = vi.fn();
+    const root = mount({ minNumbers: 1, minSymbols: 0, avoidAmbiguous: true }, { onMinNumbers, onMinSymbols, onAvoidAmbiguous });
+    const steps = root.querySelectorAll('.step');
+    expect(steps.length).toBe(2); // 最少数字 / 最少符号
+    trustedClick(steps[0]!.querySelectorAll('button')[1]!); // 最少数字 +
+    expect(onMinNumbers).toHaveBeenCalledWith(2);
+    trustedClick(steps[1]!.querySelectorAll('button')[0]!); // 最少符号 −
+    expect(onMinSymbols).toHaveBeenCalledWith(-1); // factory clamps to 0
+    trustedClick(root.querySelector('.ambig')!); // avoid-ambiguous on → off
+    expect(onAvoidAmbiguous).toHaveBeenCalledWith(false);
   });
 
   it('emits length on slider input and regenerate on trusted refresh', () => {

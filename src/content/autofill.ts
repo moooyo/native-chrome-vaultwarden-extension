@@ -498,7 +498,18 @@ function removeTotp(id: string): void {
 // tuning; "使用此密码" fills the field and saves the login. The generator runs locally (pure core
 // function over crypto.getRandomValues) so no plaintext round-trips the worker to be generated.
 
-interface GenState { username: string; password: string; length: number; numbers: boolean; symbols: boolean; }
+interface GenState {
+  username: string;
+  password: string;
+  length: number;
+  uppercase: boolean;
+  lowercase: boolean;
+  numbers: boolean;
+  symbols: boolean;
+  minNumbers: number;
+  minSymbols: number;
+  avoidAmbiguous: boolean;
+}
 const genPanels = new Map<string, { panel: GeneratePanel }>();
 
 function maybeAttachGeneratePanel(input: HTMLInputElement): void {
@@ -508,30 +519,56 @@ function maybeAttachGeneratePanel(input: HTMLInputElement): void {
 }
 
 function attachGeneratePanel(target: DetectedRegistrationField): void {
-  const state: GenState = { username: target.usernameInput?.value?.trim() ?? '', password: '', length: 18, numbers: true, symbols: true };
+  const state: GenState = {
+    username: target.usernameInput?.value?.trim() ?? '',
+    password: '',
+    length: 18,
+    uppercase: true,
+    lowercase: true,
+    numbers: true,
+    symbols: true,
+    minNumbers: 1,
+    minSymbols: 0,
+    avoidAmbiguous: true,
+  };
   const regen = (): void => {
     state.password = generatePassword({
       length: state.length,
-      lowercase: true,
-      uppercase: true,
+      lowercase: state.lowercase,
+      uppercase: state.uppercase,
       numbers: state.numbers,
       special: state.symbols,
-      minNumbers: state.numbers ? 1 : 0,
-      minSpecial: state.symbols ? 1 : 0,
-      avoidAmbiguous: true,
+      minNumbers: state.numbers ? state.minNumbers : 0,
+      minSpecial: state.symbols ? state.minSymbols : 0,
+      avoidAmbiguous: state.avoidAmbiguous,
     });
   };
   regen();
 
+  const TYPES = ['uppercase', 'lowercase', 'numbers', 'symbols'] as const;
+  // Toggling a character class off is refused if it is the last one on — the generator needs a non-empty pool.
+  const setType = (key: (typeof TYPES)[number], on: boolean): void => {
+    if (!on && !TYPES.some((k) => k !== key && state[k])) return;
+    state[key] = on;
+    regen();
+    push();
+  };
+  const clampMin = (n: number): number => Math.max(0, Math.min(Math.round(n), 9));
+
   const panel = createGeneratePanel({
     anchor: target.anchor,
     // Editing the username must NOT re-render (it would reset the field and drop the caret) — just
-    // record it; the next push (regen/length/rule change) re-renders with the recorded value.
+    // record it; the next push (regen/rule change) re-renders with the recorded value.
     onUsername: (value) => { state.username = value; },
     onRegenerate: () => { regen(); push(); },
     onLength: (n) => { state.length = clampLength(n); regen(); push(); },
-    onNumbers: (on) => { state.numbers = on; regen(); push(); },
-    onSymbols: (on) => { state.symbols = on; regen(); push(); },
+    onUppercase: (on) => setType('uppercase', on),
+    onLowercase: (on) => setType('lowercase', on),
+    onNumbers: (on) => setType('numbers', on),
+    onSymbols: (on) => setType('symbols', on),
+    onMinNumbers: (n) => { state.minNumbers = clampMin(n); regen(); push(); },
+    onMinSymbols: (n) => { state.minSymbols = clampMin(n); regen(); push(); },
+    onAvoidAmbiguous: (on) => { state.avoidAmbiguous = on; regen(); push(); },
     onUse: () => { void useGenerated(); },
     onUndo: () => {
       if (isFillableInput(target.input)) setInputValue(target.input, '');
@@ -550,8 +587,13 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
     password: state.password,
     strength: strengthLabel(state.length),
     length: state.length,
+    uppercase: state.uppercase,
+    lowercase: state.lowercase,
     numbers: state.numbers,
     symbols: state.symbols,
+    minNumbers: state.minNumbers,
+    minSymbols: state.minSymbols,
+    avoidAmbiguous: state.avoidAmbiguous,
   });
   push();
 
