@@ -1,5 +1,6 @@
 import { html, nothing, svg, type TemplateResult } from 'lit';
 import { uiIcon } from '../../ui/components/icon.js';
+import { SIDE_PANEL_CSS, sideWrap } from './side-panel.js';
 
 export interface PopoverCandidate {
   id: string;
@@ -11,7 +12,7 @@ export interface PopoverCandidate {
 }
 
 export type PopoverKind = 'login' | 'card' | 'identity';
-export type PopoverView = 'trigger' | 'status' | 'list';
+export type PopoverView = 'hidden' | 'trigger' | 'status' | 'list' | 'filled';
 
 /** The full render state of the popover surface. Held by the factory (see popover.ts) and passed to
  *  `renderPopover` on every view/state change — candidate ids live only here, never in the DOM. */
@@ -20,6 +21,9 @@ export interface PopoverState {
   view: PopoverView;
   statusMessage: string;
   candidates: PopoverCandidate[];
+  /** Login autofill (design 2c) mounts to the RIGHT of the focused field with a connector and shows the
+   *  match list directly (no click-to-open trigger). Card/identity keep the compact trigger popover. */
+  sidePanel: boolean;
 }
 
 /** Privileged callbacks. Every click that reaches them is gated on `Event.isTrusted` in the template,
@@ -64,6 +68,8 @@ export const POPOVER_STYLES = `
       --mi-faint: #9AA0AA;
       --mi-teal: #0E8A72;
       --mi-teal-text: #0B7A65;
+      --mi-teal-10: rgba(14,138,114,.1);
+      --mi-teal-20: rgba(14,138,114,.2);
       --mi-line: rgba(22,24,29,.09);
       --mi-fill: #F1F1EE;
       --mi-row-hover: #F2F2EF;
@@ -128,6 +134,11 @@ export const POPOVER_STYLES = `
     .status-msg { font-size: 12.5px; font-weight: 600; color: var(--mi-ink); }
     svg { stroke-width: 1.8; }
 
+    /* Filled confirmation (design 2c) */
+    .filled { display: flex; align-items: center; gap: 8px; padding: 10px 13px 13px; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 14px; background: var(--mi-teal-10); border: 1px solid var(--mi-teal-20); color: var(--mi-teal-text); font-size: 11.5px; font-weight: 600; }
+    .badge svg { width: 12px; height: 12px; stroke-width: 2.4; }
+
     @media (prefers-color-scheme: dark) {
       :host {
         --mi-panel: #1F2229;
@@ -135,6 +146,8 @@ export const POPOVER_STYLES = `
         --mi-muted: #8A8F99;
         --mi-faint: #7B818B;
         --mi-teal-text: #45D6B5;
+        --mi-teal-10: rgba(69,214,181,.14);
+        --mi-teal-20: rgba(69,214,181,.24);
         --mi-line: rgba(255,255,255,.09);
         --mi-fill: #262A33;
         --mi-row-hover: rgba(255,255,255,.05);
@@ -142,15 +155,24 @@ export const POPOVER_STYLES = `
       }
     }
     @media (prefers-reduced-motion: reduce) { .box { animation: none; } }
+  ` + SIDE_PANEL_CSS + `
+    .side .box { width: 272px; min-width: 0; max-width: none; }
   `;
 
 /** Render the popover surface for the given state. The page cannot forge the privileged clicks: each
- *  handler bails unless `event.isTrusted`. */
+ *  handler bails unless `event.isTrusted`. Login (2c) renders as a right-mounted side panel with a
+ *  connector; card/identity render as the compact trigger popover. */
 export function renderPopover(state: PopoverState, handlers: PopoverHandlers): TemplateResult {
-  return html`<div class="box">${renderBody(state, handlers)}</div>`;
+  // The login side panel rests hidden (nothing rendered, host collapses to 0×0) until focus opens it.
+  if (state.view === 'hidden') return html``;
+  const box = html`<div class="box">${renderBody(state, handlers)}</div>`;
+  return state.sidePanel ? sideWrap(box) : box;
 }
 
 function renderBody(state: PopoverState, handlers: PopoverHandlers): TemplateResult {
+  if (state.view === 'filled') {
+    return renderFilled();
+  }
   if (state.view === 'status') {
     return renderStatus(state.statusMessage);
   }
@@ -164,6 +186,11 @@ function renderBody(state: PopoverState, handlers: PopoverHandlers): TemplateRes
       <span class="chev">${uiIcon('chevron')}</span>
     </button>
   `;
+}
+
+/** Post-fill confirmation shown in the login side panel: a 已填充 badge (design 2c). */
+function renderFilled(): TemplateResult {
+  return html`<div class="filled"><span class="badge">${uiIcon('check')}已填充</span></div>`;
 }
 
 function renderHeader(state: PopoverState): TemplateResult {

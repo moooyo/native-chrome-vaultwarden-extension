@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from 'lit';
 import { uiIcon } from '../../ui/components/icon.js';
+import { SIDE_PANEL_CSS, sideWrap } from './side-panel.js';
 
 // TODO i18n: content-script surfaces are isolated from the extension i18n module, so these
 // user-facing strings are hardcoded in Chinese to match the 密屿/MiYu design.
@@ -108,7 +109,7 @@ export const TOTP_PANEL_STYLES = `
       .btn-primary:hover { background: #fff; }
     }
     @media (prefers-reduced-motion: reduce) { .box { animation: none; } }
-  `;
+  ` + SIDE_PANEL_CSS;
 
 function trusted(event: Event, fn: (() => void) | undefined): void {
   if (!event.isTrusted) return;
@@ -123,7 +124,7 @@ function grouped(code: string): string {
 /** Render the 2FA panel surface for the given state. The page cannot forge the privileged clicks: each
  *  handler bails unless `event.isTrusted`. */
 export function renderTotpPanel(state: TotpPanelState, handlers: TotpPanelHandlers): TemplateResult {
-  return html`<div class="box">${renderBody(state, handlers)}</div>`;
+  return sideWrap(html`<div class="box">${renderBody(state, handlers)}</div>`);
 }
 
 function renderBody(state: TotpPanelState, handlers: TotpPanelHandlers): TemplateResult {

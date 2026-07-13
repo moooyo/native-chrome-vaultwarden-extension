@@ -22,7 +22,7 @@ afterEach(() => {
 function mount(state: Partial<PopoverState>, handlers: PopoverHandlers = {}): HTMLElement {
   container = document.createElement('div');
   document.body.append(container);
-  const full: PopoverState = { kind: 'login', view: 'trigger', statusMessage: '', candidates: [], ...state };
+  const full: PopoverState = { kind: 'login', view: 'trigger', statusMessage: '', candidates: [], sidePanel: false, ...state };
   render(renderPopover(full, handlers), container);
   return container;
 }

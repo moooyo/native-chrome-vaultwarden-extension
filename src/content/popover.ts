@@ -5,6 +5,7 @@
 // element's state nor forge its callbacks (closed root + Event.isTrusted gating live in the element).
 
 import { mountRenderSurface } from './ui/render-surface.js';
+import { repositionSidePanel } from './ui/side-panel.js';
 import {
   POPOVER_STYLES,
   renderPopover,
@@ -25,30 +26,45 @@ export interface AutofillPopover {
   open(): void;
   showStatus(message: string): void;
   showCandidates(candidates: PopoverCandidate[]): void;
+  /** Show the post-fill 已填充 confirmation (login side panel, design 2c). */
+  showFilled(): void;
   remove(): void;
 }
 
 export interface AutofillPopoverOptions {
   anchor: HTMLElement;
   kind?: PopoverKind;
+  /** Login autofill (2c) mounts as a right-side panel with a connector and shows matches directly; card
+   *  / identity keep the compact below-field trigger popover. */
+  sidePanel?: boolean;
+  /** Matches to show immediately (side-panel login opens straight into the list). */
+  candidates?: PopoverCandidate[];
   onOpen(): void;
   onSelect(cipherId: string): void;
 }
 
 export function createAutofillPopover(options: AutofillPopoverOptions): AutofillPopover {
   const kind = options.kind ?? 'login';
-  const state: PopoverState = { kind, view: 'trigger', statusMessage: '', candidates: [] };
+  const sidePanel = options.sidePanel ?? false;
+  const state: PopoverState = {
+    kind,
+    view: sidePanel ? 'hidden' : 'trigger',
+    statusMessage: '',
+    candidates: options.candidates ?? [],
+    sidePanel,
+  };
   const handlers: PopoverHandlers = { onOpen: options.onOpen, onSelect: options.onSelect };
   const surface = mountRenderSurface(POPOVER_STYLES);
   const host = surface.host;
   host.style.position = 'absolute';
   host.style.zIndex = '2147483647';
 
-  // Render, then re-place under the anchor. `render()` is synchronous, so the surface's size is final
-  // by the time we measure it — the panel tracks the anchor as its content grows (trigger → status/list).
+  // Render, then re-place. `render()` is synchronous, so the surface's size is final by the time we
+  // measure it. The login side panel hangs to the right with a connector; card/identity drop below.
+  const place = sidePanel ? repositionSidePanel : reposition;
   const draw = (): void => {
     surface.render(renderPopover(state, handlers));
-    reposition(host, options.anchor);
+    place(host, options.anchor);
   };
   draw();
 
@@ -66,6 +82,10 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
     showCandidates(candidates: PopoverCandidate[]) {
       state.candidates = candidates;
       state.view = 'list';
+      draw();
+    },
+    showFilled() {
+      state.view = 'filled';
       draw();
     },
     remove() {

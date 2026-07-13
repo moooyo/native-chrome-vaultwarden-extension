@@ -6,9 +6,11 @@ interface FakePopover {
   open: ReturnType<typeof vi.fn>;
   showStatus: ReturnType<typeof vi.fn>;
   showCandidates: ReturnType<typeof vi.fn>;
+  showFilled: ReturnType<typeof vi.fn>;
   remove: ReturnType<typeof vi.fn>;
   options: {
     kind?: 'login' | 'card' | 'identity';
+    sidePanel?: boolean;
     onOpen(): void;
     onSelect(cipherId: string): void;
   };
@@ -39,6 +41,7 @@ vi.mock('./popover.js', () => ({
       open: vi.fn(),
       showStatus: vi.fn(),
       showCandidates: vi.fn(),
+      showFilled: vi.fn(),
       remove: vi.fn(),
       options,
     };
@@ -73,6 +76,17 @@ describe('autofill controller', () => {
     await Promise.resolve();
 
     expect(sendRequest).toHaveBeenCalledWith({ type: 'autofill.findCandidates', frameUrl: 'https://example.com/login' });
+  });
+
+  it('opens the login side panel when a login field is focused (design 2c)', () => {
+    vi.mocked(sendRequest).mockResolvedValue({ ok: true, data: [] });
+
+    startAutofill('https://example.com/login');
+    const current = popover();
+    const emailInput = document.querySelector('input[type="email"]') as HTMLInputElement;
+    emailInput.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+
+    expect(current.open).toHaveBeenCalled();
   });
 
   it('uses the current frame URL after same-document navigation', async () => {
@@ -296,7 +310,7 @@ describe('autofill controller', () => {
     expect(filledForm?.passwordInput).toBeUndefined();
     expect(filledForm?.usernameInput?.type).toBe('email');
     expect(current.showStatus).not.toHaveBeenCalledWith('Form is no longer available');
-    expect(current.showStatus).toHaveBeenCalledWith('Filled');
+    expect(current.showFilled).toHaveBeenCalled();
   });
 
   it('fills a standalone verification-code step without reporting it unavailable', async () => {
@@ -320,7 +334,7 @@ describe('autofill controller', () => {
     expect(filledForm?.totpInput?.getAttribute('name')).toBe('otp');
     expect(filledForm?.passwordInput).toBeUndefined();
     expect(current.showStatus).not.toHaveBeenCalledWith('Form is no longer available');
-    expect(current.showStatus).toHaveBeenCalledWith('Filled');
+    expect(current.showFilled).toHaveBeenCalled();
   });
 
   it('attaches a card popover and fills the form on selection', async () => {

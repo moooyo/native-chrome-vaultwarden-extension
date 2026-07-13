@@ -136,6 +136,7 @@ function attachIfNew(id: string, attach: () => void): void {
 function attachPopover(getFrameUrl: FrameUrlProvider, form: DetectedLoginForm): void {
   const popover = createAutofillPopover({
     anchor: form.anchor,
+    sidePanel: true,
     onOpen: () => {
       void loadCandidates(getFrameUrl(), popover);
     },
@@ -247,7 +248,8 @@ async function fillSelected(
   }
   if (isAutofillCredentials(response.data)) {
     const filled = fillLoginForm(form, response.data);
-    popover.showStatus(filled ? 'Filled' : 'No fillable fields');
+    if (filled) popover.showFilled();
+    else popover.showStatus('No fillable fields');
   } else {
     popover.showStatus('Unexpected autofill response');
   }
@@ -324,9 +326,25 @@ document.addEventListener('focusin', (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) return;
   ensureFrameController().noteFocus(target);
+  maybeOpenLoginPanel(target);
   maybeAttachTotpPanel(target);
   maybeAttachGeneratePanel(target);
 }, true);
+
+/** Design 2c: the login match panel hangs to the right of the focused field and opens on focus (no
+ *  click-to-open trigger). Find the login form the focused input belongs to and open its side panel,
+ *  attaching it first if a freshly-added form hasn't been picked up by the mutation observer yet. */
+function maybeOpenLoginPanel(input: HTMLInputElement): void {
+  const { loginForms } = computeFillExclusion(document);
+  const form = loginForms.find((f) => f.usernameInput === input || f.passwordInput === input);
+  if (!form) return;
+  let pop = popoverRegistry.get(form.id);
+  if (!pop || !pop.element.isConnected) {
+    attachPopovers(frameUrlProvider); // idempotent (attachIfNew de-dupes) — ensure the panel exists
+    pop = popoverRegistry.get(form.id);
+  }
+  if (pop && pop.element.isConnected) pop.open();
+}
 
 /** form.id → its hover popover, so the keyboard shortcut can open the right picker on a multi-match. */
 export const popoverRegistry = new Map<string, ReturnType<typeof createAutofillPopover>>();

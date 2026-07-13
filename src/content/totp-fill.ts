@@ -10,7 +10,7 @@ import {
   type TotpPanelHandlers,
   type TotpPanelState,
 } from './ui/totp-panel-element.js';
-import { reposition } from './popover.js';
+import { repositionSidePanel } from './ui/side-panel.js';
 
 export interface TotpPanel {
   element: HTMLElement;
@@ -44,11 +44,11 @@ export function createTotpPanel(options: TotpPanelOptions): TotpPanel {
   host.style.position = 'absolute';
   host.style.zIndex = '2147483647';
 
-  // Render, then re-place under the anchor. `render()` is synchronous, so the surface's size is final
-  // by the time we measure it — the panel tracks the anchor as the code ticks or the view changes.
+  // Render, then re-place as a side panel to the right of the code field. `render()` is synchronous, so
+  // the surface's size is final by the time we measure it — the panel tracks the field as the code ticks.
   const draw = (): void => {
     surface.render(renderTotpPanel(state, handlers));
-    reposition(host, options.anchor);
+    repositionSidePanel(host, options.anchor);
   };
   draw();
 
