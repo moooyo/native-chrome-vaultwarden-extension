@@ -45,7 +45,8 @@ describe('totp panel surface', () => {
   it('renders the item, grouped code, seconds, and a draining ring', () => {
     const root = mount();
     expect(root.textContent).toContain('Forge');
-    expect(root.querySelector('.code')!.textContent).toBe('123 456');
+    expect(root.querySelector('.code')!.textContent!.replace(/\s/g, '')).toBe('123456');
+    expect(root.querySelectorAll('.code .grp').length).toBe(2);
     expect(root.querySelector('.secs')!.textContent).toContain('15s');
     // Circular countdown: at 15/30s remaining the arc is half-drained (dashoffset ≈ half the circumference).
     const arc = root.querySelector('.cd-arc') as SVGCircleElement;

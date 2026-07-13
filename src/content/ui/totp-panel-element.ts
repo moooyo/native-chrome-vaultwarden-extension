@@ -75,7 +75,9 @@ export const TOTP_PANEL_STYLES = `
     .sub { font-size: 11px; color: var(--mi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .code-box { margin: 0 13px; padding: 9px 11px; background: var(--mi-fill-2); border: 1px solid var(--mi-line); border-radius: 10px; display: flex; align-items: center; gap: 9px; }
-    .code { flex: 1; font-family: "JetBrains Mono", ui-monospace, monospace; font-weight: 600; font-size: 18px; color: var(--mi-teal-text); letter-spacing: .08em; }
+    .code { flex: 1; display: flex; align-items: baseline; font-family: "JetBrains Mono", ui-monospace, monospace; font-weight: 600; font-size: 20px; color: var(--mi-teal-text); }
+    .code .grp { flex: 1; display: flex; justify-content: space-between; }
+    .code .grp:first-child { margin-right: 0.7em; }
     .secs { font-size: 10.5px; color: var(--mi-faint); flex: none; }
     /* Circular countdown: an arc that drains clockwise from the top as the seconds tick down.
        (Named cd-* to avoid the logo glyph's own .ring/.dot classes.) */
@@ -120,9 +122,17 @@ function trusted(event: Event, fn: (() => void) | undefined): void {
   fn?.();
 }
 
-function grouped(code: string): string {
+/** The code laid out to fill the row: two digit groups pushed to the ends (space-between) so the code
+ *  spans the width instead of bunching on the left, each digit evenly boxed. */
+function codeGroups(code: string): TemplateResult {
   const c = code ?? '';
-  return c.length === 6 ? `${c.slice(0, 3)} ${c.slice(3)}` : c;
+  if (c.length !== 6) {
+    return html`<span class="grp">${[...c].map((d) => html`<span>${d}</span>`)}</span>`;
+  }
+  return html`
+    <span class="grp">${[...c.slice(0, 3)].map((d) => html`<span>${d}</span>`)}</span>
+    <span class="grp">${[...c.slice(3)].map((d) => html`<span>${d}</span>`)}</span>
+  `;
 }
 
 /** Render the 2FA panel surface for the given state. The page cannot forge the privileged clicks: each
@@ -159,7 +169,7 @@ function renderPanel(state: TotpPanelState, handlers: TotpPanelHandlers): Templa
   const offset = CIRC * (1 - frac);
   return html`
     <div class="code-box">
-      <span class="code">${grouped(state.code)}</span>
+      <span class="code">${codeGroups(state.code)}</span>
       <span class="secs">${state.remaining}s</span>
       <svg class="cd-ring" viewBox="0 0 20 20" aria-hidden="true">
         <circle class="cd-track" cx="10" cy="10" r="8"></circle>

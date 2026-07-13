@@ -20,7 +20,7 @@ describe('createTotpPanel', () => {
     const panel = createTotpPanel({ anchor: anchor(), onFill: vi.fn(), onCopy: vi.fn(), onUndo: vi.fn() });
     expect(panel.element.shadowRoot).toBeNull(); // closed root — unreachable from the page
     panel.update({ itemName: 'Forge', itemUser: 'z', code: '445566', remaining: 9 });
-    expect(panel.root.querySelector('.code')!.textContent).toBe('445 566');
+    expect(panel.root.querySelector('.code')!.textContent!.replace(/\s/g, '')).toBe('445566');
     panel.remove();
   });
 
