@@ -39,6 +39,13 @@ async function setRange(el: VwGeneratorView, value: string): Promise<void> {
   await el.updateComplete;
 }
 
+async function setWords(el: VwGeneratorView, value: string): Promise<void> {
+  const input = q<HTMLInputElement>(el, '[data-words]');
+  input.value = value;
+  input.dispatchEvent(new Event('input'));
+  await el.updateComplete;
+}
+
 async function setMode(el: VwGeneratorView, id: string): Promise<void> {
   q(el, '[data-mode]').dispatchEvent(
     new CustomEvent('vw-segmented-change', { detail: { id }, bubbles: true, composed: true }),
@@ -71,12 +78,16 @@ describe('vw-generator-view modes', () => {
     expect(q<HTMLElement>(el, '[data-length-value]').textContent).toBe('14');
   });
 
-  it('produces a passphrase of separator-joined words in memorable mode', async () => {
+  it('produces a passphrase in memorable mode from a dedicated word-count control', async () => {
     const el = await mount();
     await setMode(el, 'memorable');
-    // numWords tracks the length slider (default 14, clamped to 3–20); one digit is appended to a
-    // single word by includeNumber, never a separator, so the word count is preserved.
-    expect(output(el).split('-').length).toBe(14);
+    // Memorable decouples from the character-length slider: it uses a dedicated 3–20 word-count
+    // control that defaults to 4 words. One digit is appended to a single word by includeNumber,
+    // never a separator, so the word count is preserved.
+    expect(q(el, '[data-words]')).toBeTruthy();
+    expect(el.shadowRoot!.querySelector('[data-length]')).toBeNull();
+    expect(output(el).split('-').length).toBe(4);
+    expect(q<HTMLElement>(el, '[data-words-value]').textContent).toBe('4');
   });
 
   it('produces a numeric-only value in PIN mode', async () => {
@@ -84,6 +95,24 @@ describe('vw-generator-view modes', () => {
     await setMode(el, 'pin');
     expect(output(el)).toMatch(/^[0-9]+$/);
     expect(output(el).length).toBe(14);
+  });
+
+  it('hides the symbol toggle in memorable mode and every class toggle in PIN mode', async () => {
+    const el = await mount();
+    // Random exposes all three class toggles.
+    expect(q(el, "[data-toggle='upper']")).toBeTruthy();
+    expect(q(el, "[data-toggle='number']")).toBeTruthy();
+    expect(q(el, "[data-toggle='symbol']")).toBeTruthy();
+    // Memorable: symbols do not apply to a passphrase, so that toggle is hidden.
+    await setMode(el, 'memorable');
+    expect(q(el, "[data-toggle='upper']")).toBeTruthy();
+    expect(q(el, "[data-toggle='number']")).toBeTruthy();
+    expect(el.shadowRoot!.querySelector("[data-toggle='symbol']")).toBeNull();
+    // PIN: no class toggle applies to digit-only output.
+    await setMode(el, 'pin');
+    expect(el.shadowRoot!.querySelector("[data-toggle='upper']")).toBeNull();
+    expect(el.shadowRoot!.querySelector("[data-toggle='number']")).toBeNull();
+    expect(el.shadowRoot!.querySelector("[data-toggle='symbol']")).toBeNull();
   });
 });
 
@@ -104,7 +133,7 @@ describe('vw-generator-view length + toggles', () => {
   it('clamps memorable word count to a maximum of 20', async () => {
     const el = await mount();
     await setMode(el, 'memorable');
-    await setRange(el, '40');
+    await setWords(el, '40');
     expect(output(el).split('-').length).toBe(20);
   });
 
@@ -147,6 +176,17 @@ describe('vw-generator-view strength', () => {
     expect(strengthLabel(el)).toBe('中等');
     await setRange(el, '8');
     expect(strengthLabel(el)).toBe('较弱');
+  });
+
+  it('rates a long digit-only PIN on entropy, not length (never "strong")', async () => {
+    const el = await mount();
+    await setMode(el, 'pin');
+    await setRange(el, '16');
+    // 16 digits ≈ 53 bits (16 × log2(10)); length alone would read "极强", but entropy caps it at 中等.
+    const label = strengthLabel(el);
+    expect(label).not.toBe('极强');
+    expect(label).not.toBe('强');
+    expect(label).toBe('中等');
   });
 });
 

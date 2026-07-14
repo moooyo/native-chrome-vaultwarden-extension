@@ -30,4 +30,18 @@ describe('showNotice', () => {
       vi.useRealTimers();
     }
   });
+
+  it('replaces the previous notice so errors never overlap', () => {
+    showNotice('first error');
+    showNotice('second error');
+    // Only the most recent notice remains — no illegible stack of bottom-center bars.
+    expect(document.querySelectorAll('[data-vw-notice]')).toHaveLength(1);
+  });
+
+  it('returns a handle that removes the notice early', () => {
+    const handle = showNotice('dismiss me');
+    expect(document.querySelector('[data-vw-notice]')).not.toBeNull();
+    handle.remove();
+    expect(document.querySelector('[data-vw-notice]')).toBeNull();
+  });
 });

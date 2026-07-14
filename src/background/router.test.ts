@@ -122,6 +122,41 @@ describe('router', () => {
       .resolves.toEqual({ ok: true, data: { defaultUriMatchStrategy: 0, lockTimeout: '15', onIdleAction: 'lock', clipboardClearSeconds: '60' } });
   });
 
+  it('reads settings.get storage values concurrently', async () => {
+    let started = 0;
+    let unblock!: () => void;
+    const barrier = new Promise<void>((resolve) => { unblock = resolve; });
+    // Each getter blocks on a shared barrier that only releases once all five have started. Sequential
+    // awaits would deadlock (the first getter never resolves); a single Promise.all fires all five.
+    const gated = <T>(value: T): (() => Promise<T>) => vi.fn(async () => {
+      started += 1;
+      if (started === 5) unblock();
+      await barrier;
+      return value;
+    });
+    const router = createRouter({
+      auth: {},
+      vault: {},
+      settings: {
+        getServerUrl: gated<string | undefined>('https://vault.example.com'),
+        saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: gated<UriMatchStrategySetting>(0),
+        saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: gated<LockTimeoutSetting>('15'),
+        saveLockTimeout: vi.fn(),
+        getOnIdleAction: gated<OnIdleAction>('lock'),
+        saveOnIdleAction: vi.fn(),
+        getClipboardClearSetting: gated<ClipboardClearSetting>('60'),
+        saveClipboardClearSetting: vi.fn(),
+      },
+    });
+    await expect(router.handle({ type: 'settings.get' })).resolves.toEqual({
+      ok: true,
+      data: { serverUrl: 'https://vault.example.com', defaultUriMatchStrategy: 0, lockTimeout: '15', onIdleAction: 'lock', clipboardClearSeconds: '60' },
+    });
+    expect(started).toBe(5);
+  }, 2000);
+
   it('routes settings.save', async () => {
     const save = vi.fn(async () => {});
     const router = createRouter({

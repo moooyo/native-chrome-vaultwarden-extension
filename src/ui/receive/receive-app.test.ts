@@ -183,6 +183,21 @@ describe('vw-receive-app password required', () => {
     expect(pwInput).not.toBeNull();
     expect(app.shadowRoot!.activeElement).toBe(pwInput);
   });
+
+  it('renders the password prompt as a polite info message, not an assertive alert', async () => {
+    const stubs = makeDeps({
+      fetchImpl: async (input) => (String(input).includes('/access/') ? new Response('', { status: 401 }) : jsonRes({})),
+    });
+    const app = await mount(stubs.deps);
+    linkInput(app).value = linkFor('acc1');
+    accessButton(app).click();
+    await settle(app);
+    const msg = app.shadowRoot!.querySelector('vw-status-message') as (HTMLElement & { tone: string; icon: unknown }) | null;
+    expect(msg).not.toBeNull();
+    // The first access of a password-protected Send is a normal prompt, not a failure.
+    expect(msg!.tone).toBe('info');
+    expect(msg!.icon).toBeUndefined();
+  });
 });
 
 describe('vw-receive-app text send', () => {

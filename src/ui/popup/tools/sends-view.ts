@@ -35,6 +35,7 @@ export class VwSendsView extends LitElement {
     mode: { state: true },
     editingId: { state: true },
     validationError: { state: true },
+    encoding: { state: true },
   };
 
   declare sends: AsyncState<SendSummary[]>;
@@ -43,6 +44,9 @@ export class VwSendsView extends LitElement {
   declare mode: SendMode;
   declare editingId: string | null;
   declare validationError: string | undefined;
+  /** True while a chosen file is being base64-encoded on the main thread (before the create command
+   *  is emitted). Drives the create button's disabled + spinner state so the popup never looks frozen. */
+  declare encoding: boolean;
 
   private submitting: 'create' | 'edit' | null = null;
   private wasPending = false;
@@ -55,6 +59,7 @@ export class VwSendsView extends LitElement {
     this.mode = 'text';
     this.editingId = null;
     this.validationError = undefined;
+    this.encoding = false;
   }
 
   static override styles = [
@@ -175,6 +180,22 @@ export class VwSendsView extends LitElement {
         width: 16px;
         height: 16px;
       }
+      .spin {
+        display: inline-flex;
+      }
+      .spin svg {
+        animation: mvSpin 0.8s linear infinite;
+      }
+      @keyframes mvSpin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .spin svg {
+          animation: none;
+        }
+      }
     `,
   ];
 
@@ -241,7 +262,7 @@ export class VwSendsView extends LitElement {
   }
 
   private async create(): Promise<void> {
-    if (this.pending) return;
+    if (this.pending || this.encoding) return;
     this.validationError = undefined;
     const base = this.baseInput();
     const rawName = this.readValue('[data-name]').trim();
@@ -250,7 +271,15 @@ export class VwSendsView extends LitElement {
       const file = this.renderRoot.querySelector<HTMLInputElement>('[data-file]')?.files?.[0];
       if (!file) { this.validationError = 'Choose a file to share'; return; }
       if (file.size > MAX_FILE_BYTES) { this.validationError = 'File is too large (max 100 MB)'; return; }
-      const dataB64 = await fileToBase64(file);
+      // base64-encoding a large file blocks the popup's main thread; flip the busy flag before the
+      // first await so the button disables and shows a spinner rather than appearing frozen.
+      this.encoding = true;
+      let dataB64: string;
+      try {
+        dataB64 = await fileToBase64(file);
+      } finally {
+        this.encoding = false;
+      }
       this.submitting = 'create';
       emit<SendCreateDetail>(this, 'vw-send-create', { kind: 'file', input: { ...base, name: rawName || file.name }, dataB64, fileName: file.name });
       return;
@@ -344,7 +373,11 @@ export class VwSendsView extends LitElement {
           <label class="field"><span>Max views</span><input class="input" data-max type="number" min="0" placeholder="—" /></label>
         </div>
         ${this.validationError ? html`<vw-status-message tone="danger" .icon=${'alert'} .message=${this.validationError}></vw-status-message>` : nothing}
-        <button type="button" class="button primary block" data-create ?disabled=${this.pending} @click=${() => void this.create()}>${uiIcon('plus')}<span>Create Send</span></button>
+        <button type="button" class="button primary block" data-create ?disabled=${this.pending || this.encoding} @click=${() => void this.create()}>
+          ${this.encoding
+            ? html`<span class="spin" data-encoding>${uiIcon('refresh')}</span><span>Encoding…</span>`
+            : html`${uiIcon('plus')}<span>Create Send</span>`}
+        </button>
       </div>
       <button type="button" class="button block" data-receive @click=${() => this.receive()}>${uiIcon('mail')}<span>Receive a Send</span></button>
     `;

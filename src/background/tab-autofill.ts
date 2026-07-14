@@ -63,6 +63,18 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
     const topUrl = tab.url;
 
     const frames = await deps.getFrames(tabId);
+    // Memoize candidate lookups by URL within this single invocation: the top-frame seed match and
+    // frame 0's per-frame scan share the identical URL, and multiple same-origin frames repeat too.
+    const candidatesByUrl = new Map<string, Promise<AutofillCandidate[]>>();
+    const findCandidates = (frameUrl: string): Promise<AutofillCandidate[]> => {
+      let pending = candidatesByUrl.get(frameUrl);
+      if (!pending) {
+        pending = deps.findCandidates(frameUrl);
+        candidatesByUrl.set(frameUrl, pending);
+      }
+      return pending;
+    };
+
     const inspected: Array<{ frame: BrowserFrame; inspection: FrameInspection }> = [];
     let attempted = 0;
     for (const frame of frames) {
@@ -86,7 +98,7 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
 
     const merged = new Map<string, TabAutofillSuggestion>();
     // Always match the top-frame URI so a row can open detail even when no form was ever found.
-    for (const candidate of await deps.findCandidates(topUrl)) {
+    for (const candidate of await findCandidates(topUrl)) {
       merged.set(candidate.id, { ...candidate });
     }
 
@@ -95,7 +107,7 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
     for (const { frame, inspection } of inspected) {
       // Match candidates against the browser-authoritative frame URL, never the content-reported
       // `inspection.frameUrl` (which a compromised/racing renderer could spoof).
-      const frameCandidates = await deps.findCandidates(frame.url);
+      const frameCandidates = await findCandidates(frame.url);
       for (const candidate of frameCandidates) {
         if (!merged.has(candidate.id)) merged.set(candidate.id, { ...candidate });
       }
@@ -161,12 +173,21 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
       throw err;
     }
 
-    const response = await deps.sendToFrame(tabId, target.frameId, {
-      type: 'autofill.commitLoginFill',
-      formId: target.formId,
-      expectedFrameUrl: frame.url,
-      credentials,
-    });
+    // Mirror getSuggestions' per-frame delivery guard: the content script can be torn down between
+    // credential release and commit (navigation/reload). A recognized "no receiving end" failure is
+    // a graceful per-frame skip; any other error is a real bug and must propagate, not be swallowed.
+    let response: unknown;
+    try {
+      response = await deps.sendToFrame(tabId, target.frameId, {
+        type: 'autofill.commitLoginFill',
+        formId: target.formId,
+        expectedFrameUrl: frame.url,
+        credentials,
+      });
+    } catch (err) {
+      if (isMissingContentScriptError(err)) return { status: 'content_script_unavailable' };
+      throw err;
+    }
     return parseTabFillOutcome(response) ?? { status: 'content_script_unavailable' };
   }
 

@@ -46,4 +46,25 @@ describe('equivalent domains', () => {
     expect(areDomainsEquivalent('a.local', 'b.local', idx)).toBe(true);
     expect(areDomainsEquivalent('google.com', 'youtube.com', idx)).toBe(false);
   });
+
+  it('links overlapping groups so a domain shared by two groups is equivalent to members of both', () => {
+    // 'shared.com' appears in both user groups; merging the overlapping groups makes a.com and
+    // c.com equivalent too. Without merging, the shared domain would keep only the last group id
+    // and areDomainsEquivalent would wrongly return false for the earlier group's pairings.
+    const idx = buildEquivalentDomainIndex([
+      ['a.com', 'shared.com'],
+      ['shared.com', 'c.com'],
+    ]);
+    expect(areDomainsEquivalent('a.com', 'shared.com', idx)).toBe(true);
+    expect(areDomainsEquivalent('shared.com', 'c.com', idx)).toBe(true);
+    expect(areDomainsEquivalent('a.com', 'c.com', idx)).toBe(true); // transitive via the shared domain
+  });
+
+  it('links a user group that overlaps a built-in group', () => {
+    // youtube.com is in the google built-in group; a user group naming it should merge with that
+    // group, so google.com and the user domain become equivalent.
+    const idx = buildEquivalentDomainIndex([['youtube.com', 'mycompany.example']]);
+    expect(areDomainsEquivalent('google.com', 'mycompany.example', idx)).toBe(true);
+    expect(areDomainsEquivalent('gmail.com', 'mycompany.example', idx)).toBe(true);
+  });
 });

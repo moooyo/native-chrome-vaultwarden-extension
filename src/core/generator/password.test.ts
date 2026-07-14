@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generatePassword, DEFAULT_PASSWORD_OPTIONS } from './password.js';
+import { generatePassword, DEFAULT_PASSWORD_OPTIONS, MAX_PASSWORD_LENGTH } from './password.js';
 
 const LOWER = /[a-z]/;
 const UPPER = /[A-Z]/;
@@ -75,6 +75,27 @@ describe('generatePassword', () => {
       seededRandomInt(7),
     );
     expect(pw).toBe('');
+  });
+
+  it('bounds an absurdly large requested length instead of hanging', () => {
+    // A caller (or hostile input) passing 1e6 must not spin the generator into a multi-megabyte string.
+    const pw = generatePassword({ ...DEFAULT_PASSWORD_OPTIONS, length: 1_000_000 }, seededRandomInt(11));
+    expect(pw).toHaveLength(MAX_PASSWORD_LENGTH);
+  });
+
+  it('coerces a non-finite length to a bounded password (no hang, no overflow)', () => {
+    const pw = generatePassword({ ...DEFAULT_PASSWORD_OPTIONS, length: Number.NaN }, seededRandomInt(12));
+    expect(pw.length).toBeGreaterThan(0);
+    expect(pw.length).toBeLessThanOrEqual(MAX_PASSWORD_LENGTH);
+  });
+
+  it('bounds absurd per-class minimums so they cannot blow up the output length', () => {
+    const pw = generatePassword(
+      { length: 8, lowercase: true, uppercase: true, numbers: true, special: true, minNumbers: 5000, minSpecial: 5000, avoidAmbiguous: false },
+      seededRandomInt(13),
+    );
+    // Each enabled class still guarantees at least one character (up to +4), so allow small headroom.
+    expect(pw.length).toBeLessThanOrEqual(MAX_PASSWORD_LENGTH + 4);
   });
 
   it('is reproducible for a fixed random source and varies with the seed', () => {

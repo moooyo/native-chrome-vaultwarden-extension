@@ -3,8 +3,14 @@
 // render-based closed-shadow notice; this stable factory delegates to its mount, which renders
 // the message inertly inside a closed shadow root and auto-dismisses.
 
-import { presentNotice } from './ui/notice-element.js';
+import { presentNotice, type NoticeHandle } from './ui/notice-element.js';
 
-export function showNotice(message: string): void {
-  presentNotice(message);
+// Only one notice is shown at a time: each new message dismisses the previous bar first, so several
+// errors in quick succession never stack into an illegible pile of bottom-center bars.
+let activeNotice: NoticeHandle | null = null;
+
+export function showNotice(message: string): NoticeHandle {
+  activeNotice?.remove();
+  activeNotice = presentNotice(message);
+  return activeNotice;
 }

@@ -37,6 +37,24 @@ describe('vw-dialog', () => {
     expect(nativeDialog?.querySelector('h2')?.textContent).toContain('Delete item');
   });
 
+  it('labels the dialog via aria-labelledby when a heading is set', async () => {
+    const dialog = await mountDialog();
+    const nativeDialog = dialog.shadowRoot!.querySelector('dialog')!;
+    expect(nativeDialog.getAttribute('aria-labelledby')).toBe('vw-dialog-heading');
+    expect(nativeDialog.getAttribute('aria-label')).toBeNull();
+  });
+
+  it('drops aria-labelledby when headingless and falls back to aria-label', async () => {
+    const dialog = document.createElement('vw-dialog') as VwDialog;
+    dialog.label = 'Confirm action';
+    document.body.append(dialog);
+    await dialog.updateComplete;
+    const nativeDialog = dialog.shadowRoot!.querySelector('dialog')!;
+    // A headingless dialog must not point aria-labelledby at an empty heading (empty accessible name).
+    expect(nativeDialog.getAttribute('aria-labelledby')).toBeNull();
+    expect(nativeDialog.getAttribute('aria-label')).toBe('Confirm action');
+  });
+
   it('moves initial focus to the slotted autofocus target when opened', async () => {
     const trigger = makeTrigger();
     trigger.focus();

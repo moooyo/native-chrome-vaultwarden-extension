@@ -23,6 +23,7 @@ import type { SymmetricKey } from '../crypto/keys.js';
 import { hexToBytes, base64ToBytes, bytesToBase64, bytesToBase64Url, base64UrlToBytes } from '../crypto/encoding.js';
 import { hmacSha256 } from '../crypto/primitives.js';
 import { decryptToText, EncStringMacError } from '../crypto/encstring.js';
+import * as encstringNs from '../crypto/encstring.js';
 import { derToRawSignature } from './fido2.js';
 import { encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
 import { buildTextSendRequest } from './sends.js';
@@ -318,6 +319,40 @@ describe('VaultService', () => {
     await service.sync();
     await service.clearCache();
     await expect(service.getField('cipher-1', 'password')).rejects.toThrow('vault is not synced');
+  });
+
+  // Lock-time metadata purge: decrypted item names / login URIs must not linger in storage.local after
+  // lock, but the list must rebuild locally (no re-sync) on the next unlocked read.
+  it('purgeDecryptedCaches drops the plaintext summaries but keeps them rebuildable while unlocked', async () => {
+    const { service } = await makeService();
+    const synced = await service.sync();
+    expect(synced.items).not.toEqual([]);
+
+    await service.purgeDecryptedCaches();
+    // Still unlocked → the next read rebuilds the identical listing from the encrypted vault cache.
+    await expect(service.listItems()).resolves.toEqual(synced);
+  });
+
+  it('leaves the vault list empty after purge while locked (no plaintext rebuilt without the key)', async () => {
+    const { service, session } = await makeService();
+    await service.sync();
+    await service.purgeDecryptedCaches();
+    await session.lock();
+    await expect(service.listItems()).resolves.toEqual({ items: [], folders: [], collections: [], orgPermissions: [] });
+  });
+
+  it('decryptCipherById rejects with an AppError code the router can map (sync_required / locked)', async () => {
+    // Not synced → sync_required (not the generic 'error') so the UI prompts a sync, not a failure toast.
+    const notSynced = await makeService();
+    await notSynced.service.sync();
+    await notSynced.service.clearCache();
+    await expect(notSynced.service.getField('cipher-1', 'password')).rejects.toMatchObject({ code: 'sync_required' });
+
+    // Synced then locked → locked, so the UI prompts an unlock.
+    const { service, session } = await makeService();
+    await service.sync();
+    await session.lock();
+    await expect(service.getField('cipher-1', 'password')).rejects.toMatchObject({ code: 'locked' });
   });
 
   // Coverage for undecryptable-cipher path through getField: decryptCipher returns a
@@ -694,6 +729,30 @@ describe('VaultService', () => {
       stubApi(api).listSends = vi.fn(async () => []);
       await expect(service.updateSend('missing', { name: 'N' }, 'http://x')).rejects.toMatchObject({ code: 'error' });
     });
+    it('updateSend uses the PUT response and does not list sends a second time', async () => {
+      const { service, api } = await makeService();
+      const existing = { id: 's1', accessId: 'a1', type: 0, name: FIELD_VECTOR.encString, key: FIELD_VECTOR.encString, text: { text: FIELD_VECTOR.encString }, deletionDate: new Date(0).toISOString(), accessCount: 3 };
+      const putResponse = { ...existing, accessCount: 9 };
+      const listSends = vi.fn(async () => [existing]);
+      stubApi(api).listSends = listSends;
+      stubApi(api).updateSend = vi.fn(async () => putResponse);
+      stubApi(api).removeSendPassword = vi.fn(async () => {});
+      const summary = await service.updateSend('s1', { name: 'New', text: 'x', passwordMode: 'keep' }, 'http://localhost:8080');
+      expect(listSends).toHaveBeenCalledTimes(1); // only the pre-PUT read; the PUT response is reused
+      expect(summary.accessCount).toBe(9); // comes from the PUT response, not a re-list
+    });
+
+    it('updateSend reflects password removal in the returned summary (passwordProtected false)', async () => {
+      const { service, api } = await makeService();
+      // The PUT response still carries the pre-removal password hash; removeSendPassword clears it after.
+      const existing = { id: 's1', accessId: 'a1', type: 0, name: FIELD_VECTOR.encString, key: FIELD_VECTOR.encString, text: { text: FIELD_VECTOR.encString }, deletionDate: new Date(0).toISOString(), accessCount: 0, password: 'still-hashed' };
+      stubApi(api).listSends = vi.fn(async () => [existing]);
+      stubApi(api).updateSend = vi.fn(async () => existing);
+      stubApi(api).removeSendPassword = vi.fn(async () => {});
+      const summary = await service.updateSend('s1', { name: 'N', passwordMode: 'remove' }, 'http://x');
+      expect(stubApi(api).removeSendPassword).toHaveBeenCalledWith('access', 's1');
+      expect(summary.passwordProtected).toBe(false);
+    });
   });
 
   describe('save / update login capture', () => {
@@ -730,6 +789,37 @@ describe('VaultService', () => {
       // Even the identical stored credential is treated as new, because protected items are skipped.
       await expect(service.checkSaveLogin(SITE, { username: USER, password: PASS }, UriMatchStrategy.Domain))
         .resolves.toEqual({ action: 'save', suggestedName: 'example.com' });
+    });
+
+    it('checkSaveLogin does not decrypt secrets of ciphers that do not match the page (summary pre-filter)', async () => {
+      const otherPassEnc = await encUnder('other-secret', testUserKey);
+      const sync: SyncResponse = {
+        profile: { id: 'u', email: 'u@example.com' },
+        ciphers: [
+          // Non-matching item is scanned FIRST: the old path fully decrypts it (revealing its password)
+          // before reaching the match; the summary pre-filter skips it without touching secrets.
+          { id: 'other', type: 1, favorite: false, organizationId: null,
+            name: await encUnder('Other', testUserKey),
+            login: { username: await encUnder('me@other.test', testUserKey), password: otherPassEnc,
+              uris: [{ uri: await encUnder('https://other.test', testUserKey) }] } },
+          { id: 'match', type: 1, favorite: false, organizationId: null,
+            name: await encUnder('Match', testUserKey),
+            login: { username: await encUnder('me@example.com', testUserKey), password: await encUnder('match-pass', testUserKey),
+              uris: [{ uri: await encUnder('https://example.com', testUserKey) }] } },
+        ],
+      };
+      const { service } = await makeService(sync);
+      await service.sync();
+      const spy = vi.spyOn(encstringNs, 'decryptToText');
+      try {
+        // Correctness is unchanged: a new username on example.com still yields 'save'.
+        await expect(service.checkSaveLogin('https://example.com', { username: 'me@example.com', password: 'x' }, UriMatchStrategy.Domain))
+          .resolves.toMatchObject({ action: 'update', cipherId: 'match' });
+        // The non-matching item's password is never fed to decryptToText — it was filtered by summary.
+        expect(spy.mock.calls.map((c) => c[0])).not.toContain(otherPassEnc);
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it('saveLogin creates an encrypted login cipher and re-syncs', async () => {
@@ -1573,6 +1663,56 @@ describe('VaultService', () => {
     const { pwnedCount } = await import('./pwned.js');
     expect(vi.mocked(pwnedCount).mock.calls.length).toBe(2); // deduped: 'reused-weak' + 'unique-safe'
     expect(JSON.stringify(entries)).not.toContain('reused-weak'); // no password crosses the boundary
+  });
+
+  it('getPwnedReport tolerates a single failed HIBP lookup (allSettled), omitting only that id', async () => {
+    const { pwnedCount } = await import('./pwned.js');
+    const mock = vi.mocked(pwnedCount);
+    const original = mock.getMockImplementation();
+    mock.mockImplementation(async (pw: string) => {
+      if (pw === 'boom') throw new Error('network down');
+      return pw === 'pwned' ? 7 : 0;
+    });
+    try {
+      const enc = async (s: string) => encUnder(s, testUserKey);
+      const sync: SyncResponse = {
+        profile: { id: 'u', email: 'u@example.com' },
+        ciphers: [
+          { id: 'a', type: 1, name: await enc('A'), favorite: false, organizationId: null, login: { password: await enc('pwned') } },
+          { id: 'b', type: 1, name: await enc('B'), favorite: false, organizationId: null, login: { password: await enc('boom') } },
+          { id: 'c', type: 1, name: await enc('C'), favorite: false, organizationId: null, login: { password: await enc('safe') } },
+        ],
+      };
+      const { service } = await makeService(sync);
+      await service.sync();
+      const entries = await service.getPwnedReport();
+      // 'b' failed → omitted (never 0, so the UI shows it as unknown); 'a' and 'c' succeeded.
+      expect(entries).toEqual([{ id: 'a', pwnedCount: 7 }, { id: 'c', pwnedCount: 0 }]);
+    } finally {
+      mock.mockImplementation(original!);
+    }
+  });
+
+  it('getPwnedReport throws only when every HIBP lookup fails', async () => {
+    const { pwnedCount } = await import('./pwned.js');
+    const mock = vi.mocked(pwnedCount);
+    const original = mock.getMockImplementation();
+    mock.mockImplementation(async () => { throw new Error('all down'); });
+    try {
+      const enc = async (s: string) => encUnder(s, testUserKey);
+      const sync: SyncResponse = {
+        profile: { id: 'u', email: 'u@example.com' },
+        ciphers: [
+          { id: 'a', type: 1, name: await enc('A'), favorite: false, organizationId: null, login: { password: await enc('p1') } },
+          { id: 'b', type: 1, name: await enc('B'), favorite: false, organizationId: null, login: { password: await enc('p2') } },
+        ],
+      };
+      const { service } = await makeService(sync);
+      await service.sync();
+      await expect(service.getPwnedReport()).rejects.toMatchObject({ code: 'error' });
+    } finally {
+      mock.mockImplementation(original!);
+    }
   });
 
   it('findFillItems lists all cards (no URL match), sorted favorite-then-name, without secrets', async () => {

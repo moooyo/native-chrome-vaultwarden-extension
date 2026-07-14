@@ -166,6 +166,51 @@ describe('decryptCipher', () => {
     });
   });
 
+  it('resolves to undecryptable when a field throws a non-MAC error (bad wrapped-key length)', async () => {
+    // A per-cipher key that unwraps to 32 bytes (not 64) makes symmetricKeyFromBytes throw a plain
+    // Error — not EncStringMacError/UnsupportedEncTypeError. It must still degrade to undecryptable
+    // rather than reject (targeted reveal/download must never throw on one malformed cipher).
+    const badKey = await encryptBytes(new Uint8Array(32), userKey, new Uint8Array(16).fill(0x07));
+    const cipher: CipherResponse = {
+      id: 'bad-key', type: 1, favorite: true, organizationId: null,
+      name: FIELD_VECTOR.encString, key: badKey, login: null,
+    };
+    const out = await decryptCipher(cipher, userKey);
+    expect(out).toMatchObject({ id: 'bad-key', type: 1, favorite: true, name: '(error)', undecryptable: true });
+  });
+
+  it('resolves to undecryptable when a field EncString has invalid base64 (not a MAC error)', async () => {
+    const cipher: CipherResponse = {
+      id: 'bad-b64', type: 1, favorite: false, organizationId: null,
+      name: '2.@@@invalid@@@|@@@|@@@', login: null,
+    };
+    const out = await decryptCipher(cipher, userKey);
+    expect(out).toMatchObject({ id: 'bad-b64', type: 1, name: '(error)', undecryptable: true });
+  });
+
+  it('degrades a single custom field whose name or value fails to decrypt instead of nuking the item', async () => {
+    const cipher: CipherResponse = {
+      id: 'field-bad', type: 1, favorite: false, organizationId: null,
+      name: await encryptString('Good Name', userKey),
+      login: { username: await encryptString('alice', userKey) },
+      fields: [
+        { type: 0, name: TAMPERED_FIELD_ENCSTRING, value: await encryptString('v', userKey) },
+        { type: 1, name: await encryptString('PIN', userKey), value: TAMPERED_FIELD_ENCSTRING },
+        { type: 2, name: await encryptString('Flag', userKey), value: await encryptString('true', userKey) },
+      ],
+    };
+    const out = await decryptCipher(cipher, userKey);
+    expect(out?.undecryptable).toBeUndefined();
+    expect(out?.name).toBe('Good Name');
+    expect(out?.username).toBe('alice');
+    // Bad name → empty name (kept); bad value → dropped; the healthy field is intact.
+    expect(out?.fields).toEqual([
+      { type: 0, name: '', value: 'v' },
+      { type: 1, name: 'PIN' },
+      { type: 2, name: 'Flag', value: 'true' },
+    ]);
+  });
+
   it('decrypts a personal cipher using a per-cipher item key', async () => {
     const itemEncKey = new Uint8Array(32).fill(0x01);
     const itemMacKey = new Uint8Array(32).fill(0x02);

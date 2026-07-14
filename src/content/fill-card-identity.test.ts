@@ -57,6 +57,53 @@ describe('fillCardForm', () => {
     fillCardForm(form, { number: '4111', expMonth: 'September' });
     expect((document.getElementById('mm') as HTMLSelectElement).value).toBe('9');
   });
+
+  it('matches a zero-padded month <select> from an unpadded vault month', () => {
+    document.body.innerHTML = `
+      <form>
+        <input autocomplete="cc-number">
+        <select autocomplete="cc-exp-month" id="mm">
+          <option value="">Month</option>
+          <option value="01">01</option>
+          <option value="02">02</option>
+          <option value="03">03</option>
+        </select>
+      </form>`;
+    const form = detectCardForms()[0]!;
+    // Vault stores expMonth unpadded (e.g. "3"); the site's <select> uses "01".."12".
+    fillCardForm(form, { number: '4111', expMonth: '3', expYear: '2027' });
+    expect((document.getElementById('mm') as HTMLSelectElement).value).toBe('03');
+  });
+
+  it('matches a two-digit year <select> from a four-digit vault year', () => {
+    document.body.innerHTML = `
+      <form>
+        <input autocomplete="cc-number">
+        <select autocomplete="cc-exp-year" id="yy">
+          <option value="">Year</option>
+          <option value="26">26</option>
+          <option value="27">27</option>
+        </select>
+      </form>`;
+    const form = detectCardForms()[0]!;
+    fillCardForm(form, { number: '4111', expMonth: '3', expYear: '2027' });
+    expect((document.getElementById('yy') as HTMLSelectElement).value).toBe('27');
+  });
+
+  it('matches a four-digit year <select> from a two-digit vault year', () => {
+    document.body.innerHTML = `
+      <form>
+        <input autocomplete="cc-number">
+        <select autocomplete="cc-exp-year" id="yy">
+          <option value="">Year</option>
+          <option value="2026">2026</option>
+          <option value="2027">2027</option>
+        </select>
+      </form>`;
+    const form = detectCardForms()[0]!;
+    fillCardForm(form, { number: '4111', expMonth: '3', expYear: '27' });
+    expect((document.getElementById('yy') as HTMLSelectElement).value).toBe('2027');
+  });
 });
 
 describe('fillIdentityForm', () => {

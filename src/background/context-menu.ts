@@ -51,27 +51,51 @@ function parseItemId(id: string): { scope: 'form' | 'field'; kind: FillKind; cip
 }
 
 export function createContextMenu(deps: ContextMenuDeps) {
-  return {
-    /** Rebuild the menu from the current vault. Hides all vault items unless the vault is unlocked. */
-    async refresh(): Promise<void> {
-      await deps.menus.removeAll();
-      if ((await deps.getState()) !== 'unlocked') return; // never leak item names when locked / logged out
-      const [cards, identities] = await Promise.all([deps.findFillItems('card'), deps.findFillItems('identity')]);
-      if (cards.length === 0 && identities.length === 0) return;
-      deps.menus.create({ id: ROOT_ID, title: '密屿', contexts: ['editable'] });
-      for (const group of GROUPS) {
-        const items = group.kind === 'card' ? cards : identities;
-        if (items.length === 0) continue;
-        deps.menus.create({ id: group.id, parentId: ROOT_ID, title: group.title, contexts: ['editable'] });
-        for (const item of items) {
-          deps.menus.create({
-            id: itemId(group.scope, group.kind, item.id),
-            parentId: group.id,
-            title: item.reprompt ? `${item.name} 🔒` : item.name,
-            contexts: ['editable'],
-          });
-        }
+  /** Rebuild the menu from the current vault. Hides all vault items unless the vault is unlocked. */
+  async function rebuild(): Promise<void> {
+    await deps.menus.removeAll();
+    if ((await deps.getState()) !== 'unlocked') return; // never leak item names when locked / logged out
+    const [cards, identities] = await Promise.all([deps.findFillItems('card'), deps.findFillItems('identity')]);
+    if (cards.length === 0 && identities.length === 0) return;
+    deps.menus.create({ id: ROOT_ID, title: '密屿', contexts: ['editable'] });
+    for (const group of GROUPS) {
+      const items = group.kind === 'card' ? cards : identities;
+      if (items.length === 0) continue;
+      deps.menus.create({ id: group.id, parentId: ROOT_ID, title: group.title, contexts: ['editable'] });
+      for (const item of items) {
+        deps.menus.create({
+          id: itemId(group.scope, group.kind, item.id),
+          parentId: group.id,
+          title: item.reprompt ? `${item.name} 🔒` : item.name,
+          contexts: ['editable'],
+        });
       }
+    }
+  }
+
+  // Single-flight, newest-wins serialization: removeAll()+create() must never interleave across two
+  // concurrent refreshes (that races duplicate-id create() calls). A refresh requested while one is
+  // in flight is coalesced into a single trailing rebuild so the final menu reflects the latest state.
+  let inFlight: Promise<void> | null = null;
+  let queued = false;
+
+  return {
+    async refresh(): Promise<void> {
+      if (inFlight) {
+        queued = true;
+        return inFlight;
+      }
+      inFlight = (async () => {
+        try {
+          do {
+            queued = false;
+            await rebuild();
+          } while (queued);
+        } finally {
+          inFlight = null;
+        }
+      })();
+      return inFlight;
     },
 
     /** A menu item was clicked: fetch fill data in the worker and forward a command to the clicked frame. */
@@ -85,17 +109,22 @@ export function createContextMenu(deps: ContextMenuDeps) {
         const command: FillCommand = { type: 'autofill.fill', scope: parsed.scope, kind: parsed.kind, data };
         await deps.tabs.sendMessage(tab.id, command, options);
       } catch (err) {
+        const code = errorCode(err);
         // Reprompt-protected items refuse inline release; tell the page to surface that, never the data.
-        if (isReprompt(err)) {
+        if (code === 'reprompt_required') {
           const command: FillErrorCommand = { type: 'autofill.fillError', code: 'reprompt_required' };
           await deps.tabs.sendMessage(tab.id, command, options);
+          return;
         }
-        // denied / locked / sync_required: silently no-op.
+        // denied / locked / sync_required are expected refusals — safe to ignore silently.
+        if (code === 'denied' || code === 'locked' || code === 'sync_required') return;
+        // Anything else is unexpected; surface it for diagnosis rather than a silent no-op.
+        console.error('context menu fill failed', err);
       }
     },
   };
 }
 
-function isReprompt(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'reprompt_required';
+function errorCode(err: unknown): string | undefined {
+  return typeof err === 'object' && err !== null ? (err as { code?: string }).code : undefined;
 }

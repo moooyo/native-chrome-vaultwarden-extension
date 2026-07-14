@@ -26,7 +26,7 @@ import './tools/health-view.js';
 import './tools/sends-view.js';
 import './tools/account-security-view.js';
 import './tools/pin-view.js';
-import { triggerDownload } from './utils.js';
+import { safeWebUrl, triggerDownload } from './utils.js';
 import { addPasswordToHistory } from '../../core/generator/history.js';
 import type { AsyncState } from '../components/async-state.js';
 import type {
@@ -115,7 +115,10 @@ function createDefaultBrowser(): PopupBrowser {
     },
     async openUrl(url: string) {
       const normalized = url.includes('://') ? url : `https://${url}`;
-      await browser.tabs.create({ url: normalized });
+      // Gate the (possibly org-shared/crafted) stored URI down to http/https before navigating — a
+      // routine click must never open a file:/chrome:/javascript: scheme in a new tab.
+      const safe = safeWebUrl(normalized);
+      if (safe !== undefined) await browser.tabs.create({ url: safe });
     },
   };
 }
@@ -254,6 +257,11 @@ export class VwPopupApp extends LitElement {
    *  Re-resolved on every vault entry — the popup never trusts a remembered tab across sessions. */
   private activeTabId: number | undefined;
 
+  /** Monotonic counter incremented at the start of each `loadSuggestions`. A run only commits its
+   *  result while it still holds the latest ticket, so an earlier request that resolves late (rapid
+   *  enterVault / account-switch overlap) can never overwrite a newer one. */
+  private latestSuggestionsSeq = 0;
+
   constructor() {
     super();
     this.route = { name: 'loading' };
@@ -342,6 +350,9 @@ export class VwPopupApp extends LitElement {
       clearInterval(this.totpTimer);
       this.totpTimer = undefined;
     }
+    // Also stop the 2FA-list countdown here so a programmatic detach (disconnectedCallback) while the
+    // totp route is active can't leak the 1s interval — `navigate()` alone doesn't cover disconnects.
+    this.stopTotpList();
     this.repromptCredential = null;
     this.detailExtrasCache = undefined;
     this.detailCipher = null;
@@ -613,9 +624,10 @@ export class VwPopupApp extends LitElement {
    *  explicit `no_eligible_tab` neutral state; unavailable outcomes map to their reason; only
    *  non-secret `TabAutofillSuggestion`s ever reach `suggestionsState`. */
   private async loadSuggestions(): Promise<void> {
+    const seq = ++this.latestSuggestionsSeq;
     this.suggestionsState = { status: 'loading' };
     const tabId = await this.browser.getActiveTabId();
-    if (!this.isUnlockedWorkspace()) return;
+    if (!this.isUnlockedWorkspace() || seq !== this.latestSuggestionsSeq) return;
     if (tabId === undefined) {
       this.activeTabId = undefined;
       this.suggestionsState = { status: 'unavailable', reason: 'no_eligible_tab' };
@@ -623,7 +635,7 @@ export class VwPopupApp extends LitElement {
     }
     this.activeTabId = tabId;
     const response = await this.request({ type: 'autofill.getTabSuggestions', tabId });
-    if (!this.isUnlockedWorkspace()) return;
+    if (!this.isUnlockedWorkspace() || seq !== this.latestSuggestionsSeq) return;
     if (!response.ok) {
       this.suggestionsState = { status: 'error', message: response.error.message };
       return;
@@ -688,17 +700,24 @@ export class VwPopupApp extends LitElement {
     if (uri) await this.browser.openUrl(uri);
   }
 
+  /** The shared vault-sync body: request a sync, apply the refreshed listing, stamp the last-synced
+   *  time, and reload suggestions. Each caller owns its own in-flight guard (the sync-bar uses
+   *  `syncing`; the tools menu uses `pending`). */
+  private async syncVault(): Promise<void> {
+    const response = await this.request({ type: 'vault.sync' });
+    if (response.ok) {
+      this.applyListingResponse(response);
+      this.lastSync = Date.now();
+      await this.loadSuggestions();
+    }
+  }
+
   /** Manual vault sync from the bottom sync bar: drives the spinner + last-synced label. */
   private async handleSync(): Promise<void> {
     if (this.syncing) return;
     this.syncing = true;
     try {
-      const response = await this.request({ type: 'vault.sync' });
-      if (response.ok) {
-        this.applyListingResponse(response);
-        this.lastSync = Date.now();
-        await this.loadSuggestions();
-      }
+      await this.syncVault();
     } finally {
       this.syncing = false;
     }
@@ -953,11 +972,7 @@ export class VwPopupApp extends LitElement {
         if (this.pending) return;
         this.pending = true;
         try {
-          const response = await this.request({ type: 'vault.sync' });
-          if (response.ok) {
-            this.applyListingResponse(response);
-            await this.loadSuggestions();
-          }
+          await this.syncVault();
         } finally {
           this.pending = false;
         }
@@ -973,16 +988,28 @@ export class VwPopupApp extends LitElement {
     return (this.accounts.find((account) => account.active) ?? this.accounts[0])?.email;
   }
 
-  /** Copy a non-secret tool value (a generated password/username, or a Send link) and schedule the
-   *  background clipboard clear. Feedback lands on the shared tool banner. */
-  private async copyToolValue(value: string, label: string): Promise<void> {
+  /** Shared clipboard copy: write the value, schedule the background clear, and report success/failure
+   *  through the caller's status setter. Optionally raises the copy-confirmation toast. */
+  private async copy(
+    value: string,
+    label: string,
+    setStatus: (status: DetailStatus) => void,
+    opts?: { toast?: boolean },
+  ): Promise<void> {
     try {
       await navigator.clipboard.writeText(value);
       void this.request({ type: 'clipboard.scheduleClear' });
-      this.toolStatus = { message: `${label} copied to clipboard`, tone: 'success' };
+      setStatus({ message: `${label} copied to clipboard`, tone: 'success' });
+      if (opts?.toast) this.showToast(t('common.copiedClear'));
     } catch {
-      this.toolStatus = { message: `Failed to copy ${label.toLowerCase()}`, tone: 'danger' };
+      setStatus({ message: `Failed to copy ${label.toLowerCase()}`, tone: 'danger' });
     }
+  }
+
+  /** Copy a non-secret tool value (a generated password/username, or a Send link) and schedule the
+   *  background clipboard clear. Feedback lands on the shared tool banner. */
+  private copyToolValue(value: string, label: string): Promise<void> {
+    return this.copy(value, label, (status) => { this.toolStatus = status; });
   }
 
   /** Record a freshly generated value into the in-memory (never persisted) generator history. */
@@ -1263,15 +1290,8 @@ export class VwPopupApp extends LitElement {
   }
 
   /** Copy a plaintext value the detail already displays, then schedule the background clipboard clear. */
-  private async copyToClipboard(value: string, label: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(value);
-      void this.request({ type: 'clipboard.scheduleClear' });
-      this.detailStatus = { message: `${label} copied to clipboard`, tone: 'success' };
-      this.showToast(t('common.copiedClear'));
-    } catch {
-      this.detailStatus = { message: `Failed to copy ${label.toLowerCase()}`, tone: 'danger' };
-    }
+  private copyToClipboard(value: string, label: string): Promise<void> {
+    return this.copy(value, label, (status) => { this.detailStatus = status; }, { toast: true });
   }
 
   private handleCopy(detail: CopyDetail): void {

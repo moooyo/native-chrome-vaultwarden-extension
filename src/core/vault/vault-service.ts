@@ -93,6 +93,15 @@ export class VaultService {
     if (!auth) throw new Error('not logged in');
     const response = await this.deps.api.sync(auth.accessToken);
     this.assertIdentityEpoch(identityEpoch);
+    return this.decryptAndPersist(response, identityEpoch);
+  }
+
+  /**
+   * Decrypt a sync response and persist every derived cache (summaries, folders, collections, org
+   * permissions, equivalence data). Requires an unlocked vault. Shared by sync() and the lock/unlock
+   * cache rebuild so the two paths cannot drift.
+   */
+  private async decryptAndPersist(response: SyncResponse, identityEpoch: number): Promise<VaultListing> {
     const userKey = await this.deps.session.loadUserKey();
     if (!userKey) throw new Error('vault is locked');
     const orgKeys = await this.buildOrgKeys(response.profile);
@@ -124,6 +133,31 @@ export class VaultService {
     return { items, folders, collections, orgPermissions };
   }
 
+  /**
+   * Purge the DECRYPTED metadata caches (item names, login URIs, folder/collection names, org
+   * permissions) from storage.local — called on lock so they don't linger as plaintext on disk. The
+   * encrypted VAULT_CACHE is kept, so listItems() rebuilds the listing locally (no re-sync) on the
+   * next unlocked read.
+   */
+  async purgeDecryptedCaches(): Promise<void> {
+    await this.withCacheMutation(async () => {
+      await this.deps.localStore.remove(SUMMARY_CACHE_KEY);
+      await this.deps.localStore.remove(FOLDER_CACHE_KEY);
+      await this.deps.localStore.remove(COLLECTION_CACHE_KEY);
+      await this.deps.localStore.remove(EQUIV_DOMAINS_KEY);
+      await this.deps.localStore.remove(EQUIV_EXCLUDED_KEY);
+      await this.deps.localStore.remove(ORG_PERMISSIONS_KEY);
+    });
+  }
+
+  /** Rebuild the decrypted caches from the still-cached encrypted vault, only when unlocked. */
+  private async rebuildDecryptedCachesIfUnlocked(): Promise<VaultListing | undefined> {
+    const response = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
+    if (!response) return undefined;
+    if (!(await this.deps.session.loadUserKey())) return undefined; // locked — keep the caches purged
+    return this.decryptAndPersist(response, this.identityEpoch());
+  }
+
   private identityEpoch(): number {
     return this.deps.getIdentityEpoch?.() ?? 0;
   }
@@ -153,8 +187,16 @@ export class VaultService {
   }
 
   async listItems(): Promise<VaultListing> {
+    let items = await this.deps.localStore.get<CipherSummary[]>(SUMMARY_CACHE_KEY);
+    if (!items) {
+      // Caches were purged on lock but the encrypted vault is still cached — rebuild locally on the
+      // first unlocked read (no re-sync). Stays empty while locked (no user key).
+      const rebuilt = await this.rebuildDecryptedCachesIfUnlocked();
+      if (rebuilt) return rebuilt;
+      items = [];
+    }
     return {
-      items: (await this.deps.localStore.get<CipherSummary[]>(SUMMARY_CACHE_KEY)) ?? [],
+      items,
       folders: (await this.deps.localStore.get<FolderSummary[]>(FOLDER_CACHE_KEY)) ?? [],
       collections: (await this.deps.localStore.get<CollectionSummary[]>(COLLECTION_CACHE_KEY)) ?? [],
       orgPermissions: (await this.deps.localStore.get<OrgPermission[]>(ORG_PERMISSIONS_KEY)) ?? [],
@@ -397,12 +439,19 @@ export class VaultService {
   async updateSend(id: string, input: UpdateSendInput, serverUrl: string): Promise<SendSummary> {
     const userKey = await this.requireUserKey();
     const token = await this.requireToken();
+    // The pre-PUT read is required — there is no single-send GET, and buildUpdateSendRequest needs the
+    // existing send key / dates / file. The PUT response is the authoritative post-update record, so we
+    // reuse it directly instead of re-listing every send.
     const existing = (await this.deps.api.listSends(token)).find((s) => s.id === id);
     if (!existing) throw new AppError('error', 'Send not found');
     const request = await buildUpdateSendRequest(existing, input, userKey, this.deps.now ? { now: this.deps.now } : {});
-    await this.deps.api.updateSend(token, id, request);
-    if (input.passwordMode === 'remove') await this.deps.api.removeSendPassword(token, id);
-    const updated = (await this.deps.api.listSends(token)).find((s) => s.id === id) ?? existing;
+    const updated = await this.deps.api.updateSend(token, id, request);
+    if (input.passwordMode === 'remove') {
+      await this.deps.api.removeSendPassword(token, id);
+      // The PUT response still carries the pre-removal password hash; clear it so the summary reports
+      // passwordProtected: false to match the just-removed state.
+      return decryptSend({ ...updated, password: null }, userKey, serverUrl);
+    }
     return decryptSend(updated, userKey, serverUrl);
   }
 
@@ -907,16 +956,24 @@ export class VaultService {
     const unique = [...new Set(logins.map((l) => l.password))];
     const byPassword = new Map<string, number>();
     const LIMIT = 6;
-    try {
-      for (let i = 0; i < unique.length; i += LIMIT) {
-        const batch = unique.slice(i, i + LIMIT);
-        const counts = await Promise.all(batch.map((pw) => pwnedCount(pw)));
-        batch.forEach((pw, j) => byPassword.set(pw, counts[j]!));
-      }
-    } catch {
+    // Look up each unique password independently: one failed HIBP request must not abort the whole
+    // report. Failed passwords are simply left out of byPassword (their ids get pwnedCount undefined,
+    // never a misleading 0). Only a total failure — no lookup succeeded — surfaces as an error.
+    for (let i = 0; i < unique.length; i += LIMIT) {
+      const batch = unique.slice(i, i + LIMIT);
+      const results = await Promise.allSettled(batch.map((pw) => pwnedCount(pw)));
+      results.forEach((r, j) => {
+        if (r.status === 'fulfilled') byPassword.set(batch[j]!, r.value);
+      });
+    }
+    if (unique.length > 0 && byPassword.size === 0) {
       throw new AppError('error', 'Could not reach the breach service');
     }
-    return logins.map((l) => ({ id: l.id, pwnedCount: byPassword.get(l.password) ?? 0 }));
+    // Omit ids whose lookup failed so the UI shows them as unknown (undefined) rather than "0 breaches".
+    return logins.flatMap((l) => {
+      const count = byPassword.get(l.password);
+      return count === undefined ? [] : [{ id: l.id, pwnedCount: count }];
+    });
   }
 
   /**
@@ -973,11 +1030,13 @@ export class VaultService {
 
   private async decryptCipherById(id: string): Promise<DecryptedCipher | undefined> {
     const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
-    if (!cache) throw new Error('vault is not synced');
+    // AppError codes so the router maps these to 'sync_required' / 'locked' (a sync/unlock prompt),
+    // not the generic 'error'. Messages kept verbatim for callers that match on them.
+    if (!cache) throw new AppError('sync_required', 'vault is not synced');
     const cipher = cache.ciphers.find((c) => c.id === id);
     if (!cipher) return undefined;
     const userKey = await this.deps.session.loadUserKey();
-    if (!userKey) throw new Error('vault is locked');
+    if (!userKey) throw new AppError('locked', 'vault is locked');
     const orgKeys = await this.buildOrgKeys(cache.profile);
     return decryptCipher(cipher, userKey, orgKeys);
   }
@@ -1140,18 +1199,24 @@ export class VaultService {
     if (!submitted.password) return { action: 'none' };
     const cache = await this.deps.localStore.get<SyncResponse>(VAULT_CACHE_KEY);
     if (!cache) return { action: 'none' };
+    const summaries = (await this.deps.localStore.get<CipherSummary[]>(SUMMARY_CACHE_KEY)) ?? [];
     const userKey = await this.deps.session.loadUserKey();
     if (!userKey) return { action: 'none' };
     const orgKeys = await this.buildOrgKeys(cache.profile);
     const equivalentIndex = await this.loadEquivalentIndex();
     const username = submitted.username?.trim().toLowerCase();
-    for (const cipher of cache.ciphers) {
-      if (cipher.type !== 1 || cipher.deletedDate) continue;
-      const decrypted = await decryptCipher(cipher, userKey, orgKeys);
-      if (!decrypted || decrypted.undecryptable || decrypted.reprompt) continue;
-      if (!bestMatch(decrypted.loginUris, frameUrl, defaultStrategy, equivalentIndex)) continue;
-      const sameUser = username ? decrypted.username?.trim().toLowerCase() === username : !decrypted.username;
+    // Pre-filter against the already-decrypted summary cache (name / loginUris / username) so the
+    // expensive full decrypt — which materializes the password — runs only for URI + username matches,
+    // not for every stored cipher on each form submit.
+    for (const summary of summaries) {
+      if (summary.type !== 1 || summary.deletedDate || summary.undecryptable || summary.reprompt) continue;
+      if (!bestMatch(summary.loginUris, frameUrl, defaultStrategy, equivalentIndex)) continue;
+      const sameUser = username ? summary.username?.trim().toLowerCase() === username : !summary.username;
       if (!sameUser) continue;
+      const cipher = cache.ciphers.find((c) => c.id === summary.id);
+      if (!cipher) continue;
+      const decrypted = await decryptCipher(cipher, userKey, orgKeys);
+      if (!decrypted || decrypted.undecryptable) continue;
       if (decrypted.password === submitted.password) return { action: 'none' }; // already stored
       return { action: 'update', cipherId: decrypted.id, name: decrypted.name };
     }

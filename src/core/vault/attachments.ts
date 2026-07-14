@@ -48,9 +48,11 @@ export async function encryptAttachmentFile(
 export async function decryptAttachmentFile(buffer: Uint8Array, key: SymmetricKey): Promise<Uint8Array> {
   if (buffer.length < 1 + 16 + 32) throw new Error('attachment blob too short');
   if (buffer[0] !== ENC_TYPE_AESCBC_HMAC) throw new Error(`unsupported attachment encType ${buffer[0]}`);
-  const iv = buffer.slice(1, 17);
-  const mac = buffer.slice(17, 49);
-  const ct = buffer.slice(49);
+  // subarray returns views that share the blob's backing buffer (no copy). macData is then the only
+  // copy we build, dropping the full-ciphertext duplication a `buffer.slice(49)` would have made.
+  const iv = buffer.subarray(1, 17);
+  const mac = buffer.subarray(17, 49);
+  const ct = buffer.subarray(49);
   const macData = new Uint8Array(iv.length + ct.length);
   macData.set(iv, 0);
   macData.set(ct, iv.length);

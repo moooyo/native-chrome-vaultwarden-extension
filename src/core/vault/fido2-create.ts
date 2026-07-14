@@ -5,11 +5,11 @@
 import { bytesToBase64Url, utf8ToBytes } from '../crypto/encoding.js';
 import { cborBytes, cborMap, cborNegInt, cborText, cborUint } from '../crypto/cbor.js';
 import { encryptToText } from '../crypto/encstring.js';
+import { FLAG_UP, FLAG_UV, FLAG_BE, FLAG_BS, FLAG_AT, sha256, buildClientDataJSON } from './fido2-common.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import type { Fido2CredentialData } from '../api/types.js';
 
 const subtle = globalThis.crypto.subtle;
-const FLAG_UP = 0x01, FLAG_UV = 0x04, FLAG_BE = 0x08, FLAG_BS = 0x10, FLAG_AT = 0x40;
 
 export interface GeneratedFido2Keypair {
   pkcs8: Uint8Array;        // private key (PKCS#8) — stays in the worker
@@ -35,10 +35,6 @@ export async function generateFido2Keypair(): Promise<GeneratedFido2Keypair> {
   return { pkcs8, coseKey, credentialId, publicKeySpki };
 }
 
-async function sha256(data: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await subtle.digest('SHA-256', data as BufferSource));
-}
-
 export async function buildAttestationObject(params: {
   rpId: string; coseKey: Uint8Array; credentialId: Uint8Array; userVerified: boolean;
 }): Promise<{ attestationObject: Uint8Array; authData: Uint8Array }> {
@@ -61,7 +57,7 @@ export async function buildAttestationObject(params: {
 }
 
 export function buildCreateClientDataJSON(challenge: string, origin: string): string {
-  return JSON.stringify({ type: 'webauthn.create', challenge, origin, crossOrigin: false });
+  return buildClientDataJSON('webauthn.create', challenge, origin);
 }
 
 export interface NewFido2Credential {

@@ -2,6 +2,36 @@ import { utf8ToBytes } from './encoding.js';
 
 const subtle = globalThis.crypto.subtle;
 
+/**
+ * Cache the imported (non-extractable) CryptoKey per raw-key Uint8Array. Bulk decryption fans a
+ * MAC-verify + AES-CBC-decrypt over every field of every cipher, all under the same UserKey, so
+ * without a cache each field re-imports the same two raw keys. Keyed by the key-bytes array identity:
+ * SymmetricKey.encKey/macKey are stable, immutable slices, so identity implies identical bytes.
+ * A Promise is stored to dedupe concurrent imports; entries are GC'd once the key array is dropped
+ * (e.g. on lock/logout). Separate maps per algorithm/usage keep an AES key from colliding with an
+ * HMAC key. The cached CryptoKey is byte-for-byte equivalent to a fresh import, so output is identical.
+ */
+const hmacKeyCache = new WeakMap<Uint8Array, Promise<CryptoKey>>();
+const aesDecryptKeyCache = new WeakMap<Uint8Array, Promise<CryptoKey>>();
+
+function importHmacKey(key: Uint8Array): Promise<CryptoKey> {
+  let imported = hmacKeyCache.get(key);
+  if (!imported) {
+    imported = subtle.importKey('raw', key as BufferSource, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    hmacKeyCache.set(key, imported);
+  }
+  return imported;
+}
+
+function importAesDecryptKey(key: Uint8Array): Promise<CryptoKey> {
+  let imported = aesDecryptKeyCache.get(key);
+  if (!imported) {
+    imported = subtle.importKey('raw', key as BufferSource, { name: 'AES-CBC' }, false, ['decrypt']);
+    aesDecryptKeyCache.set(key, imported);
+  }
+  return imported;
+}
+
 export async function pbkdf2Sha256(
   password: Uint8Array,
   salt: Uint8Array,
@@ -18,7 +48,7 @@ export async function pbkdf2Sha256(
 }
 
 export async function hmacSha256(key: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
-  const k = await subtle.importKey('raw', key as BufferSource, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const k = await importHmacKey(key);
   return new Uint8Array(await subtle.sign('HMAC', k, data as BufferSource));
 }
 
@@ -55,7 +85,7 @@ export async function aesCbc256Decrypt(
   iv: Uint8Array,
   data: Uint8Array,
 ): Promise<Uint8Array> {
-  const k = await subtle.importKey('raw', key as BufferSource, { name: 'AES-CBC' }, false, ['decrypt']);
+  const k = await importAesDecryptKey(key);
   return new Uint8Array(await subtle.decrypt({ name: 'AES-CBC', iv: iv as BufferSource }, k, data as BufferSource));
 }
 

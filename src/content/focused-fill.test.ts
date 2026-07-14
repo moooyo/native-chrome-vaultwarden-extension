@@ -150,4 +150,18 @@ describe('runFocusedFill', () => {
     expect(deps.fillCard).not.toHaveBeenCalled();
     expect(deps.notify).toHaveBeenCalledWith(NOTICE_PAGE_CHANGED);
   });
+
+  it('aborts a card fill if the frame URL changed during the round-trip', async () => {
+    const field = liveInput(); // stays connected — only the URL changes
+    const form = { kind: 'card', id: 'c10', fields: new Map([['number', field]]), anchor: field };
+    let url = 'https://ex.com';
+    const deps = makeDeps({
+      frameUrl: () => url,
+      fillItems: async () => ({ ok: true, data: [{ id: 'x' }] as never }),
+      fillData: async () => { url = 'https://evil.com'; return { ok: true, data: { number: '4111' } }; },
+    });
+    await runFocusedFill({ kind: 'card', form: form as never }, deps);
+    expect(deps.fillCard).not.toHaveBeenCalled();
+    expect(deps.notify).toHaveBeenCalledWith(NOTICE_PAGE_CHANGED);
+  });
 });

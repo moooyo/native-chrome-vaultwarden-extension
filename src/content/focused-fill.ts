@@ -102,13 +102,16 @@ export async function runFocusedFill(target: FocusedTarget, deps: FocusedFillDep
   }
 
   const kind = target.kind; // 'card' | 'identity'
+  const frameUrl = deps.frameUrl();
   const items = await deps.fillItems(kind);
   if (!items.ok) { deps.notify(items.message); return; }
   if (items.data.length === 0) { deps.notify(kind === 'card' ? 'No saved cards' : 'No saved identities'); return; }
   if (items.data.length > 1) { deps.openPicker(target.form.id); return; }
   const data = await deps.fillData(items.data[0]!.id, kind);
   if (!data.ok) { deps.notify(data.message); return; }
-  if (!fillFormLive(target.form)) { deps.notify(NOTICE_PAGE_CHANGED); return; }
+  // TOCTOU guard, mirroring the login branch: bail if the frame navigated or the form detached during
+  // the async round-trip, so we never write vault data into a page that changed under us.
+  if (deps.frameUrl() !== frameUrl || !fillFormLive(target.form)) { deps.notify(NOTICE_PAGE_CHANGED); return; }
   if (kind === 'card') deps.fillCard(target.form, data.data as CardFillData);
   else deps.fillIdentity(target.form, data.data as IdentityFillData);
 }

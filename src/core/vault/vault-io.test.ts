@@ -77,6 +77,16 @@ describe('encrypted export', () => {
   it('isEncryptedExport is false for a plaintext export', () => {
     expect(isEncryptedExport(buildExportJson([login], folders))).toBe(false);
   });
+
+  it('rejects an export with invalid kdfIterations with a clear error (not an opaque crypto error)', async () => {
+    for (const kdfIterations of [0, -1, 1.5, 'nope', null]) {
+      const json = JSON.stringify({
+        encrypted: true, passwordProtected: true, salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+        kdfType: 0, kdfIterations, encKeyValidation_DO_NOT_EDIT: '2.a|b|c', data: '2.a|b|c',
+      });
+      await expect(decryptEncryptedExport(json, 'pw')).rejects.toThrow(/valid KDF parameters/);
+    }
+  });
 });
 
 describe('parseCsvImport', () => {

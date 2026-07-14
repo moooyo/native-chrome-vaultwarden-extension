@@ -8,6 +8,9 @@ import '../../components/status-message.js';
 import type { DetailStatus, PinSetDetail } from '../types.js';
 
 const MIN_PIN_LENGTH = 4;
+// inputmode=numeric is only a keyboard hint — letters/symbols can still be typed or pasted. The copy
+// promises "at least 4 digits", so enforce exactly that: MIN_PIN_LENGTH+ ASCII digits, nothing else.
+const PIN_PATTERN = new RegExp(`^\\d{${MIN_PIN_LENGTH},}$`);
 
 /**
  * PIN unlock management. The root loads the current PIN status (`auth.pinStatus`) and passes it as
@@ -132,7 +135,7 @@ export class VwPinView extends LitElement {
     if (this.pending) return;
     this.validationError = undefined;
     const pin = (this.renderRoot.querySelector<HTMLInputElement>('[data-pin]')?.value ?? '').trim();
-    if (pin.length < MIN_PIN_LENGTH) {
+    if (!PIN_PATTERN.test(pin)) {
       this.validationError = 'PIN 码至少需要 4 位数字'; // TODO i18n
       return;
     }

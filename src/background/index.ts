@@ -8,7 +8,7 @@ import { createBrowserStore, hardenSessionAccessLevel } from '../platform/store.
 import { createRouter } from './router.js';
 import { isMessageAllowed } from './sender-guard.js';
 import { createSettingsService } from './settings.js';
-import { createIdleLock, IDLE_LOCK_ALARM } from './idle-lock.js';
+import { createIdleLock, ensureIdleLockAlarm, IDLE_LOCK_ALARM } from './idle-lock.js';
 import { createClipboard, CLIPBOARD_CLEAR_ALARM } from './clipboard.js';
 import { createContextMenu, shouldRefreshMenu } from './context-menu.js';
 import { handleFocusedFillCommand } from './commands.js';
@@ -38,6 +38,9 @@ const auth = new AuthService({
     identityEpoch++;
     await clearVaultCache();
   },
+  // On lock (not logout), drop decrypted item names / login URIs from storage.local; the encrypted
+  // vault cache stays so the listing rebuilds locally on the next unlock.
+  onLock: async () => { await vault.purgeDecryptedCaches(); },
 });
 const vault = new VaultService({ api, auth, session, localStore, getIdentityEpoch: () => identityEpoch });
 clearVaultCache = () => vault.clearCache();
@@ -124,6 +127,15 @@ void contextMenu.refresh().catch(() => {});
 
 browser.idle.onStateChanged.addListener((state) => { void idleLock.onStateChanged(state as 'active' | 'idle' | 'locked'); });
 void idleLock.applyDetection();
+
+// Recreate the idle-lock backstop alarm if a prior worker eviction dropped it. onInstalled seeds it
+// on first install; this covers every cold SW start, and onStartup covers browser restarts.
+const idleAlarmScheduler = {
+  get: (name: string) => browser.alarms.get(name),
+  create: (name: string, options: { periodInMinutes: number }) => { browser.alarms.create(name, options); },
+};
+void ensureIdleLockAlarm(idleAlarmScheduler).catch(() => {});
+browser.runtime.onStartup.addListener(() => { void ensureIdleLockAlarm(idleAlarmScheduler).catch(() => {}); });
 
 browser.contextMenus.onClicked.addListener((info, tab) => {
   void contextMenu.handleClick(String(info.menuItemId), tab, info.frameId);

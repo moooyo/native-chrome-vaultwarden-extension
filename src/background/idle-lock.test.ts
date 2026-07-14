@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createIdleLock, type IdleLockDeps, type IdleState } from './idle-lock.js';
+import { createIdleLock, ensureIdleLockAlarm, IDLE_LOCK_ALARM, type IdleLockDeps, type IdleState } from './idle-lock.js';
 
 function makeDeps(over: Partial<IdleLockDeps> = {}): IdleLockDeps {
   return {
@@ -78,5 +78,27 @@ describe('createIdleLock', () => {
     const active = makeDeps({ queryState: vi.fn(async (): Promise<IdleState> => 'active') });
     await createIdleLock(active).onBackstopAlarm();
     expect(active.lock).not.toHaveBeenCalled();
+  });
+
+  it('clamps the backstop queryState interval to the chrome.idle minimum', async () => {
+    const queryState = vi.fn(async (): Promise<IdleState> => 'active');
+    // A sub-minimum idleSeconds would make chrome.idle.queryState throw; clamp it like applyDetection.
+    const deps = makeDeps({ getConfig: async () => ({ idleSeconds: 5, action: 'lock' }), queryState });
+    await createIdleLock(deps).onBackstopAlarm();
+    expect(queryState).toHaveBeenCalledWith(15);
+  });
+});
+
+describe('ensureIdleLockAlarm', () => {
+  it('creates the backstop alarm when it is missing', async () => {
+    const create = vi.fn();
+    await ensureIdleLockAlarm({ get: async () => undefined, create });
+    expect(create).toHaveBeenCalledWith(IDLE_LOCK_ALARM, { periodInMinutes: 1 });
+  });
+
+  it('does not recreate an alarm that already exists', async () => {
+    const create = vi.fn();
+    await ensureIdleLockAlarm({ get: async () => ({ name: IDLE_LOCK_ALARM }), create });
+    expect(create).not.toHaveBeenCalled();
   });
 });

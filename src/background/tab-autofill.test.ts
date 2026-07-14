@@ -162,6 +162,20 @@ describe('tab autofill coordinator', () => {
       expect(c1?.target).toEqual({ frameId: 1, formId: 'sub-form' });
     });
 
+    it('resolves candidates once per unique frame URL within a single getSuggestions call', async () => {
+      // The top-frame seed match and frame 0's per-frame scan use the identical URL; memoization
+      // must collapse them into a single findCandidates resolution.
+      const findCandidates = vi.fn(async (_url: string) => [candidate('c1')]);
+      const deps = makeDeps({
+        getFrames: async () => [{ frameId: 0, url: 'https://example.com/login' }],
+        sendToFrame: vi.fn(async () => ({ frameUrl: 'https://example.com/login', forms: [{ formId: 'f', visible: true }] })),
+        findCandidates,
+      });
+      await createTabAutofillCoordinator(deps).getSuggestions(7);
+      const topUrlCalls = findCandidates.mock.calls.filter(([url]) => url === 'https://example.com/login');
+      expect(topUrlCalls).toHaveLength(1);
+    });
+
     it('keeps top-frame URI matches without a Fill target when no form exists', async () => {
       const deps = makeDeps({
         sendToFrame: vi.fn(async () => ({ frameUrl: 'https://example.com/login', forms: [] })),
@@ -366,6 +380,24 @@ describe('tab autofill coordinator', () => {
     it('reports content_script_unavailable when the target frame no longer exists', async () => {
       const deps = makeDeps({ getFrame: vi.fn(async () => undefined) });
       await expect(createTabAutofillCoordinator(deps).fill(7, 'c1', target)).resolves.toEqual({ status: 'content_script_unavailable' });
+    });
+
+    it('reports content_script_unavailable when the frame is torn down during commit', async () => {
+      const deps = makeDeps({
+        getFrame: vi.fn(async () => ({ frameId: 0, url: 'https://example.com/login', documentId: 'doc-A' })),
+        getCredentials: vi.fn(async () => ({ username: 'me', password: 'secret' })),
+        sendToFrame: vi.fn(async () => { throw new Error('Could not establish connection. Receiving end does not exist.'); }),
+      });
+      await expect(createTabAutofillCoordinator(deps).fill(7, 'c1', target)).resolves.toEqual({ status: 'content_script_unavailable' });
+    });
+
+    it('rethrows an unexpected error thrown by the commit sendToFrame', async () => {
+      const deps = makeDeps({
+        getFrame: vi.fn(async () => ({ frameId: 0, url: 'https://example.com/login', documentId: 'doc-A' })),
+        getCredentials: vi.fn(async () => ({ username: 'me', password: 'secret' })),
+        sendToFrame: vi.fn(async () => { throw new TypeError('commit is not a function'); }),
+      });
+      await expect(createTabAutofillCoordinator(deps).fill(7, 'c1', target)).rejects.toThrow('commit is not a function');
     });
 
     it('denies fill and never releases credentials for a cross-origin iframe lacking host access', async () => {

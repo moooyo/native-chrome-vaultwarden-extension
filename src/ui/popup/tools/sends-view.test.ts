@@ -100,6 +100,31 @@ describe('vw-sends-view create', () => {
     expect((detail as { fileName: string }).fileName).toBe('note.txt');
     expect((detail as { dataB64: string }).dataB64).toBe(btoa('hi'));
   });
+
+  it('enters the encoding state synchronously when a file create starts', async () => {
+    const el = await mount();
+    q<HTMLButtonElement>(el, '[data-mode-file]').click();
+    await el.updateComplete;
+    const fileInput = q<HTMLInputElement>(el, '[data-file]');
+    const file = new File(['hi'], 'note.txt');
+    Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+    // The base64 encode runs on the popup main thread; the busy flag must be set before the first
+    // await so the button can disable / show a spinner rather than appear frozen.
+    q<HTMLButtonElement>(el, '[data-create]').click();
+    expect(el.encoding).toBe(true);
+    // Let the encode + emit settle; the flag clears once the bytes are ready.
+    await new Promise((r) => setTimeout(r));
+    await el.updateComplete;
+    expect(el.encoding).toBe(false);
+  });
+
+  it('disables the create button and shows a spinner while encoding', async () => {
+    const el = await mount();
+    el.encoding = true;
+    await el.updateComplete;
+    expect(q<HTMLButtonElement>(el, '[data-create]').disabled).toBe(true);
+    expect(el.shadowRoot!.querySelector('[data-encoding]')).not.toBeNull();
+  });
 });
 
 describe('vw-sends-view list actions', () => {

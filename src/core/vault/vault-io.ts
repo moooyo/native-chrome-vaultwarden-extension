@@ -131,7 +131,13 @@ export async function decryptEncryptedExport(json: string, password: string): Pr
   if (p.kdfType !== undefined && p.kdfType !== null && p.kdfType !== 0) {
     throw new Error('This export uses Argon2 KDF, which is not supported');
   }
-  const key = await deriveExportKey(password, String(p.salt ?? ''), Number(p.kdfIterations ?? 0));
+  // Validate the iteration count up front: a missing / zero / non-integer value would otherwise reach
+  // WebCrypto (deriveExportKey → PBKDF2) and surface as an opaque OperationError.
+  const kdfIterations = Number(p.kdfIterations ?? 0);
+  if (!Number.isInteger(kdfIterations) || kdfIterations <= 0) {
+    throw new Error('This export is missing valid KDF parameters');
+  }
+  const key = await deriveExportKey(password, String(p.salt ?? ''), kdfIterations);
   try {
     await decryptToText(String(p.encKeyValidation_DO_NOT_EDIT ?? ''), key); // password check (MAC)
   } catch {

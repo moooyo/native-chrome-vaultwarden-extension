@@ -344,7 +344,10 @@ export class VwReceiveApp extends LitElement {
   private renderStatus() {
     switch (this.state.status) {
       case 'passwordRequired':
-        return html`<vw-status-message tone="danger" .icon=${'alert'} .message=${this.state.message}></vw-status-message>`;
+        // The first access of a password-protected Send is a normal prompt, not a failure (a
+        // wrong-password retry returns the same 401), so keep it a polite info message — no
+        // assertive alert, no error icon.
+        return html`<vw-status-message tone="info" .message=${this.state.message}></vw-status-message>`;
       case 'downloading':
         return html`<vw-status-message tone="info" .message=${this.i18n.t('receive.loading')}></vw-status-message>`;
       case 'error':

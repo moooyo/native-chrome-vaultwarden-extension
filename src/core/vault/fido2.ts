@@ -3,6 +3,7 @@
 // authenticatorData ‖ SHA-256(clientDataJSON) signed with ES256, DER-encoded as WebAuthn requires.
 
 import { bytesToBase64Url, utf8ToBytes } from '../crypto/encoding.js';
+import { FLAG_UP, FLAG_UV, FLAG_BE, FLAG_BS, sha256, buildClientDataJSON } from './fido2-common.js';
 
 const subtle = globalThis.crypto.subtle;
 
@@ -27,16 +28,8 @@ export interface PasskeyAssertion extends AssertionResult {
   userHandle?: string;  // base64url
 }
 
-// Authenticator data flags (WebAuthn §6.1): UP=user present, UV=user verified, BE=backup eligible,
-// BS=backup state. Vault passkeys are synced (cloud-backed) → BE and BS are set on every ceremony.
-const FLAG_UP = 0x01;
-const FLAG_UV = 0x04;
-const FLAG_BE = 0x08;
-const FLAG_BS = 0x10;
-
-async function sha256(data: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await subtle.digest('SHA-256', data as BufferSource));
-}
+// Authenticator data flags live in fido2-common (FLAG_*); each path composes its own flag set. Vault
+// passkeys are synced (cloud-backed) → BE and BS are set on every ceremony.
 
 /** authenticatorData = SHA-256(rpId) ‖ flags ‖ signCount(uint32 big-endian). No attested cred data for get(). */
 export async function buildAuthenticatorData(rpId: string, flags: number, signCount: number): Promise<Uint8Array> {
@@ -51,17 +44,12 @@ export async function buildAuthenticatorData(rpId: string, flags: number, signCo
   return out;
 }
 
-function buildClientDataJSON(challenge: string, origin: string): string {
-  // Property order matches what browsers emit; challenge stays base64url.
-  return JSON.stringify({ type: 'webauthn.get', challenge, origin, crossOrigin: false });
-}
-
 /** Sign a WebAuthn assertion with a stored passkey private key (PKCS#8, ECDSA P-256). */
 export async function signFido2Assertion(pkcs8: Uint8Array, params: AssertionParams): Promise<AssertionResult> {
   const key = await subtle.importKey('pkcs8', pkcs8 as BufferSource, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
   const flags = FLAG_UP | FLAG_BE | FLAG_BS | (params.userVerified ? FLAG_UV : 0);
   const authData = await buildAuthenticatorData(params.rpId, flags, params.counter ?? 0);
-  const clientDataJSON = buildClientDataJSON(params.challenge, params.origin);
+  const clientDataJSON = buildClientDataJSON('webauthn.get', params.challenge, params.origin);
   const clientDataBytes = utf8ToBytes(clientDataJSON);
   const signedData = new Uint8Array([...authData, ...(await sha256(clientDataBytes))]);
   const rawSig = new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, signedData as BufferSource));
@@ -81,15 +69,23 @@ export function rawToDerSignature(raw: Uint8Array): Uint8Array {
   return new Uint8Array([0x30, body.length, ...body]);
 }
 
-/** Convert a DER ECDSA signature back to raw r‖s (32+32). Useful for verification/tests. */
+/** Convert a DER ECDSA signature back to raw r‖s (32+32). Useful for verification/tests. Validates the
+ *  minimal DER shape a P-256 signature must have — SEQUENCE of two INTEGERs, all definite single-byte
+ *  lengths (r/s are ≤ 33 bytes, well under the 0x80 multi-byte threshold) — so a malformed blob throws
+ *  instead of silently producing garbage from a clamped slice. */
 export function derToRawSignature(der: Uint8Array): Uint8Array {
-  let i = 2; // skip 0x30, total length
-  if (der[i] !== 0x02) throw new Error('invalid DER signature');
+  if (der[0] !== 0x30) throw new Error('invalid DER signature'); // SEQUENCE tag
+  const seqLen = der[1]!;
+  if (seqLen & 0x80) throw new Error('invalid DER signature'); // multi-byte/indefinite length
+  let i = 2;
+  if (der[i] !== 0x02) throw new Error('invalid DER signature'); // INTEGER (r)
   const rLen = der[i + 1]!;
+  if (rLen & 0x80 || i + 2 + rLen > der.length) throw new Error('invalid DER signature');
   const r = der.slice(i + 2, i + 2 + rLen);
   i = i + 2 + rLen;
-  if (der[i] !== 0x02) throw new Error('invalid DER signature');
+  if (der[i] !== 0x02) throw new Error('invalid DER signature'); // INTEGER (s)
   const sLen = der[i + 1]!;
+  if (sLen & 0x80 || i + 2 + sLen > der.length) throw new Error('invalid DER signature');
   const s = der.slice(i + 2, i + 2 + sLen);
   const out = new Uint8Array(64);
   out.set(leftPadOrTrim(r, 32), 0);

@@ -158,6 +158,28 @@ describe('vw-account-security-view KDF change', () => {
     q<HTMLButtonElement>(el, '[data-change-kdf]').click();
     expect(changed).toHaveBeenCalledWith({ currentPassword: 'current', iterations: 600000 });
   });
+
+  it('rejects an iteration count above the safe maximum', async () => {
+    const el = await mount();
+    const changed = vi.fn();
+    el.addEventListener('vw-change-kdf', changed);
+    set(el, '[data-kdf-current]', 'current');
+    set(el, '[data-iterations]', '100000000');
+    q<HTMLButtonElement>(el, '[data-change-kdf]').click();
+    await el.updateComplete;
+    expect(changed).not.toHaveBeenCalled();
+    expect(text(el)).toContain('2000000');
+  });
+
+  it('accepts the exact safe maximum', async () => {
+    const el = await mount();
+    const changed = vi.fn();
+    el.addEventListener('vw-change-kdf', (e) => changed((e as CustomEvent<ChangeKdfDetail>).detail));
+    set(el, '[data-kdf-current]', 'current');
+    set(el, '[data-iterations]', '2000000');
+    q<HTMLButtonElement>(el, '[data-change-kdf]').click();
+    expect(changed).toHaveBeenCalledWith({ currentPassword: 'current', iterations: 2000000 });
+  });
 });
 
 describe('vw-account-security-view key rotation', () => {

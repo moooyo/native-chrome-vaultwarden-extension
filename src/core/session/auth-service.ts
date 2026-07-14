@@ -19,6 +19,8 @@ export interface AuthServiceDeps {
   serverUrlProvider?: () => Promise<string | undefined>;
   /** Clears data derived from the active account whenever that identity changes. */
   onIdentityChanged?: () => Promise<void>;
+  /** Runs after a lock (not a logout) so callers can purge decrypted metadata left on disk. */
+  onLock?: () => Promise<void>;
   now?: () => number;
 }
 
@@ -352,8 +354,14 @@ export class AuthService {
     return this.deps.session.getState();
   }
 
-  lock(): Promise<void> {
-    return this.deps.session.lock();
+  async lock(): Promise<void> {
+    await this.deps.session.lock();
+    // Best-effort: purge decrypted metadata left on disk. Must never turn a lock into a failure.
+    try {
+      await this.deps.onLock?.();
+    } catch {
+      /* ignore */
+    }
   }
 
   async logout(): Promise<void> {

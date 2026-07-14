@@ -21,8 +21,9 @@ export const BUILTIN_EQUIVALENT_DOMAINS: string[][] = [
 
 /**
  * Build a domain -> group-id index from the built-in list plus any user-defined groups. Two domains
- * are equivalent when they share a group id. (Groups are kept distinct; a domain listed in more than
- * one group takes the last group id — overlaps are rare in the curated list.)
+ * are equivalent when they share a group id. Groups that share any domain are merged (union-find) into
+ * a single component, so a domain listed in more than one group ends up equivalent to every member of
+ * every group it appears in — matching Bitwarden's "union all groups containing the domain" behavior.
  *
  * `excludedDomains` carries the domains of server global-equivalence groups the user has switched off
  * (globalEquivalentDomains[].excluded). Any built-in group containing such a domain is dropped, so the
@@ -31,12 +32,43 @@ export const BUILTIN_EQUIVALENT_DOMAINS: string[][] = [
 export function buildEquivalentDomainIndex(userGroups: string[][] = [], excludedDomains: string[] = []): Map<string, number> {
   const excluded = new Set(excludedDomains.map((d) => d.toLowerCase()));
   const builtins = BUILTIN_EQUIVALENT_DOMAINS.filter((group) => !group.some((d) => excluded.has(d.toLowerCase())));
+  const groups = [...builtins, ...userGroups];
+
+  // Union-find over group indices: whenever a domain appears in two groups, union those groups so
+  // overlapping groups collapse into one component with a single canonical id.
+  const parent = groups.map((_, i) => i);
+  const find = (x: number): number => {
+    let root = x;
+    while (parent[root] !== root) {
+      const next = parent[root];
+      if (next === undefined) break; // unreachable for valid indices; keeps strict indexing happy
+      root = next;
+    }
+    return root;
+  };
+  const union = (a: number, b: number): void => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  };
+
+  const firstSeenGroup = new Map<string, number>();
+  groups.forEach((group, gi) => {
+    for (const domain of group) {
+      const d = domain.toLowerCase();
+      const prev = firstSeenGroup.get(d);
+      if (prev === undefined) firstSeenGroup.set(d, gi);
+      else union(prev, gi);
+    }
+  });
+
+  // Map every domain to its component's canonical id. A shared domain is written from each of its
+  // groups, but all those groups now resolve to the same root, so the id is consistent.
   const index = new Map<string, number>();
-  let groupId = 0;
-  for (const group of [...builtins, ...userGroups]) {
-    const id = groupId++;
+  groups.forEach((group, gi) => {
+    const id = find(gi);
     for (const domain of group) index.set(domain.toLowerCase(), id);
-  }
+  });
   return index;
 }
 

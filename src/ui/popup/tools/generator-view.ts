@@ -1,4 +1,4 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
@@ -15,6 +15,7 @@ import {
   DEFAULT_PASSPHRASE_OPTIONS,
   type PassphraseGenOptions,
 } from '../../../core/generator/passphrase.js';
+import { PASSPHRASE_WORDLIST } from '../../../core/generator/wordlist.js';
 import type { CopyDetail, GeneratorHistoryAddDetail } from '../types.js';
 
 /** The three generation styles the reskinned generator exposes. */
@@ -22,6 +23,22 @@ type GenMode = 'random' | 'memorable' | 'pin';
 
 const LENGTH_MIN = 8;
 const LENGTH_MAX = 40;
+
+// Memorable (passphrase) word count is a distinct control from the character-length slider: a
+// passphrase is measured in words, not characters, so 8–40 characters would be meaningless here.
+const WORDS_MIN = 3;
+const WORDS_MAX = 20;
+const WORDS_DEFAULT = Math.min(Math.max(DEFAULT_PASSPHRASE_OPTIONS.numWords, WORDS_MIN), WORDS_MAX);
+
+// Entropy tiers (bits). A digit-only PIN or a short passphrase is rated on real entropy, not raw
+// character count, so a 16-digit PIN (~53 bits) reads "fair", never "very strong".
+const BITS_VERY_STRONG = 128;
+const BITS_STRONG = 80;
+const BITS_FAIR = 50;
+const BITS_FULL_BAR = 128;
+
+/** Bits of entropy contributed by each independently-chosen passphrase word. */
+const BITS_PER_WORD = Math.log2(PASSPHRASE_WORDLIST.length);
 
 function clampInt(value: string, min: number, max: number, fallback: number): number {
   const n = Number(value);
@@ -50,6 +67,7 @@ export class VwGeneratorView extends LitElement {
     mode: { state: true },
     current: { state: true },
     length: { state: true },
+    words: { state: true },
     uppercase: { state: true },
     numbers: { state: true },
     symbols: { state: true },
@@ -60,6 +78,7 @@ export class VwGeneratorView extends LitElement {
   declare mode: GenMode;
   declare current: string;
   declare length: number;
+  declare words: number;
   declare uppercase: boolean;
   declare numbers: boolean;
   declare symbols: boolean;
@@ -73,6 +92,7 @@ export class VwGeneratorView extends LitElement {
     this.mode = 'random';
     this.current = '';
     this.length = Math.min(Math.max(DEFAULT_PASSWORD_OPTIONS.length, LENGTH_MIN), LENGTH_MAX);
+    this.words = WORDS_DEFAULT;
     this.uppercase = DEFAULT_PASSWORD_OPTIONS.uppercase;
     this.numbers = DEFAULT_PASSWORD_OPTIONS.numbers;
     this.symbols = DEFAULT_PASSWORD_OPTIONS.special;
@@ -277,7 +297,7 @@ export class VwGeneratorView extends LitElement {
     if (this.mode === 'memorable') {
       const options: PassphraseGenOptions = {
         ...DEFAULT_PASSPHRASE_OPTIONS,
-        numWords: Math.min(Math.max(this.length, 3), 20),
+        numWords: this.words,
         capitalize: this.uppercase,
         includeNumber: this.numbers,
       };
@@ -348,18 +368,38 @@ export class VwGeneratorView extends LitElement {
     this.regenerate();
   }
 
+  private setWords(value: string): void {
+    this.words = clampInt(value, WORDS_MIN, WORDS_MAX, this.words);
+    this.regenerate();
+  }
+
   private setToggle(key: 'uppercase' | 'numbers' | 'symbols', checked: boolean): void {
     this[key] = checked;
     this.regenerate();
   }
 
-  /** Length-based strength: matches the design's tiers plus a proportional bar width. */
+  /** Estimated entropy (bits) of the current value. Passphrases are measured per independently-chosen
+   *  word; everything else is `length × log2(alphabetSize)` over the active character classes, so a
+   *  digit-only PIN is scored on its true (small) alphabet rather than raw length. */
+  private entropyBits(): number {
+    if (this.mode === 'memorable') return this.words * BITS_PER_WORD;
+    const alphabet =
+      this.mode === 'pin'
+        ? 10
+        : 26 /* lowercase, always on */ +
+          (this.uppercase ? 26 : 0) +
+          (this.numbers ? 10 : 0) +
+          (this.symbols ? 8 : 0);
+    return this.current.length * Math.log2(Math.max(alphabet, 2));
+  }
+
+  /** Entropy-based strength: tiers on estimated bits (not raw length) plus a proportional bar width. */
   private strength(): { label: string; color: string; width: number } {
-    const len = this.current.length;
-    const width = Math.max(0, Math.min(100, Math.round((len / 20) * 100)));
-    if (len >= 16) return { label: t('gen.strengthStrong'), color: 'var(--vw-strength-strong)', width };
-    if (len >= 12) return { label: t('gen.strengthGood'), color: 'var(--vw-strength-good)', width };
-    if (len >= 10) return { label: t('gen.strengthMid'), color: 'var(--vw-strength-mid)', width };
+    const bits = this.entropyBits();
+    const width = Math.max(0, Math.min(100, Math.round((bits / BITS_FULL_BAR) * 100)));
+    if (bits >= BITS_VERY_STRONG) return { label: t('gen.strengthStrong'), color: 'var(--vw-strength-strong)', width };
+    if (bits >= BITS_STRONG) return { label: t('gen.strengthGood'), color: 'var(--vw-strength-good)', width };
+    if (bits >= BITS_FAIR) return { label: t('gen.strengthMid'), color: 'var(--vw-strength-mid)', width };
     return { label: t('gen.strengthWeak'), color: 'var(--vw-strength-weak)', width };
   }
 
@@ -379,6 +419,54 @@ export class VwGeneratorView extends LitElement {
           .checked=${this[key]}
           @vw-toggle-change=${(e: CustomEvent<{ checked: boolean }>) => this.setToggle(key, e.detail.checked)}
         ></vw-toggle>
+      </div>
+    `;
+  }
+
+  /** The size control: a character-length slider for random/PIN, or a dedicated word-count slider for
+   *  a memorable passphrase (words, not characters). */
+  private renderSizeControl() {
+    if (this.mode === 'memorable') {
+      return html`
+        <div class="length-row">
+          <span class="length-label">${t('gen.words')}</span>
+          <span class="length-pill" data-words-value>${this.words}</span>
+        </div>
+        <input
+          type="range"
+          data-words
+          min=${WORDS_MIN}
+          max=${WORDS_MAX}
+          .value=${String(this.words)}
+          @input=${(e: Event) => this.setWords((e.target as HTMLInputElement).value)}
+        />
+      `;
+    }
+    return html`
+      <div class="length-row">
+        <span class="length-label">${t('gen.length')}</span>
+        <span class="length-pill" data-length-value>${this.length}</span>
+      </div>
+      <input
+        type="range"
+        data-length
+        min=${LENGTH_MIN}
+        max=${LENGTH_MAX}
+        .value=${String(this.length)}
+        @input=${(e: Event) => this.setLength((e.target as HTMLInputElement).value)}
+      />
+    `;
+  }
+
+  /** Only the class toggles that affect the active mode: all three for random, uppercase + number for
+   *  a memorable passphrase (symbols do not apply), none for a digit-only PIN. */
+  private renderToggles() {
+    if (this.mode === 'pin') return html`<div class="toggles"></div>`;
+    return html`
+      <div class="toggles">
+        ${this.renderToggleRow(t('gen.upper'), 'uppercase', 'upper')}
+        ${this.renderToggleRow(t('gen.number'), 'numbers', 'number')}
+        ${this.mode === 'random' ? this.renderToggleRow(t('gen.symbol'), 'symbols', 'symbol') : nothing}
       </div>
     `;
   }
@@ -407,24 +495,9 @@ export class VwGeneratorView extends LitElement {
           </div>
         </div>
 
-        <div class="length-row">
-          <span class="length-label">${t('gen.length')}</span>
-          <span class="length-pill" data-length-value>${this.length}</span>
-        </div>
-        <input
-          type="range"
-          data-length
-          min=${LENGTH_MIN}
-          max=${LENGTH_MAX}
-          .value=${String(this.length)}
-          @input=${(e: Event) => this.setLength((e.target as HTMLInputElement).value)}
-        />
+        ${this.renderSizeControl()}
 
-        <div class="toggles">
-          ${this.renderToggleRow(t('gen.upper'), 'uppercase', 'upper')}
-          ${this.renderToggleRow(t('gen.number'), 'numbers', 'number')}
-          ${this.renderToggleRow(t('gen.symbol'), 'symbols', 'symbol')}
-        </div>
+        ${this.renderToggles()}
 
         <vw-segmented
           data-mode

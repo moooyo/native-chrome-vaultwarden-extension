@@ -9,6 +9,9 @@ import { LocalizeController, t } from '../../i18n/index.js';
 import type { ChangeKdfDetail, ChangePasswordDetail, DetailStatus, RotateKeyDetail } from '../types.js';
 
 const MIN_KDF_ITERATIONS = 600_000;
+// Upper guard: a mistyped count (e.g. 100_000_000) would make every later unlock run PBKDF2 for
+// seconds-to-minutes, effectively locking the user out. Reject anything above a generous ceiling.
+const MAX_KDF_ITERATIONS = 2_000_000;
 
 /**
  * Account security (MiYu design): change the master password, change the PBKDF2 iteration count, or
@@ -165,6 +168,7 @@ export class VwAccountSecurityView extends LitElement {
     const iterations = Number(this.read('[data-iterations]'));
     if (!currentPassword) { this.validationError = '请输入当前主密码'; return; } // TODO i18n
     if (!Number.isFinite(iterations) || iterations < MIN_KDF_ITERATIONS) { this.validationError = '迭代次数至少为 600000'; return; } // TODO i18n
+    if (iterations > MAX_KDF_ITERATIONS) { this.validationError = '迭代次数不能超过 2000000'; return; } // TODO i18n
     emit<ChangeKdfDetail>(this, 'vw-change-kdf', { currentPassword, iterations });
   }
 
@@ -231,7 +235,7 @@ export class VwAccountSecurityView extends LitElement {
         <vw-setting-card stacked emphasized heading=${t('security.changeKdf')} description="PBKDF2 · 至少 600000 次迭代">
           <div class="form">
             <input class="input bordered" data-kdf-current type="password" autocomplete="current-password" placeholder=${t('security.currentPassword')} />
-            <input class="input bordered" data-iterations type="number" min="600000" step="100000" placeholder="迭代次数（至少 600000）" />
+            <input class="input bordered" data-iterations type="number" min="600000" max="2000000" step="100000" placeholder="迭代次数（至少 600000）" />
             <button type="button" class="btn primary wide" data-change-kdf ?disabled=${this.pending} @click=${() => this.changeKdf()}>
               ${uiIcon('refresh')}<span>${t('common.save')}</span>
             </button>

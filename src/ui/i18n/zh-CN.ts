@@ -143,6 +143,7 @@ export const zhCN = {
   // --- generator ----------------------------------------------------------------------------
   'gen.title': '密码生成器',
   'gen.length': '长度',
+  'gen.words': '单词数',
   'gen.upper': '大写字母 A–Z',
   'gen.number': '数字 0–9',
   'gen.symbol': '符号 !@#$',

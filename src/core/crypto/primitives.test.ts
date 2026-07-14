@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { pbkdf2Sha256, hkdfExpandSha256, hmacSha256, aesCbc256Decrypt, aesCbc256Encrypt, rsaOaepDecrypt, rsaOaepEncrypt } from './primitives.js';
 import { utf8ToBytes, bytesToHex, hexToBytes, base64ToBytes, bytesToUtf8 } from './encoding.js';
 import { RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
@@ -57,6 +57,40 @@ describe('primitives', () => {
     const plaintext = utf8ToBytes('round-trip me');
     const ct = await aesCbc256Encrypt(key, iv, plaintext);
     expect(bytesToHex(await aesCbc256Decrypt(key, iv, ct))).toBe(bytesToHex(plaintext));
+  });
+
+  it('hmacSha256 imports each raw key once, reusing the cached CryptoKey across calls', async () => {
+    const key = hexToBytes('aa'.repeat(32));
+    const importSpy = vi.spyOn(crypto.subtle, 'importKey');
+    try {
+      const a = await hmacSha256(key, utf8ToBytes('one'));
+      const b = await hmacSha256(key, utf8ToBytes('one'));
+      const c = await hmacSha256(key, utf8ToBytes('two'));
+      // Cached: exactly one importKey for the key across three signs.
+      expect(importSpy).toHaveBeenCalledTimes(1);
+      // Output must be identical to the uncached path (same key ⇒ same MAC for same data).
+      expect(bytesToHex(a)).toBe(bytesToHex(b));
+      expect(bytesToHex(c)).not.toBe(bytesToHex(a));
+    } finally {
+      importSpy.mockRestore();
+    }
+  });
+
+  it('aesCbc256Decrypt caches the imported key yet still returns the correct plaintext', async () => {
+    const key = hexToBytes('00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff');
+    const iv = hexToBytes('0102030405060708090a0b0c0d0e0f10');
+    const plaintext = utf8ToBytes('cache me correctly');
+    const ct = await aesCbc256Encrypt(key, iv, plaintext);
+    const importSpy = vi.spyOn(crypto.subtle, 'importKey');
+    try {
+      const first = await aesCbc256Decrypt(key, iv, ct);
+      const second = await aesCbc256Decrypt(key, iv, ct);
+      expect(importSpy).toHaveBeenCalledTimes(1);
+      expect(bytesToUtf8(first)).toBe('cache me correctly');
+      expect(bytesToUtf8(second)).toBe('cache me correctly');
+    } finally {
+      importSpy.mockRestore();
+    }
   });
 
   it('RSA-OAEP-SHA1 decrypts what WebCrypto encrypted (round-trip vector)', async () => {

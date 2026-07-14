@@ -182,7 +182,7 @@ export async function buildUpdateSendRequest(
     deletionDate: input.deletionDays && input.deletionDays > 0
       ? new Date(now() + clampDays(input.deletionDays, 1, 31) * DAY_MS).toISOString()
       : existing.deletionDate,
-    disabled: input.disabled ?? false,
+    disabled: input.disabled ?? Boolean(existing.disabled),
     hideEmail: existing.hideEmail ?? false,
   };
   if (existing.type === 0) {

@@ -66,6 +66,18 @@ describe('vw-pin-view', () => {
     expect(q(el, 'vw-status-message')).toBeTruthy();
   });
 
+  it('rejects a PIN containing non-digit characters', async () => {
+    const el = await mount(false);
+    const set = vi.fn();
+    el.addEventListener('vw-pin-set', set);
+    // Four characters long, but inputmode=numeric is only a hint — letters can still be typed/pasted.
+    q<HTMLInputElement>(el, '[data-pin]').value = '12ab';
+    q<HTMLButtonElement>(el, '[data-set]').click();
+    await el.updateComplete;
+    expect(set).not.toHaveBeenCalled();
+    expect(el.validationError ?? '').toContain('4');
+  });
+
   it('emits a validated PIN', async () => {
     const el = await mount(false);
     const set = vi.fn();

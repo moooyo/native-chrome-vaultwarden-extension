@@ -283,11 +283,13 @@ export function createRouter(deps: RouterDeps) {
             return { ok: true, data: { input: input ?? null } };
           }
           case 'settings.get': {
-            const serverUrl = await deps.settings.getServerUrl();
-            const defaultUriMatchStrategy = await deps.settings.getDefaultUriMatchStrategy();
-            const lockTimeout = await deps.settings.getLockTimeout();
-            const onIdleAction = await deps.settings.getOnIdleAction();
-            const clipboardClearSeconds = await deps.settings.getClipboardClearSetting();
+            const [serverUrl, defaultUriMatchStrategy, lockTimeout, onIdleAction, clipboardClearSeconds] = await Promise.all([
+              deps.settings.getServerUrl(),
+              deps.settings.getDefaultUriMatchStrategy(),
+              deps.settings.getLockTimeout(),
+              deps.settings.getOnIdleAction(),
+              deps.settings.getClipboardClearSetting(),
+            ]);
             const base = { defaultUriMatchStrategy, lockTimeout, onIdleAction, clipboardClearSeconds };
             return { ok: true, data: serverUrl === undefined ? base : { serverUrl, ...base } };
           }

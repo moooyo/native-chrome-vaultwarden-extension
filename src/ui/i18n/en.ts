@@ -138,6 +138,7 @@ export const en: Record<MessageKey, string> = {
   // generator
   'gen.title': 'Password generator',
   'gen.length': 'Length',
+  'gen.words': 'Words',
   'gen.upper': 'Uppercase A–Z',
   'gen.number': 'Numbers 0–9',
   'gen.symbol': 'Symbols !@#$',

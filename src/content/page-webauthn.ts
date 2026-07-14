@@ -29,22 +29,38 @@ if (originalGet && window.isSecureContext) {
   credentials!.get = async function vaultwardenGet(options?: CredentialRequestOptions): Promise<Credential | null> {
     const publicKey = options?.publicKey;
     if (!publicKey) return originalGet(options);
+    const signal = options?.signal;
+    if (signal?.aborted) return originalGet(options); // already cancelled → native, no consent modal
     const rpId = publicKey.rpId ?? location.hostname;
     if (!isRegistrableSuffix(rpId, location.hostname)) return originalGet(options);
     try {
-      const assertion = await requestAssertion({
+      const assertion = await withAbort(signal, requestAssertion({
         rpId,
         challenge: bytesToBase64Url(toBytes(publicKey.challenge)),
         allowedCredentialIds: (publicKey.allowCredentials ?? []).map((c) => bytesToBase64Url(toBytes(c.id))),
         // Forward the RP's user-verification requirement so the worker can set the UV flag honestly.
         ...(publicKey.userVerification ? { userVerification: publicKey.userVerification } : {}),
-      });
+      }));
       if (!assertion) return originalGet(options); // no stored passkey → native authenticator
       return buildCredential(assertion);
     } catch {
       return originalGet(options);
     }
   };
+}
+
+/** Reject as soon as `signal` aborts, so an in-flight consent round-trip is abandoned and the caller
+ *  falls back to the native authenticator instead of returning a credential the RP already cancelled. */
+function withAbort<T>(signal: AbortSignal | undefined, promise: Promise<T>): Promise<T> {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(new DOMException('The operation was aborted.', 'AbortError'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      (error) => { signal.removeEventListener('abort', onAbort); reject(error as Error); },
+    );
+  });
 }
 
 /** Whether to intercept a create() for the vault (else defer to the native authenticator). Uses the
@@ -171,7 +187,9 @@ function buildCredential(assertion: BridgeAssertion): Credential {
 }
 
 function isRegistrableSuffix(rpId: string, host: string): boolean {
-  return host === rpId || host.endsWith(`.${rpId}`);
+  // rp.id is page-supplied and may be mixed-case; host (location.hostname) is always lowercase.
+  const id = rpId.toLowerCase();
+  return host === id || host.endsWith(`.${id}`);
 }
 
 function toBytes(source: BufferSource): Uint8Array {

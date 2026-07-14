@@ -21,11 +21,15 @@ export class VwDialog extends LitElement {
   static override properties = {
     open: { type: Boolean },
     heading: { type: String },
+    label: { type: String },
     cancelable: { type: Boolean },
   };
 
   declare open: boolean;
   declare heading: string;
+  /** Accessible name for a headingless dialog. Ignored when `heading` is non-empty (the heading node
+   *  labels the dialog via aria-labelledby instead). */
+  declare label: string;
   declare cancelable: boolean;
 
   private previouslyFocused: HTMLElement | null = null;
@@ -35,6 +39,7 @@ export class VwDialog extends LitElement {
     super();
     this.open = false;
     this.heading = '';
+    this.label = '';
     this.cancelable = true;
   }
 
@@ -186,7 +191,8 @@ export class VwDialog extends LitElement {
     return html`
       <dialog
         tabindex="-1"
-        aria-labelledby="vw-dialog-heading"
+        aria-labelledby=${this.heading ? 'vw-dialog-heading' : nothing}
+        aria-label=${!this.heading && this.label ? this.label : nothing}
         @cancel=${this.handleNativeCancel}
         @close=${this.handleNativeClose}
         @click=${this.handleBackdropClick}

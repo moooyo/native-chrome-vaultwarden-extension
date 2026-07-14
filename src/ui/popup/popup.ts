@@ -3,6 +3,7 @@
 import browser from 'webextension-polyfill';
 import { sendRequest } from '../../messaging/protocol.js';
 import { VwPopupApp } from './app.js';
+import { safeWebUrl } from './utils.js';
 
 const app = document.createElement('vw-popup-app') as VwPopupApp;
 app.request = sendRequest;
@@ -13,7 +14,10 @@ app.browser = {
     await browser.tabs.create({ url: browser.runtime.getURL('ui/receive/receive.html') });
   },
   openUrl: async (url: string) => {
-    await browser.tabs.create({ url: url.includes('://') ? url : `https://${url}` });
+    const normalized = url.includes('://') ? url : `https://${url}`;
+    // Gate the stored URI down to http/https before navigating — never open a non-web scheme.
+    const safe = safeWebUrl(normalized);
+    if (safe !== undefined) await browser.tabs.create({ url: safe });
   },
 };
 document.getElementById('app')?.append(app);

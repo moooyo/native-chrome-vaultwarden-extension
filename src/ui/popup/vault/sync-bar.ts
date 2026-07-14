@@ -8,7 +8,8 @@ import { LocalizeController, t } from '../../i18n/index.js';
  * The popup's bottom sync bar: a status dot (teal synced / amber syncing), a relative "last synced"
  * label, and a manual sync button whose icon spins while a sync is in flight. Emits `vw-sync-now`.
  * `lastSync` is an epoch-ms timestamp (or undefined when never synced); the relative label is
- * computed here so it stays localized and live.
+ * recomputed on each render (there is no interval — the popup is ephemeral, so an idle popup simply
+ * keeps its last computed value until the next render/sync).
  */
 export class VwSyncBar extends LitElement {
   static override properties = {

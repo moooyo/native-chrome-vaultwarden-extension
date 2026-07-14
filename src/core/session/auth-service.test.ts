@@ -762,6 +762,18 @@ describe('AuthService', () => {
     expect(removeSpy).toHaveBeenCalledWith('other@example.com');
   });
 
+  // --- #lock-purge: lock runs the onLock hook, best-effort ---
+  it('lock() runs the onLock hook and still succeeds when the hook throws', async () => {
+    const sm = new SessionManager({ localStore: createMemoryStore(), sessionStore: createMemoryStore() });
+    const onLock = vi.fn(async () => {});
+    const auth = new AuthService({ api: {} as ApiClient, session: sm, now: () => 1000, onLock });
+    await auth.lock();
+    expect(onLock).toHaveBeenCalledTimes(1);
+
+    const throwing = new AuthService({ api: {} as ApiClient, session: sm, now: () => 1000, onLock: async () => { throw new Error('purge failed'); } });
+    await expect(throwing.lock()).resolves.toBeUndefined();
+  });
+
   // PIN unlock tests use a 5000-iteration KDF so the PBKDF2 derivation stays fast.
   async function makeUnlocked() {
     const { auth, sm } = makeService({});

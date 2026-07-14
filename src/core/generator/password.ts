@@ -30,6 +30,19 @@ const NUMBERS = '0123456789';
 const SPECIAL = '!@#$%^&*';
 const AMBIGUOUS = new Set(['I', 'l', '1', 'O', '0']);
 
+/**
+ * Hard ceiling on generated length; also caps the sum of the per-class minimums. Defense-in-depth
+ * against a caller passing an absurd or malformed length/minimum (e.g. 1e7, NaN) that would spin the
+ * fill loop into a multi-megabyte string and hang the popup. Well above the UI's [8, 40] range.
+ */
+export const MAX_PASSWORD_LENGTH = 128;
+
+/** Coerce to an integer within [min, max]; a non-finite input (NaN/Infinity) falls back to `min`. */
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(Math.max(Math.trunc(value), min), max);
+}
+
 export function generatePassword(
   options: PasswordGenOptions,
   randomInt: (maxExclusive: number) => number = cryptoRandomInt,
@@ -44,8 +57,10 @@ export function generatePassword(
   const all = lower + upper + numbers + special;
   if (!all) return '';
 
-  const minNum = options.numbers ? Math.max(options.minNumbers, 0) : 0;
-  const minSpec = options.special ? Math.max(options.minSpecial, 0) : 0;
+  // Clamp per-class minimums so their sum can never exceed MAX_PASSWORD_LENGTH (a huge minNumbers
+  // otherwise forces an equally huge, class-skewed password regardless of `length`).
+  const minNum = options.numbers ? clampInt(options.minNumbers, 0, MAX_PASSWORD_LENGTH) : 0;
+  const minSpec = options.special ? clampInt(options.minSpecial, 0, MAX_PASSWORD_LENGTH - minNum) : 0;
 
   const chars: string[] = [];
   for (let i = 0; i < minNum; i++) chars.push(pick(numbers, randomInt));
@@ -56,7 +71,10 @@ export function generatePassword(
   if (numbers && minNum === 0) chars.push(pick(numbers, randomInt));
   if (special && minSpec === 0) chars.push(pick(special, randomInt));
 
-  const targetLength = Math.max(options.length, chars.length);
+  // Clamp the requested length to [chars.length, MAX_PASSWORD_LENGTH] (never below the guaranteed
+  // characters already collected), coercing an absurd or non-finite length instead of looping on it.
+  const cap = Math.max(MAX_PASSWORD_LENGTH, chars.length);
+  const targetLength = Math.max(clampInt(options.length, 0, cap), chars.length);
   while (chars.length < targetLength) chars.push(pick(all, randomInt));
 
   shuffle(chars, randomInt);

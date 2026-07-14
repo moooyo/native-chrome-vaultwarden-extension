@@ -74,6 +74,48 @@ describe('context menu', () => {
     expect(created).toHaveLength(0);
   });
 
+  it('serializes overlapping refreshes and coalesces them to a single trailing rebuild', async () => {
+    const { deps } = makeDeps('unlocked', [{ id: 'c1', name: 'Visa', favorite: false }]);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let removeAllCount = 0;
+    deps.menus.removeAll = vi.fn(async () => {
+      removeAllCount += 1;
+      if (removeAllCount === 1) await gate; // hold the first rebuild open while more refreshes queue
+    });
+    const menu = createContextMenu(deps);
+    const p1 = menu.refresh();
+    const p2 = menu.refresh();
+    const p3 = menu.refresh();
+    release();
+    await Promise.all([p1, p2, p3]);
+    // Without serialization all three rebuilds interleave (3 removeAlls, duplicate create ids);
+    // newest-wins single-flight collapses them to the in-flight run plus one coalesced trailing run.
+    expect(removeAllCount).toBe(2);
+  });
+
+  it('logs an unexpected fill error instead of silently swallowing it', async () => {
+    const { deps, sent } = makeDeps('unlocked');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    deps.getFillData = vi.fn(async () => { throw new Error('decrypt exploded'); });
+    await createContextMenu(deps).handleClick('vw-fill|form|card|c9', { id: 7 }, 0);
+    expect(spy).toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+    spy.mockRestore();
+  });
+
+  it('stays silent (no log, no message) for expected credential-release refusals', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const code of ['denied', 'locked', 'sync_required'] as const) {
+      const { deps, sent } = makeDeps('unlocked');
+      deps.getFillData = vi.fn(async () => { throw Object.assign(new Error('x'), { code }); });
+      await createContextMenu(deps).handleClick('vw-fill|form|card|c9', { id: 7 }, 0);
+      expect(sent).toHaveLength(0);
+    }
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
   it('shouldRefreshMenu fires for sync/auth/cipher mutations, not for reads', () => {
     expect(shouldRefreshMenu('vault.sync')).toBe(true);
     expect(shouldRefreshMenu('auth.lock')).toBe(true);

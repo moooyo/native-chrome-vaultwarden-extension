@@ -14,6 +14,14 @@ describe('attachment crypto', () => {
     expect(await decryptAttachmentFile(blob, att)).toEqual(data);
   });
 
+  it('round-trips a multi-AES-block payload (subarray views over the blob, not copies)', async () => {
+    const att = fixedKey(5);
+    // 200 bytes spans several 16-byte AES-CBC blocks, exercising the ciphertext subarray path.
+    const data = new Uint8Array(200).map((_, i) => (i * 7) & 0xff);
+    const blob = await encryptAttachmentFile(data, att);
+    expect(await decryptAttachmentFile(blob, att)).toEqual(data);
+  });
+
   it('rejects a tampered blob (MAC failure)', async () => {
     const att = fixedKey(9);
     const blob = await encryptAttachmentFile(new Uint8Array([1, 2, 3, 4]), att);

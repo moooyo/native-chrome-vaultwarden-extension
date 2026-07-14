@@ -19,6 +19,25 @@ describe('buildAuthenticatorData', () => {
   });
 });
 
+describe('derToRawSignature', () => {
+  it('rejects a blob that does not start with the 0x30 SEQUENCE tag', () => {
+    // Well-formed INTEGER body, but the leading SEQUENCE tag is wrong — must be rejected, not parsed.
+    const der = new Uint8Array([0x99, 0x06, 0x02, 0x01, 0x05, 0x02, 0x01, 0x06]);
+    expect(() => derToRawSignature(der)).toThrow(/invalid DER/);
+  });
+
+  it('rejects an INTEGER length that overruns the buffer instead of silently truncating', () => {
+    // sLen claims 5 bytes but only 1 is present; slice() would clamp silently to a short `s`.
+    const der = new Uint8Array([0x30, 0x06, 0x02, 0x01, 0x05, 0x02, 0x05, 0x06]);
+    expect(() => derToRawSignature(der)).toThrow(/invalid DER/);
+  });
+
+  it('rejects a multi-byte (high-bit) INTEGER length', () => {
+    const der = new Uint8Array([0x30, 0x04, 0x02, 0x81, 0x01, 0x05]);
+    expect(() => derToRawSignature(der)).toThrow(/invalid DER/);
+  });
+});
+
 describe('signFido2Assertion', () => {
   it('produces an assertion whose DER signature verifies against the public key', async () => {
     const { pkcs8, publicKey } = await makeKeypair();

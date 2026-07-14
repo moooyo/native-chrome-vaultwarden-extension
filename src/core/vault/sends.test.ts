@@ -171,4 +171,16 @@ describe('buildUpdateSendRequest', () => {
     expect(req.file?.fileName).toBe(existing.file!.fileName);  // file name unchanged
     expect(req.deletionDate).toBe(existing.deletionDate);      // days blank → keep date
   });
+
+  it('preserves the existing disabled state when the input omits it', async () => {
+    const existing = { ...(await makeExisting()), disabled: true } as SendResponse;
+    const req = await buildUpdateSendRequest(existing, { name: 'N', text: 't', passwordMode: 'keep' }, userKey, fileDeps);
+    expect(req.disabled).toBe(true); // omitted input.disabled must not silently re-publish the send
+  });
+
+  it('lets the input override the disabled state when provided', async () => {
+    const existing = { ...(await makeExisting()), disabled: true } as SendResponse;
+    const req = await buildUpdateSendRequest(existing, { name: 'N', text: 't', disabled: false, passwordMode: 'keep' }, userKey, fileDeps);
+    expect(req.disabled).toBe(false);
+  });
 });

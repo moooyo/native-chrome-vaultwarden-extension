@@ -64,23 +64,24 @@ export async function decryptCipher(
       if (attachments.length) out.attachments = attachments;
     }
     return out;
-  } catch (err) {
-    if (err instanceof EncStringMacError || err instanceof UnsupportedEncTypeError) {
-      const undecryptable: CipherSummary = {
-        id: cipher.id,
-        type: cipher.type,
-        favorite: cipher.favorite ?? false,
-        name: '(error)',
-        uris: [],
-        loginUris: [],
-        undecryptable: true,
-      };
-      if (cipher.organizationId) undecryptable.organizationId = cipher.organizationId;
-      if (cipher.folderId) undecryptable.folderId = cipher.folderId;
-      if (cipher.collectionIds?.length) undecryptable.collectionIds = cipher.collectionIds;
-      return undecryptable;
-    }
-    throw err;
+  } catch {
+    // Any decrypt failure degrades to an undecryptable summary — not only a bad MAC or unsupported
+    // encType, but also a malformed EncString (invalid base64) or a wrapped key of the wrong length,
+    // which surface as a plain Error. Rethrowing those turned one corrupt cipher into an unhandled
+    // throw on targeted reveal/download (decryptCipherById → decryptCipher); fail-close instead.
+    const undecryptable: CipherSummary = {
+      id: cipher.id,
+      type: cipher.type,
+      favorite: cipher.favorite ?? false,
+      name: '(error)',
+      uris: [],
+      loginUris: [],
+      undecryptable: true,
+    };
+    if (cipher.organizationId) undecryptable.organizationId = cipher.organizationId;
+    if (cipher.folderId) undecryptable.folderId = cipher.folderId;
+    if (cipher.collectionIds?.length) undecryptable.collectionIds = cipher.collectionIds;
+    return undecryptable;
   }
 }
 
@@ -142,11 +143,10 @@ export async function decryptCipherSummary(
     if (subtitle) summary.subtitle = subtitle;
     if (cipher.deletedDate) summary.deletedDate = cipher.deletedDate;
     return summary;
-  } catch (err) {
-    if (err instanceof EncStringMacError || err instanceof UnsupportedEncTypeError) {
-      return undecryptableSummary(cipher);
-    }
-    throw err;
+  } catch {
+    // Mirror decryptCipher: any decrypt failure (bad MAC, unsupported encType, malformed base64, or a
+    // bad-length wrapped key) degrades to an undecryptable summary rather than propagating.
+    return undecryptableSummary(cipher);
   }
 }
 
@@ -272,16 +272,17 @@ async function decryptFido2Credentials(src: Fido2CredentialData[], key: Symmetri
 }
 
 /** Decrypt custom fields. Text/Hidden/Boolean carry a decrypted value; Linked (type 3) carries only
- *  its linkedId. A field whose name fails to decrypt keeps an empty name rather than dropping. */
+ *  its linkedId. A field whose name or value fails to decrypt degrades just that field (empty name /
+ *  dropped value) so one tampered custom field never marks the whole item undecryptable. */
 async function decryptCustomFields(src: CipherFieldData[], key: SymmetricKey): Promise<DecryptedField[]> {
   const out: DecryptedField[] = [];
   for (const f of src) {
     const type = ((f.type ?? 0) as CustomFieldType);
-    const field: DecryptedField = { type, name: (await decryptOptional(f.name, key)) ?? '' };
+    const field: DecryptedField = { type, name: (await decryptFieldOptional(f.name, key)) ?? '' };
     if (type === 3) {
       if (f.linkedId != null) field.linkedId = f.linkedId;
     } else {
-      const value = await decryptOptional(f.value, key);
+      const value = await decryptFieldOptional(f.value, key);
       if (value !== undefined) field.value = value;
     }
     out.push(field);
@@ -337,4 +338,18 @@ async function decryptOptional(
   key: SymmetricKey,
 ): Promise<string | undefined> {
   return value ? decryptToText(value, key) : undefined;
+}
+
+/** Like decryptOptional, but a decrypt failure (bad MAC, malformed EncString, …) degrades to
+ *  undefined instead of throwing — so one corrupt custom field never aborts the whole item. */
+async function decryptFieldOptional(
+  value: string | null | undefined,
+  key: SymmetricKey,
+): Promise<string | undefined> {
+  if (!value) return undefined;
+  try {
+    return await decryptToText(value, key);
+  } catch {
+    return undefined;
+  }
 }

@@ -16,6 +16,10 @@ export default tseslint.config(
         atob: 'readonly',
       },
     },
-    rules: { 'no-console': 'off' },
+    rules: {
+      'no-console': 'off',
+      // Allow intentionally-unused identifiers prefixed with `_` (e.g. ignored callback params).
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }],
+    },
   },
 );

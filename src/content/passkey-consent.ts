@@ -30,21 +30,51 @@ export type PasskeyPickerResult = PasskeyRegisterResult;
 export type PasskeyLoginResult = { credentialId: string } | { cancelled: true };
 
 /**
+ * Grace period after a consent surface mounts during which an *approving* action (confirm / select /
+ * create-new) is ignored. Guards against a page that provokes a real click at the dialog's fixed
+ * center the instant it appears (clickjacking): only actions that land after the surface has settled
+ * can approve. Cancel / Escape / outside-click are never delayed — dismissing early is harmless.
+ */
+export const PASSKEY_CONSENT_ARM_MS = 300;
+
+/** Whether the arming grace period has elapsed since `mountedAt`. */
+function isArmed(mountedAt: number): boolean {
+  return Date.now() - mountedAt >= PASSKEY_CONSENT_ARM_MS;
+}
+
+/**
+ * Settle a consent promise as cancelled if the page removes the surface host from the DOM. The host is
+ * a light-DOM `<div>` the page can reach and remove; without this the ceremony would hang, resolving
+ * only via an unlikely window Escape. Returns a teardown that disconnects the observer.
+ */
+function observeHostRemoval(host: HTMLElement, onRemoved: () => void): () => void {
+  const observer = new MutationObserver(() => {
+    if (!host.isConnected) onRemoved();
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  return () => observer.disconnect();
+}
+
+/**
  * Prompt the user to approve using a stored passkey for `rpId`. Resolves true on confirm, false on
  * cancel / Escape / outside click. The dialog lives in a closed shadow root the page cannot reach.
  */
 export function confirmPasskeyUse(rpId: string): Promise<boolean> {
   return new Promise((resolve) => {
     const surface = mountRenderSurface(DIALOG_STYLES);
+    const mountedAt = Date.now();
     let settled = false;
+    let disconnectObserver = (): void => {};
     const finish = (confirmed: boolean): void => {
       if (settled) return;
       settled = true;
       window.removeEventListener('keydown', handleKeydown, true);
+      disconnectObserver();
       surface.remove();
       resolve(confirmed);
     };
     const handleKeydown = (event: KeyboardEvent): void => {
+      if (!event.isTrusted) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         finish(false);
@@ -52,11 +82,12 @@ export function confirmPasskeyUse(rpId: string): Promise<boolean> {
     };
     const state: PasskeyConsentState = { rpId };
     const handlers: PasskeyConsentHandlers = {
-      onConfirm: () => finish(true),
+      onConfirm: () => { if (isArmed(mountedAt)) finish(true); },
       onCancel: () => finish(false),
       onOverlay: () => finish(false),
     };
     window.addEventListener('keydown', handleKeydown, true);
+    disconnectObserver = observeHostRemoval(surface.host, () => finish(false));
     surface.render(renderPasskeyConsent(state, handlers));
   });
 }
@@ -72,15 +103,19 @@ export function choosePasskeyTarget(
 ): Promise<PasskeyPickerResult> {
   return new Promise((resolve) => {
     const surface = mountRenderSurface(DIALOG_STYLES);
+    const mountedAt = Date.now();
     let settled = false;
+    let disconnectObserver = (): void => {};
     const finish = (result: PasskeyRegisterResult): void => {
       if (settled) return;
       settled = true;
       window.removeEventListener('keydown', handleKeydown, true);
+      disconnectObserver();
       surface.remove();
       resolve(result);
     };
     const handleKeydown = (event: KeyboardEvent): void => {
+      if (!event.isTrusted) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         finish({ cancelled: true });
@@ -88,9 +123,10 @@ export function choosePasskeyTarget(
     };
     const state: PasskeyRegisterState = { rpId, targets };
     const handlers: PasskeyRegisterHandlers = {
-      onNew: () => finish({}),
+      onNew: () => { if (isArmed(mountedAt)) finish({}); },
       onCancel: () => finish({ cancelled: true }),
       onSelectTarget: (index) => {
+        if (!isArmed(mountedAt)) return;
         const target = state.targets[index];
         if (target) {
           finish({ targetCipherId: target.id });
@@ -99,6 +135,7 @@ export function choosePasskeyTarget(
       onOverlay: () => finish({ cancelled: true }),
     };
     window.addEventListener('keydown', handleKeydown, true);
+    disconnectObserver = observeHostRemoval(surface.host, () => finish({ cancelled: true }));
     surface.render(renderPasskeyRegister(state, handlers));
   });
 }
@@ -115,15 +152,19 @@ export function choosePasskeyLogin(
 ): Promise<PasskeyLoginResult> {
   return new Promise((resolve) => {
     const surface = mountRenderSurface(DIALOG_STYLES);
+    const mountedAt = Date.now();
     let settled = false;
+    let disconnectObserver = (): void => {};
     const finish = (result: PasskeyLoginResult): void => {
       if (settled) return;
       settled = true;
       window.removeEventListener('keydown', handleKeydown, true);
+      disconnectObserver();
       surface.remove();
       resolve(result);
     };
     const handleKeydown = (event: KeyboardEvent): void => {
+      if (!event.isTrusted) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         finish({ cancelled: true });
@@ -136,6 +177,7 @@ export function choosePasskeyLogin(
     };
     const handlers: PasskeyLoginPickerHandlers = {
       onSelect: (index) => {
+        if (!isArmed(mountedAt)) return;
         const chosen = candidates[index];
         if (chosen) finish({ credentialId: chosen.credentialId });
       },
@@ -143,6 +185,7 @@ export function choosePasskeyLogin(
       onOverlay: () => finish({ cancelled: true }),
     };
     window.addEventListener('keydown', handleKeydown, true);
+    disconnectObserver = observeHostRemoval(surface.host, () => finish({ cancelled: true }));
     surface.render(renderPasskeyLoginPicker(state, handlers));
   });
 }

@@ -27,6 +27,25 @@ describe('encstring', () => {
     expect(await decryptToText(FIELD_VECTOR.encString, userKey)).toBe(FIELD_VECTOR.plaintext);
   });
 
+  it('repeated decrypts with the same key stay correct (key-import caching preserves output)', async () => {
+    // decryptCipher fans many field decrypts over one SymmetricKey; the cached CryptoKey must not
+    // change the result. Round-trip several distinct values through the same key back to back.
+    const values = ['first', 'second value', '', 'a much longer secret with symbols !@#$%^&*()'];
+    const encs = await Promise.all(values.map((v) => encryptToText(v, userKey)));
+    for (let round = 0; round < 3; round++) {
+      for (let i = 0; i < values.length; i++) {
+        expect(await decryptToText(encs[i]!, userKey)).toBe(values[i]);
+      }
+    }
+    // The wrapped-UserKey vector still unwraps to the exact same raw bytes across repeats.
+    const stretched = {
+      encKey: hexToBytes(STRETCH_VECTOR.encKeyHex),
+      macKey: hexToBytes(STRETCH_VECTOR.macKeyHex),
+    };
+    expect(bytesToHex(await decryptToBytes(USER_KEY_VECTOR.akey, stretched))).toBe(USER_KEY_VECTOR.userKeyHex);
+    expect(bytesToHex(await decryptToBytes(USER_KEY_VECTOR.akey, stretched))).toBe(USER_KEY_VECTOR.userKeyHex);
+  });
+
   it('decrypts the wrapped UserKey to its 64 raw bytes (via stretched key)', async () => {
     const stretched = {
       encKey: hexToBytes(STRETCH_VECTOR.encKeyHex),

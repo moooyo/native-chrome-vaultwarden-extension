@@ -18,6 +18,12 @@ const MIN_DETECTION_SECONDS = 15;
 /** When disabled, set a large interval so 'idle' rarely fires; 'locked' is ignored by the applyAction gate. */
 const SENTINEL_SECONDS = 4 * 3600;
 
+/** Clamp a requested idle detection window to chrome.idle's hard minimum. Both the detection-interval
+ *  setter and the backstop `queryState` call reject values below this, so every caller must clamp. */
+function clampDetection(idleSeconds: number): number {
+  return Math.max(MIN_DETECTION_SECONDS, idleSeconds);
+}
+
 export function createIdleLock(deps: IdleLockDeps) {
   async function applyAction(idleSeconds: number | null, action: OnIdleAction): Promise<void> {
     if (idleSeconds === null) return;                 // disabled — ignores idle AND locked
@@ -27,7 +33,7 @@ export function createIdleLock(deps: IdleLockDeps) {
   return {
     async applyDetection(): Promise<void> {
       const { idleSeconds } = await deps.getConfig();
-      deps.setDetectionInterval(idleSeconds === null ? SENTINEL_SECONDS : Math.max(MIN_DETECTION_SECONDS, idleSeconds));
+      deps.setDetectionInterval(idleSeconds === null ? SENTINEL_SECONDS : clampDetection(idleSeconds));
     },
     async onStateChanged(state: IdleState): Promise<void> {
       if (state !== 'idle' && state !== 'locked') return;
@@ -37,8 +43,23 @@ export function createIdleLock(deps: IdleLockDeps) {
     async onBackstopAlarm(): Promise<void> {
       const { idleSeconds, action } = await deps.getConfig();
       if (idleSeconds === null) return;
-      const state = await deps.queryState(idleSeconds);
+      const state = await deps.queryState(clampDetection(idleSeconds));
       if (state === 'idle' || state === 'locked') await applyAction(idleSeconds, action);
     },
   };
+}
+
+/** Minimal `chrome.alarms` surface `ensureIdleLockAlarm` depends on. */
+export interface AlarmScheduler {
+  get(name: string): Promise<{ name: string } | undefined>;
+  create(name: string, options: { periodInMinutes: number }): void;
+}
+
+/** Idempotently ensure the idle-lock backstop alarm exists. The alarm is created in `onInstalled`,
+ *  but MV3 can evict the worker and, in rare cases, drop its alarms; calling this on every cold SW
+ *  start (and on `onStartup`) recreates a lost alarm. Recreating a present alarm would just reset its
+ *  schedule, so we only create when `get` reports it missing. */
+export async function ensureIdleLockAlarm(alarms: AlarmScheduler): Promise<void> {
+  const existing = await alarms.get(IDLE_LOCK_ALARM);
+  if (!existing) alarms.create(IDLE_LOCK_ALARM, { periodInMinutes: 1 });
 }
