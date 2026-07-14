@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import type { Mock } from 'vitest';
 import { VaultService } from './vault-service.js';
 import { UriMatchStrategy } from './uri-match.js';
 
@@ -1295,7 +1296,7 @@ describe('VaultService', () => {
   it('importVault creates a cipher per parsed item and re-syncs once', async () => {
     const { service, api } = await makeService();
     const json = JSON.stringify({ items: [{ type: 1, name: 'Imported', login: { password: 'p' } }, { type: 2, name: 'Note', notes: 'n' }] });
-    await expect(service.importVault(json)).resolves.toBe(2);
+    await expect(service.importVault(json)).resolves.toMatchObject({ imported: 2, failed: 0 });
     expect(api.createCipher).toHaveBeenCalledTimes(2);
     expect(api.sync).toHaveBeenCalled();
   });
@@ -1308,7 +1309,7 @@ describe('VaultService', () => {
   it('importVault parses a CSV export (logins) and creates a cipher per row', async () => {
     const { service, api } = await makeService();
     const csv = 'name,login_username,login_password,login_uri\nGitHub,octocat,s3cret,https://github.com\nGmail,me@example.com,hunter2,https://mail.google.com\n';
-    await expect(service.importVault(csv)).resolves.toBe(2);
+    await expect(service.importVault(csv)).resolves.toMatchObject({ imported: 2, failed: 0 });
     expect(api.createCipher).toHaveBeenCalledTimes(2);
   });
 
@@ -1316,6 +1317,53 @@ describe('VaultService', () => {
     const { service } = await makeService();
     const encrypted = JSON.stringify({ encrypted: true, passwordProtected: true, salt: 'x', kdfIterations: 600000, data: '2.a|b|c' });
     await expect(service.importVault(encrypted)).rejects.toThrow(/password-protected/);
+  });
+
+  it('importVault continues past a failing item, still syncs, and reports imported/failed counts', async () => {
+    const { service, api } = await makeService();
+    const json = JSON.stringify({ items: [
+      { type: 1, name: 'First', login: { password: 'a' } },
+      { type: 1, name: 'Second', login: { password: 'b' } },
+      { type: 1, name: 'Third', login: { password: 'c' } },
+    ] });
+    // Reject the middle item's createCipher; the first and third must still be created.
+    const createCipher = api.createCipher as unknown as Mock;
+    createCipher.mockReset();
+    let call = 0;
+    createCipher.mockImplementation(async () => {
+      call += 1;
+      if (call === 2) throw new Error('server rejected item');
+      return { id: 'new-cipher', type: 1, name: '2.enc' };
+    });
+
+    const result = await service.importVault(json);
+
+    // (a) the other items were still created despite the middle failure (no early abort).
+    expect(createCipher).toHaveBeenCalledTimes(3);
+    // (b) the final sync still ran because at least one item imported.
+    expect(api.sync).toHaveBeenCalled();
+    // (c) the return value reports the correct imported/failed counts.
+    expect(result.imported).toBe(2);
+    expect(result.failed).toBe(1);
+    expect(result.failures).toEqual([{ index: 1, message: 'server rejected item' }]);
+    // (d) reaching here proves importVault did not throw a total-failure error.
+  });
+
+  it('importVault does not re-sync when every item fails', async () => {
+    const { service, api } = await makeService();
+    const json = JSON.stringify({ items: [
+      { type: 1, name: 'First', login: { password: 'a' } },
+      { type: 1, name: 'Second', login: { password: 'b' } },
+    ] });
+    const createCipher = api.createCipher as unknown as Mock;
+    createCipher.mockReset();
+    createCipher.mockRejectedValue(new Error('server rejected item'));
+
+    const result = await service.importVault(json);
+
+    expect(createCipher).toHaveBeenCalledTimes(2);
+    expect(api.sync).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ imported: 0, failed: 2 });
   });
 
   it('signs a passkey assertion in the worker without leaking the private key', async () => {

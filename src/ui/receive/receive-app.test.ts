@@ -96,6 +96,16 @@ it('renders a focused page task with a heading and constrained body', async () =
   expect(app.shadowRoot!.querySelector('[data-task-column]')).not.toBeNull();
 });
 
+describe('vw-receive-app appearance', () => {
+  afterEach(() => document.body.replaceChildren());
+
+  it('mirrors the saved theme + density onto the host so the page is themed', async () => {
+    const app = await mount(makeDeps().deps);
+    expect(app.getAttribute('data-theme')).toBe('light');
+    expect(app.getAttribute('data-density')).toBe('comfortable');
+  });
+});
+
 async function accessFor(app: VwReceiveApp, link: string, password?: string): Promise<void> {
   linkInput(app).value = link;
   accessButton(app).click();

@@ -860,22 +860,38 @@ export class VwPopupApp extends LitElement {
     switch (detail.action) {
       case 'switch-account':
         if (detail.email !== undefined) {
-          const response = await this.request({ type: 'auth.switchAccount', email: detail.email });
-          if (response.ok) {
-            // Drop the prior account's non-secret vault listing + Fill outcome before re-routing;
-            // an unlocked destination reloads its own data via enterVault().
-            this.resetVaultState();
-            await this.reRouteFromState();
+          if (this.pending) return;
+          this.pending = true;
+          try {
+            const response = await this.request({ type: 'auth.switchAccount', email: detail.email });
+            if (response.ok) {
+              // Drop the prior account's non-secret vault listing + Fill outcome before re-routing;
+              // an unlocked destination reloads its own data via enterVault().
+              this.resetVaultState();
+              await this.reRouteFromState();
+            } else {
+              this.showToast(response.error.message);
+            }
+          } finally {
+            this.pending = false;
           }
         }
         return;
       case 'remove-account':
         if (detail.email !== undefined) {
-          const response = await this.request({ type: 'auth.removeAccount', email: detail.email });
-          if (response.ok) {
-            // Drop the removed account's non-secret vault listing + Fill outcome before re-routing.
-            this.resetVaultState();
-            await this.reRouteFromState();
+          if (this.pending) return;
+          this.pending = true;
+          try {
+            const response = await this.request({ type: 'auth.removeAccount', email: detail.email });
+            if (response.ok) {
+              // Drop the removed account's non-secret vault listing + Fill outcome before re-routing.
+              this.resetVaultState();
+              await this.reRouteFromState();
+            } else {
+              this.showToast(response.error.message);
+            }
+          } finally {
+            this.pending = false;
           }
         }
         return;
@@ -892,11 +908,17 @@ export class VwPopupApp extends LitElement {
         await this.browser.openOptions();
         return;
       case 'lock': {
-        const response = await this.request({ type: 'auth.lock' });
-        // A lock must drop the unlocked vault's non-secret listing state (items/folders/
-        // collections/org permissions/suggestions), not only the tool state.
-        if (response.ok) { this.resetVaultState(); this.navigate(unlockRoute()); }
-        else this.navigate({ name: 'vault', scope: 'suggestions', error: response.error.message });
+        if (this.pending) return;
+        this.pending = true;
+        try {
+          const response = await this.request({ type: 'auth.lock' });
+          // A lock must drop the unlocked vault's non-secret listing state (items/folders/
+          // collections/org permissions/suggestions), not only the tool state.
+          if (response.ok) { this.resetVaultState(); this.navigate(unlockRoute()); }
+          else this.showToast(response.error.message); // surface the failure instead of an unread route error
+        } finally {
+          this.pending = false;
+        }
         return;
       }
       case 'logout':
@@ -1388,7 +1410,7 @@ export class VwPopupApp extends LitElement {
     }
     const input = (response.data as { input: CipherInput | null }).input;
     if (!input) {
-      this.editorStatus = { message: '此条目类型暂不支持编辑', tone: 'danger' };
+      this.editorStatus = { message: t('editor.typeUnsupported'), tone: 'danger' };
       return;
     }
     this.editorInput = input;
@@ -1427,7 +1449,7 @@ export class VwPopupApp extends LitElement {
         return;
       }
       await this.loadListing();
-      this.editorStatus = { message: '集合已更新', tone: 'success' };
+      this.editorStatus = { message: t('editor.collectionsUpdated'), tone: 'success' };
     } finally {
       this.pending = false;
     }

@@ -187,7 +187,8 @@ export function createRouter(deps: RouterDeps) {
           }
           case 'vault.import': {
             if (!deps.vault.importVault) throw new Error('vault.importVault is not wired');
-            return { ok: true, data: { imported: await deps.vault.importVault(request.content, request.password) } };
+            const result = await deps.vault.importVault(request.content, request.password);
+            return { ok: true, data: { imported: result.imported } };
           }
           case 'vault.hasPasskey': {
             if (!deps.vault.hasMatchingPasskey) throw new Error('vault.hasMatchingPasskey is not wired');

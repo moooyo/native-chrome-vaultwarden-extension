@@ -11,7 +11,6 @@ export const BUILTIN_EQUIVALENT_DOMAINS: string[][] = [
   ['paypal.com', 'paypal.me'],
   ['facebook.com', 'fb.com', 'messenger.com', 'instagram.com'],
   ['yahoo.com', 'yahoo.co.uk', 'yahoo.co.jp', 'ymail.com', 'rocketmail.com'],
-  ['github.com', 'githubusercontent.com', 'github.io'],
   ['atlassian.com', 'atlassian.net', 'jira.com', 'bitbucket.org', 'trello.com'],
   ['steampowered.com', 'steamcommunity.com'],
   ['discord.com', 'discordapp.com'],

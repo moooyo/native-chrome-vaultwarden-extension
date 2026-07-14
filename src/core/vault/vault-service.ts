@@ -53,6 +53,17 @@ export interface VaultListing {
   orgPermissions: OrgPermission[];
 }
 
+/** Outcome of an {@link VaultService.importVault} run. Reports how many items were created versus how
+ *  many failed so the caller can surface a partial import instead of treating one failure as total. */
+export interface ImportResult {
+  /** Number of items successfully created on the server. */
+  imported: number;
+  /** Number of items that failed to import. */
+  failed: number;
+  /** Per-item failure detail, in input order: the index into the parsed import and the error message. */
+  failures: Array<{ index: number; message: string }>;
+}
+
 /** The save/update decision for a captured form submission. */
 export type SaveLoginPrompt =
   | { action: 'none' }
@@ -935,18 +946,29 @@ export class VaultService {
   /**
    * Import a Bitwarden export (plaintext JSON, password-protected JSON, or CSV): parse, then create one
    * cipher per item and re-sync once. `password` is required for an encrypted export.
+   *
+   * Each item is imported independently: a single item's failure (e.g. a server 4xx) is recorded and
+   * the batch continues, rather than aborting on the first rejection. Aborting would leave the items
+   * created before the failure silently committed while the caller sees a total failure and retries —
+   * duplicating those successes. The final `sync()` runs whenever at least one item landed so the local
+   * cache reflects what was imported. Returns the imported/failed counts and per-item failure detail.
    */
-  async importVault(content: string, password?: string): Promise<number> {
+  async importVault(content: string, password?: string): Promise<ImportResult> {
     const inputs = await parseImport(content, password);
     const userKey = await this.requireUserKey();
     const token = await this.requireToken();
     let imported = 0;
-    for (const input of inputs) {
-      await this.deps.api.createCipher(token, await encryptCipher(input, userKey));
-      imported++;
+    const failures: ImportResult['failures'] = [];
+    for (const [index, input] of inputs.entries()) {
+      try {
+        await this.deps.api.createCipher(token, await encryptCipher(input, userKey));
+        imported++;
+      } catch (err) {
+        failures.push({ index, message: err instanceof Error ? err.message : String(err) });
+      }
     }
     if (imported > 0) await this.sync();
-    return imported;
+    return { imported, failed: failures.length, failures };
   }
 
   private async decryptCipherById(id: string): Promise<DecryptedCipher | undefined> {
