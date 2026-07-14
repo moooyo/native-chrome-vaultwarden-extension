@@ -1,5 +1,6 @@
 import { LitElement, css, html } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
 import '../../components/menu.js';
@@ -85,7 +86,7 @@ export class VwAccountMenu extends LitElement {
 
   private emitAction(action: AccountAction, email?: string): void {
     const detail: AccountActionDetail = email !== undefined ? { action, email } : { action };
-    this.dispatchEvent(new CustomEvent<AccountActionDetail>('vw-account-action', { detail, bubbles: true, composed: true }));
+    emit<AccountActionDetail>(this, 'vw-account-action', detail);
   }
 
   private handleSelect(event: Event): void {

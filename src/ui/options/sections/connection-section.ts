@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import { getPrefs, setPref, subscribePrefs } from '../../prefs.js';
@@ -139,16 +140,12 @@ export class VwConnectionSection extends LitElement {
       this.validationError = t('auth.serverUrl');
       return;
     }
-    this.dispatchEvent(new CustomEvent<ConnectionSaveDetail>('vw-connection-save', {
-      detail: { serverUrl: normalized },
-      bubbles: true,
-      composed: true,
-    }));
+    emit<ConnectionSaveDetail>(this, 'vw-connection-save', { serverUrl: normalized });
   }
 
   private syncNow(): void {
     if (this.syncing) return;
-    this.dispatchEvent(new CustomEvent('vw-sync-now', { bubbles: true, composed: true }));
+    emit(this, 'vw-sync-now');
   }
 
   private renderStatus() {

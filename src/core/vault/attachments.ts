@@ -5,7 +5,7 @@
 
 import { aesCbc256Decrypt, aesCbc256Encrypt, hmacSha256 } from '../crypto/primitives.js';
 import { constantTimeEqual } from '../crypto/encoding.js';
-import { unwrapSymmetricKey, symmetricKeyFromBytes, type SymmetricKey } from '../crypto/keys.js';
+import { unwrapSymmetricKey, symmetricKeyFromBytes, serializeSymmetricKey, type SymmetricKey } from '../crypto/keys.js';
 import { encryptToBytes } from '../crypto/encstring.js';
 
 const ENC_TYPE_AESCBC_HMAC = 2;
@@ -22,10 +22,7 @@ export function generateAttachmentKey(randomBytes: (n: number) => Uint8Array = d
 
 /** Wrap an attachment key under the cipher key as an encType=2 EncString (stored as attachment.key). */
 export async function wrapAttachmentKey(attachmentKey: SymmetricKey, cipherKey: SymmetricKey): Promise<string> {
-  const raw = new Uint8Array(64);
-  raw.set(attachmentKey.encKey, 0);
-  raw.set(attachmentKey.macKey, 32);
-  return encryptToBytes(raw, cipherKey);
+  return encryptToBytes(serializeSymmetricKey(attachmentKey), cipherKey);
 }
 
 /** Encrypt file bytes into an EncArrayBuffer: [2] ‖ iv ‖ mac ‖ ct (Encrypt-then-MAC). */

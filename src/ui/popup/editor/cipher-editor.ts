@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
 import '../../components/status-message.js';
@@ -547,7 +548,7 @@ export class VwCipherEditor extends LitElement {
   }
 
   private emit<T>(type: string, detail: T): void {
-    this.dispatchEvent(new CustomEvent<T>(type, { detail, bubbles: true, composed: true }));
+    emit<T>(this, type, detail);
   }
 
   private save(): void {
@@ -597,7 +598,7 @@ export class VwCipherEditor extends LitElement {
   }
 
   private back(): void {
-    this.dispatchEvent(new CustomEvent('vw-item-back', { bubbles: true, composed: true }));
+    emit(this, 'vw-item-back');
   }
 
   // --- rendering --------------------------------------------------------------------------------

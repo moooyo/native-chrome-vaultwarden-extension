@@ -1,5 +1,6 @@
 import { LitElement, css, html } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
 import '../../components/toggle.js';
 import '../../components/segmented.js';
@@ -313,9 +314,7 @@ export class VwGeneratorView extends LitElement {
   }
 
   private emitHistoryAdd(value: string): void {
-    this.dispatchEvent(
-      new CustomEvent<GeneratorHistoryAddDetail>('vw-history-add', { detail: { value }, bubbles: true, composed: true }),
-    );
+    emit<GeneratorHistoryAddDetail>(this, 'vw-history-add', { value });
   }
 
   /** Explicit Regenerate: record the value being replaced, then produce a fresh one. */
@@ -331,13 +330,11 @@ export class VwGeneratorView extends LitElement {
   private copy(): void {
     if (!this.current) return;
     this.emitHistoryAdd(this.current);
-    this.dispatchEvent(
-      new CustomEvent<CopyDetail>('vw-copy', { detail: { value: this.current, label: this.copyLabel() }, bubbles: true, composed: true }),
-    );
+    emit<CopyDetail>(this, 'vw-copy', { value: this.current, label: this.copyLabel() });
   }
 
   private back(): void {
-    this.dispatchEvent(new CustomEvent('vw-item-back', { bubbles: true, composed: true }));
+    emit(this, 'vw-item-back');
   }
 
   private setMode(mode: GenMode): void {

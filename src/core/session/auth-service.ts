@@ -2,7 +2,7 @@ import type { ApiClient, PasswordLoginInput, PasswordLoginResult } from '../api/
 import { ApiHttpError } from '../api/client.js';
 import { AppError } from '../errors.js';
 import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey, assertKdfIterationsFloor } from '../crypto/kdf.js';
-import { unwrapSymmetricKey, decryptPrivateKey, type SymmetricKey } from '../crypto/keys.js';
+import { unwrapSymmetricKey, decryptPrivateKey, serializeSymmetricKey, type SymmetricKey } from '../crypto/keys.js';
 import { encryptToBytes } from '../crypto/encstring.js';
 import { buildRegistration } from '../crypto/registration.js';
 import type { SessionManager, SessionState } from './session-manager.js';
@@ -165,10 +165,7 @@ export class AuthService {
     const userKey = await this.deps.session.loadUserKey();
     if (!userKey) throw new Error('vault is locked');
     const pinKey = await this.derivePinKey(pin, auth.email, auth.kdfIterations);
-    const raw = new Uint8Array(64);
-    raw.set(userKey.encKey, 0);
-    raw.set(userKey.macKey, 32);
-    await this.deps.session.savePinProtectedUserKey(await encryptToBytes(raw, pinKey));
+    await this.deps.session.savePinProtectedUserKey(await encryptToBytes(serializeSymmetricKey(userKey), pinKey));
   }
 
   /** Unlock with a PIN (no network). A wrong PIN fails the MAC check and throws. */
@@ -259,10 +256,7 @@ export class AuthService {
 
   /** Wrap the 64-byte UserKey (enc‖mac) under a stretched master key as an encType=2 EncString. */
   private async wrapUserKey(userKey: SymmetricKey, stretched: SymmetricKey): Promise<string> {
-    const raw = new Uint8Array(64);
-    raw.set(userKey.encKey, 0);
-    raw.set(userKey.macKey, 32);
-    return encryptToBytes(raw, stretched);
+    return encryptToBytes(serializeSymmetricKey(userKey), stretched);
   }
 
   /**

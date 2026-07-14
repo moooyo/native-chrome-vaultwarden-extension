@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
 import '../../components/status-message.js';
@@ -137,7 +138,7 @@ export class VwAccountSecurityView extends LitElement {
   }
 
   private back(): void {
-    this.dispatchEvent(new CustomEvent('vw-item-back', { bubbles: true, composed: true }));
+    emit(this, 'vw-item-back');
   }
 
   private toMain(): void {
@@ -154,7 +155,7 @@ export class VwAccountSecurityView extends LitElement {
     if (!currentPassword || !newPassword) { this.validationError = '请输入当前主密码和新主密码'; return; } // TODO i18n
     if (newPassword.length < 8) { this.validationError = '新主密码至少需要 8 个字符'; return; } // TODO i18n
     if (newPassword !== confirm) { this.validationError = '两次输入的新主密码不一致'; return; } // TODO i18n
-    this.dispatchEvent(new CustomEvent<ChangePasswordDetail>('vw-change-password', { detail: { currentPassword, newPassword }, bubbles: true, composed: true }));
+    emit<ChangePasswordDetail>(this, 'vw-change-password', { currentPassword, newPassword });
   }
 
   private changeKdf(): void {
@@ -164,7 +165,7 @@ export class VwAccountSecurityView extends LitElement {
     const iterations = Number(this.read('[data-iterations]'));
     if (!currentPassword) { this.validationError = '请输入当前主密码'; return; } // TODO i18n
     if (!Number.isFinite(iterations) || iterations < MIN_KDF_ITERATIONS) { this.validationError = '迭代次数至少为 600000'; return; } // TODO i18n
-    this.dispatchEvent(new CustomEvent<ChangeKdfDetail>('vw-change-kdf', { detail: { currentPassword, iterations }, bubbles: true, composed: true }));
+    emit<ChangeKdfDetail>(this, 'vw-change-kdf', { currentPassword, iterations });
   }
 
   private confirmRotate(): void {
@@ -172,7 +173,7 @@ export class VwAccountSecurityView extends LitElement {
     this.validationError = undefined;
     const masterPassword = this.read('[data-rotate-current]');
     if (!masterPassword) { this.validationError = '请输入当前主密码'; return; } // TODO i18n
-    this.dispatchEvent(new CustomEvent<RotateKeyDetail>('vw-rotate-key', { detail: { masterPassword }, bubbles: true, composed: true }));
+    emit<RotateKeyDetail>(this, 'vw-rotate-key', { masterPassword });
   }
 
   private renderStatus() {

@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import { getPrefs, setPref, subscribePrefs } from '../../prefs.js';
 import '../../components/setting-card.js';
@@ -137,11 +138,7 @@ export class VwSecuritySection extends LitElement {
   private onLockTimeoutChange(value: string): void {
     if (this.pending || !isLockTimeoutSetting(value)) return;
     this.lockTimeout = value;
-    this.dispatchEvent(new CustomEvent<LockTimeoutSaveDetail>('vw-lock-timeout-save', {
-      detail: { lockTimeout: value },
-      bubbles: true,
-      composed: true,
-    }));
+    emit<LockTimeoutSaveDetail>(this, 'vw-lock-timeout-save', { lockTimeout: value });
   }
 
   private onIdleChange(value: string): void {
@@ -157,11 +154,7 @@ export class VwSecuritySection extends LitElement {
   }
 
   private emitSecurity(): void {
-    this.dispatchEvent(new CustomEvent<SecuritySaveDetail>('vw-security-save', {
-      detail: { onIdleAction: this.onIdleAction, clipboardClearSeconds: this.clipboardClearSeconds },
-      bubbles: true,
-      composed: true,
-    }));
+    emit<SecuritySaveDetail>(this, 'vw-security-save', { onIdleAction: this.onIdleAction, clipboardClearSeconds: this.clipboardClearSeconds });
   }
 
   private changePassword(): void {
@@ -174,11 +167,7 @@ export class VwSecuritySection extends LitElement {
       this.passwordError = t('security.confirmPassword');
       return;
     }
-    this.dispatchEvent(new CustomEvent<ChangePasswordDetail>('vw-change-password', {
-      detail: { currentPassword, newPassword },
-      bubbles: true,
-      composed: true,
-    }));
+    emit<ChangePasswordDetail>(this, 'vw-change-password', { currentPassword, newPassword });
   }
 
   private renderStatus() {

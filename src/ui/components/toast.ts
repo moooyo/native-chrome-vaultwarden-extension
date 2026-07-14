@@ -1,5 +1,6 @@
 import { LitElement, css, html } from 'lit';
 import { themeTokens } from './tokens.js';
+import { emit } from './emit.js';
 
 const TOAST_MS = 1900;
 
@@ -65,7 +66,7 @@ export class VwToast extends LitElement {
       this.style.bottom = `${this.offset}px`;
       if (this.timer) clearTimeout(this.timer);
       this.timer = setTimeout(() => {
-        this.dispatchEvent(new CustomEvent('vw-toast-dismiss', { bubbles: true, composed: true }));
+        emit(this, 'vw-toast-dismiss');
       }, TOAST_MS);
     }
   }

@@ -1,5 +1,6 @@
 import { LitElement, css, html } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
 import '../../components/menu.js';
@@ -49,7 +50,7 @@ export class VwToolsMenu extends LitElement {
   ];
 
   private emitAction(action: ToolAction): void {
-    this.dispatchEvent(new CustomEvent<ToolActionDetail>('vw-tool-action', { detail: { action }, bubbles: true, composed: true }));
+    emit<ToolActionDetail>(this, 'vw-tool-action', { action });
   }
 
   private handleSelect(event: Event): void {

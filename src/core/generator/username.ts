@@ -3,6 +3,7 @@
 
 import { cryptoRandomInt } from './password.js';
 import { PASSPHRASE_WORDLIST } from './wordlist.js';
+import { clamp } from '../util/num.js';
 
 export type UsernameType = 'plusAddressed' | 'catchAll' | 'randomWord';
 
@@ -66,4 +67,3 @@ export function generateRandomWordUsername(
 }
 
 function clampLen(len: number): number { return clamp(Math.trunc(len) || 0, 4, 32); }
-function clamp(v: number, min: number, max: number): number { return Math.max(min, Math.min(max, v)); }

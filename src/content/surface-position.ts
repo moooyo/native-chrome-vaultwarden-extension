@@ -1,6 +1,8 @@
 // Pure, global-free viewport positioning for content surfaces. Callers supply every dimension so the
 // functions can be exercised deterministically in tests and reused from the isolated content world.
 
+import { clamp } from '../core/util/num.js';
+
 export type PopoverPlacement = 'below' | 'above';
 
 export interface AnchorRect {
@@ -54,10 +56,6 @@ export const POPOVER_VIEWPORT_MARGIN = 8;
 export const MODAL_VIEWPORT_MARGIN = 16;
 /** Default gap between an anchor and its popover. */
 export const POPOVER_ANCHOR_GAP = 4;
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), Math.max(min, max));
-}
 
 /**
  * Positions a popover under its anchor, flipping above when there is no room below, and clamping to

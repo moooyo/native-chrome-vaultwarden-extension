@@ -10,6 +10,18 @@ export function symmetricKeyFromBytes(bytes: Uint8Array): SymmetricKey {
   return { encKey: bytes.slice(0, 32), macKey: bytes.slice(32, 64) };
 }
 
+/**
+ * Serialize a SymmetricKey to its 64-byte wire layout: enc(32) ‖ mac(32). The exact inverse of
+ * symmetricKeyFromBytes. This byte order is a security-sensitive invariant shared by every place that
+ * wraps a symmetric key (UserKey / PIN / attachment / emergency-access), so it lives here once.
+ */
+export function serializeSymmetricKey(key: SymmetricKey): Uint8Array {
+  const raw = new Uint8Array(64);
+  raw.set(key.encKey, 0);
+  raw.set(key.macKey, 32);
+  return raw;
+}
+
 export async function unwrapSymmetricKey(
   protectedKey: string,
   wrappingKey: SymmetricKey,

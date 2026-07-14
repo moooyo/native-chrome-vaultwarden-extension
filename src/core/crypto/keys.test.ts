@@ -1,7 +1,25 @@
 import { describe, it, expect } from 'vitest';
-import { unwrapSymmetricKey, symmetricKeyFromBytes, decryptPrivateKey, unwrapRsaWrappedKey } from './keys.js';
+import { unwrapSymmetricKey, symmetricKeyFromBytes, serializeSymmetricKey, decryptPrivateKey, unwrapRsaWrappedKey } from './keys.js';
 import { hexToBytes, bytesToHex, bytesToBase64, base64ToBytes } from './encoding.js';
 import { USER_KEY_VECTOR, STRETCH_VECTOR, RSA_PRIVATE_KEY_VECTOR, RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
+
+describe('keys.serializeSymmetricKey', () => {
+  it('is the exact inverse of symmetricKeyFromBytes (64-byte enc‖mac round-trip)', () => {
+    const bytes = new Uint8Array(64);
+    for (let i = 0; i < 64; i++) bytes[i] = i;
+    const roundTripped = serializeSymmetricKey(symmetricKeyFromBytes(bytes));
+    expect(roundTripped).toHaveLength(64);
+    expect(bytesToHex(roundTripped)).toBe(bytesToHex(bytes));
+  });
+
+  it('lays out encKey in bytes 0-31 and macKey in bytes 32-63', () => {
+    const encKey = new Uint8Array(32).fill(0xaa);
+    const macKey = new Uint8Array(32).fill(0xbb);
+    const raw = serializeSymmetricKey({ encKey, macKey });
+    expect(bytesToHex(raw.slice(0, 32))).toBe(bytesToHex(encKey));
+    expect(bytesToHex(raw.slice(32, 64))).toBe(bytesToHex(macKey));
+  });
+});
 
 describe('keys.unwrapSymmetricKey', () => {
   it('unwraps the protected UserKey using the stretched master key', async () => {

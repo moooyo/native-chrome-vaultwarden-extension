@@ -1,5 +1,6 @@
 import { LitElement, css, html } from 'lit';
 import { themeTokens } from './tokens.js';
+import { emit } from './emit.js';
 
 export interface SegmentedOption {
   id: string;
@@ -68,7 +69,7 @@ export class VwSegmented extends LitElement {
   private select(id: string): void {
     if (id === this.value) return;
     this.value = id;
-    this.dispatchEvent(new CustomEvent('vw-segmented-change', { detail: { id }, bubbles: true, composed: true }));
+    emit(this, 'vw-segmented-change', { id });
   }
 
   protected override render() {

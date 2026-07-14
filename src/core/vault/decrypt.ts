@@ -2,18 +2,9 @@ import type { AttachmentData, CardCipherData, CipherFieldData, CipherResponse, C
 import { decryptToText, EncStringMacError, UnsupportedEncTypeError } from '../crypto/encstring.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import { unwrapSymmetricKey, unwrapRsaWrappedKey } from '../crypto/keys.js';
+import { CARD_FIELDS, IDENTITY_FIELDS } from './models.js';
 import type { CipherSummary, CollectionSummary, CustomFieldType, DecryptedAttachment, DecryptedCard, DecryptedCipher, DecryptedField, DecryptedFido2Credential, DecryptedIdentity, FolderSummary } from './models.js';
 import type { LoginUri } from './uri-match.js';
-
-const IDENTITY_FIELDS: Array<keyof IdentityCipherData> = [
-  'title', 'firstName', 'middleName', 'lastName', 'address1', 'address2', 'address3',
-  'city', 'state', 'postalCode', 'country', 'company', 'email', 'phone', 'ssn',
-  'username', 'passportNumber', 'licenseNumber',
-];
-
-const CARD_FIELDS: Array<keyof CardCipherData> = [
-  'cardholderName', 'brand', 'number', 'expMonth', 'expYear', 'code',
-];
 
 export async function decryptCipher(
   cipher: CipherResponse,
@@ -91,6 +82,106 @@ export async function decryptCipher(
     }
     throw err;
   }
+}
+
+/**
+ * Decrypt only what the vault list needs from a cipher: the display fields (name, login URIs,
+ * username, and the card-brand / identity-name subtitle) plus the non-secret presence flags. Unlike
+ * decryptCipher this NEVER decrypts the password, TOTP secret, notes, card number/code, identity
+ * national-IDs, custom fields, attachment names, or the passkey PKCS#8 private key — so a large
+ * vault's every-sync `decryptSummaries` pass does far less WebCrypto work and materializes far less
+ * plaintext. Use decryptCipher for detail / reveal / edit / autofill flows that need the secrets.
+ *
+ * Presence flags (hasTotp / hasPasskey / passwordHistoryCount / reprompt) are derived from the
+ * ENCRYPTED response shape. This preserves the prior "successful non-empty decrypt" semantics for
+ * every stored item: the encrypt paths only ever write an optional secret when its plaintext is
+ * non-empty (see encryptLogin / encryptFido2Credential), so a present ciphertext always decrypts to
+ * a non-empty string. hasPasskey additionally requires credentialId + keyValue + rpId to all be
+ * present, mirroring decryptFido2Credentials, which drops a credential missing any of the three.
+ */
+export async function decryptCipherSummary(
+  cipher: CipherResponse,
+  userKey: SymmetricKey,
+  orgKeys?: Map<string, SymmetricKey>,
+): Promise<CipherSummary | undefined> {
+  const baseKey = cipher.organizationId ? orgKeys?.get(cipher.organizationId) : userKey;
+  if (!baseKey) return undefined;
+  try {
+    const key = cipher.key ? await unwrapSymmetricKey(cipher.key, baseKey) : baseKey;
+    const name = await decryptRequired(cipher.name, key, '(no name)');
+    const loginUris: LoginUri[] = [];
+    for (const u of cipher.login?.uris ?? []) {
+      if (u.uri) {
+        const loginUri: LoginUri = { uri: await decryptToText(u.uri, key) };
+        if (u.match !== undefined && u.match !== null) {
+          loginUri.match = u.match;
+        }
+        loginUris.push(loginUri);
+      }
+    }
+    const summary: CipherSummary = {
+      id: cipher.id,
+      type: cipher.type,
+      favorite: cipher.favorite ?? false,
+      name,
+      uris: loginUris.map((u) => u.uri),
+      loginUris,
+    };
+    if (cipher.organizationId) summary.organizationId = cipher.organizationId;
+    if (cipher.folderId) summary.folderId = cipher.folderId;
+    if (cipher.collectionIds?.length) summary.collectionIds = cipher.collectionIds;
+    if (cipher.reprompt) summary.reprompt = true;
+    if (cipher.passwordHistory?.length) summary.passwordHistoryCount = cipher.passwordHistory.length;
+    const username = await decryptOptional(cipher.login?.username, key);
+    if (username) summary.username = username;
+    if (cipher.login?.totp) summary.hasTotp = true;
+    if (cipher.login?.fido2Credentials?.some((fc) => fc.credentialId && fc.keyValue && fc.rpId)) {
+      summary.hasPasskey = true;
+    }
+    const subtitle = await summarySubtitle(cipher, key);
+    if (subtitle) summary.subtitle = subtitle;
+    if (cipher.deletedDate) summary.deletedDate = cipher.deletedDate;
+    return summary;
+  } catch (err) {
+    if (err instanceof EncStringMacError || err instanceof UnsupportedEncTypeError) {
+      return undecryptableSummary(cipher);
+    }
+    throw err;
+  }
+}
+
+/** The list subtitle: card brand (type 3) or identity full name (type 4). Decrypts ONLY those
+ *  non-secret display fields — never the card number/code or identity national-ID secrets. */
+async function summarySubtitle(cipher: CipherResponse, key: SymmetricKey): Promise<string | undefined> {
+  if (cipher.type === 3 && cipher.card) {
+    return decryptOptional(cipher.card.brand, key);
+  }
+  if (cipher.type === 4 && cipher.identity) {
+    const first = await decryptOptional(cipher.identity.firstName, key);
+    const last = await decryptOptional(cipher.identity.lastName, key);
+    const name = [first, last].filter(Boolean).join(' ');
+    return name || undefined;
+  }
+  return undefined;
+}
+
+/** The list summary for a cipher whose display fields cannot be decrypted (bad MAC / unsupported enc
+ *  type, or an unexpected error). Carries only the non-secret envelope fields. */
+export function undecryptableSummary(cipher: CipherResponse): CipherSummary {
+  const summary: CipherSummary = {
+    id: cipher.id,
+    type: cipher.type,
+    favorite: cipher.favorite ?? false,
+    name: '(undecryptable)',
+    uris: [],
+    loginUris: [],
+    undecryptable: true,
+  };
+  if (cipher.organizationId) summary.organizationId = cipher.organizationId;
+  if (cipher.folderId) summary.folderId = cipher.folderId;
+  if (cipher.collectionIds?.length) summary.collectionIds = cipher.collectionIds;
+  if (cipher.deletedDate) summary.deletedDate = cipher.deletedDate;
+  return summary;
 }
 
 /**

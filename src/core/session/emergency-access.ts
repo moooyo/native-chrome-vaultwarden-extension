@@ -7,15 +7,12 @@
 // this module is the reusable key-grant primitive that the flow is built on. See docs/tech-debt.md.
 
 import { rsaOaepEncrypt } from '../crypto/primitives.js';
-import { unwrapRsaWrappedKey, type SymmetricKey } from '../crypto/keys.js';
+import { unwrapRsaWrappedKey, serializeSymmetricKey, type SymmetricKey } from '../crypto/keys.js';
 import { bytesToBase64 } from '../crypto/encoding.js';
 
 /** Wrap a 64-byte UserKey to the grantee's RSA public key (SPKI DER) as an encType=4 EncString. */
 export async function grantEmergencyKey(userKey: SymmetricKey, granteePublicKeySpki: Uint8Array): Promise<string> {
-  const raw = new Uint8Array(64);
-  raw.set(userKey.encKey, 0);
-  raw.set(userKey.macKey, 32);
-  const ciphertext = await rsaOaepEncrypt(granteePublicKeySpki, raw);
+  const ciphertext = await rsaOaepEncrypt(granteePublicKeySpki, serializeSymmetricKey(userKey));
   return `4.${bytesToBase64(ciphertext)}`;
 }
 

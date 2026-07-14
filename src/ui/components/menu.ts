@@ -2,6 +2,7 @@ import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from './tokens.js';
 import { controlStyles } from './styles.js';
 import { uiIcon, type IconName } from './icon.js';
+import { emit } from './emit.js';
 
 export interface MenuItem {
   id: string;
@@ -165,11 +166,7 @@ export class VwMenu extends LitElement {
     if (!item || item.disabled) {
       return;
     }
-    this.dispatchEvent(new CustomEvent('vw-menu-select', {
-      detail: { id: item.id },
-      bubbles: true,
-      composed: true,
-    }));
+    emit(this, 'vw-menu-select', { id: item.id });
     this.closeMenu();
   }
 
@@ -178,7 +175,7 @@ export class VwMenu extends LitElement {
       return;
     }
     this.open = false;
-    this.dispatchEvent(new CustomEvent('vw-menu-close', { bubbles: true, composed: true }));
+    emit(this, 'vw-menu-close');
   }
 
   private readonly handleKeydown = (event: KeyboardEvent): void => {

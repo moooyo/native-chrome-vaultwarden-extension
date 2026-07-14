@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import { getPrefs, setPref, subscribePrefs } from '../../prefs.js';
 import '../../components/setting-card.js';
@@ -93,11 +94,7 @@ export class VwAutofillSection extends LitElement {
   private onStrategyChange(value: string): void {
     const raw = Number(value);
     if (!isUriMatchStrategySetting(raw)) return;
-    this.dispatchEvent(new CustomEvent<AutofillSaveDetail>('vw-autofill-save', {
-      detail: { defaultUriMatchStrategy: raw },
-      bubbles: true,
-      composed: true,
-    }));
+    emit<AutofillSaveDetail>(this, 'vw-autofill-save', { defaultUriMatchStrategy: raw });
   }
 
   protected override render() {

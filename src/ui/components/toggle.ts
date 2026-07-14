@@ -1,5 +1,6 @@
 import { LitElement, css, html } from 'lit';
 import { themeTokens } from './tokens.js';
+import { emit } from './emit.js';
 
 /**
  * `vw-toggle` — the MiYu switch. 40×20 by default, 36×19 in the `sm` variant (Send access-password).
@@ -63,9 +64,7 @@ export class VwToggle extends LitElement {
     event.preventDefault();
     if (this.disabled) return;
     this.checked = !this.checked;
-    this.dispatchEvent(
-      new CustomEvent('vw-toggle-change', { detail: { checked: this.checked }, bubbles: true, composed: true }),
-    );
+    emit(this, 'vw-toggle-change', { checked: this.checked });
   }
 
   protected override render() {
