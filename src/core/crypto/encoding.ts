@@ -10,8 +10,16 @@ export function bytesToUtf8(b: Uint8Array): string {
 }
 
 export function bytesToBase64(b: Uint8Array): string {
+  // Fast path: native, C++-backed base64 (Uint8Array#toBase64). Byte-identical
+  // standard base64 to the btoa fallback below, but without the O(n) JS string churn.
+  const nativeToBase64 = (b as { toBase64?: () => string }).toBase64;
+  if (typeof nativeToBase64 === 'function') return nativeToBase64.call(b);
+  // Fallback: build the Latin1 string in 32 KiB chunks (fromCharCode.apply caps out
+  // on the argument count), then btoa. Avoids per-byte string concatenation.
   let binary = '';
-  for (let i = 0; i < b.length; i++) binary += String.fromCharCode(b[i]!);
+  for (let i = 0; i < b.length; i += 0x8000) {
+    binary += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000) as unknown as number[]);
+  }
   return btoa(binary);
 }
 

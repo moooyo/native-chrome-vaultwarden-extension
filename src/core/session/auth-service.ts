@@ -1,4 +1,6 @@
 import type { ApiClient, PasswordLoginInput, PasswordLoginResult } from '../api/client.js';
+import { ApiHttpError } from '../api/client.js';
+import { AppError } from '../errors.js';
 import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey, assertKdfIterationsFloor } from '../crypto/kdf.js';
 import { unwrapSymmetricKey, decryptPrivateKey, type SymmetricKey } from '../crypto/keys.js';
 import { encryptToBytes } from '../crypto/encstring.js';
@@ -119,7 +121,10 @@ export class AuthService {
   }
 
   async submitTwoFactor(input: { provider: number; code: string; remember?: boolean }): Promise<AuthResult> {
-    if (!this.pendingLogin) throw new Error('no pending 2FA login');
+    // pendingLogin lives only in the (ephemeral) service-worker memory. If the SW was torn down while the
+    // user fetched an emailed code, it is gone — surface a specific signal so the UI resets to the login
+    // screen rather than throwing an opaque error. Do NOT persist the master-key material.
+    if (!this.pendingLogin) throw new AppError('session_expired', 'Your sign-in session expired. Re-enter your password.');
     const loginInput: PasswordLoginInput = {
       email: this.pendingLogin.email,
       masterPasswordHash: this.pendingLogin.masterPasswordHash,
@@ -132,7 +137,8 @@ export class AuthService {
   }
 
   async sendEmailCode(): Promise<void> {
-    if (!this.pendingLogin?.twoFactorToken) throw new Error('no pending 2FA token');
+    if (!this.pendingLogin) throw new AppError('session_expired', 'Your sign-in session expired. Re-enter your password.');
+    if (!this.pendingLogin.twoFactorToken) throw new Error('no pending 2FA token');
     await this.deps.api.sendEmailLogin({
       email: this.pendingLogin.email,
       twoFactorToken: this.pendingLogin.twoFactorToken,
@@ -289,19 +295,21 @@ export class AuthService {
 
   /** Activate another logged-in account; the vault locks so the user re-unlocks it. */
   async switchAccount(email: string): Promise<void> {
+    const normalized = email.trim().toLowerCase();
     this.pendingLogin = undefined;
     const activeBefore = (await this.deps.session.getPersistedAuth())?.email;
-    if (email !== activeBefore) await this.notifyIdentityChanged();
-    await this.deps.session.switchAccount(email);
+    if (normalized !== activeBefore) await this.notifyIdentityChanged();
+    await this.deps.session.switchAccount(normalized);
   }
 
   async removeAccount(email: string): Promise<void> {
+    const normalized = email.trim().toLowerCase();
     this.pendingLogin = undefined;
     const activeBefore = (await this.deps.session.getPersistedAuth())?.email;
     const serverUrl = await this.currentServerUrl();
-    if (serverUrl) await this.deps.session.removeRememberDeviceToken(serverUrl, email.trim().toLowerCase());
-    if (email.trim().toLowerCase() === activeBefore) await this.notifyIdentityChanged();
-    await this.deps.session.removeAccount(email);
+    if (serverUrl) await this.deps.session.removeRememberDeviceToken(serverUrl, normalized);
+    if (normalized === activeBefore) await this.notifyIdentityChanged();
+    await this.deps.session.removeAccount(normalized);
   }
 
   /** Drop all account-scoped authentication before switching the configured server. */
@@ -383,7 +391,19 @@ export class AuthService {
     if (this.activeRefresh?.key === key) return this.activeRefresh.promise;
 
     const promise = (async () => {
-      const refreshed = await this.deps.api.refresh(auth.refreshToken);
+      let refreshed;
+      try {
+        refreshed = await this.deps.api.refresh(auth.refreshToken);
+      } catch (err) {
+        // A permanently-invalid refresh token (revoked/expired) returns 400 invalid_grant (or 401). The
+        // session is dead and every later request would fail opaquely, so clear it and drive re-login.
+        // Transient errors (network, 5xx) are rethrown so the caller can retry with the token intact.
+        if (err instanceof ApiHttpError && (err.status === 400 || err.status === 401)) {
+          await this.logout();
+          return;
+        }
+        throw err;
+      }
       const [current, currentServerUrl] = await Promise.all([
         this.deps.session.getPersistedAuth(),
         this.currentServerUrl(),

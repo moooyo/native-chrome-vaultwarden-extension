@@ -5,6 +5,7 @@ export type AppErrorCode =
   | 'no_match'
   | 'stale_form'
   | 'reprompt_required'
+  | 'session_expired'
   | 'denied';
 
 export class AppError extends Error {

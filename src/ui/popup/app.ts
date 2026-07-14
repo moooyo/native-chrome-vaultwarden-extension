@@ -422,7 +422,10 @@ export class VwPopupApp extends LitElement {
    *  other success goes to the vault's default (suggestions) scope. */
   private async routeAuthResult(response: ResponseMessage): Promise<void> {
     if (!response.ok) {
-      if (this.route.name === 'twoFactor') {
+      if (response.error.code === 'session_expired') {
+        // The sign-in session (pending 2FA) was lost — reset to the login screen to re-enter the password.
+        this.navigate(loginRoute(response.error.message));
+      } else if (this.route.name === 'twoFactor') {
         this.navigate(twoFactorRoute(this.route.providers, response.error.message));
       } else if (this.route.name === 'register') {
         this.navigate(registerRoute(response.error.message));
@@ -489,8 +492,9 @@ export class VwPopupApp extends LitElement {
     this.pending = true;
     try {
       const response = await this.request({ type: 'auth.sendEmailCode' });
-      if (!response.ok && this.route.name === 'twoFactor') {
-        this.navigate(twoFactorRoute(this.route.providers, response.error.message));
+      if (!response.ok) {
+        if (response.error.code === 'session_expired') this.navigate(loginRoute(response.error.message));
+        else if (this.route.name === 'twoFactor') this.navigate(twoFactorRoute(this.route.providers, response.error.message));
       }
     } finally {
       this.pending = false;
