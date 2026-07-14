@@ -52,11 +52,11 @@ describe('ApiClient prelogin', () => {
     const res = await api.prelogin('  USER@EXAMPLE.COM  ');
     expect(res).toEqual({ kdf: 0, kdfIterations: 600000 });
     expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/identity/accounts/prelogin', {
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/identity/accounts/prelogin', expect.objectContaining({
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ email: 'user@example.com' }),
-    });
+    }));
   });
 });
 
@@ -237,10 +237,10 @@ describe('ApiClient refresh and sync', () => {
     const fetchFn = vi.fn(async () => jsonResponse({ profile: { id: 'u', email: 'u@example.com' }, ciphers: [] }));
     const api = new ApiClient({ serverUrlProvider: async () => 'https://vw.example.com', fetchFn, localStore: createMemoryStore() });
     await expect(api.sync('access')).resolves.toEqual({ profile: { id: 'u', email: 'u@example.com' }, ciphers: [] });
-    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/sync', {
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/sync', expect.objectContaining({
       method: 'GET',
       headers: { authorization: 'Bearer access' },
-    });
+    }));
   });
 });
 
@@ -272,30 +272,30 @@ describe('ApiClient folders', () => {
     const fetchFn = vi.fn(async () => jsonResponse({ id: 'f1', name: '2.enc', revisionDate: 'd', object: 'folder' }));
     const res = await makeApi(fetchFn).createFolder('token', '2.enc');
     expect(res).toMatchObject({ id: 'f1', name: '2.enc' });
-    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/folders', {
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/folders', expect.objectContaining({
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer token' },
       body: JSON.stringify({ name: '2.enc' }),
-    });
+    }));
   });
 
   it('PUTs /api/folders/<id> to rename', async () => {
     const fetchFn = vi.fn(async () => jsonResponse({ id: 'f1', name: '2.new' }));
     await makeApi(fetchFn).updateFolder('token', 'f1', '2.new');
-    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/folders/f1', {
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/folders/f1', expect.objectContaining({
       method: 'PUT',
       headers: { 'content-type': 'application/json', authorization: 'Bearer token' },
       body: JSON.stringify({ name: '2.new' }),
-    });
+    }));
   });
 
   it('DELETEs /api/folders/<id> and tolerates an empty response body', async () => {
     const fetchFn = vi.fn(async () => textResponse('', 200));
     await expect(makeApi(fetchFn).deleteFolder('token', 'f1')).resolves.toBeUndefined();
-    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/folders/f1', {
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/folders/f1', expect.objectContaining({
       method: 'DELETE',
       headers: { authorization: 'Bearer token' },
-    });
+    }));
   });
 
   it('throws ApiHttpError on a failed folder request', async () => {
@@ -317,48 +317,48 @@ describe('ApiClient ciphers', () => {
     const fetchFn = vi.fn(async () => jsonResponse({ id: 'c1', type: 1, name: '2.enc' }));
     const res = await makeApi(fetchFn).createCipher('token', request);
     expect(res).toMatchObject({ id: 'c1' });
-    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers', {
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers', expect.objectContaining({
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer token' },
       body: JSON.stringify(request),
-    });
+    }));
   });
 
   it('PUTs /api/ciphers/<id> to update', async () => {
     const fetchFn = vi.fn(async () => jsonResponse({ id: 'c1', type: 1, name: '2.enc' }));
     await makeApi(fetchFn).updateCipher('token', 'c1', request);
-    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers/c1', {
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers/c1', expect.objectContaining({
       method: 'PUT',
       headers: { 'content-type': 'application/json', authorization: 'Bearer token' },
       body: JSON.stringify(request),
-    });
+    }));
   });
 
   it('DELETEs /api/ciphers/<id> and tolerates an empty body', async () => {
     const fetchFn = vi.fn(async () => textResponse('', 200));
     await expect(makeApi(fetchFn).deleteCipher('token', 'c1')).resolves.toBeUndefined();
-    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers/c1', {
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers/c1', expect.objectContaining({
       method: 'DELETE',
       headers: { authorization: 'Bearer token' },
-    });
+    }));
   });
 
   it('PUTs /api/ciphers/<id>/delete to soft-delete (move to trash) with an empty body', async () => {
     const fetchFn = vi.fn(async () => textResponse('', 200));
     await expect(makeApi(fetchFn).softDeleteCipher('token', 'c1')).resolves.toBeUndefined();
-    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers/c1/delete', {
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers/c1/delete', expect.objectContaining({
       method: 'PUT',
       headers: { authorization: 'Bearer token' },
-    });
+    }));
   });
 
   it('PUTs /api/ciphers/<id>/restore to restore from trash', async () => {
     const fetchFn = vi.fn(async () => jsonResponse({ id: 'c1', type: 1, name: '2.enc', deletedDate: null }));
     await expect(makeApi(fetchFn).restoreCipher('token', 'c1')).resolves.toBeUndefined();
-    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers/c1/restore', {
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/api/ciphers/c1/restore', expect.objectContaining({
       method: 'PUT',
       headers: { authorization: 'Bearer token' },
-    });
+    }));
   });
 });
 
@@ -371,11 +371,11 @@ describe('ApiClient register', () => {
       keys: { publicKey: 'pub', encryptedPrivateKey: '2.priv' }, kdf: 0, kdfIterations: 600000,
     };
     await expect(api.register(data)).resolves.toBeUndefined();
-    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/identity/accounts/register', {
+    expect(fetchFn).toHaveBeenCalledWith('https://vw.example.com/identity/accounts/register', expect.objectContaining({
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(data),
-    });
+    }));
   });
 
   it('throws ApiHttpError when registration is rejected', async () => {
@@ -506,5 +506,64 @@ describe('key-rotation endpoints', () => {
     expect(await api.getTrustedEmergencyAccess('t')).toEqual([{ id: 'e1' }]);
     expect((await api.getOrganizationPublicKey('t', 'o1')).publicKey).toBe('PUB');
     expect((await api.getAccountPublicKey('t')).publicKey).toBe('PUB');
+  });
+});
+
+describe('ApiClient hardening', () => {
+  const makeApi = (fetchFn: typeof fetch) => new ApiClient({
+    serverUrlProvider: async () => 'https://vw.example.com',
+    fetchFn,
+    localStore: createMemoryStore(),
+  });
+
+  it('passwordLogin maps a non-JSON error body to ApiHttpError (not a raw SyntaxError)', async () => {
+    const fetchFn = vi.fn(async () => textResponse('<html>502 Bad Gateway</html>', 502));
+    const err = await captureApiHttpError(makeApi(fetchFn).passwordLogin({ email: 'u@e.com', masterPasswordHash: 'h' }));
+    expect(err.status).toBe(502);
+    expect(err.body).toContain('Bad Gateway');
+  });
+
+  it('refresh maps a non-JSON error body to ApiHttpError (not a raw SyntaxError)', async () => {
+    const fetchFn = vi.fn(async () => textResponse('proxy down', 502));
+    const err = await captureApiHttpError(makeApi(fetchFn).refresh('rt'));
+    expect(err.status).toBe(502);
+  });
+
+  it('passwordLogin throws a descriptive error when a 200 body lacks access_token', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ unexpected: true }, 200));
+    await expect(makeApi(fetchFn).passwordLogin({ email: 'u@e.com', masterPasswordHash: 'h' }))
+      .rejects.toThrow(/access[_ ]?token/i);
+  });
+
+  it('sendEmailLogin tolerates an empty 200 body (Vaultwarden returns no body)', async () => {
+    const fetchFn = vi.fn(async () => new Response('', { status: 200 }));
+    await expect(makeApi(fetchFn).sendEmailLogin({ email: 'u@e.com', twoFactorToken: 't' })).resolves.toBeUndefined();
+  });
+
+  it('downloadAttachment attaches the Bearer token only when the URL is the configured origin', async () => {
+    const sameOrigin = vi.fn(async () => jsonResponse({}));
+    await makeApi(sameOrigin as never).downloadAttachment('https://vw.example.com/attachments/a1', 'secret-token');
+    expect((sameOrigin.mock.calls[0] as unknown as [string, RequestInit])[1].headers)
+      .toMatchObject({ authorization: 'Bearer secret-token' });
+
+    const crossOrigin = vi.fn(async () => jsonResponse({}));
+    await makeApi(crossOrigin as never).downloadAttachment('https://evil.example.net/blob', 'secret-token');
+    const headers = (crossOrigin.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string> | undefined;
+    expect(headers?.authorization).toBeUndefined();
+  });
+
+  it('times out a stalled request with a clear error', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchFn = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      }));
+      const promise = makeApi(fetchFn as never).sync('token');
+      const assertion = expect(promise).rejects.toThrow(/timed out|timeout/i);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
