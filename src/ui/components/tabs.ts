@@ -1,6 +1,7 @@
 import { LitElement, css, html } from 'lit';
 import { themeTokens } from './tokens.js';
 import { controlStyles } from './styles.js';
+import { emit } from './emit.js';
 
 export interface TabItem {
   id: string;
@@ -84,11 +85,7 @@ export class VwTabs extends LitElement {
       return;
     }
     this.selected = tab.id;
-    this.dispatchEvent(new CustomEvent('vw-tab-change', {
-      detail: { id: tab.id },
-      bubbles: true,
-      composed: true,
-    }));
+    emit(this, 'vw-tab-change', { id: tab.id });
   }
 
   private readonly handleKeydown = (event: KeyboardEvent): void => {

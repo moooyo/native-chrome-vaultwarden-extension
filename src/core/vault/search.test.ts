@@ -23,6 +23,36 @@ describe('filterSummaries', () => {
     expect(filterSummaries(items, 'ME@').map((i) => i.id)).toEqual(['2']);
     expect(filterSummaries(items, 'github.com').map((i) => i.id)).toEqual(['1']);
   });
+
+  it('returns the same matches as a naive rebuild for every query (behavior unchanged)', () => {
+    const naive = (list: CipherSummary[], query: string) => {
+      const q = query.trim().toLowerCase();
+      if (!q) return list;
+      return list.filter((i) => [i.name, i.username ?? '', ...i.uris].join('\n').toLowerCase().includes(q));
+    };
+    for (const q of ['', 'git', 'ME@', 'github.com', 'example', 'MAIL', 'nope']) {
+      expect(filterSummaries(items, q).map((i) => i.id)).toEqual(naive(items, q).map((i) => i.id));
+    }
+  });
+
+  it('reuses the cached lowercased haystack per item across repeated filters', () => {
+    // A summary whose `name` getter counts reads: the haystack is built by reading name/username/uris,
+    // so a second filter that reuses the cache must not read the fields again.
+    let nameReads = 0;
+    const item = {
+      id: 'x', type: 1, favorite: false, username: 'octo', uris: ['https://github.com'], loginUris: [],
+      get name() { nameReads++; return 'GitHub'; },
+    } as unknown as CipherSummary;
+    const list = [item];
+
+    expect(filterSummaries(list, 'git').map((i) => i.id)).toEqual(['x']);
+    const afterFirst = nameReads;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    expect(filterSummaries(list, 'hub').map((i) => i.id)).toEqual(['x']);
+    // The second filter reused the cached haystack — the item's fields were not re-read to rebuild it.
+    expect(nameReads).toBe(afterFirst);
+  });
 });
 
 describe('filterByFolder', () => {

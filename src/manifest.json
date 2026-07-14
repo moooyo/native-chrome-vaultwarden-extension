@@ -31,7 +31,6 @@
   "permissions": [
     "storage",
     "alarms",
-    "clipboardRead",
     "clipboardWrite",
     "contextMenus",
     "idle",

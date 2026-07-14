@@ -187,7 +187,8 @@ export function createRouter(deps: RouterDeps) {
           }
           case 'vault.import': {
             if (!deps.vault.importVault) throw new Error('vault.importVault is not wired');
-            return { ok: true, data: { imported: await deps.vault.importVault(request.content, request.password) } };
+            const result = await deps.vault.importVault(request.content, request.password);
+            return { ok: true, data: { imported: result.imported } };
           }
           case 'vault.hasPasskey': {
             if (!deps.vault.hasMatchingPasskey) throw new Error('vault.hasMatchingPasskey is not wired');
@@ -384,6 +385,13 @@ export function createRouter(deps: RouterDeps) {
           case 'autofill.fillTabSuggestion': {
             if (!deps.tabAutofill) throw new Error('tabAutofill is not wired');
             return { ok: true, data: { outcome: await deps.tabAutofill.fill(request.tabId, request.cipherId, request.target) } };
+          }
+          default: {
+            // Exhaustiveness guard + runtime safety: an unknown/removed type (e.g. version skew with an
+            // old tab's content script) gets a structured error instead of resolving `undefined`, which
+            // would make callers reading response.ok/.data throw a TypeError.
+            const unknown: never = request;
+            return { ok: false, error: { code: 'error', message: `unknown message type: ${(unknown as { type?: string }).type ?? ''}` } };
           }
         }
       } catch (err) {

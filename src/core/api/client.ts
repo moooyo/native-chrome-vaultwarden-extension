@@ -42,6 +42,7 @@ export interface ApiClientDeps {
 }
 
 const DEVICE_ID_KEY = 'deviceIdentifier';
+const REQUEST_TIMEOUT_MS = 30_000;
 
 export class ApiClient {
   private readonly fetchFn: FetchFn;
@@ -52,28 +53,24 @@ export class ApiClient {
   }
 
   async passwordLogin(input: PasswordLoginInput): Promise<PasswordLoginResult> {
-    const form = new URLSearchParams();
+    const form = await this.baseTokenForm();
     form.set('grant_type', 'password');
     form.set('username', input.email.trim().toLowerCase());
     form.set('password', input.masterPasswordHash);
     form.set('scope', 'api offline_access');
-    form.set('client_id', 'browser');
-    form.set('device_type', '2');
-    form.set('device_identifier', await this.getDeviceIdentifier());
-    form.set('device_name', 'chrome');
     if (input.twoFactorProvider !== undefined && input.twoFactorToken) {
       form.set('two_factor_provider', String(input.twoFactorProvider));
       form.set('two_factor_token', input.twoFactorToken);
       form.set('two_factor_remember', input.remember ? '1' : '0');
     }
 
-    const response = await this.fetchFn(await this.url('/identity/connect/token'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: form.toString(),
-    });
-    const body = await response.json();
-    if (response.ok) return { kind: 'success', data: body as LoginSuccessResponse };
+    const { response, body } = await this.tokenRequest(form);
+    if (response.ok) {
+      if (!isRecord(body) || typeof body.access_token !== 'string') {
+        throw new Error('login response is missing access_token');
+      }
+      return { kind: 'success', data: body as unknown as LoginSuccessResponse };
+    }
 
     if (response.status === 400 && isTwoFactorRequired(body)) {
       const raw = body.TwoFactorProviders;
@@ -93,7 +90,8 @@ export class ApiClient {
   }
 
   async sendEmailLogin(input: { email: string; twoFactorToken: string }): Promise<void> {
-    await this.jsonRequest('/api/two-factor/send-email-login', {
+    // Vaultwarden returns 200 with an EMPTY body here, so this must not try to JSON-parse the response.
+    await this.noBodyRequest('/api/two-factor/send-email-login', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ email: input.email.trim().toLowerCase(), token: input.twoFactorToken }),
@@ -118,21 +116,15 @@ export class ApiClient {
   }
 
   async refresh(refreshToken: string): Promise<RefreshTokenResponse> {
-    const form = new URLSearchParams();
+    const form = await this.baseTokenForm();
     form.set('grant_type', 'refresh_token');
     form.set('refresh_token', refreshToken);
-    form.set('client_id', 'browser');
-    form.set('device_type', '2');
-    form.set('device_identifier', await this.getDeviceIdentifier());
-    form.set('device_name', 'chrome');
-    const response = await this.fetchFn(await this.url('/identity/connect/token'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: form.toString(),
-    });
-    const body = await response.json();
+    const { response, body } = await this.tokenRequest(form);
     if (!response.ok) throw new ApiHttpError(response.status, body);
-    return body as RefreshTokenResponse;
+    if (!isRecord(body) || typeof body.access_token !== 'string') {
+      throw new Error('refresh response is missing access_token');
+    }
+    return body as unknown as RefreshTokenResponse;
   }
 
   async sync(accessToken: string): Promise<SyncResponse> {
@@ -292,6 +284,17 @@ export class ApiClient {
   async uploadSendFileData(accessToken: string, url: string, data: Uint8Array, encryptedFileName: string): Promise<void> {
     const form = new FormData();
     form.append('data', new Blob([data as BlobPart], { type: 'application/octet-stream' }), encryptedFileName);
+    if (/^https?:\/\//i.test(url)) {
+      // Absolute upload URL (direct-blob storage): gate the bearer token to the configured origin.
+      const sameOrigin = await this.isConfiguredOrigin(url);
+      const response = await this.fetchWithTimeout(url, {
+        method: 'POST',
+        headers: sameOrigin ? { authorization: `Bearer ${accessToken}` } : {},
+        body: form,
+      });
+      if (!response.ok) throw new ApiHttpError(response.status, await response.text());
+      return;
+    }
     const path = url.startsWith('/api') ? url : `/api${url}`;
     await this.noBodyRequest(path, {
       method: 'POST',
@@ -328,7 +331,11 @@ export class ApiClient {
 
   /** Download an attachment's encrypted blob from its (absolute) URL. */
   async downloadAttachment(url: string, accessToken: string): Promise<Uint8Array> {
-    const response = await this.fetchFn(url, { headers: { authorization: `Bearer ${accessToken}` } });
+    // The URL comes from the sync response and may point off-origin (CDN/blob storage). Only attach the
+    // bearer token when the host is the configured server, so a malicious/MITM'd URL can't capture it.
+    const sameOrigin = await this.isConfiguredOrigin(url);
+    const headers = sameOrigin ? { authorization: `Bearer ${accessToken}` } : {};
+    const response = await this.fetchWithTimeout(url, { headers });
     if (!response.ok) throw new ApiHttpError(response.status, await response.text());
     return new Uint8Array(await response.arrayBuffer());
   }
@@ -396,12 +403,9 @@ export class ApiClient {
 
   /** Send a request that may return an empty body (DELETE endpoints); throws on a non-OK status. */
   private async noBodyRequest(path: string, init: RequestInit): Promise<void> {
-    const response = await this.fetchFn(await this.url(path), init);
+    const response = await this.fetchWithTimeout(await this.url(path), init);
     if (!response.ok) {
-      const text = await response.text();
-      let body: unknown;
-      try { body = JSON.parse(text); } catch { body = text; }
-      throw new ApiHttpError(response.status, body);
+      throw new ApiHttpError(response.status, await this.parseBody(response));
     }
   }
 
@@ -424,7 +428,7 @@ export class ApiClient {
   }
 
   private async jsonRequest<T>(path: string, init: RequestInit): Promise<T> {
-    const response = await this.fetchFn(await this.url(path), init);
+    const response = await this.fetchWithTimeout(await this.url(path), init);
     const text = await response.text();
 
     if (!response.ok) {
@@ -440,6 +444,59 @@ export class ApiClient {
     return JSON.parse(text) as T;
   }
 
+  /** Shared form for the two /identity/connect/token grants (password + refresh): device fields. */
+  private async baseTokenForm(): Promise<URLSearchParams> {
+    const form = new URLSearchParams();
+    form.set('client_id', 'browser');
+    form.set('device_type', '2');
+    form.set('device_identifier', await this.getDeviceIdentifier());
+    form.set('device_name', 'chrome');
+    return form;
+  }
+
+  /** POST a token grant and return the raw response + best-effort parsed body (each caller maps status). */
+  private async tokenRequest(form: URLSearchParams): Promise<{ response: Response; body: unknown }> {
+    const response = await this.fetchWithTimeout(await this.url('/identity/connect/token'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+    });
+    return { response, body: await this.parseBody(response) };
+  }
+
+  /** Read the body as JSON, falling back to the raw text when it is empty or not JSON. */
+  private async parseBody(response: Response): Promise<unknown> {
+    const text = await response.text();
+    if (!text) return text;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+
+  private async isConfiguredOrigin(url: string): Promise<boolean> {
+    try {
+      return new URL(url).origin === new URL(await this.deps.serverUrlProvider()).origin;
+    } catch {
+      return false;
+    }
+  }
+
+  /** fetch with a hard deadline: aborts the request after REQUEST_TIMEOUT_MS and maps it to a clear error. */
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      return await this.fetchFn(url, { ...init, signal: controller.signal });
+    } catch (error) {
+      if (controller.signal.aborted) throw new ApiTimeoutError(REQUEST_TIMEOUT_MS);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private async url(path: string): Promise<string> {
     const base = await this.deps.serverUrlProvider();
     const normalized = base.endsWith('/') ? base : `${base}/`;
@@ -452,6 +509,17 @@ export class ApiHttpError extends Error {
     super(`Vaultwarden API error ${status}`);
     this.name = 'ApiHttpError';
   }
+}
+
+export class ApiTimeoutError extends Error {
+  constructor(public readonly timeoutMs: number) {
+    super(`Vaultwarden API request timed out after ${timeoutMs}ms`);
+    this.name = 'ApiTimeoutError';
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 function isTwoFactorRequired(body: unknown): body is TwoFactorRequiredResponse {

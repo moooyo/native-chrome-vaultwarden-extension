@@ -1,5 +1,6 @@
 import { LitElement, css, html } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import '../../components/logo.js';
@@ -55,7 +56,7 @@ export class VwPopupHeader extends LitElement {
   ];
 
   private emit(type: string): void {
-    this.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true }));
+    emit(this, type);
   }
 
   protected override render() {

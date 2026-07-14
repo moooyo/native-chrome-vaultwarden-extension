@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import { uiIcon } from '../../components/icon.js';
 import '../../components/setting-card.js';
@@ -77,7 +78,7 @@ export class VwDataSection extends LitElement {
   ];
 
   private emit(type: string, detail?: unknown): void {
-    this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
+    emit(this, type, detail);
   }
 
   private q<T extends HTMLElement>(sel: string): T | null {

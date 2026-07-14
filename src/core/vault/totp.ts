@@ -10,6 +10,8 @@ export interface TotpConfig {
   digits: number;
   period: number;
   algorithm: TotpAlgorithm;
+  /** Steam Guard: map the truncation onto a 5-char alphabet instead of decimal digits. */
+  steam?: boolean;
 }
 
 export interface TotpResult {
@@ -22,12 +24,20 @@ export interface TotpResult {
 const DEFAULT_DIGITS = 6;
 const DEFAULT_PERIOD = 30;
 const DEFAULT_ALGORITHM: TotpAlgorithm = 'SHA1';
+const MAX_DIGITS = 10;
+// Steam Guard alphabet (bitwarden-vault/src/totp.rs STEAM_CHARS).
+const STEAM_CHARS = '23456789BCDFGHJKMNPQRTVWXY';
 
-/** Parse a stored TOTP secret, accepting both a bare base32 secret and an `otpauth://` URI. */
+/** Parse a stored TOTP secret, accepting a bare base32 secret, an `otpauth://` URI, or a `steam://` URI. */
 export function parseTotp(input: string): TotpConfig | undefined {
   const trimmed = input.trim();
   if (!trimmed) return undefined;
   if (/^otpauth:\/\//i.test(trimmed)) return parseOtpauth(trimmed);
+  if (/^steam:\/\//i.test(trimmed)) {
+    const secret = normalizeBase32(trimmed.replace(/^steam:\/\//i, ''));
+    if (!secret) return undefined;
+    return { secret, digits: 5, period: DEFAULT_PERIOD, algorithm: DEFAULT_ALGORITHM, steam: true };
+  }
   const secret = normalizeBase32(trimmed);
   if (!secret) return undefined;
   return { secret, digits: DEFAULT_DIGITS, period: DEFAULT_PERIOD, algorithm: DEFAULT_ALGORITHM };
@@ -51,6 +61,16 @@ export async function generateTotpCode(config: TotpConfig, epochSeconds: number)
     ((hmac[offset + 1]! & 0xff) * 0x10000) +
     ((hmac[offset + 2]! & 0xff) * 0x100) +
     (hmac[offset + 3]! & 0xff);
+  if (config.steam) {
+    // Steam maps the 31-bit truncation onto STEAM_CHARS instead of decimal digits.
+    let full = binary;
+    let code = '';
+    for (let i = 0; i < config.digits; i++) {
+      code += STEAM_CHARS[full % STEAM_CHARS.length];
+      full = Math.floor(full / STEAM_CHARS.length);
+    }
+    return code;
+  }
   return (binary % 10 ** config.digits).toString().padStart(config.digits, '0');
 }
 
@@ -73,9 +93,13 @@ function parseOtpauth(uri: string): TotpConfig | undefined {
   }
   const secret = normalizeBase32(url.searchParams.get('secret') ?? '');
   if (!secret) return undefined;
+  const steam = (url.searchParams.get('encoder') ?? '').toLowerCase() === 'steam';
+  if (steam) {
+    return { secret, digits: 5, period: DEFAULT_PERIOD, algorithm: DEFAULT_ALGORITHM, steam: true };
+  }
   return {
     secret,
-    digits: toPositiveInt(url.searchParams.get('digits'), DEFAULT_DIGITS),
+    digits: Math.min(MAX_DIGITS, toPositiveInt(url.searchParams.get('digits'), DEFAULT_DIGITS)),
     period: toPositiveInt(url.searchParams.get('period'), DEFAULT_PERIOD),
     algorithm: normalizeAlgorithm(url.searchParams.get('algorithm')),
   };

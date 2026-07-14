@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import '../../components/logo.js';
 import '../../components/status-message.js';
@@ -64,7 +65,7 @@ export class VwAboutSection extends LitElement {
         <vw-logo variant="hero"></vw-logo>
         <div class="name">${t('common.appName')}</div>
         <div class="version" data-version>${t('options.about.version', { version: this.version })}</div>
-        <button type="button" class="check" data-check-update @click=${() => this.dispatchEvent(new CustomEvent('vw-check-update', { bubbles: true, composed: true }))}>
+        <button type="button" class="check" data-check-update @click=${() => emit(this, 'vw-check-update')}>
           ${t('options.about.checkUpdate')}
         </button>
         ${this.status

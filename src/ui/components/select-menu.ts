@@ -1,6 +1,7 @@
 import { LitElement, css, html } from 'lit';
 import { themeTokens } from './tokens.js';
 import { uiIcon } from './icon.js';
+import { emit } from './emit.js';
 
 export interface SelectOption {
   value: string;
@@ -65,7 +66,7 @@ export class VwSelect extends LitElement {
   private onChange(event: Event): void {
     const value = (event.target as HTMLSelectElement).value;
     this.value = value;
-    this.dispatchEvent(new CustomEvent('vw-select-change', { detail: { value }, bubbles: true, composed: true }));
+    emit(this, 'vw-select-change', { value });
   }
 
   protected override render() {

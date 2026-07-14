@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
 import '../../components/status-message.js';
@@ -210,19 +211,19 @@ export class VwSendsView extends LitElement {
   }
 
   private back(): void {
-    this.dispatchEvent(new CustomEvent('vw-item-back', { bubbles: true, composed: true }));
+    emit(this, 'vw-item-back');
   }
 
   private receive(): void {
-    this.dispatchEvent(new CustomEvent('vw-send-receive', { bubbles: true, composed: true }));
+    emit(this, 'vw-send-receive');
   }
 
   private copyUrl(url: string): void {
-    this.dispatchEvent(new CustomEvent<CopyDetail>('vw-copy', { detail: { value: url, label: 'Send link' }, bubbles: true, composed: true }));
+    emit<CopyDetail>(this, 'vw-copy', { value: url, label: 'Send link' });
   }
 
   private deleteSend(id: string): void {
-    this.dispatchEvent(new CustomEvent<SendDeleteDetail>('vw-send-delete', { detail: { id }, bubbles: true, composed: true }));
+    emit<SendDeleteDetail>(this, 'vw-send-delete', { id });
   }
 
   private baseInput(): SendInput {
@@ -251,22 +252,14 @@ export class VwSendsView extends LitElement {
       if (file.size > MAX_FILE_BYTES) { this.validationError = 'File is too large (max 100 MB)'; return; }
       const dataB64 = await fileToBase64(file);
       this.submitting = 'create';
-      this.dispatchEvent(new CustomEvent<SendCreateDetail>('vw-send-create', {
-        detail: { kind: 'file', input: { ...base, name: rawName || file.name }, dataB64, fileName: file.name },
-        bubbles: true,
-        composed: true,
-      }));
+      emit<SendCreateDetail>(this, 'vw-send-create', { kind: 'file', input: { ...base, name: rawName || file.name }, dataB64, fileName: file.name });
       return;
     }
 
     const text = this.readValue('[data-text]');
     if (!text) { this.validationError = 'Enter the text to share'; return; }
     this.submitting = 'create';
-    this.dispatchEvent(new CustomEvent<SendCreateDetail>('vw-send-create', {
-      detail: { kind: 'text', input: { ...base, text, hidden: this.readChecked('[data-hidden]') } },
-      bubbles: true,
-      composed: true,
-    }));
+    emit<SendCreateDetail>(this, 'vw-send-create', { kind: 'text', input: { ...base, text, hidden: this.readChecked('[data-hidden]') } });
   }
 
   private saveEdit(send: SendSummary): void {
@@ -290,7 +283,7 @@ export class VwSendsView extends LitElement {
     else input.passwordMode = 'keep';
 
     this.submitting = 'edit';
-    this.dispatchEvent(new CustomEvent<SendUpdateDetail>('vw-send-update', { detail: { id: send.id, input }, bubbles: true, composed: true }));
+    emit<SendUpdateDetail>(this, 'vw-send-update', { id: send.id, input });
   }
 
   private renderStatus() {

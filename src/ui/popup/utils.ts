@@ -3,9 +3,15 @@
  * components so they can be unit-tested directly and reused by the root orchestration:
  *  - `safeWebUrl` gates a stored URI down to http/https before it is ever used as an `href`.
  *  - `formatTotp` groups a six-digit code for readability.
- *  - `fileToBase64` / `base64ToBytes` bridge chosen files and decrypted attachment bytes.
+ *  - `fileToBase64` / `base64ToBytes` bridge chosen files and decrypted attachment bytes
+ *    (thin wrappers over the shared core codec in `core/crypto/encoding`).
  *  - `triggerDownload` saves decrypted bytes with strict object-URL cleanup.
  */
+
+import { base64ToBytes, bytesToBase64 } from '../../core/crypto/encoding.js';
+
+// Re-export the shared decoder so existing callers keep importing it from here.
+export { base64ToBytes };
 
 /** Return a normalized http(s) URL, or `undefined` for anything else (other schemes, non-URLs).
  *  Callers render a link only when this is defined — never a `javascript:`/`data:`/`file:` href. */
@@ -26,18 +32,7 @@ export function formatTotp(code: string): string {
 
 /** Read a chosen file into base64 (the worker re-encrypts it under a fresh attachment key). */
 export async function fileToBase64(file: Blob): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
-  return btoa(binary);
-}
-
-/** Decode base64 attachment bytes returned by the worker into a byte array. */
-export function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+  return bytesToBase64(new Uint8Array(await file.arrayBuffer()));
 }
 
 /** Save decrypted attachment bytes as a file, revoking the object URL once the click is dispatched. */

@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
 import '../../components/status-message.js';
@@ -203,18 +204,16 @@ export class VwHealthView extends LitElement {
   ];
 
   private back(): void {
-    this.dispatchEvent(new CustomEvent('vw-item-back', { bubbles: true, composed: true }));
+    emit(this, 'vw-item-back');
   }
 
   private check(): void {
     if (this.pwned.status === 'loading') return;
-    this.dispatchEvent(new CustomEvent('vw-health-check', { bubbles: true, composed: true }));
+    emit(this, 'vw-health-check');
   }
 
   private open(cipherId: string): void {
-    this.dispatchEvent(
-      new CustomEvent<ItemOpenDetail>('vw-item-open', { detail: { cipherId }, bubbles: true, composed: true }),
-    );
+    emit<ItemOpenDetail>(this, 'vw-item-open', { cipherId });
   }
 
   private renderChips(entry: HealthEntry) {

@@ -1,10 +1,12 @@
 import browser from 'webextension-polyfill';
+import type { Runtime } from 'webextension-polyfill';
 import { ApiClient } from '../core/api/client.js';
 import { AuthService } from '../core/session/auth-service.js';
 import { SessionManager } from '../core/session/session-manager.js';
 import { VaultService } from '../core/vault/vault-service.js';
 import { createBrowserStore, hardenSessionAccessLevel } from '../platform/store.js';
 import { createRouter } from './router.js';
+import { isMessageAllowed } from './sender-guard.js';
 import { createSettingsService } from './settings.js';
 import { createIdleLock, IDLE_LOCK_ALARM } from './idle-lock.js';
 import { createClipboard, CLIPBOARD_CLEAR_ALARM } from './clipboard.js';
@@ -140,15 +142,19 @@ browser.runtime.onInstalled.addListener(() => {
   void idleLock.applyDetection();
 });
 
-browser.runtime.onMessage.addListener((message: unknown) => {
+browser.runtime.onMessage.addListener((message: unknown, sender: Runtime.MessageSender) => {
   // Do not hijack the offscreen document's own responses.
   if (typeof message === 'object' && message !== null && typeof (message as { type?: unknown }).type === 'string'
       && (message as { type: string }).type.startsWith('offscreen.')) {
     return; // synchronous return, no Promise
   }
   return (async () => {
-    const response = await router.handle(message as RequestMessage);
     const type = (message as { type?: unknown }).type;
+    if (typeof type === 'string'
+        && !isMessageAllowed(type, sender, browser.runtime.getURL(''), browser.runtime.id)) {
+      return { ok: false, error: { code: 'denied', message: 'sender not permitted' } };
+    }
+    const response = await router.handle(message as RequestMessage);
     if (typeof type === 'string') {
       if (shouldRefreshMenu(type)) void contextMenu.refresh().catch(() => {});
       if (type === 'settings.save' || type === 'settings.saveSecurity') void idleLock.applyDetection();

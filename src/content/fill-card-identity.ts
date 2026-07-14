@@ -1,6 +1,7 @@
 import type { CardFillData, IdentityFillData } from '../messaging/protocol.js';
 import type { DetectedFillForm, FillFieldElement } from './field-detection.js';
 import type { CardRole, IdentityRole } from './field-map.js';
+import { nativeSetValue, setElementValue } from './native-set-value.js';
 
 export function fillCardForm(form: DetectedFillForm, data: CardFillData): boolean {
   let filled = false;
@@ -64,9 +65,7 @@ function formatExp(el: FillFieldElement, month: string, year: string): string {
 
 function setFieldValue(el: FillFieldElement, value: string): boolean {
   if (el instanceof HTMLSelectElement) return setSelectValue(el, value);
-  el.value = value;
-  el.dispatchEvent(new Event('input', { bubbles: true }));
-  el.dispatchEvent(new Event('change', { bubbles: true }));
+  setElementValue(el, value);
   return true;
 }
 
@@ -76,7 +75,7 @@ function setSelectValue(select: HTMLSelectElement, value: string): boolean {
     (o) => o.value.trim().toLowerCase() === target || o.text.trim().toLowerCase() === target,
   );
   if (!option) return false;
-  select.value = option.value;
+  nativeSetValue(select, option.value);
   select.dispatchEvent(new Event('input', { bubbles: true }));
   select.dispatchEvent(new Event('change', { bubbles: true }));
   return true;

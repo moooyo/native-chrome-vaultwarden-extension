@@ -1,21 +1,16 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import type { AsyncState } from '../../components/async-state.js';
 import type { SendInput, SendSummary } from '../../../core/vault/sends.js';
+import { bytesToBase64 } from '../../../core/crypto/encoding.js';
 import '../../components/segmented.js';
 import '../../components/select-menu.js';
 import '../../components/toggle.js';
 import '../../components/status-message.js';
 import type { SectionStatus } from '../types.js';
-
-async function fileToBase64(file: File): Promise<string> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
 
 /**
  * Options Send section: an intro card + a "new Send" create form (text/file, name, content, expiry,
@@ -97,7 +92,7 @@ export class VwSendSection extends LitElement {
   ];
 
   private emit(type: string, detail?: unknown): void {
-    this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
+    emit(this, type, detail);
   }
 
   private q<T extends HTMLElement>(sel: string): T | null {
@@ -117,7 +112,7 @@ export class VwSendSection extends LitElement {
     if (password) base.password = password;
     if (this.kind === 'file') {
       if (!this.file) return;
-      const dataB64 = await fileToBase64(this.file);
+      const dataB64 = bytesToBase64(new Uint8Array(await this.file.arrayBuffer()));
       this.emit('vw-send-create', { kind: 'file', input: { ...base, name: name || this.file.name }, dataB64, fileName: this.file.name });
     } else {
       const text = this.q<HTMLTextAreaElement>('[data-content]')?.value ?? '';

@@ -13,6 +13,8 @@ import { AuthService } from './auth-service.js';
 import { SessionManager } from './session-manager.js';
 import { createMemoryStore } from '../../platform/store.js';
 import type { ApiClient, PasswordLoginInput } from '../api/client.js';
+import { ApiHttpError } from '../api/client.js';
+import { AppError } from '../errors.js';
 import { base64ToBytes, bytesToHex, hexToBytes } from '../crypto/encoding.js';
 import { symmetricKeyFromBytes, unwrapSymmetricKey } from '../crypto/keys.js';
 import { deriveMasterKey, stretchMasterKey } from '../crypto/kdf.js';
@@ -419,9 +421,10 @@ describe('AuthService', () => {
     });
   });
 
-  it('sendEmailCode rejects when there is no pending 2FA token (fresh instance)', async () => {
+  it('sendEmailCode rejects with session_expired when there is no pending 2FA token (fresh instance / SW teardown)', async () => {
     const { auth } = makeService({});
-    await expect(auth.sendEmailCode()).rejects.toThrow('no pending 2FA token');
+    await expect(auth.sendEmailCode()).rejects.toMatchObject({ code: 'session_expired' });
+    await expect(auth.sendEmailCode()).rejects.toBeInstanceOf(AppError);
   });
 
   it('sendEmailCode rejects when pending login has no twoFactorToken', async () => {
@@ -707,7 +710,7 @@ describe('AuthService', () => {
   });
 
   // --- Finding 5: logout clears pending login ---
-  it('logout clears pending login so subsequent submitTwoFactor rejects', async () => {
+  it('logout clears pending login so subsequent submitTwoFactor rejects with session_expired', async () => {
     const api: Partial<ApiClient> = {
       prelogin: vi.fn().mockResolvedValue({ kdf: 0 as const, kdfIterations: KDF_VECTOR_600K.iterations }),
       passwordLogin: vi.fn().mockResolvedValue({ kind: 'twoFactor' as const, providers: [0], token: 'tf' }),
@@ -717,7 +720,46 @@ describe('AuthService', () => {
     await auth.logout();
     await expect(
       auth.submitTwoFactor({ provider: 0, code: '000000' }),
-    ).rejects.toThrow('no pending 2FA login');
+    ).rejects.toMatchObject({ code: 'session_expired' });
+  });
+
+  // --- #9: refresh with a permanently-invalid token clears the dead session ---
+  it('refreshIfNeeded clears the session on a 400 invalid_grant (revoked refresh token)', async () => {
+    const refresh = vi.fn(async () => { throw new ApiHttpError(400, { error: 'invalid_grant' }); });
+    const { auth, sm } = makeService({ refresh });
+    await sm.saveUnlocked({
+      email: KDF_VECTOR.email, accessToken: 'old-access', refreshToken: 'dead-refresh', expiresAt: 1100,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: KDF_VECTOR.iterations,
+      userKey: { encKey: new Uint8Array(32), macKey: new Uint8Array(32) },
+    });
+    await expect(auth.refreshIfNeeded(5000)).resolves.toBeUndefined();
+    expect(await sm.getPersistedAuth()).toBeUndefined(); // session cleared, user driven to re-login
+  });
+
+  it('refreshIfNeeded rethrows a transient refresh error and keeps the session', async () => {
+    const refresh = vi.fn(async () => { throw new ApiHttpError(500, 'bad gateway'); });
+    const { auth, sm } = makeService({ refresh });
+    await sm.saveUnlocked({
+      email: KDF_VECTOR.email, accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 1100,
+      protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: KDF_VECTOR.iterations,
+      userKey: { encKey: new Uint8Array(32), macKey: new Uint8Array(32) },
+    });
+    await expect(auth.refreshIfNeeded(5000)).rejects.toBeInstanceOf(ApiHttpError);
+    expect((await sm.getPersistedAuth())?.refreshToken).toBe('old-refresh'); // session preserved
+  });
+
+  // --- #9: account email is normalized before it reaches the session store ---
+  it('switchAccount and removeAccount normalize a mixed-case/whitespace email', async () => {
+    const { auth, sm } = makeService({});
+    const userKey = { encKey: new Uint8Array(32), macKey: new Uint8Array(32) };
+    await sm.saveUnlocked({ email: 'active@example.com', accessToken: 'a', refreshToken: 'ra', expiresAt: 999999, protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000, userKey });
+    await sm.saveUnlocked({ email: 'other@example.com', accessToken: 'b', refreshToken: 'rb', expiresAt: 999999, protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000, userKey });
+    const switchSpy = vi.spyOn(sm, 'switchAccount');
+    const removeSpy = vi.spyOn(sm, 'removeAccount');
+    await auth.switchAccount('  ACTIVE@Example.com  ');
+    expect(switchSpy).toHaveBeenCalledWith('active@example.com');
+    await auth.removeAccount('  OTHER@Example.com  ');
+    expect(removeSpy).toHaveBeenCalledWith('other@example.com');
   });
 
   // PIN unlock tests use a 5000-iteration KDF so the PBKDF2 derivation stays fast.

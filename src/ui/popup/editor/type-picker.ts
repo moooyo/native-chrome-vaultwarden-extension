@@ -1,5 +1,6 @@
 import { LitElement, css, html } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon, type IconName } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
@@ -111,11 +112,11 @@ export class VwTypePicker extends LitElement {
   ];
 
   private pick(type: 1 | 2 | 3 | 4): void {
-    this.dispatchEvent(new CustomEvent<EditorTypeDetail>('vw-editor-type', { detail: { type }, bubbles: true, composed: true }));
+    emit<EditorTypeDetail>(this, 'vw-editor-type', { type });
   }
 
   private back(): void {
-    this.dispatchEvent(new CustomEvent('vw-item-back', { bubbles: true, composed: true }));
+    emit(this, 'vw-item-back');
   }
 
   protected override render() {

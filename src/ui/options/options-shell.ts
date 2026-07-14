@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { keyed } from 'lit/directives/keyed.js';
 import { themeTokens, paletteTokens } from '../components/tokens.js';
+import { emit } from '../components/emit.js';
 import { LocalizeController, t, getLocale, setLocale, type Locale } from '../i18n/index.js';
 import type { MessageKey } from '../i18n/index.js';
 import { AppearanceController, getTheme, setTheme } from '../theme.js';
@@ -119,7 +120,7 @@ export class VwOptionsShell extends LitElement {
 
   private selectNav(id: string): void {
     if (id === this.selected) return;
-    this.dispatchEvent(new CustomEvent('vw-nav-change', { detail: { id }, bubbles: true, composed: true }));
+    emit(this, 'vw-nav-change', { id });
   }
 
   private currentLabel(): string {
@@ -145,7 +146,7 @@ export class VwOptionsShell extends LitElement {
   }
 
   private emitLogout(): void {
-    this.dispatchEvent(new CustomEvent('vw-logout', { bubbles: true, composed: true }));
+    emit(this, 'vw-logout');
   }
 
   private renderFooter() {

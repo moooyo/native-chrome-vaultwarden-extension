@@ -1,13 +1,15 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
 import { tileColor, tileInitial } from '../../components/tile-color.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import type { MessageKey } from '../../i18n/index.js';
 import type { CipherSummary } from '../../../core/vault/models.js';
-import type { DetailExtras, SuggestionsViewState, TotpSnapshot } from '../types.js';
+import type { DetailExtras, DetailStatus, SuggestionsViewState, TotpSnapshot } from '../types.js';
 import type { TabAutofillSuggestion } from '../../../messaging/protocol.js';
 import '../../components/totp-meter.js';
+import '../../components/status-message.js';
 
 export type CategoryId = 'all' | 'login' | 'card' | 'totp' | 'note' | 'identity';
 
@@ -20,6 +22,10 @@ const CATEGORIES: ReadonlyArray<{ id: CategoryId; key: MessageKey }> = [
 ];
 
 const DOTS = '••••••••••••';
+
+/** How many leading rows carry the staggered entrance delay. Rows past this animate immediately, so
+ *  a long list (each row starts at opacity:0) never leaves later rows invisible for seconds. */
+const STAGGER_LIMIT = 12;
 
 /** Which category an item belongs to. TOTP is a facet of logins that carry a TOTP secret. */
 function matchesCategory(item: CipherSummary, category: CategoryId): boolean {
@@ -73,6 +79,11 @@ export class VwVaultView extends LitElement {
   private password = '';
   private totp: TotpSnapshot | undefined;
   private totpTimer: number | undefined;
+  /** In-flight guard so a slow `getTotp` (>1s) can't stack concurrent derives from the 1s tick. */
+  private totpLoading = false;
+  /** Local feedback for the open item when an on-demand secret release is refused (reprompt/locked).
+   *  The root records its own detailed error, but that banner is not rendered in this view. */
+  private detailStatus: DetailStatus | undefined = undefined;
 
   constructor() {
     super();
@@ -160,6 +171,7 @@ export class VwVaultView extends LitElement {
     if (changed.has('selectedCipherId')) {
       this.revealed = false;
       this.password = '';
+      this.detailStatus = undefined;
       this.stopTotp();
       const item = this.selected();
       if (item?.hasTotp && this.extras) void this.loadTotp();
@@ -171,7 +183,7 @@ export class VwVaultView extends LitElement {
   }
 
   private emit(type: string, detail?: unknown): void {
-    this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
+    emit(this, type, detail);
   }
 
   private onSearch(value: string): void {
@@ -197,23 +209,37 @@ export class VwVaultView extends LitElement {
     if (result.ok) {
       this.password = result.value ?? '';
       this.revealed = true;
-      this.requestUpdate();
+      this.detailStatus = undefined;
+    } else {
+      // The worker refused to release the secret (reprompt-protected / locked / sync required). The
+      // root has already recorded the detailed error on its own status, which this view never renders,
+      // so give the user local feedback instead of a dead eye button.
+      this.detailStatus = { message: t('detail.repromptTitle'), tone: 'danger' };
     }
+    this.requestUpdate();
   }
 
   private async loadTotp(): Promise<void> {
     if (!this.extras) return;
-    const result = await this.extras.getTotp();
-    if (!result.ok || !result.totp) return;
-    this.totp = result.totp;
-    this.requestUpdate();
-    this.startTotpTick();
+    if (this.totpLoading) return;
+    this.totpLoading = true;
+    try {
+      const result = await this.extras.getTotp();
+      if (!result.ok || !result.totp) return;
+      this.totp = result.totp;
+      this.requestUpdate();
+      this.startTotpTick();
+    } finally {
+      this.totpLoading = false;
+    }
   }
 
   private startTotpTick(): void {
     this.stopTotp();
     this.totpTimer = window.setInterval(() => {
       if (!this.totp) return;
+      // A previous refresh is still deriving — skip this tick rather than stack concurrent derives.
+      if (this.totpLoading) return;
       if (this.totp.remaining <= 1) {
         void this.loadTotp();
       } else {
@@ -314,7 +340,9 @@ export class VwVaultView extends LitElement {
     return html`
       ${showSuggestions ? this.renderSuggestionGroup() : nothing}
       <div class="group-label main">${mainLabel}</div>
-      ${items.map((item, i) => this.renderItem(item, false, undefined, `calc(${i} * 40ms + 120ms)`))}
+      ${items.map((item, i) =>
+        this.renderItem(item, false, undefined, i < STAGGER_LIMIT ? `calc(${i} * 40ms + 120ms)` : undefined),
+      )}
     `;
   }
 
@@ -326,13 +354,17 @@ export class VwVaultView extends LitElement {
       <div class="group-label">${t('list.currentSite', { domain })}</div>
       ${suggestions.map((s, i) => {
         const item = byId.get(s.id);
-        return item ? this.renderItem(item, true, s, `calc(${i} * 45ms)`) : nothing;
+        return item ? this.renderItem(item, true, s, i < STAGGER_LIMIT ? `calc(${i} * 45ms)` : undefined) : nothing;
       })}
     `;
   }
 
   private renderItem(item: CipherSummary, isSuggestion: boolean, suggestion?: TabAutofillSuggestion, rowDelay?: string) {
     const expanded = this.selectedCipherId === item.id;
+    // A reprompt-protected item cannot be released inline (the worker refuses with reprompt_required),
+    // so an inline Fill/copy pill would fail silently. Route the row to open (toggle) instead, which
+    // reaches the master-password reprompt flow — mirroring how the editor route gates protected items.
+    const needsReprompt = item.reprompt === true || suggestion?.reprompt === true;
     return html`
       <div>
         <div class="row" style=${rowDelay ? `animation-delay:${rowDelay}` : nothing} @click=${() => this.toggleItem(item.id)}>
@@ -346,22 +378,24 @@ export class VwVaultView extends LitElement {
             </div>
             <div class="sub">${item.username ?? item.subtitle ?? ''}</div>
           </div>
-          ${isSuggestion && suggestion
-            ? html`<button
-                type="button"
-                class="fill-pill"
-                @click=${(e: Event) => { e.stopPropagation(); this.fillSuggestion(suggestion); }}
-              >${t('list.fill')}</button>`
-            : html`
-                <button
+          ${needsReprompt
+            ? html`<span class="chev">${uiIcon('chevron')}</span>`
+            : isSuggestion && suggestion
+              ? html`<button
                   type="button"
-                  class="row-copy"
-                  title=${t('list.copyPassword')}
-                  aria-label=${t('list.copyPassword')}
-                  @click=${(e: Event) => { e.stopPropagation(); this.copySecret('password', t('detail.password')); }}
-                >${uiIcon('copy')}</button>
-                <span class="chev">${uiIcon('chevron')}</span>
-              `}
+                  class="fill-pill"
+                  @click=${(e: Event) => { e.stopPropagation(); this.fillSuggestion(suggestion); }}
+                >${t('list.fill')}</button>`
+              : html`
+                  <button
+                    type="button"
+                    class="row-copy"
+                    title=${t('list.copyPassword')}
+                    aria-label=${t('list.copyPassword')}
+                    @click=${(e: Event) => { e.stopPropagation(); this.copySecret('password', t('detail.password')); }}
+                  >${uiIcon('copy')}</button>
+                  <span class="chev">${uiIcon('chevron')}</span>
+                `}
         </div>
         ${expanded ? this.renderCard(item, suggestion) : nothing}
       </div>
@@ -377,6 +411,13 @@ export class VwVaultView extends LitElement {
     const isLogin = item.type === 1;
     return html`
       <div class="card" @click=${(e: Event) => e.stopPropagation()}>
+        ${this.detailStatus
+          ? html`<vw-status-message
+              tone=${this.detailStatus.tone}
+              .icon=${'alert'}
+              .message=${this.detailStatus.message}
+            ></vw-status-message>`
+          : nothing}
         ${item.username
           ? html`
               <div>

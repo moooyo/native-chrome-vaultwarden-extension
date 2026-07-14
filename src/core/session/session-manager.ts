@@ -1,6 +1,6 @@
 import type { KeyValueStore } from '../../platform/store.js';
 import type { SymmetricKey } from '../crypto/keys.js';
-import { symmetricKeyFromBytes } from '../crypto/keys.js';
+import { symmetricKeyFromBytes, serializeSymmetricKey } from '../crypto/keys.js';
 import { bytesToBase64, base64ToBytes } from '../crypto/encoding.js';
 
 export type SessionState = 'loggedOut' | 'locked' | 'unlocked';
@@ -221,10 +221,7 @@ export class SessionManager {
   }
 
   private async saveUserKey(userKey: SymmetricKey): Promise<void> {
-    const raw = new Uint8Array(64);
-    raw.set(userKey.encKey, 0);
-    raw.set(userKey.macKey, 32);
-    await this.deps.sessionStore.set(USER_KEY_KEY, bytesToBase64(raw));
+    await this.deps.sessionStore.set(USER_KEY_KEY, bytesToBase64(serializeSymmetricKey(userKey)));
   }
 
   private async savePrivateKey(privateKey: Uint8Array): Promise<void> {

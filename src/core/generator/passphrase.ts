@@ -4,6 +4,7 @@
 
 import { cryptoRandomInt } from './password.js';
 import { PASSPHRASE_WORDLIST } from './wordlist.js';
+import { clamp } from '../util/num.js';
 
 export interface PassphraseGenOptions {
   numWords: number;
@@ -40,8 +41,4 @@ export function generatePassphrase(
     chosen[idx] = `${chosen[idx]}${randomInt(10)}`;
   }
   return chosen.join(options.separator);
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
 }

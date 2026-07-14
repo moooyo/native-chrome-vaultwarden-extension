@@ -64,6 +64,23 @@ export interface DecryptedIdentity {
   licenseNumber?: string;
 }
 
+/**
+ * Card fields in canonical order. Single source of truth shared by encrypt.ts and decrypt.ts so the
+ * two whitelists cannot drift; derived from the DecryptedCard model via `keyof`. The on-the-wire type
+ * (CardCipherData) shares this exact key set, so the same list indexes both directions.
+ */
+export const CARD_FIELDS: ReadonlyArray<keyof DecryptedCard> = [
+  'cardholderName', 'brand', 'number', 'expMonth', 'expYear', 'code',
+];
+
+/** Identity fields (all 18) in canonical order. Single source of truth for encrypt.ts / decrypt.ts;
+ *  see CARD_FIELDS for the rationale. Derived from DecryptedIdentity via `keyof`. */
+export const IDENTITY_FIELDS: ReadonlyArray<keyof DecryptedIdentity> = [
+  'title', 'firstName', 'middleName', 'lastName', 'address1', 'address2', 'address3',
+  'city', 'state', 'postalCode', 'country', 'company', 'email', 'phone', 'ssn',
+  'username', 'passportNumber', 'licenseNumber',
+];
+
 export interface DecryptedCipher extends CipherSummary {
   password?: string;
   totp?: string;

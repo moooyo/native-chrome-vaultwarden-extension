@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from './tokens.js';
 import { controlStyles } from './styles.js';
+import { emit } from './emit.js';
 
 export type DialogCloseReason = 'escape' | 'backdrop' | 'dismiss' | string;
 
@@ -104,11 +105,7 @@ export class VwDialog extends LitElement {
     this.restoreFocus();
     const reason = this.pendingCloseReason ?? 'dismiss';
     this.pendingCloseReason = null;
-    this.dispatchEvent(new CustomEvent('vw-dialog-close', {
-      detail: { reason },
-      bubbles: true,
-      composed: true,
-    }));
+    emit(this, 'vw-dialog-close', { reason });
   };
 
   private readonly handleBackdropClick = (event: MouseEvent): void => {

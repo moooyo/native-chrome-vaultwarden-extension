@@ -1,14 +1,8 @@
 import type { CardCipherData, CipherFieldData, CipherRequest, CipherResponse, IdentityCipherData, LoginCipherData } from '../api/types.js';
 import { encryptToText } from '../crypto/encstring.js';
 import type { SymmetricKey } from '../crypto/keys.js';
-import type { CipherInput, DecryptedCard, DecryptedField, DecryptedIdentity } from './models.js';
-
-const CARD_FIELDS: Array<keyof DecryptedCard> = ['cardholderName', 'brand', 'number', 'expMonth', 'expYear', 'code'];
-const IDENTITY_FIELDS: Array<keyof DecryptedIdentity> = [
-  'title', 'firstName', 'middleName', 'lastName', 'address1', 'address2', 'address3',
-  'city', 'state', 'postalCode', 'country', 'company', 'email', 'phone', 'ssn',
-  'username', 'passportNumber', 'licenseNumber',
-];
+import { CARD_FIELDS, IDENTITY_FIELDS } from './models.js';
+import type { CipherInput, DecryptedField } from './models.js';
 
 /**
  * Encrypt a plaintext cipher form into a write request. Every field is encrypted under the given
@@ -95,7 +89,7 @@ async function encryptLogin(login: NonNullable<CipherInput['login']>, key: Symme
 
 async function encryptFields<T>(
   src: T,
-  fields: Array<keyof T>,
+  fields: ReadonlyArray<keyof T>,
   key: SymmetricKey,
 ): Promise<Record<string, string>> {
   const out: Record<string, string> = {};

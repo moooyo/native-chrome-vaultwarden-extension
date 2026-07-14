@@ -4,6 +4,7 @@ import { decryptCipher } from './decrypt.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import { hexToBytes } from '../crypto/encoding.js';
 import { USER_KEY_VECTOR } from '../../../test/vectors.js';
+import { CARD_FIELDS, IDENTITY_FIELDS } from './models.js';
 import type { CipherInput } from './models.js';
 import type { CipherResponse } from '../api/types.js';
 
@@ -166,5 +167,24 @@ describe('mergeServerManagedFields', () => {
     // custom fields and reprompt are editor-controlled now and not carried from the original.
     expect(merged.fields).toBeUndefined();
     expect(merged.reprompt).toBe(0);
+  });
+});
+
+describe('shared card/identity field whitelists', () => {
+  // Single source of truth in models.ts, imported by both encrypt.ts and decrypt.ts so they cannot drift.
+  it('CARD_FIELDS lists every DecryptedCard field exactly once', () => {
+    expect([...CARD_FIELDS].sort()).toEqual(
+      ['brand', 'cardholderName', 'code', 'expMonth', 'expYear', 'number'].sort(),
+    );
+  });
+
+  it('IDENTITY_FIELDS lists every DecryptedIdentity field exactly once', () => {
+    expect([...IDENTITY_FIELDS].sort()).toEqual(
+      [
+        'title', 'firstName', 'middleName', 'lastName', 'address1', 'address2', 'address3',
+        'city', 'state', 'postalCode', 'country', 'company', 'email', 'phone', 'ssn',
+        'username', 'passportNumber', 'licenseNumber',
+      ].sort(),
+    );
   });
 });

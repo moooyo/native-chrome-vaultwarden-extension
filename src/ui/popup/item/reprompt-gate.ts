@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
@@ -139,17 +140,11 @@ export class VwRepromptGate extends LitElement {
     if (this.pending) return;
     const password = this.input?.value ?? '';
     if (!password) return;
-    this.dispatchEvent(
-      new CustomEvent<RepromptSubmitDetail>('vw-reprompt-submit', {
-        detail: { password },
-        bubbles: true,
-        composed: true,
-      }),
-    );
+    emit<RepromptSubmitDetail>(this, 'vw-reprompt-submit', { password });
   }
 
   private back(): void {
-    this.dispatchEvent(new CustomEvent('vw-item-back', { bubbles: true, composed: true }));
+    emit(this, 'vw-item-back');
   }
 
   private onKeydown(event: KeyboardEvent): void {

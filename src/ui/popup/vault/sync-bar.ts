@@ -1,5 +1,6 @@
 import { LitElement, css, html } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 
@@ -77,7 +78,7 @@ export class VwSyncBar extends LitElement {
 
   private syncNow(): void {
     if (this.syncing) return;
-    this.dispatchEvent(new CustomEvent('vw-sync-now', { bubbles: true, composed: true }));
+    emit(this, 'vw-sync-now');
   }
 
   protected override render() {

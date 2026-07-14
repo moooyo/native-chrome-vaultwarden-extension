@@ -1,11 +1,13 @@
-import { describe, it, expect } from 'vitest';
-import { decryptCipher, decryptFolders, decryptCollections, buildOrgKeyMap } from './decrypt.js';
+import { describe, it, expect, vi } from 'vitest';
+import { decryptCipher, decryptCipherSummary, decryptFolders, decryptCollections, buildOrgKeyMap } from './decrypt.js';
+import * as encstring from '../crypto/encstring.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import type { SymmetricKey } from '../crypto/keys.js';
 import { hexToBytes, bytesToBase64, base64ToBytes } from '../crypto/encoding.js';
 import { hmacSha256 } from '../crypto/primitives.js';
 import { FIELD_VECTOR, USER_KEY_VECTOR, TAMPERED_FIELD_ENCSTRING, RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
 import type { CipherResponse, CollectionResponse, FolderResponse, OrganizationResponse } from '../api/types.js';
+import type { CipherSummary } from './models.js';
 
 const userKey = symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex));
 const orgKey = symmetricKeyFromBytes(hexToBytes(ORG_KEY_VECTOR.orgKeyHex));
@@ -328,6 +330,155 @@ describe('decryptCipher', () => {
       organizationId: 'org-1', login: null,
     }, userKey, new Map([['org-1', orgKey]]));
     expect(withoutCollections && 'collectionIds' in withoutCollections).toBe(false);
+  });
+});
+
+describe('decryptCipherSummary', () => {
+  const orgKeys = new Map([['org-1', orgKey]]);
+  const enc = (s: string) => encryptString(s, userKey);
+  const encOrg = (s: string) => encryptString(s, orgKey);
+
+  // Rebuild the summary exactly as the pre-optimization path did (full decryptCipher + the old
+  // decryptSummaries projection), so we can prove the lightweight path is byte-identical.
+  async function referenceSummary(cipher: CipherResponse): Promise<CipherSummary | undefined> {
+    const decrypted = await decryptCipher(cipher, userKey, orgKeys);
+    if (!decrypted) return undefined;
+    if (decrypted.undecryptable) {
+      const s: CipherSummary = {
+        id: decrypted.id, type: decrypted.type, favorite: decrypted.favorite,
+        name: '(undecryptable)', uris: [], loginUris: [], undecryptable: true,
+      };
+      if (decrypted.organizationId) s.organizationId = decrypted.organizationId;
+      if (decrypted.folderId) s.folderId = decrypted.folderId;
+      if (decrypted.collectionIds) s.collectionIds = decrypted.collectionIds;
+      if (cipher.deletedDate) s.deletedDate = cipher.deletedDate;
+      return s;
+    }
+    const s: CipherSummary = {
+      id: decrypted.id, type: decrypted.type, favorite: decrypted.favorite,
+      name: decrypted.name, uris: decrypted.uris, loginUris: decrypted.loginUris,
+    };
+    if (decrypted.username) s.username = decrypted.username;
+    if (decrypted.totp) s.hasTotp = true;
+    if (decrypted.fido2Credentials?.length) s.hasPasskey = true;
+    if (decrypted.reprompt) s.reprompt = true;
+    if (decrypted.passwordHistoryCount) s.passwordHistoryCount = decrypted.passwordHistoryCount;
+    if (decrypted.organizationId) s.organizationId = decrypted.organizationId;
+    if (decrypted.folderId) s.folderId = decrypted.folderId;
+    if (decrypted.collectionIds) s.collectionIds = decrypted.collectionIds;
+    if (cipher.deletedDate) s.deletedDate = cipher.deletedDate;
+    let subtitle: string | undefined;
+    if (decrypted.type === 3) subtitle = decrypted.card?.brand;
+    else if (decrypted.type === 4) {
+      const name = [decrypted.identity?.firstName, decrypted.identity?.lastName].filter(Boolean).join(' ');
+      subtitle = name || undefined;
+    }
+    if (subtitle) s.subtitle = subtitle;
+    return s;
+  }
+
+  it('produces summaries identical to the old full-decrypt path across representative ciphers', async () => {
+    const cred = async () => ({
+      credentialId: await enc('cred-1'), keyValue: await enc('PKCS8B64URL'),
+      rpId: await enc('acme.com'), counter: await enc('0'),
+    });
+    const ciphers: CipherResponse[] = [
+      // login: username + password + uris, no totp/passkey/history
+      { id: 'login-plain', type: 1, favorite: false, organizationId: null, name: await enc('Plain'),
+        login: { username: await enc('alice'), password: await enc('pw'), uris: [{ uri: await enc('https://a.example'), match: 0 }] } },
+      // login with a TOTP secret
+      { id: 'login-totp', type: 1, favorite: true, organizationId: null, name: await enc('Totp'),
+        login: { username: await enc('bob'), totp: await enc('SEED') } },
+      // login with a stored passkey (no username)
+      { id: 'login-pk', type: 1, favorite: false, organizationId: null, name: await enc('Passkey'),
+        login: { fido2Credentials: [await cred()] } },
+      // login with password history + reprompt
+      { id: 'login-hist', type: 1, favorite: false, organizationId: null, name: await enc('Hist'), reprompt: 1,
+        login: { password: await enc('pw') }, passwordHistory: [{ password: await enc('old1') }, { password: await enc('old2') }] },
+      // card with brand → subtitle
+      { id: 'card-brand', type: 3, favorite: false, organizationId: null, name: await enc('Card'),
+        card: { brand: await enc('Visa'), number: await enc('4111'), code: await enc('123') } },
+      // card without a brand → no subtitle
+      { id: 'card-nobrand', type: 3, favorite: false, organizationId: null, name: await enc('Card2'),
+        card: { number: await enc('4111') } },
+      // identity → subtitle from first + last name
+      { id: 'id-1', type: 4, favorite: false, organizationId: null, name: await enc('Id'),
+        identity: { firstName: await enc('Ada'), lastName: await enc('Lovelace'), ssn: await enc('999') } },
+      // secure note
+      { id: 'note-1', type: 2, favorite: false, organizationId: null, name: await enc('Note'), notes: await enc('secret notes') },
+      // soft-deleted login (folderId + deletedDate)
+      { id: 'login-del', type: 1, favorite: false, organizationId: null, folderId: 'f1', name: await enc('Del'),
+        login: { username: await enc('carol') }, deletedDate: '2026-01-01T00:00:00.000Z' },
+      // org cipher with collectionIds
+      { id: 'org-login', type: 1, favorite: false, organizationId: 'org-1', collectionIds: ['col-1'], name: await encOrg('Org'),
+        login: { username: await encOrg('dave'), password: await encOrg('pw') } },
+      // undecryptable (corrupt name) — favorite/collectionIds carried through
+      { id: 'bad', type: 1, favorite: true, organizationId: null, name: TAMPERED_FIELD_ENCSTRING, login: null },
+    ];
+    for (const cipher of ciphers) {
+      const [reference, actual] = await Promise.all([referenceSummary(cipher), decryptCipherSummary(cipher, userKey, orgKeys)]);
+      expect(actual).toEqual(reference);
+    }
+  });
+
+  it('sets hasTotp / hasPasskey from the encrypted shape without decrypting the secrets (deterministic)', async () => {
+    // Secrets encrypted under a DIFFERENT key (orgKey): decrypting them with userKey would MAC-fail.
+    // The full path marks the cipher undecryptable; the lightweight path ignores them and stays usable.
+    const cipher: CipherResponse = {
+      id: 'mix', type: 1, favorite: false, organizationId: null,
+      name: await encryptString('Visible', userKey),
+      login: {
+        username: await encryptString('alice', userKey),
+        password: await encryptString('s3cret', orgKey),
+        totp: await encryptString('SEED', orgKey),
+        fido2Credentials: [{
+          credentialId: await encryptString('cred', orgKey),
+          keyValue: await encryptString('PRIVATE', orgKey),
+          rpId: await encryptString('acme.com', orgKey),
+        }],
+      },
+    };
+    await expect(decryptCipher(cipher, userKey)).resolves.toMatchObject({ undecryptable: true });
+    const summary = await decryptCipherSummary(cipher, userKey);
+    expect(summary).toMatchObject({ id: 'mix', name: 'Visible', username: 'alice', hasTotp: true, hasPasskey: true });
+    expect(summary?.undecryptable).toBeUndefined();
+  });
+
+  it('never passes secret ciphertexts to decryptToText for the list path (spy)', async () => {
+    const nameEnc = await encryptString('Acme', userKey);
+    const usernameEnc = await encryptString('alice', userKey);
+    const passwordEnc = await encryptString('s3cret', userKey);
+    const totpEnc = await encryptString('SEED', userKey);
+    const keyValueEnc = await encryptString('PRIVATE', userKey);
+    const notesEnc = await encryptString('notes', userKey);
+    const fieldNameEnc = await encryptString('PIN', userKey);
+    const fieldValueEnc = await encryptString('1234', userKey);
+    const cipher: CipherResponse = {
+      id: 'spy', type: 1, favorite: false, organizationId: null, name: nameEnc, notes: notesEnc,
+      login: {
+        username: usernameEnc, password: passwordEnc, totp: totpEnc,
+        fido2Credentials: [{ credentialId: await encryptString('cred', userKey), keyValue: keyValueEnc, rpId: await encryptString('acme.com', userKey) }],
+      },
+      fields: [{ type: 1, name: fieldNameEnc, value: fieldValueEnc }],
+    };
+    const spy = vi.spyOn(encstring, 'decryptToText');
+    try {
+      const summary = await decryptCipherSummary(cipher, userKey);
+      const seen = spy.mock.calls.map((c) => c[0]);
+      // Display fields ARE decrypted…
+      expect(seen).toContain(nameEnc);
+      expect(seen).toContain(usernameEnc);
+      // …secrets and non-summary fields are NOT.
+      expect(seen).not.toContain(passwordEnc);
+      expect(seen).not.toContain(totpEnc);
+      expect(seen).not.toContain(keyValueEnc);
+      expect(seen).not.toContain(notesEnc);
+      expect(seen).not.toContain(fieldNameEnc);
+      expect(seen).not.toContain(fieldValueEnc);
+      expect(summary).toMatchObject({ hasTotp: true, hasPasskey: true });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

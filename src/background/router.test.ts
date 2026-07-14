@@ -22,6 +22,21 @@ describe('router', () => {
     await expect(router.handle({ type: 'auth.getState' })).resolves.toEqual({ ok: true, data: { state: 'locked' } });
   });
 
+  it('returns a structured error for an unknown message type instead of resolving undefined', async () => {
+    const router = createRouter({
+      auth: {}, vault: {},
+      settings: {
+        getServerUrl: vi.fn(), saveServerUrl: vi.fn(),
+        getDefaultUriMatchStrategy: vi.fn(async (): Promise<UriMatchStrategySetting> => 0), saveDefaultUriMatchStrategy: vi.fn(),
+        getLockTimeout: vi.fn(async (): Promise<LockTimeoutSetting> => '15'), saveLockTimeout: vi.fn(),
+        getOnIdleAction: vi.fn(async (): Promise<OnIdleAction> => 'lock'), saveOnIdleAction: vi.fn(),
+        getClipboardClearSetting: vi.fn(async (): Promise<ClipboardClearSetting> => '60'), saveClipboardClearSetting: vi.fn(),
+      },
+    });
+    const response = await router.handle({ type: 'bogus.unknown' } as never);
+    expect(response).toEqual({ ok: false, error: { code: 'error', message: expect.stringContaining('unknown message type') } });
+  });
+
   it('turns thrown errors into ok:false responses', async () => {
     const router = createRouter({
       auth: { login: vi.fn(async () => { throw new Error('bad password'); }) },

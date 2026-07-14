@@ -4,6 +4,7 @@ import { paletteTokens, themeTokens } from '../components/tokens.js';
 import { controlStyles } from '../components/styles.js';
 import { uiIcon } from '../components/icon.js';
 import { LocalizeController, t } from '../i18n/index.js';
+import { AppearanceController } from '../theme.js';
 import '../components/logo.js';
 import '../components/status-message.js';
 import {
@@ -24,18 +25,18 @@ function isSendAccessErrorCode(value: string): value is SendAccessError {
 }
 
 /** Localised copy for each tagged Send-access failure. `unavailable` reuses the existing
- *  `receive.expired` catalog string; the others have no key yet, so they are inline Chinese with a
- *  `// TODO i18n` marker. Resolved at the point the error state is set. */
+ *  `receive.expired` catalog string; the others resolve through the `receive.error.*` catalog keys.
+ *  Resolved at the point the error state is set. */
 function sendErrorMessage(code: SendAccessError): string {
   switch (code) {
     case 'invalid_link':
-      return '无效的 Send 链接'; // TODO i18n
+      return t('receive.error.invalidLink');
     case 'password_required':
-      return '此 Send 需要访问密码'; // TODO i18n
+      return t('receive.error.passwordRequired');
     case 'unavailable':
       return t('receive.expired');
     case 'decrypt_failed':
-      return '无法解密，链接或文件可能已损坏'; // TODO i18n
+      return t('receive.error.decryptFailed');
   }
 }
 
@@ -103,6 +104,9 @@ export class VwReceiveApp extends LitElement {
 
   /** Re-renders on locale change so the Appearance language switch takes effect live. */
   private i18n = new LocalizeController(this);
+
+  /** Mirrors the theme + density prefs onto this root host so the palette re-themes at runtime. */
+  private appearance = new AppearanceController(this);
 
   constructor() {
     super();
@@ -258,8 +262,7 @@ export class VwReceiveApp extends LitElement {
     this.state = { status: 'accessing' };
     const granted = await this.deps.requestOrigin(originPattern);
     if (!granted) {
-      // TODO i18n
-      this.state = { status: 'error', message: `请授予对 ${hostOf(parsed.serverUrl)} 的访问权限以接收此 Send` };
+      this.state = { status: 'error', message: t('receive.error.permissionDenied', { host: hostOf(parsed.serverUrl) }) };
       return;
     }
     try {
@@ -300,8 +303,7 @@ export class VwReceiveApp extends LitElement {
         ? { status: 'fileReady', parsed, send }
         : { status: 'fileReady', parsed, send, passwordHash };
     } catch (err) {
-      // TODO i18n
-      this.state = { status: 'error', message: isSendAccessError(err) ? sendErrorMessage(err.code) : '下载失败' };
+      this.state = { status: 'error', message: isSendAccessError(err) ? sendErrorMessage(err.code) : t('receive.error.downloadFailed') };
     }
   }
 
@@ -360,13 +362,11 @@ export class VwReceiveApp extends LitElement {
           <header class="brand" data-page-heading>
             <vw-logo variant="hero"></vw-logo>
             <h1>${this.i18n.t('receive.title')}</h1>
-            <!-- TODO i18n -->
-            <p>在此设备上查看安全文本或下载共享文件</p>
+            <p>${this.i18n.t('receive.subtitle')}</p>
           </header>
           <div class="form">
             <label class="field">
-              <!-- TODO i18n -->
-              <span class="field-label">Send 链接</span>
+              <span class="field-label">${this.i18n.t('receive.linkLabel')}</span>
               <input
                 class="input mono"
                 data-link

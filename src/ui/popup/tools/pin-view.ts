@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
@@ -119,12 +120,12 @@ export class VwPinView extends LitElement {
   ];
 
   private back(): void {
-    this.dispatchEvent(new CustomEvent('vw-item-back', { bubbles: true, composed: true }));
+    emit(this, 'vw-item-back');
   }
 
   private emitRemove(): void {
     if (this.pending) return;
-    this.dispatchEvent(new CustomEvent('vw-pin-remove', { bubbles: true, composed: true }));
+    emit(this, 'vw-pin-remove');
   }
 
   private setPin(): void {
@@ -135,9 +136,7 @@ export class VwPinView extends LitElement {
       this.validationError = 'PIN 码至少需要 4 位数字'; // TODO i18n
       return;
     }
-    this.dispatchEvent(
-      new CustomEvent<PinSetDetail>('vw-pin-set', { detail: { pin }, bubbles: true, composed: true }),
-    );
+    emit<PinSetDetail>(this, 'vw-pin-set', { pin });
   }
 
   private onKeydown(event: KeyboardEvent): void {

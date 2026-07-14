@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
@@ -401,7 +402,7 @@ export class VwAuthViews extends LitElement {
   }
 
   private emit(type: string, detail: unknown = null): void {
-    this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
+    emit(this, type, detail);
   }
 
   private renderBrandHead(title: string, subtitle: string, action: unknown = nothing) {

@@ -2,6 +2,7 @@ import type { AutofillCredentials } from '../messaging/protocol.js';
 import type { DetectedLoginForm } from './form-detection.js';
 import { isFillableInput, isNewPasswordField } from './form-detection.js';
 import { flashFill, flashFillCheck } from './fill-highlight.js';
+import { setElementValue } from './native-set-value.js';
 
 export function fillLoginForm(form: DetectedLoginForm, credentials: AutofillCredentials): boolean {
   let filled = false;
@@ -27,7 +28,5 @@ export function fillLoginForm(form: DetectedLoginForm, credentials: AutofillCred
 }
 
 export function setInputValue(input: HTMLInputElement, value: string): void {
-  input.value = value;
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
+  setElementValue(input, value);
 }

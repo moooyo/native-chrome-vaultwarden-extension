@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { detectLoginForms } from './form-detection.js';
-import { fillLoginForm } from './fill.js';
+import { fillLoginForm, setInputValue } from './fill.js';
 
 describe('fillLoginForm', () => {
   beforeEach(() => {
@@ -116,5 +116,32 @@ describe('fillLoginForm', () => {
     const form = detectLoginForms()[0]!;
     fillLoginForm(form, { username: 'me@example.com', password: 'secret' });
     expect((document.getElementById('otp') as HTMLInputElement).value).toBe('');
+  });
+});
+
+describe('setInputValue', () => {
+  beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('writes through the native prototype setter, bypassing a React-style value tracker', () => {
+    document.body.innerHTML = '<input id="u" type="text">';
+    const input = document.getElementById('u') as HTMLInputElement;
+    const nativeDesc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!;
+    // Simulate React's instance-level value tracker: an own accessor shadowing the prototype. React uses
+    // it to cache the last value it set and decides whether onChange fires; a direct `input.value = x`
+    // goes through it and updates the cache, so no change is detected. Our fill must bypass it.
+    let trackerWrites = 0;
+    Object.defineProperty(input, 'value', {
+      configurable: true,
+      get() { return nativeDesc.get!.call(input); },
+      set(v: string) { trackerWrites++; nativeDesc.set!.call(input, v); },
+    });
+    let inputEvents = 0;
+    input.addEventListener('input', () => inputEvents++);
+
+    setInputValue(input, 'me@example.com');
+
+    expect(trackerWrites).toBe(0); // bypassed the instance value tracker
+    expect(nativeDesc.get!.call(input)).toBe('me@example.com'); // real DOM value updated
+    expect(inputEvents).toBe(1); // input event dispatched so onChange can fire
   });
 });
