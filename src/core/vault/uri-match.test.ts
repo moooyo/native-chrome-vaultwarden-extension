@@ -68,6 +68,11 @@ describe('uri matching', () => {
       .toBeUndefined();
   });
 
+  it('matches RegularExpression case-insensitively (Bitwarden uses the "i" flag)', () => {
+    expect(matchLoginUri({ uri: '^https://EXAMPLE\\.com/LOGIN', match: UriMatchStrategy.RegularExpression }, 'https://example.com/login', UriMatchStrategy.Domain))
+      .toMatchObject({ matchType: UriMatchStrategy.RegularExpression });
+  });
+
   it('uses the configured default strategy when match is absent or invalid', () => {
     expect(matchLoginUri({ uri: 'https://example.com' }, 'https://login.example.com', UriMatchStrategy.Domain))
       .toMatchObject({ matchType: UriMatchStrategy.Domain });

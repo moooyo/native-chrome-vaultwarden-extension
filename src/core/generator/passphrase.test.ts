@@ -49,8 +49,8 @@ describe('generatePassphrase', () => {
 });
 
 describe('PASSPHRASE_WORDLIST', () => {
-  it('is non-trivial, unique, and all lowercase ASCII words', () => {
-    expect(PASSPHRASE_WORDLIST.length).toBeGreaterThanOrEqual(128);
+  it('is a large (>= 4096), unique, all lowercase-ASCII wordlist for adequate entropy', () => {
+    expect(PASSPHRASE_WORDLIST.length).toBeGreaterThanOrEqual(4096);
     expect(new Set(PASSPHRASE_WORDLIST).size).toBe(PASSPHRASE_WORDLIST.length); // no duplicates
     for (const w of PASSPHRASE_WORDLIST) {
       expect(w).toMatch(/^[a-z]{3,}$/);

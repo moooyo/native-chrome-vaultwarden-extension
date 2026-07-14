@@ -50,6 +50,24 @@ it('throws (fail-close) when a personal cipher field cannot be decrypted with th
   await expect(rotateCipher(raw, oldK, newK)).rejects.toBeTruthy();
 });
 
+it('throws (fail-close) when an attachment has no per-attachment key (legacy blob under the UserKey)', async () => {
+  // A pre-2020 attachment has its blob encrypted directly under the account UserKey and carries no
+  // per-attachment `key`. Rotating away the UserKey would make that blob permanently undecryptable, and
+  // neither branch re-wraps it — so rotation must fail closed rather than silently orphan the file.
+  const keyless = {
+    id: 'c9', type: 1, name: await encryptToText('n', oldK),
+    attachments: [{ id: 'a1', fileName: await encryptToText('file.txt', oldK), size: '10', url: 'u' }],
+  } as unknown as CipherResponse;
+  await expect(rotateCipher(keyless, oldK, newK)).rejects.toBeTruthy();
+
+  // Same legacy attachment under a KEYED cipher, whose branch would otherwise ignore attachments entirely.
+  const keyed = {
+    id: 'c10', type: 1, key: await encryptToBytes(new Uint8Array(64).fill(3), oldK),
+    attachments: [{ id: 'a1', fileName: '2.filename==', size: '10', url: 'u' }],
+  } as unknown as CipherResponse;
+  await expect(rotateCipher(keyed, oldK, newK)).rejects.toBeTruthy();
+});
+
 it('rotateFolder re-wraps the name and preserves id', async () => {
   const raw = { id: 'f1', name: await encryptToText('Work', oldK) } as unknown as FolderResponse;
   const out = await rotateFolder(raw, oldK, newK);

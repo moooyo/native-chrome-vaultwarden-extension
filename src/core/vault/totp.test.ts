@@ -98,3 +98,36 @@ describe('getTotp', () => {
     expect(await getTotp('', 0)).toBeUndefined();
   });
 });
+
+describe('Steam TOTP', () => {
+  // Known-answer vectors from the Bitwarden SDK (bitwarden-vault/src/totp.rs test_generate_totp)
+  // at 2023-01-01T00:00:00Z (epoch 1672531200s). Steam maps the 31-bit truncation onto a 5-char
+  // alphabet instead of RFC 6238 decimal digits.
+  const STEAM_EPOCH_MS = 1672531200_000;
+
+  it('generates the 5-char Steam code (SDK parity)', async () => {
+    expect((await getTotp('steam://HXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ', STEAM_EPOCH_MS))?.code).toBe('7W6CJ');
+    expect((await getTotp('steam://ABCD123', STEAM_EPOCH_MS))?.code).toBe('N26DF');
+  });
+
+  it('is case-insensitive on the steam:// scheme', async () => {
+    expect((await getTotp('StEam://HXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ', STEAM_EPOCH_MS))?.code).toBe('7W6CJ');
+  });
+
+  it('parses steam:// as 5-char / 30s / SHA1 / steam', () => {
+    expect(parseTotp('steam://HXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ')).toEqual({
+      secret: 'HXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ', digits: 5, period: 30, algorithm: 'SHA1', steam: true,
+    });
+  });
+
+  it('honors otpauth encoder=steam', async () => {
+    const uri = 'otpauth://totp/Steam:me?secret=HXDMVJECJJWSRB3HWIZR4IFUGFTMXBOZ&issuer=Steam&encoder=steam';
+    expect((await getTotp(uri, STEAM_EPOCH_MS))?.code).toBe('7W6CJ');
+  });
+
+  it('clamps absurd otpauth digits instead of crashing', async () => {
+    const r = await getTotp('otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=99999999999', 0);
+    expect(typeof r?.code).toBe('string');
+    expect((r?.code.length ?? 0)).toBeLessThanOrEqual(10);
+  });
+});

@@ -1,9 +1,10 @@
 // Bitwarden Send: ephemeral encrypted sharing. Each send has a random 16-byte send key, stored as an
 // EncString wrapped under the account user key. The actual field-encryption key is derived from the
-// send key via HKDF-Expand (derive_shareable_key(secret, "send") → 64 bytes = enc ‖ mac). The send key
-// also rides in the share URL (base64url) so a recipient can re-derive and decrypt.
+// send key via derive_shareable_key(sendKey, "send", "send") → 64 bytes = enc ‖ mac (PRK = HMAC-SHA256
+// over "bitwarden-send", then HKDF-Expand). The send key also rides in the share URL (base64url) so a
+// recipient can re-derive and decrypt.
 
-import { hkdfExpandSha256, pbkdf2Sha256 } from '../crypto/primitives.js';
+import { hkdfExpandSha256, hmacSha256, pbkdf2Sha256 } from '../crypto/primitives.js';
 import { symmetricKeyFromBytes, type SymmetricKey } from '../crypto/keys.js';
 import { encryptToText, encryptToBytes, decryptToText, decryptToBytes } from '../crypto/encstring.js';
 import { bytesToBase64, bytesToBase64Url, utf8ToBytes } from '../crypto/encoding.js';
@@ -53,9 +54,20 @@ export interface SendCryptoDeps {
   now?: () => number;
 }
 
-/** Derive a send's field-encryption key: HKDF-Expand(PRK=sendKey, info="send", 64 bytes). */
+/**
+ * Bitwarden `derive_shareable_key(secret, name, info)` (bitwarden-crypto/src/keys/shareable_key.rs):
+ *   PRK = HMAC-SHA256(key = "bitwarden-{name}", msg = secret);  out = HKDF-Expand(PRK, info, 64) = enc‖mac.
+ * NOTE: the PRK step is REQUIRED — feeding `secret` straight into HKDF-Expand yields a valid-length but
+ * wrong key that no official Bitwarden client (nor a Vaultwarden-hosted web vault) can decrypt.
+ */
+export async function deriveShareableKey(secret: Uint8Array, name: string, info = ''): Promise<SymmetricKey> {
+  const prk = await hmacSha256(utf8ToBytes(`bitwarden-${name}`), secret);
+  return symmetricKeyFromBytes(await hkdfExpandSha256(prk, info, 64));
+}
+
+/** Derive a Send's field-encryption key: derive_shareable_key(sendKey, "send", Some("send")). */
 export async function deriveSendKey(sendKey: Uint8Array): Promise<SymmetricKey> {
-  return symmetricKeyFromBytes(await hkdfExpandSha256(sendKey, 'send', 64));
+  return deriveShareableKey(sendKey, 'send', 'send');
 }
 
 /** Hash a send password (PBKDF2-SHA256 over the password with the send key as salt). */

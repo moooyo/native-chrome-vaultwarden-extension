@@ -12,6 +12,18 @@ export type RotatedCipher = Record<string, unknown> & { id: string };
  * Throws on any undecryptable field (caller fails closed).
  */
 export async function rotateCipher(raw: CipherResponse, oldKey: SymmetricKey, newKey: SymmetricKey): Promise<RotatedCipher> {
+  // Fail-close on legacy attachments with no per-attachment key: their blob is encrypted directly under
+  // the account UserKey, which this rotation replaces. Neither branch re-wraps the server blob, so
+  // rotating would leave it permanently undecryptable once the old UserKey is gone. Refuse instead
+  // (upstream Bitwarden hard-blocks the same case) — the user must re-upload the attachment first.
+  const rawAttachments = (raw as unknown as { attachments?: Array<{ id?: string; key?: string | null }> }).attachments;
+  if (Array.isArray(rawAttachments)) {
+    for (const a of rawAttachments) {
+      if (!a || typeof a.key !== 'string' || !a.key) {
+        throw new Error('cannot rotate account key: a legacy attachment has no per-attachment key (its blob is encrypted under the account key). Re-upload the attachment, then rotate.');
+      }
+    }
+  }
   if (raw.key) {
     // Keyed: unwrap the raw item-key bytes with the old UserKey, re-wrap under the new UserKey. Fields untouched.
     const itemKeyBytes = await decryptToBytes(raw.key, oldKey);

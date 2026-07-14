@@ -1,9 +1,43 @@
 import { describe, it, expect } from 'vitest';
-import { buildTextSendRequest, decryptSend, deriveSendKey, hashSendPassword, buildSendAccessUrl, buildFileSendRequest, buildUpdateSendRequest } from './sends.js';
+import { buildTextSendRequest, decryptSend, deriveSendKey, deriveShareableKey, hashSendPassword, buildSendAccessUrl, buildFileSendRequest, buildUpdateSendRequest } from './sends.js';
 import { decryptAttachmentFile } from './attachments.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
-import { bytesToBase64Url } from '../crypto/encoding.js';
+import { bytesToBase64, bytesToBase64Url, utf8ToBytes } from '../crypto/encoding.js';
 import type { SendResponse } from '../api/types.js';
+
+// Cross-implementation known-answer vectors: Bitwarden SDK `derive_shareable_key`
+// (bitwarden-crypto/src/keys/shareable_key.rs #[test] test_derive_shareable_key). The algorithm is
+// PRK = HMAC-SHA256(key="bitwarden-"+name, msg=secret[16]); then HKDF-Expand(PRK, info, 64) = enc‖mac.
+// SymmetricCryptoKey::to_base64() is standard base64 of the 64-byte enc‖mac buffer.
+function serialize64(k: { encKey: Uint8Array; macKey: Uint8Array }): string {
+  const raw = new Uint8Array(64);
+  raw.set(k.encKey, 0);
+  raw.set(k.macKey, 32);
+  return bytesToBase64(raw);
+}
+
+describe('deriveShareableKey (Bitwarden derive_shareable_key parity)', () => {
+  it('matches the SDK vector with info = None', async () => {
+    const key = await deriveShareableKey(utf8ToBytes('&/$%F1a895g67HlX'), 'test_key');
+    expect(serialize64(key)).toBe(
+      '4PV6+PcmF2w7YHRatvyMcVQtI7zvCyssv/wFWmzjiH6Iv9altjmDkuBD1aagLVaLezbthbSe+ktR+U6qswxNnQ==',
+    );
+  });
+
+  it('matches the SDK vector with info = "test"', async () => {
+    const key = await deriveShareableKey(utf8ToBytes('67t9b5g67$%Dh89n'), 'test_key', 'test');
+    expect(serialize64(key)).toBe(
+      'F9jVQmrACGx9VUPjuzfMYDjr726JtL300Y3Yg+VYUnVQtQ1s8oImJ5xtp1KALC9h2nav04++1LDW4iFD+infng==',
+    );
+  });
+
+  it('deriveSendKey is derive_shareable_key(sendKey, "send", "send")', async () => {
+    const sendKey = new Uint8Array(16).fill(1);
+    const a = await deriveSendKey(sendKey);
+    const b = await deriveShareableKey(sendKey, 'send', 'send');
+    expect(serialize64(a)).toBe(serialize64(b));
+  });
+});
 
 const userKey = symmetricKeyFromBytes(new Uint8Array(64).map((_, i) => (i * 7) & 0xff));
 const deps = { randomBytes: (n: number) => new Uint8Array(n).fill(0x2a), now: () => 1_700_000_000_000 };

@@ -121,7 +121,8 @@ function regexMatches(pattern: string, frameUrl: string): boolean {
   if (pattern.length > MAX_REGEX_PATTERN_LENGTH) return false;
   if (!safeRegex(pattern)) return false;
   try {
-    return new RegExp(pattern).test(frameUrl);
+    // Case-insensitive to match Bitwarden's `new RegExp(uri, "i")` semantics.
+    return new RegExp(pattern, 'i').test(frameUrl);
   } catch {
     return false;
   }
