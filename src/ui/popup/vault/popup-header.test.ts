@@ -15,9 +15,8 @@ vi.mock('webextension-polyfill', () => ({
 import './popup-header.js';
 import type { VwPopupHeader } from './popup-header.js';
 
-async function mount(generatorActive = false): Promise<VwPopupHeader> {
+async function mount(): Promise<VwPopupHeader> {
   const el = document.createElement('vw-popup-header') as VwPopupHeader;
-  el.generatorActive = generatorActive;
   document.body.append(el);
   await el.updateComplete;
   return el;
@@ -30,19 +29,17 @@ function buttons(el: VwPopupHeader): HTMLButtonElement[] {
 describe('vw-popup-header', () => {
   afterEach(() => document.body.replaceChildren());
 
-  it('renders the brand and five action buttons', async () => {
+  it('renders the brand, score, lock, and account controls', async () => {
     const el = await mount();
     expect(el.shadowRoot?.querySelector('vw-logo')).not.toBeNull();
     expect(el.shadowRoot?.textContent).toContain('密屿');
-    expect(buttons(el)).toHaveLength(5);
+    expect(buttons(el)).toHaveLength(3);
   });
 
   it.each([
-    ['vw-add', 0],
-    ['vw-open-totp', 1],
-    ['vw-generator-toggle', 2],
-    ['vw-open-settings', 3],
-    ['vw-lock', 4],
+    ['vw-sync-now', 0],
+    ['vw-lock', 1],
+    ['vw-open-settings', 2],
   ] as const)('emits %s from its button', async (event, index) => {
     const el = await mount();
     const fired = vi.fn();
@@ -51,19 +48,11 @@ describe('vw-popup-header', () => {
     expect(fired).toHaveBeenCalledTimes(1);
   });
 
-  it('highlights the generator button while the generator view is open', async () => {
-    const el = await mount(true);
-    const generator = buttons(el)[2]!;
-    expect(generator.classList.contains('active')).toBe(true);
-    expect(generator.getAttribute('aria-pressed')).toBe('true');
-  });
-
-  it('highlights the authenticator button while the 2FA view is open', async () => {
+  it('animates the score ring while syncing', async () => {
     const el = await mount();
-    el.totpActive = true;
+    el.syncing = true;
     await el.updateComplete;
-    const totp = buttons(el)[1]!;
-    expect(totp.classList.contains('active')).toBe(true);
-    expect(totp.getAttribute('aria-pressed')).toBe('true');
+    expect(buttons(el)[0]!.classList.contains('syncing')).toBe(true);
+    expect(buttons(el)[0]!.disabled).toBe(true);
   });
 });

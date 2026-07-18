@@ -314,6 +314,7 @@ export class VwPopupApp extends LitElement {
         min-height: 0;
       }
       .body {
+        position: relative;
         flex: 1;
         min-height: 0;
         display: flex;
@@ -323,6 +324,40 @@ export class VwPopupApp extends LitElement {
          * second scrollbar behind the list's — keep it hidden so the list is the only scrollbar. */
         overflow: hidden;
       }
+      .body.sheet-open { overflow:visible; }
+      .scrim {
+        position:absolute;
+        inset:0;
+        z-index:10;
+        background:rgba(0,0,0,.34);
+        animation:mvIn .18s ease-out;
+      }
+      .sheet {
+        position:absolute;
+        left:0;
+        right:0;
+        bottom:0;
+        z-index:11;
+        max-height:100%;
+        overflow:auto;
+        border-radius:20px 20px 0 0;
+        background:var(--vw-panel);
+        box-shadow:var(--vw-dialog-shadow);
+        animation:mvSheet .22s cubic-bezier(.2,.9,.3,1);
+      }
+      .sheet-open .scrim { bottom:-48px; }
+      .sheet-open .sheet { bottom:-48px; max-height:calc(100% + 48px); }
+      .sheet-handle {
+        position:sticky;
+        top:0;
+        z-index:2;
+        display:block;
+        width:36px;
+        height:4px;
+        margin:8px auto 0;
+        border-radius:2px;
+        background:var(--vw-line-3);
+      }
     `,
   ];
 
@@ -331,8 +366,23 @@ export class VwPopupApp extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
+    window.addEventListener('keydown', this.handleWindowKeydown);
     void this.bootstrap();
   }
+
+  private readonly handleWindowKeydown = (event: KeyboardEvent): void => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'l') {
+      const unlocked = !['loading', 'login', 'register', 'twoFactor', 'unlock'].includes(this.route.name);
+      if (!unlocked) return;
+      event.preventDefault();
+      void this.handleAccountAction({ action: 'lock' });
+      return;
+    }
+    if (event.key === 'Escape' && ['generator', 'health', 'editor'].includes(this.route.name)) {
+      event.preventDefault();
+      this.navigate({ name: 'vault', scope: 'suggestions' });
+    }
+  };
 
   /** Load persisted language + appearance prefs (so the first paint is themed/localized), then route. */
   private async bootstrap(): Promise<void> {
@@ -342,6 +392,7 @@ export class VwPopupApp extends LitElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    window.removeEventListener('keydown', this.handleWindowKeydown);
     this.clearEphemeralDetailState();
   }
 
@@ -1556,16 +1607,26 @@ export class VwPopupApp extends LitElement {
       <vw-popup-header
         .generatorActive=${route.name === 'generator'}
         .totpActive=${route.name === 'totp'}
+        .syncing=${this.syncing}
         @vw-add=${() => this.navigate({ name: 'editor', mode: 'create' })}
         @vw-open-totp=${() => this.handleTotpToggle()}
         @vw-generator-toggle=${() => this.handleGeneratorToggle()}
         @vw-open-settings=${() => void this.browser.openOptions()}
         @vw-lock=${() => void this.handleAccountAction({ action: 'lock' })}
+        @vw-sync-now=${() => void this.handleSync()}
       ></vw-popup-header>
-      <div class="body">${this.renderBody(route)}</div>
+      <div class="body ${this.isSheetRoute(route) ? 'sheet-open' : ''}">${this.renderBodyLayer(route)}</div>
       <vw-sync-bar
         .syncing=${this.syncing}
         .lastSync=${this.lastSync}
+        .generatorActive=${route.name === 'generator'}
+        .totpActive=${route.name === 'totp'}
+        .healthActive=${route.name === 'health'}
+        @vw-add=${() => this.navigate({ name: 'editor', mode: 'create' })}
+        @vw-open-totp=${() => this.handleTotpToggle()}
+        @vw-generator-toggle=${() => this.handleGeneratorToggle()}
+        @vw-open-health=${() => this.navigate({ name: 'health' })}
+        @vw-open-settings=${() => void this.browser.openOptions()}
         @vw-sync-now=${() => void this.handleSync()}
       ></vw-sync-bar>
     `;
@@ -1611,8 +1672,37 @@ export class VwPopupApp extends LitElement {
         @vw-copy=${(event: CustomEvent<CopyDetail>) => this.handleCopy(event.detail)}
         @vw-secret-request=${(event: CustomEvent<SecretRequestDetail>) => void this.handleSecretRequest(event.detail)}
         @vw-edit-item=${(event: CustomEvent<ItemRefDetail>) => this.navigate({ name: 'editor', mode: 'edit', cipherId: event.detail.cipherId })}
+        @vw-command=${(event: CustomEvent<{ action: string }>) => this.handleVaultCommand(event.detail.action)}
       ></vw-vault-view>
     `;
+  }
+
+  private renderBodyLayer(route: PopupRoute) {
+    if (!this.isSheetRoute(route)) return this.renderBody(route);
+    return html`
+      ${this.renderVault()}
+      <div class="scrim" @click=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}></div>
+      <section class="sheet" aria-modal="true">
+        <span class="sheet-handle" aria-hidden="true"></span>
+        ${this.renderBody(route)}
+      </section>
+    `;
+  }
+
+  private isSheetRoute(route: PopupRoute): boolean {
+    return route.name === 'generator' || route.name === 'health' || route.name === 'editor';
+  }
+
+  private handleVaultCommand(action: string): void {
+    this.query = '';
+    switch (action) {
+      case 'generator': this.navigate({ name: 'generator' }); break;
+      case 'totp': this.navigate({ name: 'totp' }); break;
+      case 'lock': void this.handleAccountAction({ action: 'lock' }); break;
+      case 'new': this.navigate({ name: 'editor', mode: 'create' }); break;
+      case 'health': this.navigate({ name: 'health' }); break;
+      case 'settings': void this.browser.openOptions(); break;
+    }
   }
 
   private renderEditor(route: Extract<PopupRoute, { name: 'editor' }>) {
@@ -1702,6 +1792,7 @@ export class VwPopupApp extends LitElement {
         .entries=${this.totpEntries}
         .currentIds=${this.currentSiteIds()}
         @vw-copy=${(event: CustomEvent<CopyDetail>) => this.handleCopy(event.detail)}
+        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
       ></vw-totp-view>
     `;
   }

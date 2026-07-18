@@ -13,7 +13,7 @@ const TILE_COLORS: readonly string[] = [
   '#B4275E', // magenta
   '#3B6EA5', // steel
   '#946B00', // amber
-  '#0E8A72', // teal
+  '#0B57D0', // Google blue
   '#5C5C5C', // graphite
   '#B23B3B', // red
   '#2E7D6B', // pine

@@ -2,7 +2,7 @@ import { LitElement, css, html } from 'lit';
 import { themeTokens } from '../components/tokens.js';
 
 /**
- * The MiYu popup shell — a single 372×560 column filling the popup window. The panel background,
+ * The popup shell — a single 400×600 column filling the popup window. The panel background,
  * fonts, and clipping live here; the app root fills the default slot with the top bar, the swappable
  * body, and the sync bar. (The design's floating rounded card + shadow are inherent to a browser
  * popup window, which is a rectangle, so the panel fills edge-to-edge rather than faking window
@@ -27,6 +27,9 @@ export class VwPopupFrame extends LitElement {
         overflow: hidden;
         background: var(--vw-panel);
         color: var(--vw-ink);
+        border: 1px solid var(--vw-line-3);
+        border-radius: var(--vw-radius-panel);
+        box-shadow: var(--vw-popup-shadow);
       }
     `,
   ];

@@ -4,21 +4,21 @@ import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 
-/**
- * The popup's bottom sync bar: a status dot (teal synced / amber syncing), a relative "last synced"
- * label, and a manual sync button whose icon spins while a sync is in flight. Emits `vw-sync-now`.
- * `lastSync` is an epoch-ms timestamp (or undefined when never synced); the relative label is
- * recomputed on each render (there is no interval — the popup is ephemeral, so an idle popup simply
- * keeps its last computed value until the next render/sync).
- */
+/** Fixed bottom action rail shared by every unlocked popup view. */
 export class VwSyncBar extends LitElement {
   static override properties = {
     syncing: { type: Boolean },
     lastSync: { type: Number },
+    generatorActive: { type: Boolean },
+    totpActive: { type: Boolean },
+    healthActive: { type: Boolean },
   };
 
   declare syncing: boolean;
   declare lastSync: number | undefined;
+  declare generatorActive: boolean;
+  declare totpActive: boolean;
+  declare healthActive: boolean;
 
   private i18n = new LocalizeController(this);
 
@@ -26,77 +26,68 @@ export class VwSyncBar extends LitElement {
     super();
     this.syncing = false;
     this.lastSync = undefined;
+    this.generatorActive = false;
+    this.totpActive = false;
+    this.healthActive = false;
   }
 
   static override styles = [
     themeTokens,
     css`
-      :host { display: block; flex: none; }
+      :host { display:block; flex:none; }
       .bar {
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        height: 32px;
-        padding: 0 14px;
-        border-top: 1px solid var(--vw-line-1);
+        display:flex;
+        align-items:center;
+        height:48px;
+        padding:0 10px 0 14px;
+        border-top:1px solid var(--vw-line-1);
+        background:var(--vw-panel);
       }
-      .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--vw-teal-solid); }
-      .dot.syncing { background: var(--vw-sync-amber); }
-      .label { font-size: 11px; color: var(--vw-muted); }
-      .spacer { flex: 1; }
+      .hint {
+        flex:1;
+        min-width:0;
+        color:var(--vw-muted);
+        font-family:var(--vw-font-mono);
+        font-size:9.5px;
+        white-space:nowrap;
+      }
+      .actions { display:flex; align-items:center; gap:2px; }
       button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 24px;
-        height: 24px;
-        border: none;
-        border-radius: var(--vw-radius-small);
-        background: transparent;
-        color: var(--vw-text-2);
-        cursor: pointer;
+        display:grid;
+        place-items:center;
+        width:34px;
+        height:34px;
+        border:0;
+        border-radius:17px;
+        background:transparent;
+        color:var(--vw-text-2);
+        cursor:pointer;
       }
-      button:hover { background: var(--vw-icon-hover); }
-      button:focus-visible { outline: none; box-shadow: var(--vw-focus); }
-      button svg { width: 13px; height: 13px; }
-      button.spin svg { animation: mvSpin 0.8s linear infinite; }
-      @keyframes mvSpin { to { transform: rotate(360deg); } }
-      @media (prefers-reduced-motion: reduce) { button.spin svg { animation: none; } }
+      button:hover { background:var(--vw-icon-hover); }
+      button.active { background:var(--pc); color:var(--onpc); }
+      button.add { margin-left:3px; border-radius:12px; background:var(--p); color:var(--onp); }
+      button.add:hover { background:var(--vw-primary-bg-hover); }
+      button:focus-visible { outline:none; box-shadow:var(--vw-focus); }
+      button svg { width:18px; height:18px; }
+      button.add svg { width:20px; height:20px; }
     `,
   ];
 
-  private label(): string {
-    if (this.syncing) return t('sync.syncing');
-    if (this.lastSync === undefined) return t('sync.never');
-    const seconds = Math.max(0, Math.floor((Date.now() - this.lastSync) / 1000));
-    if (seconds < 45) return t('sync.synced', { time: t('sync.justNow') });
-    const minutes = Math.round(seconds / 60);
-    if (minutes < 60) return t('sync.synced', { time: t('sync.minutesAgo', { count: minutes }) });
-    const hours = Math.round(minutes / 60);
-    if (hours < 24) return t('sync.synced', { time: t('sync.hoursAgo', { count: hours }) });
-    return t('sync.synced', { time: t('sync.daysAgo', { count: Math.round(hours / 24) }) });
-  }
-
-  private syncNow(): void {
-    if (this.syncing) return;
-    emit(this, 'vw-sync-now');
+  private fire(type: string): void {
+    emit(this, type);
   }
 
   protected override render() {
     return html`
       <div class="bar">
-        <span class="dot ${this.syncing ? 'syncing' : ''}"></span>
-        <span class="label">${this.label()}</span>
-        <span class="spacer"></span>
-        <button
-          type="button"
-          class=${this.syncing ? 'spin' : ''}
-          title=${t('sync.now')}
-          aria-label=${t('sync.now')}
-          @click=${this.syncNow}
-        >
-          ${uiIcon('refresh')}
-        </button>
+        <span class="hint" title=${this.syncing ? t('sync.syncing') : t('sync.now')}>↑↓ · ↵ · ⌘L</span>
+        <div class="actions">
+          <button type="button" class=${this.generatorActive ? 'active' : ''} title=${t('popup.generator')} aria-label=${t('popup.generator')} aria-pressed=${this.generatorActive ? 'true' : 'false'} @click=${() => this.fire('vw-generator-toggle')}>${uiIcon('wand')}</button>
+          <button type="button" class=${this.totpActive ? 'active' : ''} title=${t('popup.authenticator')} aria-label=${t('popup.authenticator')} aria-pressed=${this.totpActive ? 'true' : 'false'} @click=${() => this.fire('vw-open-totp')}>${uiIcon('clock')}</button>
+          <button type="button" class=${this.healthActive ? 'active' : ''} title=${t('popup.health')} aria-label=${t('popup.health')} aria-pressed=${this.healthActive ? 'true' : 'false'} @click=${() => this.fire('vw-open-health')}>${uiIcon('shield')}</button>
+          <button type="button" title=${t('popup.settings')} aria-label=${t('popup.settings')} @click=${() => this.fire('vw-open-settings')}>${uiIcon('sliders')}</button>
+          <button type="button" class="add" title=${t('popup.newItem')} aria-label=${t('popup.newItem')} @click=${() => this.fire('vw-add')}>${uiIcon('plus')}</button>
+        </div>
       </div>
     `;
   }

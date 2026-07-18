@@ -70,10 +70,10 @@ export class VwConnectionSection extends LitElement {
       :host { display: flex; flex-direction: column; gap: 8px; }
 
       /* Account identity card */
-      .account { display: flex; align-items: center; gap: 14px; padding: 14px 16px; background: var(--vw-card); border: 1px solid var(--vw-line-1); border-radius: var(--vw-radius-card); }
-      .avatar { width: 44px; height: 44px; border-radius: 50%; background: var(--vw-teal-solid); color: #fff; display: grid; place-items: center; font-size: 18px; font-weight: 600; flex: none; }
+      .account { display:flex; align-items:center; gap:14px; padding:14px 16px; background:var(--vw-card); border:1px solid var(--vw-line-1); border-radius:16px; }
+      .avatar { width:40px; height:40px; border-radius:50%; background:#7c4dff; color:#fff; display:grid; place-items:center; font-size:17px; font-weight:500; flex:none; }
       .account-text { flex: 1; min-width: 0; }
-      .account-name { font-size: 14px; font-weight: 600; color: var(--vw-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .account-name { font-size:14px; font-weight:500; color:var(--vw-ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .account-sub { margin-top: 2px; font-size: 11.5px; color: var(--vw-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
       /* Server URL control */
@@ -91,6 +91,7 @@ export class VwConnectionSection extends LitElement {
       .btn.ink:hover:not(:disabled) { background: var(--vw-primary-bg-hover); }
       .btn.outline { border-color: var(--vw-line-3); background: var(--vw-card); color: var(--vw-text-4); }
       .btn.outline:hover:not(:disabled) { background: var(--vw-row-hover); }
+      .btn.account-sync { height:34px; border:0; border-radius:17px; background:var(--pc); color:var(--onpc); }
 
       /* Sync button spinner */
       .ico { display: inline-flex; }
@@ -168,7 +169,7 @@ export class VwConnectionSection extends LitElement {
           <div class="account-name">${displayName}</div>
           <div class="account-sub">${this.accountSubtitle(displayName)}</div>
         </div>
-        <button type="button" class="btn outline" data-manage>${t('options.account.manage')}</button>
+        <button type="button" class="btn account-sync" data-manage @click=${() => this.syncNow()}>${uiIcon('refresh')}<span>${t('options.account.syncNow')}</span></button>
       </div>
 
       <vw-setting-card stacked heading=${t('options.account.serverLabel')} description=${t('options.account.serverDesc')}>
@@ -194,6 +195,10 @@ export class VwConnectionSection extends LitElement {
           <span class="ico ${this.syncing ? 'spin' : ''}">${uiIcon('refresh')}</span>
           <span>${t('options.account.syncNow')}</span>
         </button>
+      </vw-setting-card>
+
+      <vw-setting-card heading=${t('options.account.encryption')} description=${t('options.account.encryptionDesc')}>
+        <span style="color:var(--grn);font-size:12px;font-weight:500">${t('options.account.enabled')}</span>
       </vw-setting-card>
 
       <vw-setting-card heading=${t('options.account.autoSync')} description=${t('options.account.autoSyncDesc')}>

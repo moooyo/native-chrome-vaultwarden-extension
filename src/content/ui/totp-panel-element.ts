@@ -36,34 +36,35 @@ export const TOTP_PANEL_STYLES = `
     :host { all: initial; }
     :host {
       --mi-panel: #fff;
-      --mi-ink: #16181D;
-      --mi-muted: #8A8F99;
-      --mi-faint: #9AA0AA;
-      --mi-teal: #0E8A72;
-      --mi-teal-text: #0B7A65;
-      --mi-teal-10: rgba(14,138,114,.1);
-      --mi-teal-20: rgba(14,138,114,.2);
-      --mi-line: rgba(22,24,29,.09);
-      --mi-line-3: rgba(22,24,29,.14);
-      --mi-fill-2: #F7F7F4;
-      --mi-row-hover: #F2F2EF;
-      --mi-track: rgba(22,24,29,.08);
-      --mi-ink-btn: #16181D;
+      --mi-ink:#1f1f1f;
+      --mi-muted:#747775;
+      --mi-faint:#80868b;
+      --mi-teal:#0b57d0;
+      --mi-teal-text:#0b57d0;
+      --mi-teal-10:rgba(11,87,208,.1);
+      --mi-teal-20:rgba(11,87,208,.2);
+      --mi-line:#e9eef6;
+      --mi-line-3:#c4c7c5;
+      --mi-fill-2:#f0f4f9;
+      --mi-row-hover:rgba(31,31,31,.07);
+      --mi-track:#dde3ea;
+      --mi-ink-btn:#0b57d0;
       --mi-ink-btn-fg: #fff;
-      --mi-shadow: 0 16px 40px rgba(20,24,32,.16);
+      --mi-shadow:0 8px 28px rgba(0,0,0,.2);
     }
     * { box-sizing: border-box; }
     .box {
-      font: 400 14px/1.4 "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+      font:400 14px/1.4 "Roboto", "Segoe UI", system-ui, sans-serif;
       color: var(--mi-ink); background: var(--mi-panel);
       border: 1px solid var(--mi-line); border-radius: 14px; box-shadow: var(--mi-shadow);
-      width: 276px; overflow: hidden; animation: mvIn .18s ease-out;
+      width:236px; overflow:hidden; animation:mvFly .22s cubic-bezier(.2,.9,.3,1);
     }
-    @keyframes mvIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: none; } }
+    @keyframes mvFly { from { opacity:0; transform:translateX(-12px); } to { opacity:1; transform:translateX(0); } }
     .head { display: flex; align-items: center; gap: 7px; padding: 10px 13px 7px; }
     .brand { font-size: 11.5px; font-weight: 600; letter-spacing: .01em; color: var(--mi-teal-text); }
     .head .meta { margin-left: auto; font-size: 10.5px; color: var(--mi-faint); }
-    .logo { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 5px; background: #0E8A72; flex: none; }
+    .logo { display:grid; place-items:center; width:16px; height:16px; border-radius:5px; background:#0b57d0; flex:none; }
+    .logo svg { width:11px; height:11px; fill:#fff; stroke:none; }
     .glyph { position: relative; width: 8px; height: 8px; }
     .ring { position: absolute; inset: 0; border: 1.5px solid #fff; border-radius: 50%; }
     .dot { position: absolute; left: 3px; top: 3px; width: 2px; height: 2px; border-radius: 50%; background: #fff; }
@@ -75,7 +76,7 @@ export const TOTP_PANEL_STYLES = `
     .sub { font-size: 11px; color: var(--mi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .code-box { margin: 0 13px; padding: 9px 11px; background: var(--mi-fill-2); border: 1px solid var(--mi-line); border-radius: 10px; display: flex; align-items: center; gap: 9px; }
-    .code { flex: 1; display: flex; align-items: baseline; font-family: "JetBrains Mono", ui-monospace, monospace; font-weight: 600; font-size: 20px; color: var(--mi-teal-text); }
+    .code { flex:1; display:flex; align-items:baseline; font-family:"Roboto Mono", ui-monospace, monospace; font-weight:500; font-size:18px; color:var(--mi-teal-text); }
     .code .grp { flex: 1; display: flex; justify-content: space-between; }
     .code .grp:first-child { margin-right: 0.7em; }
     .secs { font-size: 10.5px; color: var(--mi-faint); flex: none; }
@@ -87,8 +88,8 @@ export const TOTP_PANEL_STYLES = `
     .cd-arc { stroke: var(--mi-teal); stroke-width: 2.5; stroke-linecap: round; transform: rotate(-90deg); transform-origin: center; transform-box: fill-box; transition: stroke-dashoffset 1s linear; }
 
     .actions { display: flex; gap: 8px; padding: 10px 13px 13px; }
-    .btn-primary { flex: 1; height: 31px; border: 0; border-radius: 9px; background: var(--mi-ink-btn); color: var(--mi-ink-btn-fg); font: 600 12px/1 "Instrument Sans", system-ui, sans-serif; cursor: pointer; }
-    .btn-primary:hover { background: #2A2D34; }
+    .btn-primary { flex:1; height:38px; border:0; border-radius:19px; background:var(--mi-ink-btn); color:var(--mi-ink-btn-fg); font:500 12px/1 "Roboto", system-ui, sans-serif; cursor:pointer; }
+    .btn-primary:hover { background:#0842a0; }
     .icon-btn { width: 31px; height: 31px; border: 1px solid var(--mi-line-3); border-radius: 9px; background: var(--mi-panel); color: #3F444E; display: grid; place-items: center; cursor: pointer; }
     .icon-btn:hover { background: var(--mi-row-hover); }
     .icon-btn svg { width: 14px; height: 14px; }
@@ -107,13 +108,13 @@ export const TOTP_PANEL_STYLES = `
 
     @media (prefers-color-scheme: dark) {
       :host {
-        --mi-panel: #1F2229; --mi-ink: #F2F3F5; --mi-muted: #9AA0AC; --mi-faint: #7B818B;
-        --mi-teal-text: #45D6B5; --mi-teal-10: rgba(69,214,181,.14); --mi-teal-20: rgba(69,214,181,.24);
-        --mi-line: rgba(255,255,255,.09); --mi-line-3: rgba(255,255,255,.16); --mi-fill-2: #262A33;
-        --mi-row-hover: rgba(255,255,255,.05); --mi-track: rgba(255,255,255,.12);
-        --mi-ink-btn: #F2F3F5; --mi-ink-btn-fg: #16181D; --mi-shadow: 0 18px 48px rgba(0,0,0,.5);
+        --mi-panel:#1f1f1f; --mi-ink:#e3e3e3; --mi-muted:#c4c7c5; --mi-faint:#8e918f;
+        --mi-teal:#a8c7fa; --mi-teal-text:#a8c7fa; --mi-teal-10:rgba(168,199,250,.14); --mi-teal-20:rgba(168,199,250,.24);
+        --mi-line:#2b2c2e; --mi-line-3:#47494c; --mi-fill-2:#242526;
+        --mi-row-hover:rgba(227,227,227,.09); --mi-track:#37393b;
+        --mi-ink-btn:#a8c7fa; --mi-ink-btn-fg:#062e6f; --mi-shadow:0 8px 28px rgba(0,0,0,.5);
       }
-      .btn-primary:hover { background: #fff; }
+      .btn-primary:hover { background:#d3e3fd; }
     }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
   ` + SIDE_PANEL_CSS;
@@ -194,7 +195,7 @@ function renderFilled(handlers: TotpPanelHandlers): TemplateResult {
 }
 
 function logoGlyph(): TemplateResult {
-  return html`<span class="logo"><span class="glyph"><span class="ring"></span><span class="dot"></span></span></span>`;
+  return html`<span class="logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 15.5a5.5 5.5 0 1 1 4.9-8H22v4h-2v2h-3v2h-4.6a5.5 5.5 0 0 1-4.9 3Zm0-3.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg></span>`;
 }
 
 function monogramLetter(name: string): string {

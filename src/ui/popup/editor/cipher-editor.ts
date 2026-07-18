@@ -141,8 +141,8 @@ export class VwCipherEditor extends LitElement {
         flex: 1;
         min-width: 0;
         margin: 0;
-        font-size: 15.5px;
-        font-weight: 600;
+        font-size: 15px;
+        font-weight: 500;
         color: var(--vw-ink);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -153,15 +153,15 @@ export class VwCipherEditor extends LitElement {
         align-items: center;
         gap: 6px;
         flex: none;
-        height: 30px;
-        padding: 0 14px;
+        height: 38px;
+        padding: 0 17px;
         border: none;
-        border-radius: var(--vw-radius-control);
+        border-radius: 19px;
         background: var(--vw-primary-bg);
         color: var(--vw-primary-fg);
         font-family: var(--vw-font-ui);
         font-size: 12.5px;
-        font-weight: 600;
+        font-weight: 500;
         cursor: pointer;
         transition: background-color var(--vw-dur-fast);
       }
@@ -192,7 +192,7 @@ export class VwCipherEditor extends LitElement {
         scrollbar-color: var(--vw-scrollbar) transparent;
       }
       .scroll::-webkit-scrollbar {
-        width: 8px;
+        width: 6px;
       }
       .scroll::-webkit-scrollbar-thumb {
         background: var(--vw-scrollbar);
@@ -206,10 +206,10 @@ export class VwCipherEditor extends LitElement {
         gap: 6px;
       }
       .label {
-        font-size: 10px;
-        font-weight: 600;
-        letter-spacing: 0.05em;
-        color: var(--vw-faint);
+        font-size: 11px;
+        font-weight: 400;
+        letter-spacing: 0;
+        color: var(--vw-text-2);
       }
       .row {
         display: flex;
@@ -229,9 +229,9 @@ export class VwCipherEditor extends LitElement {
         width: 100%;
         min-height: 78px;
         padding: 9px 12px;
-        border: 1px solid transparent;
-        border-radius: var(--vw-radius-control);
-        background: var(--vw-fill);
+        border: 1px solid var(--vw-line-3);
+        border-radius: 10px;
+        background: var(--vw-card);
         color: var(--vw-ink);
         font-family: var(--vw-font-ui);
         font-size: 13px;

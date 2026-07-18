@@ -5,20 +5,17 @@ import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import '../../components/logo.js';
 
-/**
- * The MiYu popup top bar: the logo + brand, then five 28px icon buttons — new item, authenticator
- * (2FA codes view), password generator (highlighted while the generator view is open), settings
- * (opens the options page), and lock. Emits `vw-add`, `vw-open-totp`, `vw-generator-toggle`,
- * `vw-open-settings`, `vw-lock`. Search lives in the vault body below, not here, matching the design.
- */
+/** Compact Chrome-style identity and security bar from the new popup handoff. */
 export class VwPopupHeader extends LitElement {
   static override properties = {
     generatorActive: { type: Boolean },
     totpActive: { type: Boolean },
+    syncing: { type: Boolean },
   };
 
   declare generatorActive: boolean;
   declare totpActive: boolean;
+  declare syncing: boolean;
 
   private i18n = new LocalizeController(this);
 
@@ -26,36 +23,79 @@ export class VwPopupHeader extends LitElement {
     super();
     this.generatorActive = false;
     this.totpActive = false;
+    this.syncing = false;
   }
 
   static override styles = [
     themeTokens,
     css`
-      :host { display: block; flex: none; }
-      .bar { display: flex; align-items: center; gap: 8px; padding: 12px 14px 9px; animation: mvIn 0.25s ease-out; }
-      .brand { font-size: 14px; font-weight: 600; color: var(--vw-ink); letter-spacing: 0.01em; }
-      .spacer { flex: 1; }
-      button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 28px;
-        height: 28px;
-        border: none;
-        border-radius: var(--vw-radius-chip);
-        background: transparent;
-        color: var(--vw-text-2);
-        cursor: pointer;
-        transition: background-color var(--vw-dur-fast), color var(--vw-dur-fast);
+      :host { display:block; flex:none; }
+      .bar {
+        display:flex;
+        align-items:center;
+        gap:9px;
+        height:50px;
+        padding:0 14px;
+        border-bottom:1px solid var(--vw-line-1);
+        background:var(--vw-panel);
       }
-      button:hover { background: var(--vw-icon-hover); }
-      button:focus-visible { outline: none; box-shadow: var(--vw-focus); }
-      button svg { width: 15px; height: 15px; }
-      button.active { color: var(--vw-teal-text); background: var(--vw-teal-10); }
+      .brand { font-size:14px; font-weight:500; color:var(--vw-ink); letter-spacing:.01em; }
+      .spacer { flex:1; }
+      button {
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        border:0;
+        background:transparent;
+        color:var(--vw-text-2);
+        cursor:pointer;
+        font:inherit;
+      }
+      button:hover { background:var(--vw-icon-hover); }
+      button:focus-visible { outline:none; box-shadow:var(--vw-focus); }
+      .score {
+        gap:5px;
+        height:32px;
+        padding:0 7px;
+        border-radius:16px;
+        color:var(--grn);
+        font-size:11px;
+        font-weight:500;
+      }
+      .score-ring {
+        position:relative;
+        width:20px;
+        height:20px;
+        border-radius:50%;
+        background:conic-gradient(var(--grn) 0 86%, var(--vw-track) 86% 100%);
+      }
+      .score-ring::after {
+        content:'';
+        position:absolute;
+        inset:3px;
+        border-radius:50%;
+        background:var(--vw-panel);
+      }
+      .score.syncing .score-ring { animation:mvSpin .8s linear infinite; }
+      .icon {
+        width:32px;
+        height:32px;
+        border-radius:16px;
+      }
+      .icon svg { width:17px; height:17px; }
+      .avatar {
+        width:28px;
+        height:28px;
+        border-radius:50%;
+        background:#7c4dff;
+        color:#fff;
+        font-size:12px;
+        font-weight:500;
+      }
     `,
   ];
 
-  private emit(type: string): void {
+  private fire(type: string): void {
     emit(this, type);
   }
 
@@ -65,35 +105,20 @@ export class VwPopupHeader extends LitElement {
         <vw-logo variant="header"></vw-logo>
         <span class="brand">${t('common.brand')}</span>
         <span class="spacer"></span>
-        <button type="button" title=${t('popup.newItem')} aria-label=${t('popup.newItem')} @click=${() => this.emit('vw-add')}>
-          ${uiIcon('plus')}
-        </button>
         <button
           type="button"
-          class=${this.totpActive ? 'active' : ''}
-          title=${t('popup.authenticator')}
-          aria-label=${t('popup.authenticator')}
-          aria-pressed=${this.totpActive ? 'true' : 'false'}
-          @click=${() => this.emit('vw-open-totp')}
+          class="score ${this.syncing ? 'syncing' : ''}"
+          title=${t('sync.now')}
+          aria-label=${t('sync.now')}
+          ?disabled=${this.syncing}
+          @click=${() => this.fire('vw-sync-now')}
         >
-          ${uiIcon('clock')}
+          <span class="score-ring" aria-hidden="true"></span><span>86</span>
         </button>
-        <button
-          type="button"
-          class=${this.generatorActive ? 'active' : ''}
-          title=${t('popup.generator')}
-          aria-label=${t('popup.generator')}
-          aria-pressed=${this.generatorActive ? 'true' : 'false'}
-          @click=${() => this.emit('vw-generator-toggle')}
-        >
-          ${uiIcon('wand')}
-        </button>
-        <button type="button" title=${t('popup.settings')} aria-label=${t('popup.settings')} @click=${() => this.emit('vw-open-settings')}>
-          ${uiIcon('sliders')}
-        </button>
-        <button type="button" title=${t('popup.lock')} aria-label=${t('popup.lock')} @click=${() => this.emit('vw-lock')}>
+        <button type="button" class="icon" title=${t('popup.lock')} aria-label=${t('popup.lock')} @click=${() => this.fire('vw-lock')}>
           ${uiIcon('lock')}
         </button>
+        <button type="button" class="avatar" title=${t('popup.settings')} aria-label=${t('popup.settings')} @click=${() => this.fire('vw-open-settings')}>密</button>
       </div>
     `;
   }

@@ -179,6 +179,13 @@ export class VwSecuritySection extends LitElement {
   protected override render() {
     const prefs = getPrefs();
     return html`
+      <vw-setting-card heading=${t('options.security.biometric')} description=${t('options.security.biometricDesc')}>
+        <vw-toggle
+          .checked=${prefs.biometric}
+          @vw-toggle-change=${(e: CustomEvent<{ checked: boolean }>) => setPref('biometric', e.detail.checked)}
+        ></vw-toggle>
+      </vw-setting-card>
+
       <vw-setting-card heading=${t('options.security.autoLock')} description=${t('options.security.autoLockDesc')}>
         <div class="selects">
           <vw-select
@@ -208,11 +215,8 @@ export class VwSecuritySection extends LitElement {
         ></vw-select>
       </vw-setting-card>
 
-      <vw-setting-card heading=${t('options.security.biometric')} description=${t('options.security.biometricDesc')}>
-        <vw-toggle
-          .checked=${prefs.biometric}
-          @vw-toggle-change=${(e: CustomEvent<{ checked: boolean }>) => setPref('biometric', e.detail.checked)}
-        ></vw-toggle>
+      <vw-setting-card emphasized heading=${t('options.security.lockNow')} description=${t('options.security.lockNowDesc')}>
+        <button type="button" class="btn ink" data-lock-now @click=${() => emit(this, 'vw-lock-now')}>${t('popup.lock')}</button>
       </vw-setting-card>
 
       <vw-setting-card stacked heading=${t('options.security.masterPassword')} description=${t('options.security.masterPasswordDesc')}>

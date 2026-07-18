@@ -30,6 +30,9 @@ export const zhCN = {
 
   // --- auth / unlock ------------------------------------------------------------------------
   'auth.lockedTitle': '密屿已锁定',
+  'auth.welcomeBack': '欢迎回来',
+  'auth.lockedPrivacy': '密码库已锁定 · 内容已模糊保护',
+  'auth.masterPasswordUnlock': '改用主密码',
   'auth.unlockSubtitle': '输入主密码以解锁密钥库',
   'auth.masterPassword': '主密码',
   'auth.unlock': '解锁',
@@ -66,6 +69,8 @@ export const zhCN = {
   'popup.settings': '设置',
   'popup.lock': '锁定',
   'popup.search': '搜索密钥库',
+  'popup.searchCommand': '搜索，或输入 / 使用命令',
+  'popup.command': '命令',
   'popup.account': '账户',
   'popup.tools': '工具',
   'popup.health': '密码健康',
@@ -229,6 +234,9 @@ export const zhCN = {
   'options.account.syncing': '同步中…',
   'options.account.autoSync': '自动同步',
   'options.account.autoSyncDesc': '解锁与条目变更时自动同步',
+  'options.account.encryption': '端到端加密',
+  'options.account.encryptionDesc': '零知识架构 · AES-256 · PBKDF2 600,000 次',
+  'options.account.enabled': '已启用',
   'options.account.serverLabel': '服务器地址',
   'options.account.serverDesc': '你的 Vaultwarden / Bitwarden 服务端地址',
 
@@ -243,6 +251,8 @@ export const zhCN = {
   'options.security.changePassword': '修改主密码',
   'options.security.clipboard': '剪贴板自动清除',
   'options.security.clipboardDesc': '复制密码后自动清除剪贴板的时长',
+  'options.security.lockNow': '立即锁定密码库',
+  'options.security.lockNowDesc': '立即清除当前会话中的解密密钥',
   'options.lock.1m': '1 分钟',
   'options.lock.5m': '5 分钟',
   'options.lock.15m': '15 分钟',
@@ -358,6 +368,8 @@ export const zhCN = {
 
   // --- password health ----------------------------------------------------------------------
   'health.title': '密码健康',
+  'health.summaryTitle': '整体状况良好',
+  'health.summaryDesc': '{count} 个条目需要关注，处理后可进一步提升安全分',
   'health.check': '检查',
   'health.weak': '弱密码',
   'health.reused': '重复使用',

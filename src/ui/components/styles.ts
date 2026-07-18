@@ -13,15 +13,15 @@ export const controlStyles = css`
     align-items: center;
     justify-content: center;
     gap: 6px;
-    height: 34px;
-    padding: 0 14px;
+    min-height: 40px;
+    padding: 0 18px;
     border: 1px solid transparent;
-    border-radius: var(--vw-radius-control);
+    border-radius: 20px;
     background: transparent;
     color: var(--vw-ink);
     font-family: var(--vw-font-ui);
-    font-size: 12.5px;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 500;
     white-space: nowrap;
     cursor: pointer;
     transition: background-color var(--vw-dur-fast), border-color var(--vw-dur-fast), color var(--vw-dur-fast);
@@ -56,10 +56,10 @@ export const controlStyles = css`
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    width: 40px;
+    height: 40px;
     border: none;
-    border-radius: var(--vw-radius-chip);
+    border-radius: 20px;
     background: transparent;
     color: var(--vw-text-2);
     cursor: pointer;
@@ -75,17 +75,17 @@ export const controlStyles = css`
   /* Inputs --------------------------------------------------------------------------------- */
   .input {
     width: 100%;
-    height: 36px;
-    padding: 0 12px;
-    border: 1px solid transparent;
-    border-radius: var(--vw-radius-control);
-    background: var(--vw-fill);
+    height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--vw-line-3);
+    border-radius: 10px;
+    background: var(--vw-card);
     color: var(--vw-ink);
     font-family: var(--vw-font-ui);
     font-size: 13px;
   }
   .input::placeholder { color: var(--vw-placeholder); }
-  .input:focus { outline: none; border-color: var(--vw-accent); }
+  .input:focus { outline: none; border-color: var(--vw-accent); box-shadow: var(--vw-focus); }
 
   .input.bordered {
     background: var(--vw-card);
@@ -108,7 +108,7 @@ export const controlStyles = css`
 
   /* Scrollbar ------------------------------------------------------------------------------ */
   .scroll { overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--vw-scrollbar) transparent; }
-  .scroll::-webkit-scrollbar { width: 8px; }
+  .scroll::-webkit-scrollbar { width: 6px; }
   .scroll::-webkit-scrollbar-thumb {
     background: var(--vw-scrollbar);
     border-radius: 4px;

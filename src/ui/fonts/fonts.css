@@ -1,54 +1,37 @@
-/* MiYu bundled Latin webfonts. CJK glyphs fall back to the system stack (Segoe UI / system-ui),
-   matching the design's font stack. Copied to dist/ui/fonts/ by build.mjs; each page HTML links
-   this file as ../fonts/fonts.css, so the woff2 URLs below are same-directory. */
+/* Bundled Latin webfonts. CJK glyphs fall back to the system UI stack. */
 
 @font-face {
-  font-family: 'Instrument Sans';
+  font-family: 'Roboto';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('./instrument-sans-latin-400-normal.woff2') format('woff2');
+  src: url('./roboto-latin-400-normal.woff2') format('woff2');
 }
 @font-face {
-  font-family: 'Instrument Sans';
+  font-family: 'Roboto';
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url('./instrument-sans-latin-500-normal.woff2') format('woff2');
+  src: url('./roboto-latin-500-normal.woff2') format('woff2');
 }
 @font-face {
-  font-family: 'Instrument Sans';
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url('./instrument-sans-latin-600-normal.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'Instrument Sans';
+  font-family: 'Roboto';
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url('./instrument-sans-latin-700-normal.woff2') format('woff2');
+  src: url('./roboto-latin-700-normal.woff2') format('woff2');
 }
-
 @font-face {
-  font-family: 'JetBrains Mono';
+  font-family: 'Roboto Mono';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('./jetbrains-mono-latin-400-normal.woff2') format('woff2');
+  src: url('./roboto-mono-latin-400-normal.woff2') format('woff2');
 }
 @font-face {
-  font-family: 'JetBrains Mono';
+  font-family: 'Roboto Mono';
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url('./jetbrains-mono-latin-500-normal.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'JetBrains Mono';
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url('./jetbrains-mono-latin-600-normal.woff2') format('woff2');
+  src: url('./roboto-mono-latin-500-normal.woff2') format('woff2');
 }

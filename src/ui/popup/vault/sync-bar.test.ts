@@ -21,35 +21,34 @@ async function mount(over: Partial<VwSyncBar> = {}): Promise<VwSyncBar> {
   return el;
 }
 
-describe('vw-sync-bar', () => {
+describe('vw-sync-bar action rail', () => {
   afterEach(() => document.body.replaceChildren());
 
-  it('shows a relative "synced" label and a teal dot when idle', async () => {
-    const el = await mount({ syncing: false, lastSync: Date.now() });
-    expect(el.shadowRoot?.textContent).toContain('已同步');
-    expect(el.shadowRoot?.querySelector('.dot.syncing')).toBeNull();
+  it('renders the keyboard hint and five fixed actions', async () => {
+    const el = await mount();
+    expect(el.shadowRoot?.textContent).toContain('⌘L');
+    expect(el.shadowRoot?.querySelectorAll('button')).toHaveLength(5);
   });
 
-  it('spins the icon and shows the syncing label while syncing', async () => {
-    const el = await mount({ syncing: true, lastSync: Date.now() });
-    expect(el.shadowRoot?.textContent).toContain('正在同步');
-    expect(el.shadowRoot?.querySelector('.dot.syncing')).not.toBeNull();
-    expect(el.shadowRoot?.querySelector('button.spin')).not.toBeNull();
-  });
-
-  it('emits vw-sync-now on click when not already syncing', async () => {
-    const el = await mount({ syncing: false });
+  it.each([
+    ['vw-generator-toggle', 0],
+    ['vw-open-totp', 1],
+    ['vw-open-health', 2],
+    ['vw-open-settings', 3],
+    ['vw-add', 4],
+  ] as const)('emits %s from its action', async (event, index) => {
+    const el = await mount();
     const fired = vi.fn();
-    el.addEventListener('vw-sync-now', fired);
-    el.shadowRoot!.querySelector<HTMLButtonElement>('button')!.click();
+    el.addEventListener(event, fired);
+    el.shadowRoot!.querySelectorAll<HTMLButtonElement>('button')[index]!.click();
     expect(fired).toHaveBeenCalledTimes(1);
   });
 
-  it('does not emit while a sync is already in flight', async () => {
-    const el = await mount({ syncing: true });
-    const fired = vi.fn();
-    el.addEventListener('vw-sync-now', fired);
-    el.shadowRoot!.querySelector<HTMLButtonElement>('button')!.click();
-    expect(fired).not.toHaveBeenCalled();
+  it('marks the active generator, authenticator, and health routes', async () => {
+    const el = await mount({ generatorActive: true, totpActive: true, healthActive: true });
+    const buttons = el.shadowRoot!.querySelectorAll<HTMLButtonElement>('button');
+    expect(buttons[0]!.classList.contains('active')).toBe(true);
+    expect(buttons[1]!.classList.contains('active')).toBe(true);
+    expect(buttons[2]!.classList.contains('active')).toBe(true);
   });
 });

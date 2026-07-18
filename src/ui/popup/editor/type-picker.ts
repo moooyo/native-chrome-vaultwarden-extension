@@ -50,21 +50,25 @@ export class VwTypePicker extends LitElement {
       }
       .list {
         display: flex;
-        flex-direction: column;
-        gap: 8px;
+        flex-direction: row;
+        gap: 6px;
         padding: 4px 14px 16px;
         overflow-y: auto;
         min-height: 0;
       }
       .type-row {
         display: flex;
+        flex-direction: column;
         align-items: center;
-        gap: 12px;
-        width: 100%;
-        padding: 10px 12px;
-        border: 1px solid var(--vw-line-1);
-        border-radius: var(--vw-radius-card);
-        background: var(--vw-card);
+        justify-content: center;
+        gap: 6px;
+        flex: 1;
+        min-width: 0;
+        height: 82px;
+        padding: 8px 4px;
+        border: 1px solid var(--vw-line-3);
+        border-radius: 16px;
+        background: transparent;
         color: var(--vw-ink);
         font-family: var(--vw-font-ui);
         text-align: left;
@@ -72,8 +76,8 @@ export class VwTypePicker extends LitElement {
         transition: background-color var(--vw-dur-fast), border-color var(--vw-dur-fast);
       }
       .type-row:hover {
-        background: var(--vw-row-hover);
-        border-color: var(--vw-line-3);
+        background: var(--pc);
+        border-color: transparent;
       }
       .type-row:focus-visible {
         outline: none;
@@ -84,11 +88,11 @@ export class VwTypePicker extends LitElement {
         align-items: center;
         justify-content: center;
         flex: none;
-        width: 34px;
-        height: 34px;
-        border-radius: var(--vw-radius-control);
-        background: var(--vw-teal-10);
-        color: var(--vw-teal-text);
+        width: 30px;
+        height: 30px;
+        border-radius: 15px;
+        background: var(--vw-fill);
+        color: var(--p);
       }
       .tile svg {
         width: 18px;
@@ -97,12 +101,12 @@ export class VwTypePicker extends LitElement {
       .name {
         flex: 1;
         min-width: 0;
-        font-size: 13.5px;
-        font-weight: 600;
+        font-size: 11.5px;
+        font-weight: 500;
+        text-align: center;
       }
       .chev {
-        display: inline-flex;
-        color: var(--vw-chevron);
+        display: none;
       }
       .chev svg {
         width: 16px;

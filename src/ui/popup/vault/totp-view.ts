@@ -5,8 +5,8 @@ import { tileColor, tileInitial } from '../../components/tile-color.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import type { TotpListEntry } from '../../../core/vault/models.js';
 
-/** Ring geometry: a 26px SVG, radius 11 → this circumference drives the draining arc. */
-const RING_R = 11;
+/** Ring geometry: a compact 20px SVG matching the handoff countdown. */
+const RING_R = 8;
 const RING_C = 2 * Math.PI * RING_R;
 /** Below this many seconds the ring + count warm to amber to signal an imminent refresh. */
 const URGENT_S = 5;
@@ -41,39 +41,43 @@ export class VwTotpView extends LitElement {
   static override styles = [
     themeTokens,
     css`
-      :host { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-      .list { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 8px; scrollbar-width: thin; scrollbar-color: var(--vw-scrollbar) transparent; }
-      .list::-webkit-scrollbar { width: 8px; }
-      .list::-webkit-scrollbar-thumb { background: var(--vw-scrollbar); border-radius: 4px; border: 2px solid transparent; background-clip: content-box; }
-
-      .group-label { font-size: 11px; font-weight: 600; color: var(--vw-muted); padding: 10px 6px 4px; letter-spacing: 0.01em; }
+      :host { display:flex; flex-direction:column; min-height:0; flex:1; }
+      .view-head { display:flex; align-items:center; min-height:44px; padding:4px 14px 0; }
+      .view-title { display:flex; align-items:center; gap:7px; flex:1; color:var(--vw-ink); font-size:12.5px; font-weight:500; }
+      .view-title svg { width:17px; height:17px; color:var(--p); }
+      .back { height:30px; padding:0 10px; border:0; border-radius:15px; background:transparent; color:var(--p); font:500 11.5px/1 var(--vw-font-ui); cursor:pointer; }
+      .back:hover { background:var(--vw-icon-hover); }
+      .list { flex:1; min-height:0; overflow-y:auto; padding:0 8px 8px; scrollbar-width:thin; scrollbar-color:var(--vw-scrollbar) transparent; }
+      .list::-webkit-scrollbar { width:6px; }
+      .list::-webkit-scrollbar-thumb { background:var(--vw-scrollbar); border-radius:3px; }
+      .group-label { font-size:11px; font-weight:500; color:var(--vw-muted); padding:8px 8px 4px; }
 
       .row {
-        display: flex; align-items: center; gap: 11px;
-        width: 100%; padding: 9px 8px; border: none; background: transparent;
-        border-radius: var(--vw-radius-control); cursor: pointer; text-align: left; font: inherit; color: inherit;
-        animation: mvStag 0.3s ease-out both;
+        display:flex; align-items:center; gap:10px; width:100%; min-height:50px; padding:7px 8px;
+        border:0; border-radius:12px; background:transparent; color:inherit;
+        cursor:pointer; text-align:left; font:inherit; animation:mvStag .24s ease-out both;
       }
       .row:hover { background: var(--vw-row-hover); }
       .row:focus-visible { outline: none; box-shadow: var(--vw-focus); }
 
-      .tile { width: 34px; height: 34px; border-radius: var(--vw-radius-control); display: grid; place-items: center; color: #fff; font-size: 13px; font-weight: 700; flex: none; }
+      .tile { width:32px; height:32px; border-radius:10px; display:grid; place-items:center; color:#fff; font-size:13px; font-weight:500; flex:none; }
       .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-      .name { font-size: 13px; font-weight: 600; color: var(--vw-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .user { font-size: 11.5px; color: var(--vw-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .name { font-size:13px; font-weight:500; color:var(--vw-ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .user { font-size:11.5px; color:var(--vw-text-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
       .code {
-        font-family: var(--vw-font-mono); font-size: 16.5px; font-weight: 600; letter-spacing: 0.04em;
-        color: var(--vw-teal-text); font-variant-numeric: tabular-nums; flex: none;
+        font-family:var(--vw-font-mono); font-size:17px; font-weight:500; letter-spacing:.04em;
+        color:var(--p); font-variant-numeric:tabular-nums; flex:none;
       }
       .row:hover .code { color: var(--vw-accent); }
 
-      .ring { flex: none; width: 28px; height: 28px; transform: rotate(-90deg); }
-      .ring-track { fill: none; stroke: var(--vw-track); stroke-width: 2.75; }
-      .ring-arc { fill: none; stroke: var(--vw-teal-text); stroke-width: 2.75; stroke-linecap: round; transition: stroke-dashoffset 1s linear, stroke 0.3s; }
-      .ring-num { font-family: var(--vw-font-mono); font-size: 9.5px; font-weight: 600; fill: var(--vw-muted); font-variant-numeric: tabular-nums; }
+      .countdown { display:flex; align-items:center; gap:5px; flex:none; }
+      .ring { flex:none; width:20px; height:20px; transform:rotate(-90deg); }
+      .ring-track { fill:none; stroke:var(--vw-track); stroke-width:2.5; }
+      .ring-arc { fill:none; stroke:var(--p); stroke-width:2.5; stroke-linecap:round; transition:stroke-dashoffset 1s linear, stroke .3s; }
+      .seconds { width:22px; color:var(--vw-muted); font:400 10.5px/1 var(--vw-font-ui); font-variant-numeric:tabular-nums; }
       .row.urgent .ring-arc { stroke: #e0a400; }
-      .row.urgent .ring-num { fill: #e0a400; }
+      .row.urgent .seconds { color:#b06000; }
 
       .empty { padding: 48px 20px; text-align: center; color: var(--vw-muted); font-size: 12.5px; }
     `,
@@ -94,13 +98,19 @@ export class VwTotpView extends LitElement {
   }
 
   protected override render() {
+    const heading = html`
+      <div class="view-head">
+        <span class="view-title">${uiShield()}${t('popup.authenticator')} · ${this.entries.length}</span>
+        <button type="button" class="back" @click=${() => this.emit('vw-item-back')}>← ${t('common.back')}</button>
+      </div>
+    `;
     if (this.entries.length === 0) {
-      return html`<div class="list"><div class="empty">${t('totp.empty')}</div></div>`;
+      return html`${heading}<div class="list"><div class="empty">${t('totp.empty')}</div></div>`;
     }
     const currentSet = new Set(this.currentIds);
     const current = this.entries.filter((e) => currentSet.has(e.id));
     return html`
-      <div class="list">
+      ${heading}<div class="list">
         ${current.length
           ? html`
               <div class="group-label">${t('totp.currentSite')}</div>
@@ -128,15 +138,20 @@ export class VwTotpView extends LitElement {
           ${entry.username ? html`<span class="user">${entry.username}</span>` : nothing}
         </span>
         <span class="code">${this.grouped(entry.code)}</span>
-        <svg class="ring" viewBox="0 0 26 26" aria-hidden="true">
-          <circle class="ring-track" cx="13" cy="13" r=${RING_R}></circle>
-          <circle class="ring-arc" cx="13" cy="13" r=${RING_R}
-            stroke-dasharray=${RING_C} stroke-dashoffset=${offset}></circle>
-          ${svg`<text class="ring-num" x="13" y="13" transform="rotate(90 13 13)" text-anchor="middle" dominant-baseline="central">${remaining}</text>`}
-        </svg>
+        <span class="countdown">
+          <svg class="ring" viewBox="0 0 20 20" aria-hidden="true">
+            <circle class="ring-track" cx="10" cy="10" r=${RING_R}></circle>
+            <circle class="ring-arc" cx="10" cy="10" r=${RING_R} stroke-dasharray=${RING_C} stroke-dashoffset=${offset}></circle>
+          </svg>
+          <span class="seconds">${remaining}s</span>
+        </span>
       </button>
     `;
   }
+}
+
+function uiShield() {
+  return svg`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>`;
 }
 
 customElements.define('vw-totp-view', VwTotpView);

@@ -10,7 +10,18 @@ async function copyStatic() {
   await cp('src/manifest.json', join(outdir, 'manifest.json'));
   await mkdir(join(outdir, 'ui'), { recursive: true });
   await cp('src/icons', join(outdir, 'icons'), { recursive: true });
-  await cp('src/ui/fonts', join(outdir, 'ui', 'fonts'), { recursive: true });
+  await mkdir(join(outdir, 'ui', 'fonts'), { recursive: true });
+  await cp('src/ui/fonts/fonts.css', join(outdir, 'ui', 'fonts', 'fonts.css'));
+  const fontFiles = [
+    ['@fontsource/roboto', 'roboto-latin-400-normal.woff2'],
+    ['@fontsource/roboto', 'roboto-latin-500-normal.woff2'],
+    ['@fontsource/roboto', 'roboto-latin-700-normal.woff2'],
+    ['@fontsource/roboto-mono', 'roboto-mono-latin-400-normal.woff2'],
+    ['@fontsource/roboto-mono', 'roboto-mono-latin-500-normal.woff2'],
+  ];
+  await Promise.all(fontFiles.map(([pkg, file]) =>
+    cp(join('node_modules', pkg, 'files', file), join(outdir, 'ui', 'fonts', file)),
+  ));
   await cp('src/offscreen.html', join(outdir, 'offscreen.html'));
   for (const page of ['popup', 'options', 'receive']) {
     await mkdir(join(outdir, 'ui', page), { recursive: true });

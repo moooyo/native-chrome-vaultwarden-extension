@@ -20,15 +20,15 @@ export const NOTICE_STYLES = `
     .bar {
       position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 2147483647;
       max-width: min(360px, calc(100vw - 32px)); padding: 8px 14px;
-      font: 500 11.5px/1.5 "Instrument Sans", "Segoe UI", system-ui, sans-serif;
-      color: #fff; background: rgba(22,24,29,.92); border-radius: 16px;
-      box-shadow: 0 8px 22px rgba(20,24,32,.18);
+      font:500 11.5px/1.5 "Roboto", "Segoe UI", system-ui, sans-serif;
+      color:#f5eff7; background:#322f35; border-radius:10px;
+      box-shadow:0 8px 22px rgba(20,24,32,.18);
       overflow-wrap: anywhere; word-break: break-word;
       animation: mvUp .18s ease-out;
     }
     @keyframes mvUp { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
     @media (prefers-color-scheme: dark) {
-      .bar { color: #16181D; background: rgba(242,243,245,.95); box-shadow: 0 8px 22px rgba(0,0,0,.4); }
+      .bar { color:#1f1f1f; background:#e3e3e3; box-shadow:0 8px 22px rgba(0,0,0,.4); }
     }
     @media (prefers-reduced-motion: reduce) { .bar { animation: none; } }
   `;

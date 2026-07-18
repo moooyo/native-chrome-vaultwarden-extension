@@ -32,30 +32,31 @@ export class VwToggle extends LitElement {
       button {
         position: relative;
         width: 40px;
-        height: 20px;
+        height: 24px;
         padding: 0;
         border: none;
-        border-radius: 10px;
+        border: 1px solid var(--otl);
+        border-radius: 12px;
         background: var(--vw-toggle-off);
         cursor: pointer;
         transition: background-color var(--vw-dur-fast);
       }
-      button.sm { width: 36px; height: 19px; }
-      button[aria-checked='true'] { background: var(--vw-toggle-on); }
+      button.sm { width:36px; height:22px; }
+      button[aria-checked='true'] { border-color:transparent; background:var(--vw-toggle-on); }
       button:disabled { opacity: 0.5; cursor: default; }
       .knob {
         position: absolute;
         top: 3px;
         left: 3px;
-        width: 14px;
-        height: 14px;
+        width: 16px;
+        height: 16px;
         border-radius: 50%;
-        background: #fff;
+        background: var(--otl);
         box-shadow: var(--vw-knob-shadow);
         transition: left var(--vw-dur-fast);
       }
-      button.sm .knob { width: 13px; height: 13px; }
-      button[aria-checked='true'] .knob { left: 23px; }
+      button.sm .knob { width:14px; height:14px; }
+      button[aria-checked='true'] .knob { left:19px; background:#fff; }
       button:focus-visible { outline: none; box-shadow: var(--vw-focus); }
     `,
   ];

@@ -26,6 +26,9 @@ export const en: Record<MessageKey, string> = {
 
   // auth
   'auth.lockedTitle': 'MiYu is locked',
+  'auth.welcomeBack': 'Welcome back',
+  'auth.lockedPrivacy': 'Vault locked · content blurred for privacy',
+  'auth.masterPasswordUnlock': 'Use master password',
   'auth.unlockSubtitle': 'Enter your master password to unlock the vault',
   'auth.masterPassword': 'Master password',
   'auth.unlock': 'Unlock',
@@ -62,6 +65,8 @@ export const en: Record<MessageKey, string> = {
   'popup.settings': 'Settings',
   'popup.lock': 'Lock',
   'popup.search': 'Search vault',
+  'popup.searchCommand': 'Search, or type / for commands',
+  'popup.command': 'Command',
   'popup.account': 'Account',
   'popup.tools': 'Tools',
   'popup.health': 'Password health',
@@ -224,6 +229,9 @@ export const en: Record<MessageKey, string> = {
   'options.account.syncing': 'Syncing…',
   'options.account.autoSync': 'Auto sync',
   'options.account.autoSyncDesc': 'Sync on unlock and after item changes',
+  'options.account.encryption': 'End-to-end encryption',
+  'options.account.encryptionDesc': 'Zero knowledge · AES-256 · PBKDF2 600,000 rounds',
+  'options.account.enabled': 'Enabled',
   'options.account.serverLabel': 'Server URL',
   'options.account.serverDesc': 'Your Vaultwarden / Bitwarden server address',
 
@@ -238,6 +246,8 @@ export const en: Record<MessageKey, string> = {
   'options.security.changePassword': 'Change master password',
   'options.security.clipboard': 'Clear clipboard',
   'options.security.clipboardDesc': 'Automatically clear copied passwords after this long',
+  'options.security.lockNow': 'Lock vault now',
+  'options.security.lockNowDesc': 'Clear decrypted session keys immediately',
   'options.lock.1m': '1 minute',
   'options.lock.5m': '5 minutes',
   'options.lock.15m': '15 minutes',
@@ -353,6 +363,8 @@ export const en: Record<MessageKey, string> = {
 
   // health
   'health.title': 'Password health',
+  'health.summaryTitle': 'Overall health is good',
+  'health.summaryDesc': '{count} items need attention to improve your score',
   'health.check': 'Check',
   'health.weak': 'Weak',
   'health.reused': 'Reused',

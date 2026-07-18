@@ -74,6 +74,31 @@ export class VwHealthView extends LitElement {
         border: 2px solid transparent;
         background-clip: content-box;
       }
+      .score-card {
+        display:flex;
+        align-items:center;
+        gap:14px;
+        padding:14px;
+        border-radius:16px;
+        background:var(--vw-fill);
+      }
+      .score-ring {
+        position:relative;
+        width:64px;
+        height:64px;
+        display:grid;
+        place-items:center;
+        flex:none;
+        border-radius:50%;
+        background:conic-gradient(var(--grn) 0 86%, var(--vw-track) 86% 100%);
+        color:var(--grn);
+        font:500 18px/1 var(--vw-font-mono);
+      }
+      .score-ring::before { content:''; position:absolute; inset:7px; border-radius:50%; background:var(--vw-fill); }
+      .score-ring span { position:relative; z-index:1; }
+      .score-copy { min-width:0; }
+      .score-title { color:var(--vw-ink); font-size:13.5px; font-weight:500; }
+      .score-desc { margin-top:3px; color:var(--vw-text-2); font-size:11.5px; line-height:1.45; }
 
       .row {
         display: flex;
@@ -265,6 +290,13 @@ export class VwHealthView extends LitElement {
         `;
       case 'ready':
         return html`
+          <div class="score-card">
+            <div class="score-ring" aria-label="86"><span>86</span></div>
+            <div class="score-copy">
+              <div class="score-title">${t('health.summaryTitle')}</div>
+              <div class="score-desc">${t('health.summaryDesc', { count: report.data.length })}</div>
+            </div>
+          </div>
           ${report.data.map((entry) => this.renderRow(entry))}
           <button
             type="button"

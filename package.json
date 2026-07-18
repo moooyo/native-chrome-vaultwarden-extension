@@ -26,6 +26,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@fontsource/roboto": "^5.2.8",
+    "@fontsource/roboto-mono": "^5.2.8",
     "@playwright/test": "^1.61.1",
     "@types/node": "^26.0.1",
     "@types/webextension-polyfill": "^0.12.5",

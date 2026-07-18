@@ -6,7 +6,7 @@ import { uiIcon } from '../../ui/components/icon.js';
 // roots). The MiYu palette is therefore redeclared LOCALLY on `:host` as `--mv-*` custom properties,
 // with a `@media (prefers-color-scheme: dark)` block. `:host{all:initial}` isolates us from the
 // host page's cascade (it does not reset custom properties). Values mirror `paletteTokens` in
-// `src/ui/components/tokens.ts`; the moss logo block (`--mv-teal`) is identical in both themes.
+// `src/ui/components/tokens.ts`; the brand block follows the Material primary color.
 //
 // Content scripts run in an isolated world with no custom-element registry (`customElements` is null;
 // Chromium 41118431), so these surfaces render via lit-html `render()` into a closed shadow root
@@ -16,40 +16,41 @@ export const DIALOG_STYLES = `
   :host {
     all: initial;
     --mv-overlay: rgba(18, 22, 30, 0.28);
-    --mv-panel: #fcfcfb;
-    --mv-ink: #16181d;
-    --mv-teal: #0e8a72;
-    --mv-teal-text: #0b7a65;
-    --mv-teal-10: rgba(14, 138, 114, 0.1);
-    --mv-muted: #8a8f99;
-    --mv-faint: #9aa0aa;
-    --mv-text-2: #565b66;
-    --mv-line: rgba(22, 24, 29, 0.09);
-    --mv-row-hover: #f2f2ef;
-    --mv-chevron: #c4c7cc;
-    --mv-primary-bg: #16181d;
-    --mv-primary-bg-hover: #2a2d34;
+    --mv-panel:#ffffff;
+    --mv-ink:#1f1f1f;
+    --mv-teal:#0b57d0;
+    --mv-teal-text:#0b57d0;
+    --mv-teal-10:rgba(11,87,208,.1);
+    --mv-muted:#747775;
+    --mv-faint:#80868b;
+    --mv-text-2:#474747;
+    --mv-line:#c4c7c5;
+    --mv-row-hover:rgba(31,31,31,.07);
+    --mv-chevron:#747775;
+    --mv-primary-bg:#0b57d0;
+    --mv-primary-bg-hover:#0842a0;
     --mv-primary-fg: #ffffff;
-    --mv-dialog-shadow: 0 24px 56px rgba(20, 24, 32, 0.28);
-    --mv-font-ui: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
-    --mv-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    --mv-dialog-shadow:0 8px 28px rgba(0,0,0,.2);
+    --mv-font-ui:'Roboto','Segoe UI',system-ui,sans-serif;
+    --mv-font-mono:'Roboto Mono',ui-monospace,monospace;
   }
   @media (prefers-color-scheme: dark) {
     :host {
-      --mv-panel: #1f2229;
-      --mv-ink: #f2f3f5;
-      --mv-teal-text: #45d6b5;
-      --mv-teal-10: rgba(69, 214, 181, 0.14);
-      --mv-muted: #9aa0ac;
-      --mv-faint: #7b818b;
-      --mv-text-2: #9aa0ac;
-      --mv-line: rgba(255, 255, 255, 0.09);
-      --mv-row-hover: rgba(255, 255, 255, 0.05);
-      --mv-chevron: #565b66;
-      --mv-primary-bg: #f2f3f5;
-      --mv-primary-bg-hover: #ffffff;
-      --mv-primary-fg: #16181d;
-      --mv-dialog-shadow: 0 24px 56px rgba(0, 0, 0, 0.5);
+      --mv-panel:#1f1f1f;
+      --mv-ink:#e3e3e3;
+      --mv-teal:#a8c7fa;
+      --mv-teal-text:#a8c7fa;
+      --mv-teal-10:rgba(168,199,250,.14);
+      --mv-muted:#c4c7c5;
+      --mv-faint:#8e918f;
+      --mv-text-2:#c4c7c5;
+      --mv-line:#47494c;
+      --mv-row-hover:rgba(227,227,227,.09);
+      --mv-chevron:#8e918f;
+      --mv-primary-bg:#a8c7fa;
+      --mv-primary-bg-hover:#d3e3fd;
+      --mv-primary-fg:#062e6f;
+      --mv-dialog-shadow:0 8px 28px rgba(0,0,0,.5);
     }
   }
   * { box-sizing: border-box; }
@@ -72,10 +73,10 @@ export const DIALOG_STYLES = `
     background: var(--mv-panel);
     color: var(--mv-ink);
     border: 1px solid var(--mv-line);
-    border-radius: 16px;
+    border-radius:20px;
     box-shadow: var(--mv-dialog-shadow);
     overflow: hidden;
-    animation: mvIn 0.18s ease-out;
+    animation:mvIn .22s cubic-bezier(.2,.9,.3,1);
   }
   @keyframes mvIn {
     from { opacity: 0; transform: translateY(-5px); }
@@ -93,6 +94,7 @@ export const DIALOG_STYLES = `
     place-items: center;
     flex: none;
   }
+  .logo svg { width:11px; height:11px; fill:#fff; stroke:none; }
   .logo-glyph { position: relative; width: 8px; height: 8px; }
   .logo-ring { position: absolute; inset: 0; border: 1.5px solid #fff; border-radius: 50%; }
   .logo-dot { position: absolute; left: 3px; top: 3px; width: 2px; height: 2px; border-radius: 50%; background: #fff; }
@@ -128,12 +130,12 @@ export const DIALOG_STYLES = `
     width: 100%;
     height: 40px;
     border: none;
-    border-radius: 10px;
+    border-radius:20px;
     background: var(--mv-primary-bg);
     color: var(--mv-primary-fg);
     font-family: inherit;
     font-size: 13px;
-    font-weight: 600;
+    font-weight:500;
     cursor: pointer;
     transition: background-color 0.15s;
   }
@@ -195,7 +197,7 @@ export const DIALOG_STYLES = `
   }
   .footer:hover { background: var(--mv-row-hover); }
 
-  button:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(14, 138, 114, 0.55); }
+  button:focus-visible { outline:none; box-shadow:0 0 0 3px rgba(11,87,208,.28); }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
 `;
 
@@ -253,7 +255,7 @@ function renderHeader(rpId: string): TemplateResult {
   return html`
     <div class="header">
       <span class="logo" aria-hidden="true">
-        <span class="logo-glyph"><span class="logo-ring"></span><span class="logo-dot"></span></span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 15.5a5.5 5.5 0 1 1 4.9-8H22v4h-2v2h-3v2h-4.6a5.5 5.5 0 0 1-4.9 3Zm0-3.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
       </span>
       <span class="brand">密屿</span>
       <span class="domain">${rpId}</span>

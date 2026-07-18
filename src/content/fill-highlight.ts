@@ -1,4 +1,4 @@
-// mvFill (animations-handoff.md): a moss-green wash that flashes over an input the moment it is
+// mvFill: a Material-blue wash that flashes over an input the moment it is
 // autofilled, then fades — signalling "this field was just filled". Implemented with the Web Animations
 // API so it never permanently touches the input's own styles; feature-guarded because Element.animate is
 // absent in the happy-dom test environment, and skipped under prefers-reduced-motion.
@@ -15,8 +15,8 @@ export function flashFill(input: HTMLElement, delayMs = 0): void {
   } catch {
     /* matchMedia unavailable — proceed */
   }
-  const tinted = 'inset 0 0 0 999px rgba(14,138,114,.20), 0 0 0 2px rgba(14,138,114,.45)';
-  const clear = 'inset 0 0 0 999px rgba(14,138,114,0), 0 0 0 2px rgba(14,138,114,0)';
+  const tinted = 'inset 0 0 0 999px rgba(11,87,208,.16), 0 0 0 2px rgba(11,87,208,.42)';
+  const clear = 'inset 0 0 0 999px rgba(11,87,208,0), 0 0 0 2px rgba(11,87,208,0)';
   input.animate(
     [
       { boxShadow: tinted, offset: 0 },
@@ -27,7 +27,7 @@ export function flashFill(input: HTMLElement, delayMs = 0): void {
   );
 }
 
-/** mvPop (animations-handoff.md, design 2c): a small moss check badge that pops in at the just-filled
+/** mvPop: a small primary-color check badge that pops in at the just-filled
  *  input's top-right corner as post-fill confirmation, then fades and tears itself down. Overlay-only
  *  (position:fixed, pointer-events:none), feature-guarded and reduced-motion-aware like flashFill. */
 export function flashFillCheck(input: HTMLElement): void {
@@ -42,7 +42,7 @@ export function flashFillCheck(input: HTMLElement): void {
   const badge = document.createElement('div');
   badge.setAttribute('aria-hidden', 'true');
   badge.style.cssText =
-    'position:fixed; z-index:2147483647; width:22px; height:22px; border-radius:6px; background:#0E8A72;'
+    'position:fixed; z-index:2147483647; width:22px; height:22px; border-radius:6px; background:#0b57d0;'
     + ' color:#fff; display:grid; place-items:center; pointer-events:none; box-shadow:0 2px 6px rgba(20,24,32,.25);'
     + ' font:700 13px/1 system-ui,-apple-system,sans-serif;';
   badge.textContent = '✓';

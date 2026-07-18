@@ -487,6 +487,13 @@ export class VwGeneratorView extends LitElement {
           </button>
         </div>
 
+        <vw-segmented
+          data-mode
+          .options=${modes}
+          .value=${this.mode}
+          @vw-segmented-change=${(e: CustomEvent<{ id: string }>) => this.setMode(e.detail.id as GenMode)}
+        ></vw-segmented>
+
         <div class="result">
           <div class="password" data-output>${this.renderPassword()}</div>
           <div class="strength">
@@ -498,13 +505,6 @@ export class VwGeneratorView extends LitElement {
         ${this.renderSizeControl()}
 
         ${this.renderToggles()}
-
-        <vw-segmented
-          data-mode
-          .options=${modes}
-          .value=${this.mode}
-          @vw-segmented-change=${(e: CustomEvent<{ id: string }>) => this.setMode(e.detail.id as GenMode)}
-        ></vw-segmented>
 
         <div class="actions">
           <button type="button" class="copy" data-copy @click=${() => this.copy()}>${uiIcon('copy')}<span>${t('gen.copy')}</span></button>

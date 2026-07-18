@@ -39,12 +39,12 @@ export class VwSelect extends LitElement {
       select {
         appearance: none;
         -webkit-appearance: none;
-        height: 30px;
+        height: 40px;
         min-width: 92px;
         padding: 0 30px 0 11px;
         border: 1px solid var(--vw-line-3);
-        border-radius: var(--vw-radius-input);
-        background: var(--vw-card);
+        border-radius:20px;
+        background:var(--vw-card);
         color: var(--vw-ink);
         font-family: var(--vw-font-ui);
         font-size: 12px;

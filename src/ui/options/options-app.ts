@@ -35,14 +35,14 @@ import type {
 } from './types.js';
 
 const RAIL: OptionsNavItem[] = [
-  { id: 'account', labelKey: 'options.nav.account' },
-  { id: 'security', labelKey: 'options.nav.security' },
-  { id: 'autofill', labelKey: 'options.nav.autofill' },
-  { id: 'generator', labelKey: 'options.nav.generator' },
-  { id: 'send', labelKey: 'options.nav.send' },
-  { id: 'appearance', labelKey: 'options.nav.appearance' },
-  { id: 'data', labelKey: 'options.nav.data' },
-  { id: 'about', labelKey: 'options.nav.about' },
+  { id: 'account', labelKey: 'options.nav.account', icon: 'user' },
+  { id: 'security', labelKey: 'options.nav.security', icon: 'lock' },
+  { id: 'autofill', labelKey: 'options.nav.autofill', icon: 'key' },
+  { id: 'generator', labelKey: 'options.nav.generator', icon: 'wand' },
+  { id: 'send', labelKey: 'options.nav.send', icon: 'link' },
+  { id: 'appearance', labelKey: 'options.nav.appearance', icon: 'sun' },
+  { id: 'data', labelKey: 'options.nav.data', icon: 'file' },
+  { id: 'about', labelKey: 'options.nav.about', icon: 'alert' },
 ];
 
 function isPasswordProtectedExport(content: string): boolean {
@@ -469,6 +469,18 @@ export class VwOptionsApp extends LitElement {
     }
   }
 
+  private async handleLockNow(): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const response = await this.deps.request({ type: 'auth.lock' });
+      if (response.ok) this.locked = true;
+      else this.securityStatus = { message: response.error.message, tone: 'danger' };
+    } finally {
+      this.pending = false;
+    }
+  }
+
   // --- render --------------------------------------------------------------------------------
   private renderSection() {
     switch (this.selected) {
@@ -531,7 +543,8 @@ export class VwOptionsApp extends LitElement {
         @vw-sync-now=${() => void this.handleSync()}
         @vw-autofill-save=${(e: CustomEvent<AutofillSaveDetail>) => void this.handleAutofillSave(e)}
         @vw-lock-timeout-save=${(e: CustomEvent<LockTimeoutSaveDetail>) => void this.handleLockTimeoutSave(e)}
-        @vw-security-save=${(e: CustomEvent<SecuritySaveDetail>) => void this.handleSecuritySave(e)}
+         @vw-security-save=${(e: CustomEvent<SecuritySaveDetail>) => void this.handleSecuritySave(e)}
+         @vw-lock-now=${() => void this.handleLockNow()}
         @vw-change-password=${(e: CustomEvent<ChangePasswordDetail>) => void this.handleChangePassword(e)}
         @vw-send-create=${(e: CustomEvent<SendCreateDetail>) => void this.handleSendCreate(e)}
         @vw-send-delete=${(e: CustomEvent<SendDeleteDetail>) => void this.handleSendDelete(e)}

@@ -31,54 +31,56 @@ export const SAVE_BAR_STYLES = `
     :host { all: initial; }
     :host {
       --mi-panel: #fff;
-      --mi-ink: #16181D;
-      --mi-ink-hover: #2A2D34;
+      --mi-ink:#1f1f1f;
+      --mi-ink-hover:#0842a0;
       --mi-on-ink: #fff;
-      --mi-text-2: #565B66;
-      --mi-teal: #0E8A72;
-      --mi-line: rgba(22,24,29,.09);
-      --mi-row-hover: #F2F2EF;
-      --mi-shadow: 0 16px 40px rgba(20,24,32,.16);
+      --mi-text-2:#474747;
+      --mi-teal:#0b57d0;
+      --mi-line:#c4c7c5;
+      --mi-row-hover:rgba(31,31,31,.07);
+      --mi-shadow:0 10px 32px rgba(0,0,0,.24);
     }
     * { box-sizing: border-box; }
     .bar {
-      position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
-      display: flex; align-items: center; gap: 12px;
-      max-width: min(560px, calc(100vw - 24px));
-      font: 400 14px/1.4 "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+      position:fixed; top:14px; right:14px;
+      display:grid; grid-template-columns:22px 1fr; align-items:center; gap:8px 9px;
+      width:252px; max-width:calc(100vw - 28px);
+      font:400 14px/1.4 "Roboto", "Segoe UI", system-ui, sans-serif;
       color: var(--mi-ink); background: var(--mi-panel);
       border: 1px solid var(--mi-line); border-radius: 14px;
       box-shadow: var(--mi-shadow);
       padding: 10px 12px; z-index: 2147483647;
-      animation: mvIn .18s ease-out;
+      animation:mvSheet .25s cubic-bezier(.2,.9,.3,1);
     }
-    @keyframes mvIn { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+    @keyframes mvSheet { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:none; } }
 
     /* Concentric-circle mini logo on a moss-green block (identical in light + dark). */
-    .logo { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: #0E8A72; flex: none; }
+    .logo { display:grid; place-items:center; width:22px; height:22px; border-radius:7px; background:#0b57d0; flex:none; }
+    .logo svg { width:14px; height:14px; fill:#fff; stroke:none; }
     .glyph { position: relative; width: 11px; height: 11px; }
     .ring { position: absolute; inset: 0; border: 2px solid #fff; border-radius: 50%; }
     .dot { position: absolute; left: 4px; top: 4px; width: 3px; height: 3px; border-radius: 50%; background: #fff; }
 
-    .msg { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; color: var(--mi-ink); }
-    button { font: inherit; font-size: 12.5px; font-weight: 600; border-radius: 9px; padding: 7px 14px; cursor: pointer; border: 1px solid transparent; flex: none; }
-    .act { background: var(--mi-ink); color: var(--mi-on-ink); }
+    .msg { min-width:0; overflow-wrap:anywhere; font-size:12.5px; color:var(--mi-ink); }
+    button { font:inherit; font-size:12px; font-weight:500; border-radius:17px; padding:9px 14px; cursor:pointer; border:1px solid transparent; }
+    .act { grid-column:1 / 3; background:#0b57d0; color:#fff; }
     .act:hover { background: var(--mi-ink-hover); }
-    .dismiss { background: transparent; color: var(--mi-text-2); padding: 7px 10px; }
+    .dismiss { grid-column:1 / 3; background:transparent; color:var(--mi-text-2); padding:5px 10px; }
     .dismiss:hover { color: var(--mi-ink); background: var(--mi-row-hover); }
     button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--mi-teal); }
 
     @media (prefers-color-scheme: dark) {
       :host {
-        --mi-panel: #1F2229;
-        --mi-ink: #F2F3F5;
-        --mi-ink-hover: #fff;
-        --mi-on-ink: #16181D;
-        --mi-text-2: #9AA0AC;
-        --mi-line: rgba(255,255,255,.09);
-        --mi-row-hover: rgba(255,255,255,.05);
-        --mi-shadow: 0 18px 48px rgba(0,0,0,.5);
+        --mi-panel:#1f1f1f;
+        --mi-ink:#e3e3e3;
+        --mi-ink-hover:#d3e3fd;
+        --mi-on-ink:#062e6f;
+        --mi-text-2:#c4c7c5;
+        --mi-line:#47494c;
+        --mi-row-hover:rgba(227,227,227,.09);
+        --mi-shadow:0 10px 32px rgba(0,0,0,.5);
       }
+      .act { background:#a8c7fa; color:#062e6f; }
     }
     @media (prefers-reduced-motion: reduce) { .bar { animation: none; } }
   `;
@@ -90,7 +92,7 @@ export function renderSaveBar(state: SaveBarState, handlers: SaveBarHandlers): T
   // label / aria strings are hardcoded in Chinese here (message + actionLabel come from the caller).
   return html`
     <div class="bar" role="dialog" aria-label="保存到密屿">
-      <span class="logo"><span class="glyph"><span class="ring"></span><span class="dot"></span></span></span>
+      <span class="logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 15.5a5.5 5.5 0 1 1 4.9-8H22v4h-2v2h-3v2h-4.6a5.5 5.5 0 0 1-4.9 3Zm0-3.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg></span>
       <span class="msg">${state.message}</span>
       <button type="button" class="act" id="vw-save-act" @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onAction?.(); }}>${state.actionLabel}</button>
       <button type="button" class="dismiss" id="vw-save-dismiss" aria-label="关闭" @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onDismiss?.(); }}>暂不</button>

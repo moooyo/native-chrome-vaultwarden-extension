@@ -1,20 +1,20 @@
 /* Popup document frame. All UI, layout, and theming live inside the Lit root (`vw-popup-app`) and
-   its components; this only sizes the popup window to the MiYu 372×560 panel, loads the bundled
+   its components; this only sizes the popup window to the handoff's 400×600 panel, loads the bundled
    fonts, and paints a theme-aware backdrop so there is no flash before the shadow tree renders. */
 
 html { color-scheme: light dark; overflow: hidden; }
 
 body {
   margin: 0;
-  width: 372px;
-  height: 560px;
+  width: 400px;
+  height: 600px;
   overflow: hidden;
-  font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
-  background: #fcfcfb;
+  font-family: 'Roboto', 'Segoe UI', system-ui, sans-serif;
+  background: #ffffff;
 }
 
 @media (prefers-color-scheme: dark) {
-  body { background: #1f2229; }
+  body { background: #1f1f1f; }
 }
 
-#app { display: block; width: 372px; height: 100%; }
+#app { display: block; width: 400px; height: 100%; }

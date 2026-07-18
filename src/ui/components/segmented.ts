@@ -37,9 +37,9 @@ export class VwSegmented extends LitElement {
       .track {
         display: flex;
         gap: 2px;
-        padding: 3px;
-        border-radius: var(--vw-radius-control);
-        background: var(--vw-fill);
+        padding:2px;
+        border-radius:18px;
+        background:var(--vw-fill);
       }
       button {
         flex: 1;
@@ -47,7 +47,7 @@ export class VwSegmented extends LitElement {
         align-items: center;
         justify-content: center;
         border: none;
-        border-radius: var(--vw-radius-chip);
+        border-radius:16px;
         background: transparent;
         color: var(--vw-text-3);
         font-family: var(--vw-font-ui);
@@ -57,10 +57,10 @@ export class VwSegmented extends LitElement {
         transition: background-color var(--vw-dur-fast), color var(--vw-dur-fast);
       }
       button[aria-selected='true'] {
-        background: var(--vw-card);
-        color: var(--vw-ink);
-        font-weight: 600;
-        box-shadow: var(--vw-seg-shadow);
+        background:var(--pc);
+        color:var(--onpc);
+        font-weight:500;
+        box-shadow:none;
       }
       button:focus-visible { outline: none; box-shadow: var(--vw-focus); }
     `,

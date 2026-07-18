@@ -37,7 +37,7 @@ export class VwTabs extends LitElement {
       [role='tablist'] {
         display: flex;
         gap: 4px;
-        border-bottom: 1px solid var(--vw-line);
+        border-bottom:1px solid var(--vw-line-1);
       }
       button[role='tab'] {
         display: inline-flex;
@@ -54,8 +54,8 @@ export class VwTabs extends LitElement {
         cursor: pointer;
       }
       button[role='tab'][aria-selected='true'] {
-        color: var(--vw-blue-600);
-        border-bottom-color: var(--vw-blue-600);
+        color:var(--p);
+        border-bottom-color:var(--p);
       }
       .count {
         color: inherit;

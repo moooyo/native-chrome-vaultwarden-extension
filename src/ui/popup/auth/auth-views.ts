@@ -254,67 +254,84 @@ export class VwAuthViews extends LitElement {
 
       /* Locked (unlock) screen — the primary, pixel-specced surface ------------------------- */
       .locked {
-        flex: 1;
-        min-height: 0;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 10px;
-        padding: 24px;
-        box-sizing: border-box;
-        text-align: center;
-        animation: mvIn 0.22s ease-out;
+        position:relative;
+        flex:1;
+        min-height:0;
+        overflow:hidden;
+        background:var(--vw-panel);
+      }
+      .vault-ghost { position:absolute; inset:18px 14px; display:flex; flex-direction:column; gap:10px; filter:blur(8px); opacity:.66; }
+      .ghost-head { height:40px; border-radius:20px; background:var(--vw-fill); }
+      .ghost-card { height:126px; border-radius:16px; background:linear-gradient(135deg, var(--pc), var(--sfc)); }
+      .ghost-row { height:48px; border-radius:12px; background:var(--vw-fill); }
+      .privacy-veil { position:absolute; inset:0; background:var(--veil); backdrop-filter:blur(18px) saturate(1.3); }
+      .locked-inner {
+        position:relative;
+        z-index:1;
+        height:100%;
+        display:flex;
+        flex-direction:column;
+        align-items:center;
+        justify-content:center;
+        gap:12px;
+        padding:30px;
+        text-align:center;
+        animation:mvIn .22s ease-out;
       }
       .locked-title {
         margin: 0;
-        font-size: 15.5px;
-        font-weight: 600;
+        font-size: 16px;
+        font-weight: 500;
         color: var(--vw-ink);
       }
       .locked-sub {
-        margin: -6px 0 0;
-        font-size: 12px;
-        color: var(--vw-muted);
+        margin:-7px 0 8px;
+        max-width:270px;
+        font-size:11.5px;
+        color:var(--vw-text-2);
       }
       .locked-form {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        width: 236px;
+        display:flex;
+        flex-direction:row;
+        align-items:center;
+        gap:8px;
+        width:100%;
+        max-width:310px;
       }
       .locked-input {
-        width: 100%;
-        height: 36px;
-        padding: 0 12px;
-        border: 1px solid transparent;
-        border-radius: var(--vw-radius-control);
-        background: var(--vw-fill);
-        color: var(--vw-ink);
-        font-family: var(--vw-font-ui);
-        font-size: 13px;
+        flex:1;
+        min-width:0;
+        height:42px;
+        padding:0 15px;
+        border:1px solid var(--vw-line-3);
+        border-radius:21px;
+        background:color-mix(in srgb, var(--vw-panel) 88%, transparent);
+        color:var(--vw-ink);
+        font:400 13px/1 var(--vw-font-ui);
       }
       .locked-input::placeholder {
         color: var(--vw-placeholder);
       }
       .locked-input:focus {
         outline: none;
-        border-color: var(--vw-accent);
+        border-color:var(--vw-accent);
+        box-shadow:var(--vw-focus);
       }
       .locked-btn {
-        width: 100%;
-        height: 36px;
-        border: none;
-        border-radius: var(--vw-radius-control);
-        background: var(--vw-primary-bg);
-        color: var(--vw-primary-fg);
-        font-family: var(--vw-font-ui);
-        font-size: 13px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: background-color var(--vw-dur-fast);
+        display:grid;
+        place-items:center;
+        width:42px;
+        height:42px;
+        flex:none;
+        border:0;
+        border-radius:50%;
+        background:var(--p);
+        color:var(--onp);
+        font:500 0/1 var(--vw-font-ui);
+        cursor:pointer;
+        transition:background-color var(--vw-dur-fast);
       }
+      .locked-btn::after { content:'→'; font-size:18px; }
       .locked-btn:hover:not(:disabled) {
         background: var(--vw-primary-bg-hover);
       }
@@ -324,22 +341,23 @@ export class VwAuthViews extends LitElement {
       }
 
       .pin-row {
-        display: flex;
-        gap: 8px;
-        width: 236px;
-        margin-top: 4px;
+        display:flex;
+        gap:8px;
+        width:100%;
+        max-width:310px;
+        margin-top:2px;
       }
       .pin-input {
         flex: 1;
       }
       .pin-btn {
         flex: none;
-        width: 36px;
-        height: 36px;
+        width:42px;
+        height:42px;
         border-radius: 50%;
-        border: 1px solid var(--vw-line-3);
-        background: transparent;
-        color: var(--vw-teal-text);
+        border:0;
+        background:var(--p);
+        color:var(--onp);
         cursor: pointer;
         display: inline-flex;
         align-items: center;
@@ -347,7 +365,7 @@ export class VwAuthViews extends LitElement {
         transition: background-color var(--vw-dur-fast);
       }
       .pin-btn:hover:not(:disabled) {
-        background: var(--vw-teal-10);
+        background:var(--vw-primary-bg-hover);
       }
       .pin-btn:disabled {
         opacity: 0.5;
@@ -359,11 +377,11 @@ export class VwAuthViews extends LitElement {
       }
 
       .locked-logout {
-        margin-top: 2px;
+        margin-top:4px;
         border: none;
         background: none;
         padding: 2px 4px;
-        color: var(--vw-muted);
+        color:var(--vw-text-2);
         font-family: var(--vw-font-ui);
         font-size: 12px;
         cursor: pointer;
@@ -378,7 +396,8 @@ export class VwAuthViews extends LitElement {
       }
 
       .status {
-        width: 236px;
+        width:100%;
+        max-width:310px;
       }
     `,
   ];
@@ -649,32 +668,37 @@ export class VwAuthViews extends LitElement {
   private renderUnlock() {
     return html`
       <div class="locked">
-        <vw-logo variant="hero"></vw-logo>
-        <h1 class="locked-title">${t('auth.lockedTitle')}</h1>
-        <p class="locked-sub">${t('auth.unlockSubtitle')}</p>
-        <form
-          class="locked-form"
-          @submit=${(event: Event) => {
-            event.preventDefault();
-            this.emit('vw-auth-unlock-submit', { masterPassword: this.inputValue('unlockPassword') } satisfies UnlockSubmitDetail);
-          }}
-        >
-          <input
-            id="unlockPassword"
-            class="locked-input"
-            type="password"
-            autocomplete="current-password"
-            placeholder=${t('auth.masterPassword')}
-            required
-            ?disabled=${this.pending}
-          />
-          <button type="submit" class="locked-btn" ?disabled=${this.pending}>${t('auth.unlock')}</button>
-        </form>
-        ${this.pinEnabled ? this.renderPinUnlock() : nothing}
-        ${this.error ? html`<div class="status">${this.renderError()}</div>` : nothing}
-        <button type="button" class="locked-logout" ?disabled=${this.pending} @click=${() => this.emit('vw-auth-logout')}>
-          ${t('auth.logout')}
-        </button>
+        <div class="vault-ghost" aria-hidden="true"><span class="ghost-head"></span><span class="ghost-card"></span><span class="ghost-row"></span><span class="ghost-row"></span><span class="ghost-row"></span></div>
+        <div class="privacy-veil" aria-hidden="true"></div>
+        <div class="locked-inner">
+          <vw-logo variant="hero"></vw-logo>
+          <h1 class="locked-title">${t('auth.welcomeBack')}</h1>
+          <p class="locked-sub">${t('auth.lockedPrivacy')}</p>
+          ${this.pinEnabled ? this.renderPinUnlock() : nothing}
+          <form
+            class="locked-form"
+            aria-label=${t('auth.masterPasswordUnlock')}
+            @submit=${(event: Event) => {
+              event.preventDefault();
+              this.emit('vw-auth-unlock-submit', { masterPassword: this.inputValue('unlockPassword') } satisfies UnlockSubmitDetail);
+            }}
+          >
+            <input
+              id="unlockPassword"
+              class="locked-input"
+              type="password"
+              autocomplete="current-password"
+              placeholder=${t('auth.masterPasswordUnlock')}
+              required
+              ?disabled=${this.pending}
+            />
+            <button type="submit" class="locked-btn" title=${t('auth.unlock')} aria-label=${t('auth.unlock')} ?disabled=${this.pending}>${t('auth.unlock')}</button>
+          </form>
+          ${this.error ? html`<div class="status">${this.renderError()}</div>` : nothing}
+          <button type="button" class="locked-logout" ?disabled=${this.pending} @click=${() => this.emit('vw-auth-logout')}>
+            ${t('auth.logout')}
+          </button>
+        </div>
       </div>
     `;
   }

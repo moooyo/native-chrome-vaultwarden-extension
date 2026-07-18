@@ -5,12 +5,13 @@ import { emit } from '../components/emit.js';
 import { LocalizeController, t, getLocale, setLocale, type Locale } from '../i18n/index.js';
 import type { MessageKey } from '../i18n/index.js';
 import { AppearanceController, getTheme, setTheme } from '../theme.js';
-import { uiIcon } from '../components/icon.js';
+import { uiIcon, type IconName } from '../components/icon.js';
 import '../components/logo.js';
 
 export interface OptionsNavItem {
   id: string;
   labelKey: MessageKey;
+  icon?: IconName;
 }
 
 /**
@@ -46,38 +47,39 @@ export class VwOptionsShell extends LitElement {
     paletteTokens,
     themeTokens,
     css`
-      :host { display: flex; min-height: 100vh; background: var(--vw-options-bg); color: var(--vw-ink); }
+      :host { display:flex; min-height:100vh; background:var(--vw-options-bg); color:var(--vw-ink); }
 
       .sidebar {
-        width: 236px;
+        width: 212px;
         flex: none;
         box-sizing: border-box;
         display: flex;
         flex-direction: column;
-        padding: 20px 12px 14px;
-        border-right: 1px solid var(--vw-line-1);
+        padding: 18px 10px 14px;
       }
-      .brand { display: flex; align-items: center; gap: 9px; padding: 0 10px 16px; }
-      .brand .name { font-size: 15px; font-weight: 600; color: var(--vw-ink); }
+      .brand { display:flex; align-items:center; gap:9px; padding:0 10px 18px; }
+      .brand .name { font-size:15px; font-weight:500; color:var(--vw-ink); }
       .badge {
         margin-left: auto; font-family: var(--vw-font-mono); font-size: 10px; color: var(--vw-muted);
-        background: var(--vw-icon-hover); border-radius: 5px; padding: 2px 6px;
+        background:var(--vw-fill); border-radius:6px; padding:2px 6px;
       }
-      nav { display: flex; flex-direction: column; gap: 2px; }
+      nav { display:flex; flex-direction:column; gap:2px; }
       .nav-item {
-        display: flex; align-items: center; height: 34px; padding: 0 12px; border: none; border-radius: var(--vw-radius-input);
-        background: transparent; color: var(--vw-text-2); font-family: inherit; font-size: 13px; text-align: left;
+        display:flex; align-items:center; gap:12px; height:40px; padding:0 14px; border:0; border-radius:20px;
+        background:transparent; color:var(--vw-text-2); font-family:inherit; font-size:13px; text-align:left;
         cursor: pointer; transition: background-color var(--vw-dur-fast);
       }
       .nav-item:hover { background: var(--vw-row-hover); }
-      .nav-item.on { background: var(--vw-icon-hover); color: var(--vw-ink); font-weight: 600; }
+      .nav-item.on { background:var(--pc); color:var(--onpc); font-weight:500; }
+      .nav-icon { width:18px; height:18px; display:inline-flex; flex:none; }
+      .nav-icon svg { width:18px; height:18px; }
       .nav-item:focus-visible { outline: none; box-shadow: var(--vw-focus); }
       .spacer { flex: 1; }
 
       /* Sidebar footer — quick controls (theme toggle · language toggle · logout) */
       .foot {
         display: flex; flex-direction: column; gap: 8px;
-        padding: 12px 10px 4px; border-top: 1px solid var(--vw-line-1);
+        padding:12px 10px 4px; border-top:1px solid var(--vw-line-1);
       }
       .foot-controls { display: flex; align-items: center; gap: 8px; }
       .foot-icon {
@@ -110,11 +112,19 @@ export class VwOptionsShell extends LitElement {
       .foot-logout:focus-visible { outline: none; box-shadow: var(--vw-focus); }
       .foot-logout svg { width: 16px; height: 16px; flex: none; }
 
-      .content { flex: 1; min-width: 0; overflow-y: auto; }
-      .inner { max-width: 760px; margin: 0 auto; padding: 28px 40px 44px; }
-      .eyebrow { font-size: 12px; color: var(--vw-muted); }
-      .title { font-size: 24px; font-weight: 650; letter-spacing: -0.01em; margin: 2px 0 18px; color: var(--vw-ink); }
-      .section { display: flex; flex-direction: column; gap: 8px; animation: mvIn .2s ease-out; }
+      .content { flex:1; min-width:0; overflow-y:auto; }
+      .inner { max-width:580px; margin:0; padding:28px 36px 44px; }
+      .eyebrow { display:none; }
+      .title { margin:0 0 18px; color:var(--vw-ink); font-size:22px; font-weight:400; letter-spacing:0; }
+      .section { display:flex; flex-direction:column; gap:8px; animation:mvIn .2s ease-out; }
+      @media (max-width:720px) {
+        :host { display:block; }
+        .sidebar { width:100%; padding-bottom:8px; }
+        nav { flex-direction:row; overflow-x:auto; }
+        .nav-item { flex:none; }
+        .spacer, .foot { display:none; }
+        .inner { padding:22px 18px 36px; }
+      }
     `,
   ];
 
@@ -194,7 +204,7 @@ export class VwOptionsShell extends LitElement {
       <aside class="sidebar">
         <div class="brand">
           <vw-logo variant="sidebar"></vw-logo>
-          <span class="name">${t('common.brand')}</span>
+          <span class="name">${t('common.brand')} ${t('options.eyebrow')}</span>
           ${this.version ? html`<span class="badge">v${this.version}</span>` : nothing}
         </div>
         <nav>
@@ -206,6 +216,7 @@ export class VwOptionsShell extends LitElement {
                 aria-current=${item.id === this.selected ? 'page' : 'false'}
                 @click=${() => this.selectNav(item.id)}
               >
+                ${item.icon ? html`<span class="nav-icon">${uiIcon(item.icon)}</span>` : nothing}
                 ${t(item.labelKey)}
               </button>
             `,

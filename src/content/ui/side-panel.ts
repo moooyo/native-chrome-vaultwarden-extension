@@ -7,7 +7,7 @@ import { html, type TemplateResult } from 'lit';
 
 /** Connector zone width (the gap the line spans) and the line's y within the surface. The host is placed
  *  so this y lands on the input's vertical centre, so the line appears to leave the input's right edge. */
-const CONN_W = 22;
+const CONN_W = 16;
 const CONN_Y = 20;
 
 /** CSS for the connector, appended to each side-panel surface's own styles. Uses the surface's local
@@ -16,11 +16,10 @@ export const SIDE_PANEL_CSS = `
     .side { display: flex; align-items: flex-start; }
     .conn { position: relative; flex: none; width: ${CONN_W}px; align-self: stretch; }
     .conn::before { content: ''; position: absolute; left: 0; top: ${CONN_Y}px; width: ${CONN_W}px; height: 1.5px; background: rgba(22,24,29,.22); }
-    .conn-dot { position: absolute; left: 0; top: ${CONN_Y - 3.5}px; width: 7px; height: 7px; border-radius: 50%; background: var(--mi-teal); animation: mvPulse 2s ease-out infinite; }
+    .conn-dot { position:absolute; left:0; top:${CONN_Y - 3.5}px; width:7px; height:7px; border-radius:50%; background:var(--mi-teal); }
     :host([data-pos="below"]) .side { display: block; }
     :host([data-pos="below"]) .conn { display: none; }
     @media (prefers-color-scheme: dark) { .conn::before { background: rgba(255,255,255,.18); } }
-    @keyframes mvPulse { 0% { box-shadow: 0 0 0 0 rgba(14,138,114,.45); } 70% { box-shadow: 0 0 0 6px rgba(14,138,114,0); } 100% { box-shadow: 0 0 0 0 rgba(14,138,114,0); } }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
   `;
 
