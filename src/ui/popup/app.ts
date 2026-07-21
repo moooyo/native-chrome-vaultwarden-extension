@@ -17,6 +17,8 @@ import './vault/popup-header.js';
 import './vault/vault-view.js';
 import './vault/totp-view.js';
 import './vault/sync-bar.js';
+import './menus/tools-menu.js';
+import './menus/account-menu.js';
 import type { CategoryId } from './vault/vault-view.js';
 import './item/reprompt-gate.js';
 import './editor/type-picker.js';
@@ -124,13 +126,9 @@ function createDefaultBrowser(): PopupBrowser {
 }
 
 /**
- * The dormant Lit popup root. It owns the current `route`, the single in-flight `pending` flag,
- * and the small pieces of ephemeral auth UI state (PIN availability, remembered-device banner).
- * It performs every worker request itself (via the injectable `request`) and only ever hands
- * plain props down to `vw-auth-views`, reacting to that component's typed submit/action events.
- *
- * Not wired into `popup.html` yet — `src/ui/popup/popup.ts` remains the live entry point until a
- * later task replaces it.
+ * The live Lit popup root. It owns routing, in-flight state, and ephemeral auth/vault/tool state.
+ * Every worker request runs through the injectable `request` seam; child views receive plain props
+ * and emit typed actions. `popup.ts` mounts this element and supplies the browser integration seam.
  */
 export class VwPopupApp extends LitElement {
   static override properties = {
@@ -163,6 +161,7 @@ export class VwPopupApp extends LitElement {
     healthReport: { attribute: false },
     pwnedState: { attribute: false },
     sendsState: { attribute: false },
+    sendEncoding: { type: Boolean },
     toolStatus: { attribute: false },
     vaultScope: { type: String },
     selectedCipherId: { attribute: false },
@@ -213,6 +212,8 @@ export class VwPopupApp extends LitElement {
   declare pwnedState: PwnedState;
   /** The current account's Sends, loaded on entry to the sends route. */
   declare sendsState: AsyncState<SendSummary[]>;
+  /** True while the Send view is reading and encoding a local file before it emits a request. */
+  declare sendEncoding: boolean;
   /** Copy/create/update feedback banner the root drives on the open tool view (Sends, account
    *  security, PIN). Only one tool route is active at a time, so a single banner suffices. */
   declare toolStatus: DetailStatus | undefined;
@@ -262,6 +263,10 @@ export class VwPopupApp extends LitElement {
    *  enterVault / account-switch overlap) can never overwrite a newer one. */
   private latestSuggestionsSeq = 0;
 
+  /** Invalidates late tool feedback so an older clipboard promise cannot overwrite a newer Send
+   *  mutation result or a status belonging to a different tool route. */
+  private toolStatusEpoch = 0;
+
   constructor() {
     super();
     this.route = { name: 'loading' };
@@ -293,6 +298,7 @@ export class VwPopupApp extends LitElement {
     this.healthReport = { status: 'idle' };
     this.pwnedState = { status: 'idle' };
     this.sendsState = { status: 'idle' };
+    this.sendEncoding = false;
     this.toolStatus = undefined;
     this.vaultScope = 'suggestions';
     this.selectedCipherId = null;
@@ -358,6 +364,27 @@ export class VwPopupApp extends LitElement {
         border-radius:2px;
         background:var(--vw-line-3);
       }
+      .load-state {
+        display:flex;
+        flex:1;
+        min-height:0;
+        flex-direction:column;
+        justify-content:center;
+        gap:10px;
+        padding:24px 14px;
+      }
+      .load-back {
+        align-self:center;
+        min-height:34px;
+        padding:0 16px;
+        border:0;
+        border-radius:17px;
+        background:var(--pc);
+        color:var(--onpc);
+        font:500 12px/1 var(--vw-font-ui);
+        cursor:pointer;
+      }
+      .load-back:focus-visible { outline:none; box-shadow:var(--vw-focus); }
     `,
   ];
 
@@ -379,6 +406,7 @@ export class VwPopupApp extends LitElement {
       return;
     }
     if (event.key === 'Escape' && ['generator', 'health', 'editor'].includes(this.route.name)) {
+      if (this.pending || this.sendEncoding) return;
       event.preventDefault();
       this.navigate({ name: 'vault', scope: 'suggestions' });
     }
@@ -417,6 +445,7 @@ export class VwPopupApp extends LitElement {
    *  navigation: the TOTP timer, the reprompt credential, and (when leaving their owning view)
    *  the remembered-device banner and PIN availability flag. */
   navigate(route: PopupRoute): void {
+    if (this.sendEncoding && route.name !== 'sends') return;
     this.clearEphemeralDetailState();
     this.route = route;
     if (route.name === 'vault') {
@@ -712,10 +741,27 @@ export class VwPopupApp extends LitElement {
     });
     if (!response.ok) {
       this.fillResult = { error: response.error.message };
+      this.showToast(response.error.message);
       return;
     }
     const { outcome } = response.data as { outcome: TabFillOutcome };
     this.fillResult = { outcome: outcome.status };
+    this.showToast(outcome.status === 'filled' ? t('content.filled') : this.fillOutcomeMessage(outcome.status));
+  }
+
+  private fillOutcomeMessage(status: Exclude<TabFillOutcome['status'], 'filled'>): string {
+    switch (status) {
+      case 'no_eligible_tab': return t('fill.noEligibleTab');
+      case 'site_access_unavailable': return t('fill.siteAccessUnavailable');
+      case 'no_fillable_target': return t('fill.noFillableTarget');
+      case 'reprompt_required': return t('fill.repromptRequired');
+      case 'vault_locked': return t('fill.vaultLocked');
+      case 'sync_required': return t('fill.syncRequired');
+      case 'no_longer_matched': return t('fill.noLongerMatched');
+      case 'target_changed': return t('fill.targetChanged');
+      case 'restricted_page': return t('fill.restrictedPage');
+      case 'content_script_unavailable': return t('fill.contentScriptUnavailable');
+    }
   }
 
   private handleScopeChange(id: string): void {
@@ -756,16 +802,18 @@ export class VwPopupApp extends LitElement {
    *  `syncing`; the tools menu uses `pending`). */
   private async syncVault(): Promise<void> {
     const response = await this.request({ type: 'vault.sync' });
-    if (response.ok) {
-      this.applyListingResponse(response);
-      this.lastSync = Date.now();
-      await this.loadSuggestions();
+    if (!response.ok) {
+      this.showToast(response.error.message);
+      return;
     }
+    this.applyListingResponse(response);
+    this.lastSync = Date.now();
+    await this.loadSuggestions();
   }
 
   /** Manual vault sync from the bottom sync bar: drives the spinner + last-synced label. */
   private async handleSync(): Promise<void> {
-    if (this.syncing) return;
+    if (this.syncing || this.sendEncoding) return;
     this.syncing = true;
     try {
       await this.syncVault();
@@ -776,12 +824,14 @@ export class VwPopupApp extends LitElement {
 
   /** Toggle the generator overlay from the top bar (returns to the vault list when already open). */
   private handleGeneratorToggle(): void {
+    if (this.pending || this.sendEncoding) return;
     if (this.route.name === 'generator') this.navigate({ name: 'vault', scope: this.vaultScope });
     else this.navigate({ name: 'generator' });
   }
 
   /** Toggle the 2FA (authenticator) view from the top bar, back to the vault on a second press. */
   private handleTotpToggle(): void {
+    if (this.pending || this.sendEncoding) return;
     if (this.route.name === 'totp') this.navigate({ name: 'vault', scope: this.vaultScope });
     else this.navigate({ name: 'totp' });
   }
@@ -919,14 +969,17 @@ export class VwPopupApp extends LitElement {
   /** Drop every tool-view value that must not survive a lock/logout/account switch: the in-memory
    *  generator history and the loaded health/HIBP/Sends state. */
   private clearToolState(): void {
+    this.toolStatusEpoch += 1;
     this.generatorHistory = [];
     this.healthReport = { status: 'idle' };
     this.pwnedState = { status: 'idle' };
     this.sendsState = { status: 'idle' };
+    this.sendEncoding = false;
     this.toolStatus = undefined;
   }
 
   private async handleAccountAction(detail: AccountActionDetail): Promise<void> {
+    if (this.pending || this.syncing || this.sendEncoding) return;
     switch (detail.action) {
       case 'switch-account':
         if (detail.email !== undefined) {
@@ -991,20 +1044,33 @@ export class VwPopupApp extends LitElement {
         }
         return;
       }
-      case 'logout':
-        await this.request({ type: 'auth.logout' });
-        this.resetVaultState();
-        this.navigate(loginRoute());
+      case 'logout': {
+        if (this.pending) return;
+        this.pending = true;
+        try {
+          const response = await this.request({ type: 'auth.logout' });
+          if (!response.ok) {
+            this.showToast(response.error.message);
+            return;
+          }
+          this.resetVaultState();
+          this.navigate(loginRoute());
+        } finally {
+          this.pending = false;
+        }
         return;
+      }
       case 'forget-device': {
         const response = await this.request({ type: 'auth.forgetDevice' });
         if (response.ok) this.vaultDeviceRemembered = false;
+        else this.showToast(response.error.message);
         return;
       }
     }
   }
 
   private async handleToolAction(detail: ToolActionDetail): Promise<void> {
+    if (this.pending || this.sendEncoding) return;
     switch (detail.action) {
       case 'generator':
         this.navigate({ name: 'generator' });
@@ -1020,19 +1086,13 @@ export class VwPopupApp extends LitElement {
         this.navigate({ name: 'vault', scope: 'all' });
         return;
       case 'sync': {
-        if (this.pending) return;
-        this.pending = true;
-        try {
-          await this.syncVault();
-        } finally {
-          this.pending = false;
-        }
+        await this.handleSync();
         return;
       }
     }
   }
 
-  // --- Vault tools (dormant) orchestration ------------------------------------------------------
+  // --- Vault tools orchestration ---------------------------------------------------------------
 
   /** The active account's email, used to prefill the generator's plus-addressed base email. */
   private activeAccountEmail(): string | undefined {
@@ -1046,21 +1106,26 @@ export class VwPopupApp extends LitElement {
     label: string,
     setStatus: (status: DetailStatus) => void,
     opts?: { toast?: boolean },
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await navigator.clipboard.writeText(value);
       void this.request({ type: 'clipboard.scheduleClear' });
-      setStatus({ message: `${label} copied to clipboard`, tone: 'success' });
+      setStatus({ message: t('common.copiedLabel', { name: label }), tone: 'success' });
       if (opts?.toast) this.showToast(t('common.copiedClear'));
+      return true;
     } catch {
-      setStatus({ message: `Failed to copy ${label.toLowerCase()}`, tone: 'danger' });
+      setStatus({ message: t('common.copyFailedLabel', { name: label }), tone: 'danger' });
+      return false;
     }
   }
 
   /** Copy a non-secret tool value (a generated password/username, or a Send link) and schedule the
    *  background clipboard clear. Feedback lands on the shared tool banner. */
-  private copyToolValue(value: string, label: string): Promise<void> {
-    return this.copy(value, label, (status) => { this.toolStatus = status; });
+  private copyToolValue(value: string, label: string): Promise<boolean> {
+    const epoch = this.toolStatusEpoch;
+    return this.copy(value, label, (status) => {
+      if (epoch === this.toolStatusEpoch) this.toolStatus = status;
+    });
   }
 
   /** Record a freshly generated value into the in-memory (never persisted) generator history. */
@@ -1110,7 +1175,9 @@ export class VwPopupApp extends LitElement {
 
   private async handleSendCreate(detail: SendCreateDetail): Promise<void> {
     if (this.pending) return;
+    this.toolStatusEpoch += 1;
     this.pending = true;
+    this.toolStatus = undefined;
     try {
       const response = detail.kind === 'text'
         ? await this.request({ type: 'sends.createText', input: detail.input })
@@ -1121,8 +1188,12 @@ export class VwPopupApp extends LitElement {
       }
       const send = (response.data as { send?: SendSummary } | null)?.send;
       if (send) {
-        await this.copyToolValue(send.url, 'Send link');
-        this.toolStatus = { message: 'Send created. Link copied to clipboard.', tone: 'success' };
+        const copied = await this.copyToolValue(send.url, t('options.send.copyLink'));
+        this.toolStatus = copied
+          ? { message: t('send.createdCopied'), tone: 'success' }
+          : { message: t('send.createdCopyFailed'), tone: 'warning' };
+      } else {
+        this.toolStatus = { message: t('send.created'), tone: 'success' };
       }
       await this.loadSends();
     } finally {
@@ -1132,14 +1203,16 @@ export class VwPopupApp extends LitElement {
 
   private async handleSendUpdate(detail: SendUpdateDetail): Promise<void> {
     if (this.pending) return;
+    this.toolStatusEpoch += 1;
     this.pending = true;
+    this.toolStatus = undefined;
     try {
       const response = await this.request({ type: 'sends.update', id: detail.id, input: detail.input });
       if (!response.ok) {
         this.toolStatus = { message: response.error.message, tone: 'danger' };
         return;
       }
-      this.toolStatus = { message: 'Send updated.', tone: 'success' };
+      this.toolStatus = { message: t('send.updated'), tone: 'success' };
       await this.loadSends();
     } finally {
       this.pending = false;
@@ -1148,13 +1221,16 @@ export class VwPopupApp extends LitElement {
 
   private async handleSendDelete(detail: SendDeleteDetail): Promise<void> {
     if (this.pending) return;
+    this.toolStatusEpoch += 1;
     this.pending = true;
+    this.toolStatus = undefined;
     try {
       const response = await this.request({ type: 'sends.delete', id: detail.id });
       if (!response.ok) {
         this.toolStatus = { message: response.error.message, tone: 'danger' };
         return;
       }
+      this.toolStatus = { message: t('send.deleted'), tone: 'success' };
       await this.loadSends();
     } finally {
       this.pending = false;
@@ -1341,7 +1417,7 @@ export class VwPopupApp extends LitElement {
   }
 
   /** Copy a plaintext value the detail already displays, then schedule the background clipboard clear. */
-  private copyToClipboard(value: string, label: string): Promise<void> {
+  private copyToClipboard(value: string, label: string): Promise<boolean> {
     return this.copy(value, label, (status) => { this.detailStatus = status; }, { toast: true });
   }
 
@@ -1571,7 +1647,7 @@ export class VwPopupApp extends LitElement {
   }
 
   private renderLoading() {
-    return html`<vw-status-message tone="info" .icon=${'refresh'} message="Loading vault…"></vw-status-message>`;
+    return html`<div class="load-state"><vw-status-message tone="info" .icon=${'refresh'} .message=${t('vault.loading')}></vw-status-message></div>`;
   }
 
   private renderAuth(route: AuthRoute) {
@@ -1605,19 +1681,28 @@ export class VwPopupApp extends LitElement {
   private renderUnlocked(route: PopupRoute) {
     return html`
       <vw-popup-header
-        .generatorActive=${route.name === 'generator'}
-        .totpActive=${route.name === 'totp'}
-        .syncing=${this.syncing}
-        @vw-add=${() => this.navigate({ name: 'editor', mode: 'create' })}
-        @vw-open-totp=${() => this.handleTotpToggle()}
-        @vw-generator-toggle=${() => this.handleGeneratorToggle()}
-        @vw-open-settings=${() => void this.browser.openOptions()}
+        .busy=${this.pending || this.syncing || this.sendEncoding}
         @vw-lock=${() => void this.handleAccountAction({ action: 'lock' })}
-        @vw-sync-now=${() => void this.handleSync()}
-      ></vw-popup-header>
+      >
+        <vw-tools-menu
+          slot="tools"
+          .syncing=${this.syncing}
+          .disabled=${this.pending || this.sendEncoding}
+          @vw-tool-action=${(event: CustomEvent<ToolActionDetail>) => void this.handleToolAction(event.detail)}
+        ></vw-tools-menu>
+        <vw-account-menu
+          slot="account"
+          .accounts=${this.accounts}
+          .pinEnabled=${this.pinConfigured}
+          .deviceRemembered=${this.vaultDeviceRemembered}
+          .disabled=${this.pending || this.syncing || this.sendEncoding}
+          @vw-account-action=${(event: CustomEvent<AccountActionDetail>) => void this.handleAccountAction(event.detail)}
+        ></vw-account-menu>
+      </vw-popup-header>
       <div class="body ${this.isSheetRoute(route) ? 'sheet-open' : ''}">${this.renderBodyLayer(route)}</div>
       <vw-sync-bar
         .syncing=${this.syncing}
+        .disabled=${this.pending || this.sendEncoding}
         .lastSync=${this.lastSync}
         .generatorActive=${route.name === 'generator'}
         .totpActive=${route.name === 'totp'}
@@ -1681,7 +1766,7 @@ export class VwPopupApp extends LitElement {
     if (!this.isSheetRoute(route)) return this.renderBody(route);
     return html`
       ${this.renderVault()}
-      <div class="scrim" @click=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}></div>
+      <div class="scrim" @click=${() => this.userNavigate({ name: 'vault', scope: 'suggestions' })}></div>
       <section class="sheet" aria-modal="true">
         <span class="sheet-handle" aria-hidden="true"></span>
         ${this.renderBody(route)}
@@ -1693,7 +1778,13 @@ export class VwPopupApp extends LitElement {
     return route.name === 'generator' || route.name === 'health' || route.name === 'editor';
   }
 
+  private userNavigate(route: PopupRoute): void {
+    if (this.pending || this.sendEncoding) return;
+    this.navigate(route);
+  }
+
   private handleVaultCommand(action: string): void {
+    if (this.pending || this.sendEncoding) return;
     this.query = '';
     switch (action) {
       case 'generator': this.navigate({ name: 'generator' }); break;
@@ -1711,7 +1802,7 @@ export class VwPopupApp extends LitElement {
       return html`
         <vw-type-picker
           @vw-editor-type=${(event: CustomEvent<EditorTypeDetail>) => this.navigate({ name: 'editor', mode: 'create', cipherType: event.detail.type })}
-          @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+          @vw-item-back=${() => this.userNavigate({ name: 'vault', scope: 'suggestions' })}
         ></vw-type-picker>
       `;
     }
@@ -1719,7 +1810,7 @@ export class VwPopupApp extends LitElement {
     if (route.mode === 'edit' && route.cipherId !== undefined) {
       const id = route.cipherId;
       if (!summary) {
-        return html`<vw-status-message tone="warning" .icon=${'alert'} message="This item is no longer available."></vw-status-message>`;
+        return html`<div class="load-state"><vw-status-message tone="warning" .icon=${'alert'} .message=${t('vault.itemUnavailable')}></vw-status-message></div>`;
       }
       // A protected item must clear the master-password gate before the editor reveals its plaintext.
       if (summary.reprompt && this.repromptCredential?.cipherId !== id) {
@@ -1729,11 +1820,21 @@ export class VwPopupApp extends LitElement {
             .pending=${this.pending}
             .error=${this.repromptError}
             @vw-reprompt-submit=${(event: CustomEvent<RepromptSubmitDetail>) => void this.handleReprompt(id, event.detail.password)}
-            @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'all' })}
+            @vw-item-back=${() => this.userNavigate({ name: 'vault', scope: 'all' })}
           ></vw-reprompt-gate>
         `;
       }
-      if (!this.editorInput) return this.renderLoading();
+      if (!this.editorInput) {
+        if (this.editorStatus?.tone === 'danger') {
+          return html`
+            <div class="load-state">
+              <vw-status-message tone="danger" .icon=${'alert'} .message=${this.editorStatus.message}></vw-status-message>
+              <button type="button" class="load-back" @click=${() => this.userNavigate({ name: 'vault', scope: 'all' })}>${t('common.back')}</button>
+            </div>
+          `;
+        }
+        return this.renderLoading();
+      }
     }
     const type = route.mode === 'create' ? route.cipherType : this.editorInput?.type;
     if (type === undefined) return this.renderLoading();
@@ -1756,7 +1857,7 @@ export class VwPopupApp extends LitElement {
         @vw-cipher-collections=${(event: CustomEvent<CipherCollectionsDetail>) => void this.handleCipherCollections(event.detail)}
         @vw-editor-share=${(event: CustomEvent<EditorShareDetail>) => void this.handleEditorShare(event.detail)}
         @vw-delete-item=${(event: CustomEvent<DeleteItemDetail>) => void this.handleEditorDelete(event.detail)}
-        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'all' })}
+        @vw-item-back=${() => this.userNavigate({ name: 'vault', scope: 'all' })}
       ></vw-cipher-editor>
     `;
   }
@@ -1769,7 +1870,7 @@ export class VwPopupApp extends LitElement {
         @vw-history-add=${(event: CustomEvent<GeneratorHistoryAddDetail>) => this.handleGeneratorHistoryAdd(event.detail)}
         @vw-history-clear=${() => { this.generatorHistory = []; }}
         @vw-copy=${(event: CustomEvent<CopyDetail>) => void this.copyToolValue(event.detail.value, event.detail.label)}
-        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+        @vw-item-back=${() => this.userNavigate({ name: 'vault', scope: 'suggestions' })}
       ></vw-generator-view>
     `;
   }
@@ -1781,7 +1882,7 @@ export class VwPopupApp extends LitElement {
         .pwned=${this.pwnedState}
         @vw-health-check=${() => void this.handleHealthCheck()}
         @vw-item-open=${(event: CustomEvent<ItemOpenDetail>) => this.navigate({ name: 'detail', cipherId: event.detail.cipherId })}
-        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+        @vw-item-back=${() => this.userNavigate({ name: 'vault', scope: 'suggestions' })}
       ></vw-health-view>
     `;
   }
@@ -1792,7 +1893,7 @@ export class VwPopupApp extends LitElement {
         .entries=${this.totpEntries}
         .currentIds=${this.currentSiteIds()}
         @vw-copy=${(event: CustomEvent<CopyDetail>) => this.handleCopy(event.detail)}
-        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+        @vw-item-back=${() => this.userNavigate({ name: 'vault', scope: 'suggestions' })}
       ></vw-totp-view>
     `;
   }
@@ -1802,12 +1903,13 @@ export class VwPopupApp extends LitElement {
         .sends=${this.sendsState}
         .pending=${this.pending}
         .status=${this.toolStatus}
+        @vw-send-encoding=${(event: CustomEvent<{ encoding: boolean }>) => { this.sendEncoding = event.detail.encoding; }}
         @vw-send-create=${(event: CustomEvent<SendCreateDetail>) => void this.handleSendCreate(event.detail)}
         @vw-send-update=${(event: CustomEvent<SendUpdateDetail>) => void this.handleSendUpdate(event.detail)}
         @vw-send-delete=${(event: CustomEvent<SendDeleteDetail>) => void this.handleSendDelete(event.detail)}
         @vw-copy=${(event: CustomEvent<CopyDetail>) => void this.copyToolValue(event.detail.value, event.detail.label)}
         @vw-send-receive=${() => void this.browser.openReceive()}
-        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+        @vw-item-back=${() => this.userNavigate({ name: 'vault', scope: 'suggestions' })}
       ></vw-sends-view>
     `;
   }
@@ -1820,7 +1922,7 @@ export class VwPopupApp extends LitElement {
         @vw-change-password=${(event: CustomEvent<ChangePasswordDetail>) => void this.handleChangePassword(event.detail)}
         @vw-change-kdf=${(event: CustomEvent<ChangeKdfDetail>) => void this.handleChangeKdf(event.detail)}
         @vw-rotate-key=${(event: CustomEvent<RotateKeyDetail>) => void this.handleRotateKey(event.detail)}
-        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+        @vw-item-back=${() => this.userNavigate({ name: 'vault', scope: 'suggestions' })}
       ></vw-account-security-view>
     `;
   }
@@ -1833,7 +1935,7 @@ export class VwPopupApp extends LitElement {
         .status=${this.toolStatus}
         @vw-pin-set=${(event: CustomEvent<PinSetDetail>) => void this.handlePinSet(event.detail)}
         @vw-pin-remove=${() => void this.handlePinRemove()}
-        @vw-item-back=${() => this.navigate({ name: 'vault', scope: 'suggestions' })}
+        @vw-item-back=${() => this.userNavigate({ name: 'vault', scope: 'suggestions' })}
       ></vw-pin-view>
     `;
   }

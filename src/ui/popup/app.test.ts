@@ -106,6 +106,8 @@ describe('vw-popup-app routing', () => {
     expect(app.route.name).toBe('vault');
     expect(view(app, 'vw-vault-view')).not.toBeNull();
     expect(view(app, 'vw-popup-header')).not.toBeNull();
+    expect(view(app, 'vw-tools-menu')).not.toBeNull();
+    expect(view(app, 'vw-account-menu')).not.toBeNull();
     expect(view(app, 'vw-sync-bar')).not.toBeNull();
   });
 });
@@ -155,21 +157,20 @@ describe('vw-popup-app auth flows', () => {
   });
 });
 
-describe('vw-popup-app top bar', () => {
+describe('vw-popup-app unlocked navigation', () => {
   it('opens the editor on add', async () => {
     const app = await mountApp(fakeRequest(UNLOCKED));
-    view(app, 'vw-popup-header').dispatchEvent(new CustomEvent('vw-add', { bubbles: true, composed: true }));
+    view(app, 'vw-sync-bar').dispatchEvent(new CustomEvent('vw-add', { bubbles: true, composed: true }));
     await settle(app);
     expect(app.route.name).toBe('editor');
   });
 
   it('toggles the generator view', async () => {
     const app = await mountApp(fakeRequest(UNLOCKED));
-    const header = view(app, 'vw-popup-header');
-    header.dispatchEvent(new CustomEvent('vw-generator-toggle', { bubbles: true, composed: true }));
+    view(app, 'vw-tools-menu').dispatchEvent(new CustomEvent('vw-tool-action', { detail: { action: 'generator' }, bubbles: true, composed: true }));
     await settle(app);
     expect(app.route.name).toBe('generator');
-    header.dispatchEvent(new CustomEvent('vw-generator-toggle', { bubbles: true, composed: true }));
+    view(app, 'vw-sync-bar').dispatchEvent(new CustomEvent('vw-generator-toggle', { bubbles: true, composed: true }));
     await settle(app);
     expect(app.route.name).toBe('vault');
   });
@@ -177,7 +178,7 @@ describe('vw-popup-app top bar', () => {
   it('opens options on settings', async () => {
     const openOptions = vi.fn(async () => {});
     const app = await mountApp(fakeRequest(UNLOCKED), fakeBrowser({ openOptions }));
-    view(app, 'vw-popup-header').dispatchEvent(new CustomEvent('vw-open-settings', { bubbles: true, composed: true }));
+    view(app, 'vw-account-menu').dispatchEvent(new CustomEvent('vw-account-action', { detail: { action: 'options' }, bubbles: true, composed: true }));
     await settle(app);
     expect(openOptions).toHaveBeenCalled();
   });
@@ -187,6 +188,52 @@ describe('vw-popup-app top bar', () => {
     view(app, 'vw-popup-header').dispatchEvent(new CustomEvent('vw-lock', { bubbles: true, composed: true }));
     await settle(app);
     expect(app.route.name).toBe('unlock');
+  });
+
+  it('logs out from the account menu only after the worker confirms success', async () => {
+    const app = await mountApp(fakeRequest({ ...UNLOCKED, 'auth.logout': async () => ({ ok: true, data: null }) }));
+    view(app, 'vw-account-menu').dispatchEvent(new CustomEvent('vw-account-action', { detail: { action: 'logout' }, bubbles: true, composed: true }));
+    await settle(app);
+    expect(app.route.name).toBe('login');
+  });
+
+  it('keeps the vault open and reports a failed logout', async () => {
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.logout': async () => ({ ok: false, error: { code: 'error', message: 'Logout failed' } }),
+    }));
+    view(app, 'vw-account-menu').dispatchEvent(new CustomEvent('vw-account-action', { detail: { action: 'logout' }, bubbles: true, composed: true }));
+    await settle(app);
+    expect(app.route.name).toBe('vault');
+    expect(app.toastMessage).toBe('Logout failed');
+  });
+
+  it('disables navigation controls and ignores menu routing while a request is pending', async () => {
+    const app = await mountApp(fakeRequest(UNLOCKED));
+    app.pending = true;
+    await app.updateComplete;
+    const tools = view<HTMLElement & { disabled: boolean }>(app, 'vw-tools-menu');
+    const account = view<HTMLElement & { disabled: boolean }>(app, 'vw-account-menu');
+    const rail = view<HTMLElement & { disabled: boolean }>(app, 'vw-sync-bar');
+    expect(tools.disabled).toBe(true);
+    expect(account.disabled).toBe(true);
+    expect(rail.disabled).toBe(true);
+    tools.dispatchEvent(new CustomEvent('vw-tool-action', { detail: { action: 'health' }, bubbles: true, composed: true }));
+    await settle(app);
+    expect(app.route.name).toBe('vault');
+  });
+
+  it('keeps the Send route stable while a local file is encoding', async () => {
+    const app = await mountApp(fakeRequest(UNLOCKED));
+    view(app, 'vw-tools-menu').dispatchEvent(new CustomEvent('vw-tool-action', { detail: { action: 'sends' }, bubbles: true, composed: true }));
+    await settle(app);
+    view(app, 'vw-sends-view').dispatchEvent(new CustomEvent('vw-send-encoding', { detail: { encoding: true }, bubbles: true, composed: true }));
+    await app.updateComplete;
+    expect(app.sendEncoding).toBe(true);
+    view(app, 'vw-tools-menu').dispatchEvent(new CustomEvent('vw-tool-action', { detail: { action: 'health' }, bubbles: true, composed: true }));
+    await settle(app);
+    expect(app.route.name).toBe('sends');
+    expect((view<HTMLElement & { disabled: boolean }>(app, 'vw-sync-bar')).disabled).toBe(true);
   });
 });
 
@@ -219,6 +266,18 @@ describe('vw-popup-app vault interactions', () => {
     view(app, 'vw-vault-view').dispatchEvent(new CustomEvent('vw-suggestion-fill', { detail: { cipherId: 'c1', target: { frameId: 0, formId: 'f1' } }, bubbles: true, composed: true }));
     await settle(app);
     expect(fill).toHaveBeenCalled();
+    expect(app.toastMessage).not.toBe('');
+  });
+
+  it('surfaces a stale fill target instead of failing silently', async () => {
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'autofill.getTabSuggestions': async () => ({ ok: true, data: { outcome: { status: 'ready', suggestions: [{ id: 'c1', name: 'Nebula', matchedUri: 'https://nebula.dev', matchType: 0, favorite: false, target: { frameId: 0, formId: 'f1' } }] } } }),
+      'autofill.fillTabSuggestion': async () => ({ ok: true, data: { outcome: { status: 'target_changed' } } }),
+    }), fakeBrowser());
+    view(app, 'vw-vault-view').dispatchEvent(new CustomEvent('vw-suggestion-fill', { detail: { cipherId: 'c1', target: { frameId: 0, formId: 'f1' } }, bubbles: true, composed: true }));
+    await settle(app);
+    expect(app.toastMessage).toContain('页面已变化');
   });
 
   it('edits an item', async () => {
@@ -226,6 +285,18 @@ describe('vw-popup-app vault interactions', () => {
     view(app, 'vw-vault-view').dispatchEvent(new CustomEvent('vw-edit-item', { detail: { cipherId: 'c1' }, bubbles: true, composed: true }));
     await settle(app);
     expect(app.route.name).toBe('editor');
+  });
+
+  it('renders an editor load failure with a way back', async () => {
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'vault.getCipherInput': async () => ({ ok: false, error: { code: 'error', message: 'Unable to load item' } }),
+    }));
+    view(app, 'vw-vault-view').dispatchEvent(new CustomEvent('vw-edit-item', { detail: { cipherId: 'c1' }, bubbles: true, composed: true }));
+    await settle(app);
+    const status = view<HTMLElement & { message: string }>(app, '.load-state vw-status-message');
+    expect(status.message).toBe('Unable to load item');
+    expect(view(app, '.load-back')).not.toBeNull();
   });
 });
 
@@ -237,6 +308,17 @@ describe('vw-popup-app sync bar', () => {
     await settle(app);
     expect(sync).toHaveBeenCalled();
     expect(app.lastSync).toBeTypeOf('number');
+  });
+
+  it('surfaces a sync failure and does not stamp a successful time', async () => {
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'vault.sync': async () => ({ ok: false, error: { code: 'error', message: 'Server unavailable' } }),
+    }));
+    view(app, 'vw-sync-bar').dispatchEvent(new CustomEvent('vw-sync-now', { bubbles: true, composed: true }));
+    await settle(app);
+    expect(app.lastSync).toBeUndefined();
+    expect(app.toastMessage).toBe('Server unavailable');
   });
 });
 
@@ -286,7 +368,7 @@ describe('vw-popup-app totp countdown lifecycle', () => {
       ...UNLOCKED,
       'vault.getTotpCodes': async () => ({ ok: true, data: { totpEntries: [{ id: 'c1', name: 'Nebula', code: '123456', period: 30, remaining: 20 }] } }),
     }));
-    view(app, 'vw-popup-header').dispatchEvent(new CustomEvent('vw-open-totp', { bubbles: true, composed: true }));
+    view(app, 'vw-sync-bar').dispatchEvent(new CustomEvent('vw-open-totp', { bubbles: true, composed: true }));
     await settle(app);
     expect(app.route.name).toBe('totp');
     const timers = app as unknown as { totpListTimer: number | undefined };
@@ -300,7 +382,7 @@ describe('vw-popup-app totp countdown lifecycle', () => {
 describe('vw-popup-app clipboard copy', () => {
   it('copies a tool value without raising the copy toast', async () => {
     const app = await mountApp(fakeRequest(UNLOCKED));
-    view(app, 'vw-popup-header').dispatchEvent(new CustomEvent('vw-generator-toggle', { bubbles: true, composed: true }));
+    view(app, 'vw-tools-menu').dispatchEvent(new CustomEvent('vw-tool-action', { detail: { action: 'generator' }, bubbles: true, composed: true }));
     await settle(app);
     view(app, 'vw-generator-view').dispatchEvent(new CustomEvent('vw-copy', { detail: { value: 'gen-pass', label: 'Password' }, bubbles: true, composed: true }));
     await settle(app);
@@ -314,6 +396,31 @@ describe('vw-popup-app clipboard copy', () => {
     await settle(app);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('shown');
     expect(app.toastMessage).not.toBe('');
+  });
+
+  it('does not let an older clipboard promise overwrite a newer Send result', async () => {
+    let releaseFirst: (() => void) | undefined;
+    const writeText = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { releaseFirst = resolve; }))
+      .mockResolvedValueOnce(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const created = { id: 's1', accessId: 'a', type: 0 as const, name: 'x', hidden: false, url: 'https://new', deletionDate: '2026-08-01T00:00:00Z', accessCount: 0, disabled: false, passwordProtected: false };
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'sends.list': async () => ({ ok: true, data: { sends: [created] } }),
+      'sends.createText': async () => ({ ok: true, data: { send: created } }),
+    }));
+    view(app, 'vw-tools-menu').dispatchEvent(new CustomEvent('vw-tool-action', { detail: { action: 'sends' }, bubbles: true, composed: true }));
+    await settle(app);
+    const sends = view(app, 'vw-sends-view');
+    sends.dispatchEvent(new CustomEvent('vw-copy', { detail: { value: 'https://old', label: 'Old link' }, bubbles: true, composed: true }));
+    sends.dispatchEvent(new CustomEvent('vw-send-create', { detail: { kind: 'text', input: { name: 'x', text: 'secret', deletionDays: 7 } }, bubbles: true, composed: true }));
+    await settle(app);
+    const mutationMessage = app.toolStatus?.message;
+    expect(mutationMessage).toContain('已创建');
+    releaseFirst?.();
+    await settle(app);
+    expect(app.toolStatus?.message).toBe(mutationMessage);
   });
 });
 

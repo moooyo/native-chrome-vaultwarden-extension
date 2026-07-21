@@ -120,9 +120,16 @@ export class VwOptionsShell extends LitElement {
       @media (max-width:720px) {
         :host { display:block; }
         .sidebar { width:100%; padding-bottom:8px; }
-        nav { flex-direction:row; overflow-x:auto; }
+        nav { flex-direction:row; overflow-x:auto; scrollbar-width:thin; scrollbar-color:var(--vw-scrollbar) transparent; }
+        nav::-webkit-scrollbar { height:4px; }
+        nav::-webkit-scrollbar-thumb { border-radius:2px; background:var(--vw-scrollbar); }
+        nav::-webkit-scrollbar-button { display:none; }
         .nav-item { flex:none; }
-        .spacer, .foot { display:none; }
+        .spacer { display:none; }
+        .foot { flex-direction:row; align-items:center; margin-top:8px; padding:8px 10px 0; }
+        .foot-controls { flex:1; }
+        .lang { margin-left:0; }
+        .foot-logout { width:auto; margin-left:auto; white-space:nowrap; }
         .inner { padding:22px 18px 36px; }
       }
     `,

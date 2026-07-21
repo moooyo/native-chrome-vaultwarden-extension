@@ -29,30 +29,21 @@ function buttons(el: VwPopupHeader): HTMLButtonElement[] {
 describe('vw-popup-header', () => {
   afterEach(() => document.body.replaceChildren());
 
-  it('renders the brand, score, lock, and account controls', async () => {
+  it('renders the brand, menu slots, and lock control without a fabricated score', async () => {
     const el = await mount();
     expect(el.shadowRoot?.querySelector('vw-logo')).not.toBeNull();
     expect(el.shadowRoot?.textContent).toContain('密屿');
-    expect(buttons(el)).toHaveLength(3);
+    expect(buttons(el)).toHaveLength(1);
+    expect(el.shadowRoot?.querySelector('slot[name="tools"]')).not.toBeNull();
+    expect(el.shadowRoot?.querySelector('slot[name="account"]')).not.toBeNull();
+    expect(el.shadowRoot?.textContent).not.toContain('86');
   });
 
-  it.each([
-    ['vw-sync-now', 0],
-    ['vw-lock', 1],
-    ['vw-open-settings', 2],
-  ] as const)('emits %s from its button', async (event, index) => {
+  it('emits vw-lock from its button', async () => {
     const el = await mount();
     const fired = vi.fn();
-    el.addEventListener(event, fired);
-    buttons(el)[index]!.click();
+    el.addEventListener('vw-lock', fired);
+    buttons(el)[0]!.click();
     expect(fired).toHaveBeenCalledTimes(1);
-  });
-
-  it('animates the score ring while syncing', async () => {
-    const el = await mount();
-    el.syncing = true;
-    await el.updateComplete;
-    expect(buttons(el)[0]!.classList.contains('syncing')).toBe(true);
-    expect(buttons(el)[0]!.disabled).toBe(true);
   });
 });

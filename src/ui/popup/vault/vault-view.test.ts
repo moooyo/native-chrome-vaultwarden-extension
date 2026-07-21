@@ -70,10 +70,23 @@ describe('vw-vault-view', () => {
     const el = await mount();
     const fired = vi.fn();
     el.addEventListener('vw-item-toggle', fired);
-    const row = el.shadowRoot!.querySelector<HTMLElement>('.row')!;
+    const row = el.shadowRoot!.querySelector<HTMLButtonElement>('.row-main')!;
     expect(row.textContent).toContain('Nebula');
+    expect(row.getAttribute('aria-expanded')).toBe('false');
     row.click();
     expect(fired).toHaveBeenCalledWith(expect.objectContaining({ detail: { cipherId: 'c1' } }));
+  });
+
+  it('uses a native button for keyboard expansion and only offers password copy for logins', async () => {
+    const card: CipherSummary = { id: 'card-1', name: 'Card', uris: [], loginUris: [], type: 3, favorite: false, subtitle: '•••• 4242' };
+    const el = await mount({ items: [card] });
+    const row = el.shadowRoot!.querySelector('.row-main');
+    expect(row?.tagName).toBe('BUTTON');
+    expect(el.shadowRoot!.querySelector('.row-copy')).toBeNull();
+    el.selectedCipherId = 'card-1';
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('.btn-primary')).toBeNull();
+    expect(el.shadowRoot!.querySelector('.btn-outline')).not.toBeNull();
   });
 
   it('shows the passkey marker only for items with a passkey', async () => {

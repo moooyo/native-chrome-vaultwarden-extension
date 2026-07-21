@@ -12,6 +12,7 @@ export class VwSyncBar extends LitElement {
     generatorActive: { type: Boolean },
     totpActive: { type: Boolean },
     healthActive: { type: Boolean },
+    disabled: { type: Boolean },
   };
 
   declare syncing: boolean;
@@ -19,6 +20,7 @@ export class VwSyncBar extends LitElement {
   declare generatorActive: boolean;
   declare totpActive: boolean;
   declare healthActive: boolean;
+  declare disabled: boolean;
 
   private i18n = new LocalizeController(this);
 
@@ -29,6 +31,7 @@ export class VwSyncBar extends LitElement {
     this.generatorActive = false;
     this.totpActive = false;
     this.healthActive = false;
+    this.disabled = false;
   }
 
   static override styles = [
@@ -64,6 +67,7 @@ export class VwSyncBar extends LitElement {
         cursor:pointer;
       }
       button:hover { background:var(--vw-icon-hover); }
+      button:disabled { opacity:.5; cursor:default; }
       button.active { background:var(--pc); color:var(--onpc); }
       button.add { margin-left:3px; border-radius:12px; background:var(--p); color:var(--onp); }
       button.add:hover { background:var(--vw-primary-bg-hover); }
@@ -82,11 +86,11 @@ export class VwSyncBar extends LitElement {
       <div class="bar">
         <span class="hint" title=${this.syncing ? t('sync.syncing') : t('sync.now')}>↑↓ · ↵ · ⌘L</span>
         <div class="actions">
-          <button type="button" class=${this.generatorActive ? 'active' : ''} title=${t('popup.generator')} aria-label=${t('popup.generator')} aria-pressed=${this.generatorActive ? 'true' : 'false'} @click=${() => this.fire('vw-generator-toggle')}>${uiIcon('wand')}</button>
-          <button type="button" class=${this.totpActive ? 'active' : ''} title=${t('popup.authenticator')} aria-label=${t('popup.authenticator')} aria-pressed=${this.totpActive ? 'true' : 'false'} @click=${() => this.fire('vw-open-totp')}>${uiIcon('clock')}</button>
-          <button type="button" class=${this.healthActive ? 'active' : ''} title=${t('popup.health')} aria-label=${t('popup.health')} aria-pressed=${this.healthActive ? 'true' : 'false'} @click=${() => this.fire('vw-open-health')}>${uiIcon('shield')}</button>
-          <button type="button" title=${t('popup.settings')} aria-label=${t('popup.settings')} @click=${() => this.fire('vw-open-settings')}>${uiIcon('sliders')}</button>
-          <button type="button" class="add" title=${t('popup.newItem')} aria-label=${t('popup.newItem')} @click=${() => this.fire('vw-add')}>${uiIcon('plus')}</button>
+          <button type="button" class=${this.generatorActive ? 'active' : ''} title=${t('popup.generator')} aria-label=${t('popup.generator')} aria-pressed=${this.generatorActive ? 'true' : 'false'} ?disabled=${this.disabled} @click=${() => this.fire('vw-generator-toggle')}>${uiIcon('wand')}</button>
+          <button type="button" class=${this.totpActive ? 'active' : ''} title=${t('popup.authenticator')} aria-label=${t('popup.authenticator')} aria-pressed=${this.totpActive ? 'true' : 'false'} ?disabled=${this.disabled} @click=${() => this.fire('vw-open-totp')}>${uiIcon('clock')}</button>
+          <button type="button" class=${this.healthActive ? 'active' : ''} title=${t('popup.health')} aria-label=${t('popup.health')} aria-pressed=${this.healthActive ? 'true' : 'false'} ?disabled=${this.disabled} @click=${() => this.fire('vw-open-health')}>${uiIcon('shield')}</button>
+          <button type="button" title=${t('popup.settings')} aria-label=${t('popup.settings')} ?disabled=${this.disabled} @click=${() => this.fire('vw-open-settings')}>${uiIcon('sliders')}</button>
+          <button type="button" class="add" title=${t('popup.newItem')} aria-label=${t('popup.newItem')} ?disabled=${this.disabled} @click=${() => this.fire('vw-add')}>${uiIcon('plus')}</button>
         </div>
       </div>
     `;

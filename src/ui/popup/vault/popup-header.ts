@@ -8,22 +8,16 @@ import '../../components/logo.js';
 /** Compact Chrome-style identity and security bar from the new popup handoff. */
 export class VwPopupHeader extends LitElement {
   static override properties = {
-    generatorActive: { type: Boolean },
-    totpActive: { type: Boolean },
-    syncing: { type: Boolean },
+    busy: { type: Boolean },
   };
 
-  declare generatorActive: boolean;
-  declare totpActive: boolean;
-  declare syncing: boolean;
+  declare busy: boolean;
 
   private i18n = new LocalizeController(this);
 
   constructor() {
     super();
-    this.generatorActive = false;
-    this.totpActive = false;
-    this.syncing = false;
+    this.busy = false;
   }
 
   static override styles = [
@@ -52,46 +46,15 @@ export class VwPopupHeader extends LitElement {
         font:inherit;
       }
       button:hover { background:var(--vw-icon-hover); }
+      button:disabled { opacity:.5; cursor:default; }
       button:focus-visible { outline:none; box-shadow:var(--vw-focus); }
-      .score {
-        gap:5px;
-        height:32px;
-        padding:0 7px;
-        border-radius:16px;
-        color:var(--grn);
-        font-size:11px;
-        font-weight:500;
-      }
-      .score-ring {
-        position:relative;
-        width:20px;
-        height:20px;
-        border-radius:50%;
-        background:conic-gradient(var(--grn) 0 86%, var(--vw-track) 86% 100%);
-      }
-      .score-ring::after {
-        content:'';
-        position:absolute;
-        inset:3px;
-        border-radius:50%;
-        background:var(--vw-panel);
-      }
-      .score.syncing .score-ring { animation:mvSpin .8s linear infinite; }
       .icon {
         width:32px;
         height:32px;
         border-radius:16px;
       }
       .icon svg { width:17px; height:17px; }
-      .avatar {
-        width:28px;
-        height:28px;
-        border-radius:50%;
-        background:#7c4dff;
-        color:#fff;
-        font-size:12px;
-        font-weight:500;
-      }
+      .control-slot { display:inline-flex; align-items:center; }
     `,
   ];
 
@@ -105,20 +68,11 @@ export class VwPopupHeader extends LitElement {
         <vw-logo variant="header"></vw-logo>
         <span class="brand">${t('common.brand')}</span>
         <span class="spacer"></span>
-        <button
-          type="button"
-          class="score ${this.syncing ? 'syncing' : ''}"
-          title=${t('sync.now')}
-          aria-label=${t('sync.now')}
-          ?disabled=${this.syncing}
-          @click=${() => this.fire('vw-sync-now')}
-        >
-          <span class="score-ring" aria-hidden="true"></span><span>86</span>
-        </button>
-        <button type="button" class="icon" title=${t('popup.lock')} aria-label=${t('popup.lock')} @click=${() => this.fire('vw-lock')}>
+        <span class="control-slot"><slot name="tools"></slot></span>
+        <button type="button" class="icon" title=${t('popup.lock')} aria-label=${t('popup.lock')} ?disabled=${this.busy} @click=${() => this.fire('vw-lock')}>
           ${uiIcon('lock')}
         </button>
-        <button type="button" class="avatar" title=${t('popup.settings')} aria-label=${t('popup.settings')} @click=${() => this.fire('vw-open-settings')}>密</button>
+        <span class="control-slot"><slot name="account"></slot></span>
       </div>
     `;
   }

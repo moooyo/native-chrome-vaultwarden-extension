@@ -37,6 +37,7 @@ describe('vw-send-section', () => {
     await el.updateComplete;
     const fired = vi.fn();
     el.addEventListener('vw-send-create', fired);
+    (el.shadowRoot!.querySelector('[data-content]') as HTMLTextAreaElement).value = 'secret text';
     (el.shadowRoot!.querySelector('.form .btn-primary') as HTMLButtonElement).click();
     await new Promise((r) => setTimeout(r, 0));
     expect(fired).toHaveBeenCalled();
@@ -56,5 +57,56 @@ describe('vw-send-section', () => {
     buttons[1]!.click();
     expect(copy).toHaveBeenCalledWith(expect.objectContaining({ detail: { value: 'https://s' } }));
     expect(del).toHaveBeenCalledWith(expect.objectContaining({ detail: { id: 's1' } }));
+  });
+
+  it('keeps the form and entered text after a failed create request', async () => {
+    const el = await mount();
+    (el.shadowRoot!.querySelector('.intro .btn-primary') as HTMLButtonElement).click();
+    await el.updateComplete;
+    const content = el.shadowRoot!.querySelector('[data-content]') as HTMLTextAreaElement;
+    content.value = 'keep me';
+    (el.shadowRoot!.querySelector('.form .btn-primary') as HTMLButtonElement).click();
+    el.pending = true;
+    await el.updateComplete;
+    el.status = { tone: 'danger', message: 'Server rejected the Send' };
+    el.pending = false;
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('.form')).not.toBeNull();
+    expect((el.shadowRoot!.querySelector('[data-content]') as HTMLTextAreaElement).value).toBe('keep me');
+  });
+
+  it('closes the form only after a successful create request', async () => {
+    const el = await mount();
+    (el.shadowRoot!.querySelector('.intro .btn-primary') as HTMLButtonElement).click();
+    await el.updateComplete;
+    (el.shadowRoot!.querySelector('[data-content]') as HTMLTextAreaElement).value = 'share me';
+    (el.shadowRoot!.querySelector('.form .btn-primary') as HTMLButtonElement).click();
+    el.pending = true;
+    await el.updateComplete;
+    el.status = { tone: 'success', message: 'Created' };
+    el.pending = false;
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('.form')).toBeNull();
+  });
+
+  it('blocks an empty text Send with an inline validation error', async () => {
+    const el = await mount();
+    (el.shadowRoot!.querySelector('.intro .btn-primary') as HTMLButtonElement).click();
+    await el.updateComplete;
+    const fired = vi.fn();
+    el.addEventListener('vw-send-create', fired);
+    (el.shadowRoot!.querySelector('.form .btn-primary') as HTMLButtonElement).click();
+    await el.updateComplete;
+    expect(fired).not.toHaveBeenCalled();
+    expect(el.validationError).toBeTruthy();
+  });
+
+  it('disables existing Send actions while a file is encoding', async () => {
+    const el = await mount();
+    el.encoding = true;
+    await el.updateComplete;
+    for (const button of el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.send .icon-btn')) {
+      expect(button.disabled).toBe(true);
+    }
   });
 });

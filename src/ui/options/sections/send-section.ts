@@ -1,4 +1,4 @@
-import { LitElement, css, html, nothing } from 'lit';
+import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
@@ -12,6 +12,8 @@ import '../../components/toggle.js';
 import '../../components/status-message.js';
 import type { SectionStatus } from '../types.js';
 
+const MAX_FILE_BYTES = 100 * 1024 * 1024;
+
 /**
  * Options Send section: an intro card + a "new Send" create form (text/file, name, content, expiry,
  * max access, optional password) and the active-Send list. Dumb — it emits `vw-send-create`,
@@ -24,18 +26,24 @@ export class VwSendSection extends LitElement {
     locked: { type: Boolean },
     pending: { type: Boolean },
     status: { attribute: false },
+    validationError: { state: true },
+    encoding: { state: true },
   };
 
   declare sends: AsyncState<SendSummary[]>;
   declare locked: boolean;
   declare pending: boolean;
   declare status: SectionStatus | undefined;
+  declare validationError: string | undefined;
+  declare encoding: boolean;
 
   private i18n = new LocalizeController(this);
   private formOpen = false;
   private kind: 'text' | 'file' = 'text';
   private passwordOn = false;
   private file: File | undefined;
+  private submitted = false;
+  private wasPending = false;
 
   constructor() {
     super();
@@ -43,6 +51,8 @@ export class VwSendSection extends LitElement {
     this.locked = false;
     this.pending = false;
     this.status = undefined;
+    this.validationError = undefined;
+    this.encoding = false;
   }
 
   static override styles = [
@@ -87,7 +97,10 @@ export class VwSendSection extends LitElement {
       .icon-btn svg { width: 15px; height: 15px; }
       .footer { font-size: 11px; color: var(--vw-faint); padding: 4px 2px; }
       .empty { padding: 24px; text-align: center; color: var(--vw-muted); font-size: 12.5px; }
+      .spin { display:inline-flex; }
+      .spin svg { width:14px; height:14px; animation:mvSpin .8s linear infinite; }
       button:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; box-shadow: var(--vw-focus); }
+      @media (prefers-reduced-motion: reduce) { .spin svg { animation:none; } }
     `,
   ];
 
@@ -100,10 +113,39 @@ export class VwSendSection extends LitElement {
   }
 
   private openForm(): void { this.formOpen = true; this.requestUpdate(); }
-  private closeForm(): void { this.formOpen = false; this.file = undefined; this.passwordOn = false; this.kind = 'text'; this.requestUpdate(); }
+  private resetFormState(): void {
+    this.formOpen = false;
+    this.file = undefined;
+    this.passwordOn = false;
+    this.kind = 'text';
+    this.validationError = undefined;
+    this.submitted = false;
+    this.wasPending = false;
+  }
+
+  private closeForm(): void {
+    this.resetFormState();
+    this.requestUpdate();
+  }
+
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (this.submitted && changed.has('status') && !this.pending && this.status && this.status.tone !== 'danger') {
+      this.resetFormState();
+      return;
+    }
+    if (!changed.has('pending')) return;
+    if (this.wasPending && !this.pending && this.submitted) {
+      if (this.status?.tone !== 'danger') this.resetFormState();
+      this.submitted = false;
+    }
+    this.wasPending = this.pending;
+  }
 
   private async create(): Promise<void> {
-    const name = (this.q<HTMLInputElement>('[data-name]')?.value ?? '').trim() || t('common.brand');
+    if (this.pending || this.encoding) return;
+    this.validationError = undefined;
+    const rawName = (this.q<HTMLInputElement>('[data-name]')?.value ?? '').trim();
+    const name = rawName || t('send.defaultName');
     const deletionDays = Number(this.q<HTMLSelectElement>('[data-expiry]')?.value ?? '7') || 7;
     const maxRaw = this.q<HTMLSelectElement>('[data-max]')?.value ?? '';
     const password = this.passwordOn ? (this.q<HTMLInputElement>('[data-pass]')?.value ?? '') : '';
@@ -111,14 +153,26 @@ export class VwSendSection extends LitElement {
     if (maxRaw) base.maxAccessCount = Number(maxRaw);
     if (password) base.password = password;
     if (this.kind === 'file') {
-      if (!this.file) return;
-      const dataB64 = bytesToBase64(new Uint8Array(await this.file.arrayBuffer()));
-      this.emit('vw-send-create', { kind: 'file', input: { ...base, name: name || this.file.name }, dataB64, fileName: this.file.name });
+      if (!this.file) { this.validationError = t('send.error.fileRequired'); return; }
+      if (this.file.size > MAX_FILE_BYTES) { this.validationError = t('send.error.fileTooLarge', { max: '100 MB' }); return; }
+      this.encoding = true;
+      let dataB64: string;
+      try {
+        dataB64 = bytesToBase64(new Uint8Array(await this.file.arrayBuffer()));
+      } catch {
+        this.validationError = t('send.error.fileRead');
+        return;
+      } finally {
+        this.encoding = false;
+      }
+      this.submitted = true;
+      this.emit('vw-send-create', { kind: 'file', input: { ...base, name: rawName || this.file.name }, dataB64, fileName: this.file.name });
     } else {
       const text = this.q<HTMLTextAreaElement>('[data-content]')?.value ?? '';
+      if (!text.trim()) { this.validationError = t('send.error.textRequired'); return; }
+      this.submitted = true;
       this.emit('vw-send-create', { kind: 'text', input: { ...base, text } });
     }
-    this.closeForm();
   }
 
   private meta(send: SendSummary): string {
@@ -128,7 +182,7 @@ export class VwSendSection extends LitElement {
     if (dead) parts.push(t('options.send.expired'));
     else {
       const days = Math.max(0, Math.round((new Date(send.deletionDate).getTime() - now) / 86400000));
-      parts.push(days <= 1 ? t('options.send.expiresTomorrow') : t('options.send.expiresIn', { time: t('sync.daysAgo', { count: days }).replace('前', '') }));
+      parts.push(days <= 1 ? t('options.send.expiresTomorrow') : t('options.send.expiresInDays', { count: days }));
     }
     if (send.maxAccessCount != null) parts.push(t('options.send.accessed', { used: send.accessCount, max: send.maxAccessCount }));
     return parts.join(' · ');
@@ -151,7 +205,7 @@ export class VwSendSection extends LitElement {
           <div class="title">${t('options.send.introTitle')}</div>
           <div class="desc">${t('options.send.introDesc')}</div>
         </div>
-        <button class="btn-primary" ?disabled=${this.locked} @click=${() => this.openForm()}>
+        <button type="button" class="btn-primary" ?disabled=${this.locked || this.pending || this.encoding} @click=${() => this.openForm()}>
           ${uiIcon('plus')}${t('options.send.new')}
         </button>
       </div>
@@ -185,13 +239,13 @@ export class VwSendSection extends LitElement {
         </div>
         <div class="field">
           <label>${t('options.send.name')}</label>
-          <input data-name type="text" placeholder=${t('options.send.namePlaceholder')} />
+          <input data-name type="text" placeholder=${t('options.send.namePlaceholder')} ?disabled=${this.pending || this.encoding} />
         </div>
         <div class="field">
           <label>${this.kind === 'text' ? t('options.send.textContent') : t('options.send.fileContent')}</label>
           ${this.kind === 'text'
-            ? html`<textarea data-content rows="3" placeholder=${t('options.send.contentPlaceholder')}></textarea>`
-            : html`<input data-file type="file" @change=${(e: Event) => { this.file = (e.target as HTMLInputElement).files?.[0]; }} />`}
+            ? html`<textarea data-content rows="3" placeholder=${t('options.send.contentPlaceholder')} ?disabled=${this.pending || this.encoding}></textarea>`
+            : html`<input data-file type="file" ?disabled=${this.pending || this.encoding} @change=${(e: Event) => { this.file = (e.target as HTMLInputElement).files?.[0]; this.validationError = undefined; }} />`}
         </div>
         <div class="controls">
           <div class="field">
@@ -207,10 +261,13 @@ export class VwSendSection extends LitElement {
             <vw-toggle size="sm" .checked=${this.passwordOn} @vw-toggle-change=${(e: CustomEvent<{ checked: boolean }>) => { this.passwordOn = e.detail.checked; this.requestUpdate(); }}></vw-toggle>
           </div>
         </div>
-        ${this.passwordOn ? html`<div class="field"><input data-pass type="password" placeholder=${t('options.send.accessPassword')} /></div>` : nothing}
+        ${this.passwordOn ? html`<div class="field"><input data-pass type="password" placeholder=${t('options.send.accessPassword')} ?disabled=${this.pending || this.encoding} /></div>` : nothing}
+        ${this.validationError ? html`<vw-status-message tone="danger" .icon=${'alert'} .message=${this.validationError}></vw-status-message>` : nothing}
         <div class="actions">
-          <button class="btn-primary" ?disabled=${this.pending} @click=${() => void this.create()}>${t('options.send.create')}</button>
-          <button class="btn-outline" @click=${() => this.closeForm()}>${t('common.cancel')}</button>
+          <button type="button" class="btn-primary" ?disabled=${this.pending || this.encoding} @click=${() => void this.create()}>
+            ${this.encoding ? html`<span class="spin">${uiIcon('refresh')}</span>${t('send.encoding')}` : t('options.send.create')}
+          </button>
+          <button type="button" class="btn-outline" ?disabled=${this.pending || this.encoding} @click=${() => this.closeForm()}>${t('common.cancel')}</button>
         </div>
       </div>
     `;
@@ -237,8 +294,8 @@ export class VwSendSection extends LitElement {
           <div class="name">${send.name}</div>
           <div class="sub">${this.meta(send)}</div>
         </div>
-        <button class="icon-btn" title=${t('options.send.copyLink')} @click=${() => this.emit('vw-copy', { value: send.url })}>${uiIcon('link')}</button>
-        <button class="icon-btn danger" title=${t('common.delete')} @click=${() => this.emit('vw-send-delete', { id: send.id })}>${uiIcon('trash')}</button>
+        <button type="button" class="icon-btn" title=${t('options.send.copyLink')} aria-label=${t('send.copyAria')} ?disabled=${this.pending || this.encoding} @click=${() => this.emit('vw-copy', { value: send.url })}>${uiIcon('link')}</button>
+        <button type="button" class="icon-btn danger" title=${t('common.delete')} aria-label=${t('send.deleteAria')} ?disabled=${this.pending || this.encoding} @click=${() => this.emit('vw-send-delete', { id: send.id })}>${uiIcon('trash')}</button>
       </div>
     `;
   }

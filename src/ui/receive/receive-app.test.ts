@@ -148,6 +148,10 @@ describe('vw-receive-app permission gesture', () => {
     expect(stubs.requestOrigin).toHaveBeenCalledWith('https://vault.example/*');
     expect(stubs.fetchCalls).toHaveLength(0);
     expect(app.state.status).toBe('accessing');
+    await app.updateComplete;
+    expect(accessButton(app).disabled).toBe(true);
+    expect(accessButton(app).textContent).toContain('正在解密');
+    expect((app.shadowRoot!.querySelector('vw-status-message') as HTMLElement & { message: string }).message).toBe('正在解密…');
 
     resolveOrigin(true);
     await flushAsync();

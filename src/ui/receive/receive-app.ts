@@ -348,6 +348,7 @@ export class VwReceiveApp extends LitElement {
         // wrong-password retry returns the same 401), so keep it a polite info message — no
         // assertive alert, no error icon.
         return html`<vw-status-message tone="info" .message=${this.state.message}></vw-status-message>`;
+      case 'accessing':
       case 'downloading':
         return html`<vw-status-message tone="info" .message=${this.i18n.t('receive.loading')}></vw-status-message>`;
       case 'error':
@@ -387,7 +388,7 @@ export class VwReceiveApp extends LitElement {
                 `
               : nothing}
             <button type="button" class="btn primary block" data-access ?disabled=${busy} @click=${() => void this.onAccess()}>
-              ${uiIcon('unlock')}<span>${this.i18n.t('receive.unlock')}</span>
+              ${uiIcon(this.state.status === 'accessing' ? 'refresh' : 'unlock')}<span>${this.state.status === 'accessing' ? this.i18n.t('receive.loading') : this.i18n.t('receive.unlock')}</span>
             </button>
             ${this.renderResult()}
             ${this.renderStatus()}

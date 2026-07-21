@@ -27,6 +27,10 @@ let current: Locale = DEFAULT_LOCALE;
 const listeners = new Set<() => void>();
 let storageSynced = false;
 
+function syncDocumentLanguage(): void {
+  if (typeof document !== 'undefined') document.documentElement.lang = current;
+}
+
 function isLocale(value: unknown): value is Locale {
   return value === 'zh-CN' || value === 'en';
 }
@@ -50,11 +54,16 @@ export function t(key: MessageKey, vars?: Record<string, string | number>): stri
 
 /** Changes the active locale, notifies subscribers, and (by default) persists across contexts. */
 export function setLocale(locale: Locale, persist = true): void {
-  if (!isLocale(locale) || locale === current) return;
+  if (!isLocale(locale)) return;
+  if (locale === current) {
+    syncDocumentLanguage();
+    return;
+  }
   current = locale;
+  syncDocumentLanguage();
   if (persist) {
     try {
-      void browser.storage.local.set({ [STORAGE_KEY]: locale });
+      void browser.storage.local.set({ [STORAGE_KEY]: locale }).catch(() => undefined);
     } catch {
       /* storage unavailable (e.g. tests) */
     }
@@ -72,6 +81,7 @@ export async function initLocale(): Promise<Locale> {
   } catch {
     /* storage unavailable */
   }
+  syncDocumentLanguage();
   for (const listener of listeners) listener();
   return current;
 }
@@ -85,6 +95,7 @@ function installStorageSync(): void {
       const change = changes[STORAGE_KEY];
       if (change && isLocale(change.newValue) && change.newValue !== current) {
         current = change.newValue;
+        syncDocumentLanguage();
         for (const listener of listeners) listener();
       }
     });

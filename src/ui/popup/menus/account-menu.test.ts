@@ -1,9 +1,15 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('webextension-polyfill', () => ({
+  default: { storage: { local: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) }, onChanged: { addListener: vi.fn() } } },
+}));
+
 import './account-menu.js';
 import type { VwAccountMenu } from './account-menu.js';
 import type { AccountInfo, AccountActionDetail } from '../types.js';
 import type { VwMenu } from '../../components/menu.js';
+import { setLocale } from '../../i18n/index.js';
 
 interface Props {
   accounts?: AccountInfo[];
@@ -41,6 +47,8 @@ function itemByText(menu: VwMenu, text: string): HTMLButtonElement {
 }
 
 describe('vw-account-menu', () => {
+  beforeEach(() => setLocale('en', false));
+
   afterEach(() => {
     document.body.replaceChildren();
   });
@@ -48,14 +56,14 @@ describe('vw-account-menu', () => {
   it('lists every approved account action', async () => {
     const menu = await open(await mount({ deviceRemembered: true }));
     const text = menu.shadowRoot?.textContent ?? '';
-    for (const label of ['Add account', 'PIN', 'Account security', 'Options', 'Forget this device', 'Lock', 'Log out']) {
+    for (const label of ['Add account', 'PIN', 'Account security', 'Settings', 'Forget this device', 'Lock', 'Log out']) {
       expect(text).toContain(label);
     }
   });
 
   it.each([
     ['Account security', 'account-security'],
-    ['Options', 'options'],
+    ['Settings', 'options'],
     ['Add account', 'add-account'],
     ['Lock', 'lock'],
     ['Log out', 'logout'],
@@ -71,7 +79,7 @@ describe('vw-account-menu', () => {
   it('emits pin regardless of whether a PIN is configured, and labels it accordingly', async () => {
     const off = await mount({ pinEnabled: false });
     let menu = await open(off);
-    expect(menu.shadowRoot?.textContent).toContain('Set up PIN');
+    expect(menu.shadowRoot?.textContent).toContain('Set PIN');
     off.remove();
 
     const on = await mount({ pinEnabled: true });
@@ -83,20 +91,17 @@ describe('vw-account-menu', () => {
     expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ detail: { action: 'pin' } }));
   });
 
-  it('emits switch-account and remove-account with the target email', async () => {
+  it('emits switch-account with the target email and does not expose unconfirmed removal', async () => {
     const el = await mount({ accounts: [{ email: 'me@x', active: true }, { email: 'other@x', active: false }] });
     const emitted = vi.fn();
     el.addEventListener('vw-account-action', emitted);
     const menu = await open(el);
-    itemByText(menu, 'Switch to other@x').click();
+    itemByText(menu, 'Switch account · other@x').click();
     expect(emitted).toHaveBeenCalledWith(
       expect.objectContaining({ detail: { action: 'switch-account', email: 'other@x' } }),
     );
     const menu2 = await open(el);
-    itemByText(menu2, 'Remove other@x').click();
-    expect(emitted).toHaveBeenCalledWith(
-      expect.objectContaining({ detail: { action: 'remove-account', email: 'other@x' } }),
-    );
+    expect(menu2.shadowRoot?.textContent).not.toContain('Remove');
   });
 
   it('omits Forget this device unless the device is remembered', async () => {

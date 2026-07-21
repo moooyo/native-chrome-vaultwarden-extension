@@ -138,6 +138,37 @@ describe('vw-options-app', () => {
     expect((navigator.clipboard.writeText as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith('https://s');
   });
 
+  it('reports clipboard failure instead of claiming a Send link was copied', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn(async () => { throw new Error('denied'); }) },
+      configurable: true,
+    });
+    const app = await mount(makeDeps());
+    shell(app).dispatchEvent(new CustomEvent('vw-copy', { detail: { value: 'https://s' }, bubbles: true, composed: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(app.sendStatus?.tone).toBe('danger');
+    expect(app.sendStatus?.message).not.toContain('已复制');
+  });
+
+  it('ignores clipboard feedback from before a newer Send mutation', async () => {
+    let releaseFirst: (() => void) | undefined;
+    const writeText = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { releaseFirst = resolve; }))
+      .mockResolvedValueOnce(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const app = await mount(makeDeps({
+      'sends.createText': async () => ({ ok: true, data: { send: { id: 's1', accessId: 'a', type: 0, name: 'x', hidden: false, url: 'https://new', deletionDate: '', accessCount: 0, disabled: false, passwordProtected: false } } }),
+    }));
+    shell(app).dispatchEvent(new CustomEvent('vw-copy', { detail: { value: 'https://old' }, bubbles: true, composed: true }));
+    shell(app).dispatchEvent(new CustomEvent('vw-send-create', { detail: { kind: 'text', input: { name: 'x', deletionDays: 7 } }, bubbles: true, composed: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const mutationMessage = app.sendStatus?.message;
+    expect(mutationMessage).toContain('已创建');
+    releaseFirst?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(app.sendStatus?.message).toBe(mutationMessage);
+  });
+
   it('exports the vault on vw-export', async () => {
     const calls: string[] = [];
     const deps = makeDeps({ 'vault.export': async () => ({ ok: true, data: { json: '{}' } }) }, calls);

@@ -125,6 +125,7 @@ export class VwOptionsApp extends LitElement {
   deps: OptionsDeps = createDefaultDeps();
 
   private pendingImportContent: string | undefined;
+  private sendStatusEpoch = 0;
 
   constructor() {
     super();
@@ -315,6 +316,7 @@ export class VwOptionsApp extends LitElement {
 
   private async handleSendCreate(event: CustomEvent<SendCreateDetail>): Promise<void> {
     if (this.pending) return;
+    this.sendStatusEpoch += 1;
     this.pending = true;
     this.sendStatus = undefined;
     try {
@@ -328,8 +330,12 @@ export class VwOptionsApp extends LitElement {
       }
       const send = (response.data as { send?: SendSummary } | null)?.send;
       if (send) {
-        await this.copyToClipboard(send.url);
-        this.sendStatus = { message: t('options.send.linkCopied'), tone: 'success' };
+        const copied = await this.copyToClipboard(send.url);
+        this.sendStatus = copied
+          ? { message: t('send.createdCopied'), tone: 'success' }
+          : { message: t('send.createdCopyFailed'), tone: 'warning' };
+      } else {
+        this.sendStatus = { message: t('send.created'), tone: 'success' };
       }
       await this.loadSends();
     } finally {
@@ -339,6 +345,7 @@ export class VwOptionsApp extends LitElement {
 
   private async handleSendDelete(event: CustomEvent<SendDeleteDetail>): Promise<void> {
     if (this.pending) return;
+    this.sendStatusEpoch += 1;
     this.pending = true;
     try {
       const response = await this.deps.request({ type: 'sends.delete', id: event.detail.id });
@@ -350,16 +357,21 @@ export class VwOptionsApp extends LitElement {
   }
 
   private async handleCopy(event: CustomEvent<{ value: string }>): Promise<void> {
-    await this.copyToClipboard(event.detail.value);
-    this.sendStatus = { message: t('options.send.linkCopied'), tone: 'success' };
+    const epoch = this.sendStatusEpoch;
+    const copied = await this.copyToClipboard(event.detail.value);
+    if (epoch !== this.sendStatusEpoch) return;
+    this.sendStatus = copied
+      ? { message: t('options.send.linkCopied'), tone: 'success' }
+      : { message: t('common.copyFailed'), tone: 'danger' };
   }
 
-  private async copyToClipboard(value: string): Promise<void> {
+  private async copyToClipboard(value: string): Promise<boolean> {
     try {
       await navigator.clipboard.writeText(value);
       void this.deps.request({ type: 'clipboard.scheduleClear' });
+      return true;
     } catch {
-      /* clipboard unavailable */
+      return false;
     }
   }
 

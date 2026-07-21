@@ -1,15 +1,29 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('webextension-polyfill', () => ({
+  default: { storage: { local: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) }, onChanged: { addListener: vi.fn() } } },
+}));
+
 import './sends-view.js';
 import type { VwSendsView } from './sends-view.js';
 import type { SendSummary } from '../types.js';
 import type { SendCreateDetail, SendUpdateDetail } from '../types.js';
+import { setLocale } from '../../i18n/index.js';
+
+beforeEach(() => setLocale('en', false));
 
 async function mount(): Promise<VwSendsView> {
   const el = document.createElement('vw-sends-view') as VwSendsView;
   document.body.append(el);
   await el.updateComplete;
   return el;
+}
+
+async function openCreate(el: VwSendsView): Promise<void> {
+  q<HTMLButtonElement>(el, '[data-new-send]').click();
+  await el.updateComplete;
+  await el.updateComplete;
 }
 
 function q<T extends Element>(el: VwSendsView, sel: string): T {
@@ -44,8 +58,25 @@ describe('vw-sends-view create', () => {
     document.body.replaceChildren();
   });
 
+  it('starts with the compact create launcher so active Sends remain visible', async () => {
+    const el = await mount();
+    expect(el.shadowRoot!.querySelector('[data-new-send]')).not.toBeNull();
+    expect(el.shadowRoot!.querySelector('[data-create]')).toBeNull();
+  });
+
+  it('moves focus into the create form and restores it when the form closes', async () => {
+    const el = await mount();
+    await openCreate(el);
+    expect(el.shadowRoot!.activeElement).toBe(q(el, '[data-name]'));
+    q<HTMLButtonElement>(el, '[data-cancel-create]').click();
+    await el.updateComplete;
+    await el.updateComplete;
+    expect(el.shadowRoot!.activeElement).toBe(q(el, '[data-new-send]'));
+  });
+
   it('emits a text Send create with the collected input', async () => {
     const el = await mount();
+    await openCreate(el);
     const created = vi.fn();
     el.addEventListener('vw-send-create', (e) => created((e as CustomEvent<SendCreateDetail>).detail));
     await setValue(el, '[data-name]', 'Note');
@@ -60,6 +91,7 @@ describe('vw-sends-view create', () => {
 
   it('blocks an empty text Send with an inline error', async () => {
     const el = await mount();
+    await openCreate(el);
     const created = vi.fn();
     el.addEventListener('vw-send-create', created);
     q<HTMLButtonElement>(el, '[data-create]').click();
@@ -68,8 +100,20 @@ describe('vw-sends-view create', () => {
     expect((el.validationError ?? '').toLowerCase()).toContain('enter the text to share');
   });
 
+  it('updates visible copy and validation when the locale changes', async () => {
+    const el = await mount();
+    setLocale('zh-CN', false);
+    await el.updateComplete;
+    expect(el.shadowRoot!.textContent).toContain('内容在此设备上加密');
+    await openCreate(el);
+    q<HTMLButtonElement>(el, '[data-create]').click();
+    await el.updateComplete;
+    expect(el.validationError).toBe('请输入要分享的文本');
+  });
+
   it('rejects a file larger than 100 MB without emitting', async () => {
     const el = await mount();
+    await openCreate(el);
     q<HTMLButtonElement>(el, '[data-mode-file]').click();
     await el.updateComplete;
     const created = vi.fn();
@@ -86,6 +130,7 @@ describe('vw-sends-view create', () => {
 
   it('emits a file Send create with base64 bytes for a valid file', async () => {
     const el = await mount();
+    await openCreate(el);
     q<HTMLButtonElement>(el, '[data-mode-file]').click();
     await el.updateComplete;
     const detailPromise = new Promise<SendCreateDetail>((resolve) => {
@@ -103,6 +148,9 @@ describe('vw-sends-view create', () => {
 
   it('enters the encoding state synchronously when a file create starts', async () => {
     const el = await mount();
+    await openCreate(el);
+    const busy: boolean[] = [];
+    el.addEventListener('vw-send-encoding', (event) => busy.push((event as CustomEvent<{ encoding: boolean }>).detail.encoding));
     q<HTMLButtonElement>(el, '[data-mode-file]').click();
     await el.updateComplete;
     const fileInput = q<HTMLInputElement>(el, '[data-file]');
@@ -116,10 +164,12 @@ describe('vw-sends-view create', () => {
     await new Promise((r) => setTimeout(r));
     await el.updateComplete;
     expect(el.encoding).toBe(false);
+    expect(busy).toEqual([true, false]);
   });
 
   it('disables the create button and shows a spinner while encoding', async () => {
     const el = await mount();
+    await openCreate(el);
     el.encoding = true;
     await el.updateComplete;
     expect(q<HTMLButtonElement>(el, '[data-create]').disabled).toBe(true);
@@ -139,7 +189,7 @@ describe('vw-sends-view list actions', () => {
     const copied = vi.fn();
     el.addEventListener('vw-copy', (e) => copied((e as CustomEvent).detail));
     q<HTMLButtonElement>(el, '[data-copy]').click();
-    expect(copied).toHaveBeenCalledWith({ value: 'https://vault/#/send/acc/key', label: 'Send link' });
+    expect(copied).toHaveBeenCalledWith({ value: 'https://vault/#/send/acc/key', label: 'Copy link' });
   });
 
   it('deletes a Send', async () => {
@@ -149,7 +199,41 @@ describe('vw-sends-view list actions', () => {
     const deleted = vi.fn();
     el.addEventListener('vw-send-delete', (e) => deleted((e as CustomEvent).detail));
     q<HTMLButtonElement>(el, '[data-delete]').click();
+    await el.updateComplete;
+    expect(deleted).not.toHaveBeenCalled();
+    q<HTMLButtonElement>(el, '[data-delete-confirm]').click();
     expect(deleted).toHaveBeenCalledWith({ id: 's1' });
+  });
+
+  it('cancels a pending Send deletion without emitting', async () => {
+    const el = await mount();
+    el.sends = { status: 'ready', data: [send()] };
+    await el.updateComplete;
+    const deleted = vi.fn();
+    el.addEventListener('vw-send-delete', deleted);
+    q<HTMLButtonElement>(el, '[data-delete]').click();
+    await el.updateComplete;
+    await el.updateComplete;
+    expect(el.shadowRoot!.activeElement).toBe(q(el, '[data-delete-cancel]'));
+    q<HTMLButtonElement>(el, '[data-delete-cancel]').click();
+    await el.updateComplete;
+    expect(deleted).not.toHaveBeenCalled();
+    expect(el.shadowRoot!.querySelector('[data-delete-confirm]')).toBeNull();
+    expect(el.shadowRoot!.activeElement).toBe(q(el, '[data-delete]'));
+  });
+
+  it('disables list mutations and copy while a file is encoding', async () => {
+    const el = await mount();
+    el.sends = { status: 'ready', data: [send()] };
+    await el.updateComplete;
+    q<HTMLButtonElement>(el, '[data-delete]').click();
+    await el.updateComplete;
+    el.encoding = true;
+    await el.updateComplete;
+    for (const selector of ['[data-back]', '[data-copy]', '[data-edit]', '[data-delete]']) {
+      expect(q<HTMLButtonElement>(el, selector).disabled).toBe(true);
+    }
+    expect(q<HTMLButtonElement>(el, '[data-delete-confirm]').disabled).toBe(true);
   });
 
   it('opens the receive page', async () => {

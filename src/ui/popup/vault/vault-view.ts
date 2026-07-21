@@ -150,15 +150,19 @@ export class VwVaultView extends LitElement {
       .hero-fill { width:100%; height:42px; border-radius:21px; background:var(--p); color:var(--onp); font-size:12.5px; }
       .hero-fill:hover { background:var(--vw-primary-bg-hover); }
 
-      .row { display:flex; align-items:center; gap:10px; min-height:46px; padding:5px 8px; border-radius:12px; cursor:pointer; animation:mvStag .24s ease-out both; }
+      .row { display:flex; align-items:center; min-height:46px; border-radius:12px; animation:mvStag .24s ease-out both; }
       .row:hover, .row.selected { background:var(--vw-row-hover); }
+      .row-main {
+        display:flex; align-items:center; gap:10px; flex:1; min-width:0; min-height:46px; padding:5px 8px;
+        border:0; border-radius:12px; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer;
+      }
       .tile { width:32px; height:32px; border-radius:10px; display:grid; place-items:center; color:#fff; font-size:13px; font-weight:500; flex:none; }
       .meta { flex:1; min-width:0; }
       .title-row { display:flex; align-items:center; gap:5px; min-width:0; }
       .title { font-size:13px; font-weight:500; color:var(--vw-ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .pk { width:13px; height:13px; color:var(--grn); flex:none; display:inline-flex; }
-      .sub { font-size:11.5px; color:var(--vw-text-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .row-copy { width:28px; height:28px; border-radius:9px; display:grid; place-items:center; color:var(--vw-muted); background:transparent; border:0; cursor:pointer; opacity:.65; flex:none; }
+      .sub { display:block; font-size:11.5px; color:var(--vw-text-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .row-copy { width:28px; height:28px; margin-right:7px; border-radius:9px; display:grid; place-items:center; color:var(--vw-muted); background:transparent; border:0; cursor:pointer; opacity:.65; flex:none; }
       .row:hover .row-copy { opacity:1; }
       .row-copy:hover { background:var(--vw-icon-hover); }
       .row-copy svg { width:14px; height:14px; }
@@ -180,6 +184,7 @@ export class VwVaultView extends LitElement {
       .btn-primary:hover { background:var(--vw-primary-bg-hover); }
       .btn-outline { height:34px; padding:0 14px; border:0; border-radius:17px; background:var(--pc); color:var(--onpc); font:500 12px/1 var(--vw-font-ui); cursor:pointer; }
       .btn-outline:hover { filter:brightness(.97); }
+      .btn-outline:only-child { flex:1; }
 
       .commands { flex:1; min-height:0; overflow:auto; padding:8px 8px 12px; }
       .command { width:100%; min-height:46px; display:flex; align-items:center; gap:11px; padding:0 11px; border:0; border-radius:12px; background:transparent; color:var(--vw-ink); font:400 13px/1.3 var(--vw-font-ui); text-align:left; cursor:pointer; }
@@ -479,35 +484,39 @@ export class VwVaultView extends LitElement {
     const needsReprompt = item.reprompt === true || suggestion?.reprompt === true;
     return html`
       <div>
-        <div class="row ${expanded ? 'selected' : ''}" style=${rowDelay ? `animation-delay:${rowDelay}` : nothing} @click=${() => this.toggleItem(item.id)}>
-          <div class="tile" style=${`background:${tileColor(item.id)}`}>${tileInitial(item.name)}</div>
-          <div class="meta">
-            <div class="title-row">
-              <span class="title">${item.name}</span>
-              ${item.hasPasskey
-                ? html`<span class="pk" title=${t('list.passkeySupported')}>${uiIcon('passkey')}</span>`
-                : nothing}
-            </div>
-            <div class="sub">${item.username ?? item.subtitle ?? ''}</div>
-          </div>
+        <div class="row ${expanded ? 'selected' : ''}" style=${rowDelay ? `animation-delay:${rowDelay}` : nothing}>
+          <button type="button" class="row-main" aria-expanded=${expanded ? 'true' : 'false'} @click=${() => this.toggleItem(item.id)}>
+            <span class="tile" style=${`background:${tileColor(item.id)}`}>${tileInitial(item.name)}</span>
+            <span class="meta">
+              <span class="title-row">
+                <span class="title">${item.name}</span>
+                ${item.hasPasskey
+                  ? html`<span class="pk" title=${t('list.passkeySupported')}>${uiIcon('passkey')}</span>`
+                  : nothing}
+              </span>
+              <span class="sub">${item.username ?? item.subtitle ?? ''}</span>
+            </span>
+            ${needsReprompt || !isSuggestion ? html`<span class="chev">${uiIcon('chevron')}</span>` : nothing}
+          </button>
           ${needsReprompt
-            ? html`<span class="chev">${uiIcon('chevron')}</span>`
+            ? nothing
             : isSuggestion && suggestion
               ? html`<button
                   type="button"
                   class="fill-pill"
-                  @click=${(e: Event) => { e.stopPropagation(); this.fillSuggestion(suggestion); }}
+                  @click=${() => this.fillSuggestion(suggestion)}
                 >${t('list.fill')}</button>`
-              : html`
-                  <button
-                    type="button"
-                    class="row-copy"
-                    title=${t('list.copyPassword')}
-                    aria-label=${t('list.copyPassword')}
-                    @click=${(e: Event) => { e.stopPropagation(); this.copySecret('password', t('detail.password')); }}
-                  >${uiIcon('copy')}</button>
-                  <span class="chev">${uiIcon('chevron')}</span>
-                `}
+              : item.type === 1
+                ? html`
+                    <button
+                      type="button"
+                      class="row-copy"
+                      title=${t('list.copyPassword')}
+                      aria-label=${t('list.copyPassword')}
+                      @click=${() => this.copySecret('password', t('detail.password'))}
+                    >${uiIcon('copy')}</button>
+                  `
+                : nothing}
         </div>
         ${expanded ? this.renderCard(item, suggestion) : nothing}
       </div>
@@ -521,6 +530,7 @@ export class VwVaultView extends LitElement {
 
   private renderCard(item: CipherSummary, suggestion?: TabAutofillSuggestion) {
     const isLogin = item.type === 1;
+    const canOpenOrFill = isLogin && Boolean(suggestion?.target || item.uris[0]);
     return html`
       <div class="card" @click=${(e: Event) => e.stopPropagation()}>
         ${this.detailStatus
@@ -565,7 +575,9 @@ export class VwVaultView extends LitElement {
           ? html`<div><div class="field-label">${t(typeLabelKey(item))}</div><div class="field-val">${item.subtitle}</div></div>`
           : nothing}
         <div class="actions">
-          <button class="btn-primary" @click=${() => this.openAndFill(item, suggestion)}>${t('detail.openAndFill')}</button>
+          ${canOpenOrFill
+            ? html`<button class="btn-primary" @click=${() => this.openAndFill(item, suggestion)}>${t('detail.openAndFill')}</button>`
+            : nothing}
           <button class="btn-outline" @click=${() => this.emit('vw-edit-item', { cipherId: item.id })}>${t('common.edit')}</button>
         </div>
       </div>

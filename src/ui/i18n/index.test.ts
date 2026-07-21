@@ -17,8 +17,10 @@ describe('i18n', () => {
     setLocale('en', false);
     expect(t('common.brand')).toBe('MiYu');
     expect(t('popup.search')).toBe('Search vault');
+    expect(document.documentElement.lang).toBe('en');
     setLocale('zh-CN', false);
     expect(t('popup.search')).toBe('搜索密钥库');
+    expect(document.documentElement.lang).toBe('zh-CN');
   });
 
   it('interpolates {name} placeholders', () => {

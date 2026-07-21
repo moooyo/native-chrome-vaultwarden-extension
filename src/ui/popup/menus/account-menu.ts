@@ -1,8 +1,9 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, type PropertyValues } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
+import { LocalizeController, t } from '../../i18n/index.js';
 import '../../components/menu.js';
 import type { MenuItem, VwMenu } from '../../components/menu.js';
 import type { AccountAction, AccountActionDetail, AccountInfo } from '../types.js';
@@ -10,8 +11,8 @@ import type { AccountAction, AccountActionDetail, AccountInfo } from '../types.j
 /**
  * The account control: a trigger button and a keyboard `vw-menu` mapping every approved account
  * action to a typed `vw-account-action` event (closed `AccountAction` union, plus a target email for
- * switch/remove). It performs no requests. Menu ids are internal indices — never emails or vault ids
- * — and closing the menu restores focus to the trigger.
+ * account switching). It performs no requests. Destructive account removal stays hidden until a
+ * confirmation flow exists. Menu ids are internal indices, and closing restores trigger focus.
  */
 export class VwAccountMenu extends LitElement {
   static override properties = {
@@ -19,14 +20,17 @@ export class VwAccountMenu extends LitElement {
     pinEnabled: { type: Boolean },
     deviceRemembered: { type: Boolean },
     open: { type: Boolean },
+    disabled: { type: Boolean },
   };
 
   declare accounts: AccountInfo[];
   declare pinEnabled: boolean;
   declare deviceRemembered: boolean;
   declare open: boolean;
+  declare disabled: boolean;
 
   private actionById = new Map<string, AccountActionDetail>();
+  private i18n = new LocalizeController(this);
 
   constructor() {
     super();
@@ -34,6 +38,7 @@ export class VwAccountMenu extends LitElement {
     this.pinEnabled = false;
     this.deviceRemembered = false;
     this.open = false;
+    this.disabled = false;
   }
 
   static override styles = [
@@ -46,10 +51,27 @@ export class VwAccountMenu extends LitElement {
       }
       .anchor {
         position: absolute;
-        top: 34px;
+        top: 36px;
         right: 0;
         z-index: 20;
       }
+      .trigger {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        border: 0;
+        border-radius: 50%;
+        background: #7c4dff;
+        color: #fff;
+        cursor: pointer;
+      }
+      .trigger:hover { filter: brightness(.96); }
+      .trigger:disabled { opacity:.5; cursor:default; }
+      .trigger:focus-visible { outline: none; box-shadow: var(--vw-focus); }
+      .trigger svg { width: 16px; height: 16px; }
     `,
   ];
 
@@ -66,21 +88,18 @@ export class VwAccountMenu extends LitElement {
 
     for (const account of this.accounts) {
       if (!account.active) {
-        add(`Switch to ${account.email}`, { action: 'switch-account', email: account.email }, { icon: 'user' });
+        add(`${t('auth.switchAccount')} · ${account.email}`, { action: 'switch-account', email: account.email }, { icon: 'user' });
       }
     }
-    for (const account of this.accounts) {
-      add(`Remove ${account.email}`, { action: 'remove-account', email: account.email }, { icon: 'trash' });
-    }
-    add('Add account', { action: 'add-account' }, { icon: 'plus' });
-    add(this.pinEnabled ? 'Manage PIN' : 'Set up PIN', { action: 'pin' }, { icon: 'lock' });
-    add('Account security', { action: 'account-security' }, { icon: 'key' });
-    add('Options', { action: 'options' }, { icon: 'globe' });
+    add(t('auth.addAccount'), { action: 'add-account' }, { icon: 'plus' });
+    add(this.pinEnabled ? t('auth.managePin') : t('auth.setPin'), { action: 'pin' }, { icon: 'lock' });
+    add(t('popup.accountSecurity'), { action: 'account-security' }, { icon: 'key' });
+    add(t('popup.settings'), { action: 'options' }, { icon: 'globe' });
     if (this.deviceRemembered) {
-      add('Forget this device', { action: 'forget-device' }, { icon: 'alert' });
+      add(t('auth.forgetDevice'), { action: 'forget-device' }, { icon: 'alert' });
     }
-    add('Lock', { action: 'lock' }, { icon: 'lock' });
-    add('Log out', { action: 'logout' }, { icon: 'logout', tone: 'danger' });
+    add(t('popup.lock'), { action: 'lock' }, { icon: 'lock' });
+    add(t('auth.logout'), { action: 'logout' }, { icon: 'logout', tone: 'danger' });
     return items;
   }
 
@@ -105,29 +124,35 @@ export class VwAccountMenu extends LitElement {
   /** Re-assert the menu's open state imperatively. `vw-menu` mutates its own `open` when it
    *  self-closes (select/Escape/outside click); without this, Lit's per-binding dirty check can
    *  skip re-opening it when this component's `open` returns to the same value it last committed. */
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has('disabled') && this.disabled) this.open = false;
+  }
+
   protected override updated(): void {
     const menu = this.shadowRoot?.querySelector<VwMenu>('vw-menu');
     if (menu) menu.open = this.open;
   }
 
   protected override render() {
-    const items = this.buildItems();
+    const items = this.buildItems().map((item) => ({ ...item, disabled: this.disabled || item.disabled === true }));
+    const label = t('popup.account');
     return html`
       <button
         type="button"
-        class="icon-button"
+        class="trigger"
         data-trigger
         aria-haspopup="menu"
         aria-expanded=${this.open ? 'true' : 'false'}
-        title="Account"
-        aria-label="Account"
+        ?disabled=${this.disabled}
+        title=${label}
+        aria-label=${label}
         @click=${() => { this.open = !this.open; }}
       >
         ${uiIcon('user')}
       </button>
       <div class="anchor">
         <vw-menu
-          label="Account"
+          .label=${label}
           .items=${items}
           .open=${this.open}
           @vw-menu-select=${(e: Event) => this.handleSelect(e)}

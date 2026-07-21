@@ -51,12 +51,14 @@ export class VwMenu extends LitElement {
       [role='menu'] {
         display: flex;
         flex-direction: column;
-        min-width: 180px;
-        padding: 4px;
+        min-width: 210px;
+        max-width: min(300px, calc(100vw - 24px));
+        padding: 6px;
         gap: 2px;
-        border: 1px solid var(--vw-line);
-        border-radius: var(--vw-radius-group);
+        border: 1px solid var(--vw-line-2);
+        border-radius: var(--vw-radius-card);
         background: var(--vw-panel);
+        box-shadow: var(--vw-panel-shadow);
       }
       button[role='menuitem'] {
         display: flex;
@@ -65,7 +67,7 @@ export class VwMenu extends LitElement {
         height: 32px;
         padding: 0 10px;
         border: none;
-        border-radius: var(--vw-radius-control);
+        border-radius: var(--vw-radius-input);
         background: transparent;
         color: var(--vw-ink);
         font-family: var(--vw-font-ui);
@@ -74,7 +76,7 @@ export class VwMenu extends LitElement {
         cursor: pointer;
       }
       button[role='menuitem'].active {
-        background: var(--vw-blue-50);
+        background: var(--vw-row-hover);
       }
       button[role='menuitem'].tone-danger {
         color: var(--vw-danger);
@@ -83,13 +85,32 @@ export class VwMenu extends LitElement {
         color: var(--vw-muted);
         cursor: not-allowed;
       }
+      button[role='menuitem'] svg {
+        width: 15px;
+        height: 15px;
+        flex: none;
+      }
     `,
   ];
 
   private readonly handleDocumentPointerDown = (event: PointerEvent): void => {
-    if (!event.composedPath().includes(this)) {
+    const path = event.composedPath();
+    const root = this.getRootNode();
+    const owner = root instanceof ShadowRoot ? root.host : undefined;
+    if (!path.includes(this) && (!owner || !path.includes(owner))) {
       this.closeMenu();
     }
+  };
+
+  private readonly handleFocusOut = (event: FocusEvent): void => {
+    const next = event.relatedTarget;
+    const root = this.getRootNode();
+    if (next instanceof Node && (
+      this.contains(next)
+      || this.shadowRoot?.contains(next)
+      || (root instanceof ShadowRoot && root.contains(next))
+    )) return;
+    this.closeMenu();
   };
 
   override connectedCallback(): void {
@@ -222,14 +243,21 @@ export class VwMenu extends LitElement {
       return nothing;
     }
     return html`
-      <div role="menu" aria-label=${this.label}>
+      <div role="menu" aria-label=${this.label} @focusout=${this.handleFocusOut}>
         ${this.items.map((item, index) => html`
           <button
             type="button"
             role="menuitem"
+            tabindex=${index === this.activeIndex ? '0' : '-1'}
             class=${`${index === this.activeIndex ? 'active' : ''} ${item.tone === 'danger' ? 'tone-danger' : ''}`}
             ?disabled=${item.disabled}
             aria-disabled=${item.disabled ? 'true' : 'false'}
+            @focus=${() => {
+              if (this.activeIndex !== index) {
+                this.activeIndex = index;
+                this.requestUpdate();
+              }
+            }}
             @click=${() => {
               this.activeIndex = index;
               this.selectActive();
