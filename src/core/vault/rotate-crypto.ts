@@ -9,7 +9,12 @@ export function isEncString(v: unknown): v is string {
 /** Re-encrypt an EncString from oldKey to newKey (decrypt bytes then re-encrypt). Throws (MAC) if the
  *  ciphertext cannot be decrypted with oldKey — callers MUST treat that as fail-close. */
 export async function rewrapEncString(enc: string, oldKey: SymmetricKey, newKey: SymmetricKey): Promise<string> {
-  return encryptToBytes(await decryptToBytes(enc, oldKey), newKey);
+  const plaintext = await decryptToBytes(enc, oldKey);
+  try {
+    return await encryptToBytes(plaintext, newKey);
+  } finally {
+    plaintext.fill(0);
+  }
 }
 
 /** Deep-clone a JSON-ish value, re-wrapping every EncString leaf from oldKey to newKey. Non-EncString

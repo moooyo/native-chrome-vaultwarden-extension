@@ -12,24 +12,32 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Verify, package, and publish
+  verify:
+    name: Verify and package
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      tag_commit: ${{ steps.tag.outputs.commit }}
+      archive: ${{ steps.release.outputs.archive }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
     steps:
       - name: Checkout release tag
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ format('refs/tags/{0}', env.RELEASE_TAG) }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Verify immutable release tag
         id: tag
@@ -57,6 +65,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Xvfb authentication helper
+        run: sudo apt-get install --no-install-recommends --yes xauth
+
       - name: Lint
         run: npm run lint
 
@@ -68,6 +82,9 @@ jobs:
 
       - name: Build production extension
         run: npm run build:prod
+
+      - name: Chromium render smoke
+        run: xvfb-run --auto-servernum npm run verify:render
 
       - name: Prepare and verify release assets
         id: release
@@ -83,36 +100,98 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Publish GitHub Release
+  publish:
+    name: Publish verified assets
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.verify.outputs.tag }}
+      TAG_COMMIT: ${{ needs.verify.outputs.tag_commit }}
+      ARCHIVE_PATH: release/${{ needs.verify.outputs.archive }}
+      CHECKSUM_PATH: release/SHA256SUMS.txt
+      PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+    steps:
+      - name: Download verified release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ needs.verify.outputs.tag }}
+          path: release
+
+      - name: Publish immutable GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
-          TAG_COMMIT: ${{ steps.tag.outputs.commit }}
-          ARCHIVE_PATH: ${{ steps.release.outputs.archive_path }}
-          CHECKSUM_PATH: ${{ steps.release.outputs.checksum_path }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
         shell: bash
         run: |
           set -euo pipefail
-          release_flags=(--title "$TAG")
-          if [[ "$PRERELEASE" == "true" ]]; then
-            release_flags+=(--prerelease)
-          else
-            release_flags+=(--prerelease=false)
-          fi
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            remote_commit="$(git rev-list -n 1 "$TAG")"
-            if [[ "$remote_commit" != "$TAG_COMMIT" ]]; then
-              echo "::error::Existing release tag '$TAG' does not resolve to the verified commit."
+          archive_name="$(basename "$ARCHIVE_PATH")"
+          checksum_name="$(basename "$CHECKSUM_PATH")"
+          for asset in "$ARCHIVE_PATH" "$CHECKSUM_PATH"; do
+            if [[ ! -f "$asset" ]]; then
+              echo "::error::Verified release asset '$asset' is missing."
               exit 1
             fi
-            gh release edit "$TAG" "${release_flags[@]}"
-            gh release upload "$TAG" "$ARCHIVE_PATH" "$CHECKSUM_PATH" --clobber
-          else
-            gh release create "$TAG" "$ARCHIVE_PATH" "$CHECKSUM_PATH" \
-              "${release_flags[@]}" \
-              --target "$TAG_COMMIT" \
-              --verify-tag \
-              --generate-notes
+          done
+
+          remote_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)"
+          if [[ "$remote_commit" != "$TAG_COMMIT" ]]; then
+            echo "::error::Release tag '$TAG' moved from verified commit '$TAG_COMMIT' to '$remote_commit'."
+            exit 1
           fi
+
+          release_json="$RUNNER_TEMP/release.json"
+          release_error="$RUNNER_TEMP/release-error.txt"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" >"$release_json" 2>"$release_error"; then
+            release_tag="$(jq -r .tag_name "$release_json")"
+            release_prerelease="$(jq -r .prerelease "$release_json")"
+            if [[ "$release_tag" != "$TAG" ]]; then
+              echo "::error::Existing release tag '$release_tag' does not match verified tag '$TAG'."
+              exit 1
+            fi
+            if [[ "$release_prerelease" != "$PRERELEASE" ]]; then
+              echo "::error::Existing release prerelease state '$release_prerelease' does not match '$PRERELEASE'."
+              exit 1
+            fi
+
+            expected_assets="$(printf '%s\n' "$archive_name" "$checksum_name" | LC_ALL=C sort)"
+            remote_assets="$(jq -r '.assets[].name' "$release_json" | LC_ALL=C sort)"
+            if [[ "$remote_assets" != "$expected_assets" ]]; then
+              echo "::error::Existing release asset names do not match the verified asset set."
+              printf 'Expected:\n%s\nActual:\n%s\n' "$expected_assets" "$remote_assets"
+              exit 1
+            fi
+
+            remote_dir="$(mktemp -d)"
+            trap 'rm -rf "$remote_dir"' EXIT
+            gh release download "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --dir "$remote_dir" \
+              --pattern "$archive_name" \
+              --pattern "$checksum_name"
+            for asset_name in "$archive_name" "$checksum_name"; do
+              local_digest="$(sha256sum "release/$asset_name" | cut -d ' ' -f 1)"
+              remote_digest="$(sha256sum "$remote_dir/$asset_name" | cut -d ' ' -f 1)"
+              if [[ "$remote_digest" != "$local_digest" ]]; then
+                echo "::error::Existing release asset '$asset_name' does not match the verified SHA-256 digest."
+                exit 1
+              fi
+            done
+
+            echo "Release '$TAG' already contains the exact verified assets; nothing to publish."
+            exit 0
+          fi
+
+          if ! grep -Fq '(HTTP 404)' "$release_error"; then
+            cat "$release_error" >&2
+            exit 1
+          fi
+
+          release_flags=(--title "$TAG" --target "$TAG_COMMIT" --verify-tag --generate-notes)
+          if [[ "$PRERELEASE" == "true" ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$TAG" "$ARCHIVE_PATH" "$CHECKSUM_PATH" \
+            --repo "$GITHUB_REPOSITORY" \
+            "${release_flags[@]}"

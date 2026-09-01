@@ -59,7 +59,8 @@ function observeHostRemoval(host: HTMLElement, onRemoved: () => void): () => voi
  * Prompt the user to approve using a stored passkey for `rpId`. Resolves true on confirm, false on
  * cancel / Escape / outside click. The dialog lives in a closed shadow root the page cannot reach.
  */
-export function confirmPasskeyUse(rpId: string): Promise<boolean> {
+export function confirmPasskeyUse(rpId: string, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
   return new Promise((resolve) => {
     const surface = mountRenderSurface(DIALOG_STYLES);
     const mountedAt = Date.now();
@@ -69,10 +70,12 @@ export function confirmPasskeyUse(rpId: string): Promise<boolean> {
       if (settled) return;
       settled = true;
       window.removeEventListener('keydown', handleKeydown, true);
+      signal?.removeEventListener('abort', handleAbort);
       disconnectObserver();
       surface.remove();
       resolve(confirmed);
     };
+    const handleAbort = (): void => finish(false);
     const handleKeydown = (event: KeyboardEvent): void => {
       if (!event.isTrusted) return;
       if (event.key === 'Escape') {
@@ -87,6 +90,7 @@ export function confirmPasskeyUse(rpId: string): Promise<boolean> {
       onOverlay: () => finish(false),
     };
     window.addEventListener('keydown', handleKeydown, true);
+    signal?.addEventListener('abort', handleAbort, { once: true });
     disconnectObserver = observeHostRemoval(surface.host, () => finish(false));
     surface.render(renderPasskeyConsent(state, handlers));
   });
@@ -100,7 +104,9 @@ export function confirmPasskeyUse(rpId: string): Promise<boolean> {
 export function choosePasskeyTarget(
   rpId: string,
   targets: PasskeyRegisterTarget[],
+  signal?: AbortSignal,
 ): Promise<PasskeyPickerResult> {
+  if (signal?.aborted) return Promise.resolve({ cancelled: true });
   return new Promise((resolve) => {
     const surface = mountRenderSurface(DIALOG_STYLES);
     const mountedAt = Date.now();
@@ -110,10 +116,12 @@ export function choosePasskeyTarget(
       if (settled) return;
       settled = true;
       window.removeEventListener('keydown', handleKeydown, true);
+      signal?.removeEventListener('abort', handleAbort);
       disconnectObserver();
       surface.remove();
       resolve(result);
     };
+    const handleAbort = (): void => finish({ cancelled: true });
     const handleKeydown = (event: KeyboardEvent): void => {
       if (!event.isTrusted) return;
       if (event.key === 'Escape') {
@@ -135,6 +143,7 @@ export function choosePasskeyTarget(
       onOverlay: () => finish({ cancelled: true }),
     };
     window.addEventListener('keydown', handleKeydown, true);
+    signal?.addEventListener('abort', handleAbort, { once: true });
     disconnectObserver = observeHostRemoval(surface.host, () => finish({ cancelled: true }));
     surface.render(renderPasskeyRegister(state, handlers));
   });
@@ -149,7 +158,9 @@ export function choosePasskeyTarget(
 export function choosePasskeyLogin(
   rpId: string,
   candidates: PasskeyCandidate[],
+  signal?: AbortSignal,
 ): Promise<PasskeyLoginResult> {
+  if (signal?.aborted) return Promise.resolve({ cancelled: true });
   return new Promise((resolve) => {
     const surface = mountRenderSurface(DIALOG_STYLES);
     const mountedAt = Date.now();
@@ -159,10 +170,12 @@ export function choosePasskeyLogin(
       if (settled) return;
       settled = true;
       window.removeEventListener('keydown', handleKeydown, true);
+      signal?.removeEventListener('abort', handleAbort);
       disconnectObserver();
       surface.remove();
       resolve(result);
     };
+    const handleAbort = (): void => finish({ cancelled: true });
     const handleKeydown = (event: KeyboardEvent): void => {
       if (!event.isTrusted) return;
       if (event.key === 'Escape') {
@@ -185,6 +198,7 @@ export function choosePasskeyLogin(
       onOverlay: () => finish({ cancelled: true }),
     };
     window.addEventListener('keydown', handleKeydown, true);
+    signal?.addEventListener('abort', handleAbort, { once: true });
     disconnectObserver = observeHostRemoval(surface.host, () => finish({ cancelled: true }));
     surface.render(renderPasskeyLoginPicker(state, handlers));
   });

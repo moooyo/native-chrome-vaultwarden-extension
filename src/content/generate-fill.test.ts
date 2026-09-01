@@ -17,24 +17,33 @@ function anchor(): HTMLElement {
 }
 
 function opts() {
-  return { anchor: anchor(), onUsername: vi.fn(), onRegenerate: vi.fn(), onLength: vi.fn(), onUppercase: vi.fn(), onLowercase: vi.fn(), onNumbers: vi.fn(), onSymbols: vi.fn(), onMinNumbers: vi.fn(), onMinSymbols: vi.fn(), onAvoidAmbiguous: vi.fn(), onUse: vi.fn(), onUndo: vi.fn() };
+  return { anchor: anchor(), onUsername: vi.fn(), onRegenerate: vi.fn(), onLength: vi.fn(), onUppercase: vi.fn(), onLowercase: vi.fn(), onNumbers: vi.fn(), onSymbols: vi.fn(), onMinNumbers: vi.fn(), onMinSymbols: vi.fn(), onAvoidAmbiguous: vi.fn(), onWords: vi.fn(), onCapitalize: vi.fn(), onIncludeNumber: vi.fn(), onUse: vi.fn() };
 }
 
 describe('createGeneratePanel', () => {
   it('mounts a closed-shadow host and pushes the suggestion via update()', () => {
     const panel = createGeneratePanel(opts());
     expect(panel.element.shadowRoot).toBeNull();
-    panel.update({ username: 'me@x.dev', password: 'Kp7$mn2Q', strength: '极强', length: 18, uppercase: true, lowercase: true, numbers: true, symbols: true, minNumbers: 1, minSymbols: 0, avoidAmbiguous: true });
+    panel.update({ mode: 'password', username: 'me@x.dev', password: 'Kp7$mn2Q', strength: '极强', length: 18, uppercase: true, lowercase: true, numbers: true, symbols: true, minNumbers: 1, minSymbols: 0, avoidAmbiguous: true, words: 6, capitalize: false, includeNumber: false, managed: false, disabledReason: '' });
     expect(panel.root.querySelector('.suggest')!.textContent).toBe('Kp7$mn2Q');
     expect(panel.root.querySelector<HTMLInputElement>('.user input')!.value).toBe('me@x.dev');
     panel.remove();
   });
 
-  it('switches to the saved view', () => {
+  it('switches to a truthful filled view', () => {
     const panel = createGeneratePanel(opts());
-    panel.showSaved({ name: 'quill.app', user: 'me@x.dev' });
+    panel.showFilled({ user: 'me@x.dev' });
     expect(panel.root.querySelector('.saved')).not.toBeNull();
+    expect(panel.root.querySelector('.saved .t')!.textContent).toContain('密码已填入');
     expect(panel.root.querySelector('.saved .s')!.textContent).toContain('me@x.dev');
+    expect(panel.root.querySelector('.undo')).toBeNull();
+    panel.remove();
+  });
+
+  it('does not claim that using the generated password saves before submission', () => {
+    const panel = createGeneratePanel(opts());
+    expect(panel.root.textContent).toContain('网站提交时询问是否保存');
+    expect(panel.root.textContent).not.toContain('已保存到密屿');
     panel.remove();
   });
 

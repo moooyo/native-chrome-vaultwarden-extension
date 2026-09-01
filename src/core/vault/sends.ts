@@ -12,20 +12,40 @@ import type { SendRequest, SendResponse } from '../api/types.js';
 import { encryptAttachmentFile } from './attachments.js';
 
 const SEND_PASSWORD_ITERATIONS = 100_000;
+const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
+const MAX_SEND_DURATION_HOURS = 31 * 24;
+
+/** Bitwarden browser-v2026.8.0 Send deletion presets, expressed as elapsed hours. */
+export const SEND_DATE_PRESET_HOURS = Object.freeze({
+  oneHour: 1,
+  oneDay: 24,
+  twoDays: 48,
+  threeDays: 72,
+  sevenDays: 168,
+  fourteenDays: 336,
+  thirtyDays: 720,
+} as const);
 
 /** Plaintext input for creating a text or file send. */
 export interface SendInput {
   name: string;
+  notes?: string;
   text?: string;
   /** Hide the text behind a reveal on the access page. */
   hidden?: boolean;
+  /** Hide the sender's account email from recipients. */
+  hideEmail?: boolean;
   password?: string;
   maxAccessCount?: number;
-  /** Days until the send expires (optional). */
+  /** Exact elapsed hours until the send expires. Mutually exclusive with `expirationDays`. */
+  expirationHours?: number;
+  /** Legacy whole-day input retained for existing callers. Prefer `expirationHours`. */
   expirationDays?: number;
-  /** Days until the send is deleted (required by the server). */
-  deletionDays: number;
+  /** Exact elapsed hours until the send is deleted. Mutually exclusive with `deletionDays`. */
+  deletionHours?: number;
+  /** Legacy whole-day input retained for existing callers. Prefer `deletionHours`. */
+  deletionDays?: number;
 }
 
 /** A decrypted send for display, including its shareable access URL. */
@@ -34,6 +54,9 @@ export interface SendSummary {
   accessId: string;
   type: number;
   name: string;
+  notes?: string;
+  /** The encrypted notes field was present but could not be authenticated; edits must preserve it. */
+  notesUnavailable?: boolean;
   text?: string;
   hidden: boolean;
   url: string;
@@ -42,6 +65,7 @@ export interface SendSummary {
   maxAccessCount?: number;
   accessCount: number;
   disabled: boolean;
+  hideEmail: boolean;
   passwordProtected: boolean;
   /** Decrypted file name for a file (type=1) send. */
   fileName?: string;
@@ -77,7 +101,89 @@ export async function hashSendPassword(password: string, sendKey: Uint8Array): P
 
 /** Build the recipient access URL: {server}/#/send/{accessId}/{base64url(sendKey)}. */
 export function buildSendAccessUrl(serverUrl: string, accessId: string, sendKey: Uint8Array): string {
-  return `${serverUrl.replace(/\/$/, '')}/#/send/${accessId}/${bytesToBase64Url(sendKey)}`;
+  if (!accessId || accessId.length > 1_024) {
+    throw new TypeError('accessId must be a bounded identifier');
+  }
+  if (sendKey.length !== 16) throw new TypeError('sendKey must be exactly 16 bytes');
+  return `${normalizeSendServerBase(serverUrl)}#/send/${encodeURIComponent(accessId)}/${bytesToBase64Url(sendKey)}`;
+}
+
+function isExactLoopbackHostname(hostname: string): boolean {
+  if (hostname === 'localhost' || hostname === '[::1]') return true;
+  const octets = hostname.split('.');
+  return octets.length === 4
+    && octets[0] === '127'
+    && octets.every((octet) => /^\d{1,3}$/u.test(octet) && Number(octet) <= 255);
+}
+
+function normalizeSendServerBase(serverUrl: string): string {
+  if (
+    !serverUrl
+    || serverUrl.length > 2_048
+    || serverUrl !== serverUrl.trim()
+    || serverUrl.includes('\\')
+    || serverUrl.includes('?')
+    || serverUrl.includes('#')
+    || hasAsciiControlOrSpace(serverUrl)
+    || !hasExplicitHttpAuthority(serverUrl)
+    || hasUnsafeServerPath(serverUrl)
+  ) {
+    throw new TypeError('serverUrl must be a canonical HTTP(S) base URL');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(serverUrl);
+  } catch {
+    throw new TypeError('serverUrl must be a canonical HTTP(S) base URL');
+  }
+  if (
+    (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
+    || parsed.username
+    || parsed.password
+    || parsed.origin === 'null'
+    || (parsed.protocol === 'http:' && !isExactLoopbackHostname(parsed.hostname))
+  ) {
+    throw new TypeError('serverUrl must be a canonical HTTP(S) base URL');
+  }
+  parsed.pathname = `${parsed.pathname.replace(/\/+$/u, '')}/`;
+  return parsed.toString();
+}
+
+function hasAsciiControlOrSpace(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function hasExplicitHttpAuthority(value: string): boolean {
+  const lower = value.toLowerCase();
+  const prefixLength = lower.startsWith('https://') ? 8 : lower.startsWith('http://') ? 7 : 0;
+  if (prefixLength === 0 || prefixLength >= value.length) return false;
+  const first = value[prefixLength];
+  return first !== '/' && first !== '?' && first !== '#';
+}
+
+function hasUnsafeServerPath(value: string): boolean {
+  const schemeEnd = value.indexOf('://');
+  if (schemeEnd < 0) return true;
+  const pathStart = value.indexOf('/', schemeEnd + 3);
+  if (pathStart < 0) return false;
+  for (const rawSegment of value.slice(pathStart).split('/')) {
+    let segment: string;
+    try {
+      segment = decodeURIComponent(rawSegment);
+    } catch {
+      return true;
+    }
+    if (segment === '.' || segment === '..') return true;
+    for (const char of segment) {
+      const code = char.charCodeAt(0);
+      if (char === '/' || char === '\\' || code === 0 || code === 10 || code === 13) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -92,21 +198,23 @@ export async function buildTextSendRequest(
 ): Promise<{ request: SendRequest; sendKey: Uint8Array }> {
   const randomBytes = deps.randomBytes ?? ((n) => globalThis.crypto.getRandomValues(new Uint8Array(n)));
   const now = deps.now ?? Date.now;
+  const baseTime = now();
   const sendKey = randomBytes(16);
   const derived = await deriveSendKey(sendKey);
   const request: SendRequest = {
     type: 0,
     name: await encryptToText(input.name || 'Send', derived),
     key: await encryptToBytes(sendKey, userKey),
-    deletionDate: new Date(now() + clampDays(input.deletionDays, 1, 31) * DAY_MS).toISOString(),
+    deletionDate: createDeletionDate(input, baseTime),
     text: { text: await encryptToText(input.text ?? '', derived), hidden: input.hidden ?? false },
     disabled: false,
-    hideEmail: false,
+    hideEmail: parseRequestedHideEmail(input.hideEmail),
   };
+  if (input.notes) request.notes = await encryptToText(input.notes, derived);
   if (input.maxAccessCount && input.maxAccessCount > 0) request.maxAccessCount = Math.trunc(input.maxAccessCount);
-  if (input.expirationDays && input.expirationDays > 0) {
-    request.expirationDate = new Date(now() + input.expirationDays * DAY_MS).toISOString();
-  }
+  const expirationDate = createExpirationDate(input, baseTime);
+  if (expirationDate) request.expirationDate = expirationDate;
+  assertSendDateOrder(request.expirationDate, request.deletionDate);
   if (input.password) request.password = await hashSendPassword(input.password, sendKey);
   return { request, sendKey };
 }
@@ -125,6 +233,7 @@ export async function buildFileSendRequest(
 ): Promise<{ request: SendRequest; sendKey: Uint8Array; encryptedFile: Uint8Array; encryptedFileName: string }> {
   const randomBytes = deps.randomBytes ?? ((n) => globalThis.crypto.getRandomValues(new Uint8Array(n)));
   const now = deps.now ?? Date.now;
+  const baseTime = now();
   const sendKey = randomBytes(16);
   const derived = await deriveSendKey(sendKey);
   const encryptedFile = await encryptAttachmentFile(fileBytes, derived);
@@ -133,31 +242,37 @@ export async function buildFileSendRequest(
     type: 1,
     name: await encryptToText(input.name || fileName, derived),
     key: await encryptToBytes(sendKey, userKey),
-    deletionDate: new Date(now() + clampDays(input.deletionDays, 1, 31) * DAY_MS).toISOString(),
+    deletionDate: createDeletionDate(input, baseTime),
     file: { fileName: encryptedFileName },
     fileLength: encryptedFile.length,
     disabled: false,
-    hideEmail: false,
+    hideEmail: parseRequestedHideEmail(input.hideEmail),
   };
+  if (input.notes) request.notes = await encryptToText(input.notes, derived);
   if (input.maxAccessCount && input.maxAccessCount > 0) request.maxAccessCount = Math.trunc(input.maxAccessCount);
-  if (input.expirationDays && input.expirationDays > 0) {
-    request.expirationDate = new Date(now() + input.expirationDays * DAY_MS).toISOString();
-  }
+  const expirationDate = createExpirationDate(input, baseTime);
+  if (expirationDate) request.expirationDate = expirationDate;
+  assertSendDateOrder(request.expirationDate, request.deletionDate);
   if (input.password) request.password = await hashSendPassword(input.password, sendKey);
   return { request, sendKey, encryptedFile, encryptedFileName };
 }
 
-/** Plaintext input for editing an existing Send. Omitted day fields keep the existing dates. */
+/** Plaintext input for editing an existing Send. Omitted date-offset fields keep existing dates. */
 export interface UpdateSendInput {
   name: string;
+  /** undefined preserves the existing ciphertext; an empty string clears notes. */
+  notes?: string;
   text?: string;            // text send only
   hidden?: boolean;         // text send only
   disabled?: boolean;
+  hideEmail?: boolean;
   maxAccessCount?: number;  // >0 sets; otherwise clears the limit (null)
   passwordMode?: 'keep' | 'remove' | 'set';
   newPassword?: string;     // passwordMode === 'set'
-  expirationDays?: number;  // >0 resets from now; blank keeps existing.expirationDate
-  deletionDays?: number;    // >0 resets from now; blank keeps existing.deletionDate
+  expirationHours?: number; // >0 resets by exact elapsed hours; blank keeps existing.expirationDate
+  expirationDays?: number;  // legacy whole-day reset; mutually exclusive with expirationHours
+  deletionHours?: number;   // >0 resets by exact elapsed hours; blank keeps existing.deletionDate
+  deletionDays?: number;    // legacy whole-day reset; mutually exclusive with deletionHours
 }
 
 /**
@@ -173,27 +288,44 @@ export async function buildUpdateSendRequest(
   deps: SendCryptoDeps = {},
 ): Promise<SendRequest> {
   const now = deps.now ?? Date.now;
+  const baseTime = now();
   const sendKey = await decryptToBytes(existing.key, userKey);
   const derived = await deriveSendKey(sendKey);
   const request: SendRequest = {
     type: existing.type,
     key: existing.key,
     name: await encryptToText(input.name?.trim() || 'Send', derived),
-    deletionDate: input.deletionDays && input.deletionDays > 0
-      ? new Date(now() + clampDays(input.deletionDays, 1, 31) * DAY_MS).toISOString()
-      : existing.deletionDate,
+    deletionDate: updateDateFromRelativeDuration(
+      baseTime,
+      input.deletionHours,
+      input.deletionDays,
+      existing.deletionDate,
+      'deletion',
+    ),
     disabled: input.disabled ?? Boolean(existing.disabled),
-    hideEmail: existing.hideEmail ?? false,
+    hideEmail: resolveUpdatedHideEmail(input.hideEmail, existing.hideEmail),
   };
+  if (input.notes !== undefined) {
+    request.notes = input.notes ? await encryptToText(input.notes, derived) : null;
+  } else if (existing.notes !== undefined) {
+    request.notes = existing.notes;
+  }
+  if (existing.authType !== undefined) request.authType = existing.authType;
+  if (existing.emails !== undefined) request.emails = existing.emails;
   if (existing.type === 0) {
     request.text = { text: await encryptToText(input.text ?? '', derived), hidden: input.hidden ?? false };
   } else if (existing.type === 1 && existing.file?.fileName) {
     request.file = { fileName: existing.file.fileName };
   }
   request.maxAccessCount = input.maxAccessCount && input.maxAccessCount > 0 ? Math.trunc(input.maxAccessCount) : null;
-  request.expirationDate = input.expirationDays && input.expirationDays > 0
-    ? new Date(now() + input.expirationDays * DAY_MS).toISOString()
-    : (existing.expirationDate ?? null);
+  request.expirationDate = updateDateFromRelativeDuration(
+    baseTime,
+    input.expirationHours,
+    input.expirationDays,
+    existing.expirationDate ?? null,
+    'expiration',
+  );
+  assertSendDateOrder(request.expirationDate, request.deletionDate);
   if (input.passwordMode === 'set' && input.newPassword) {
     request.password = await hashSendPassword(input.newPassword, sendKey);
   }
@@ -215,8 +347,16 @@ export async function decryptSend(send: SendResponse, userKey: SymmetricKey, ser
     deletionDate: send.deletionDate,
     accessCount: send.accessCount ?? 0,
     disabled: Boolean(send.disabled),
+    hideEmail: send.hideEmail === true,
     passwordProtected: Boolean(send.password),
   };
+  if (send.notes) {
+    try {
+      out.notes = await decryptToText(send.notes, derived);
+    } catch {
+      out.notesUnavailable = true;
+    }
+  }
   if (send.type === 0 && send.text?.text) out.text = await safeDecrypt(send.text.text, derived);
   if (send.type === 1 && send.file?.fileName) out.fileName = await safeDecrypt(send.file.fileName, derived);
   if (send.type === 1 && send.file?.sizeName) out.sizeName = send.file.sizeName;
@@ -236,4 +376,95 @@ async function safeDecrypt(value: string, key: SymmetricKey): Promise<string> {
 function clampDays(value: number, min: number, max: number): number {
   const n = Math.trunc(value) || min;
   return Math.max(min, Math.min(max, n));
+}
+
+function parseRequestedHideEmail(value: unknown): boolean {
+  if (value !== undefined && typeof value !== 'boolean') {
+    throw new TypeError('hideEmail must be a boolean');
+  }
+  return value === true;
+}
+
+function resolveUpdatedHideEmail(
+  requested: unknown,
+  existing: unknown,
+): boolean {
+  if (requested !== undefined) return parseRequestedHideEmail(requested);
+  if (existing !== undefined && existing !== null && typeof existing !== 'boolean') {
+    throw new TypeError('existing hideEmail must be a boolean');
+  }
+  return existing === true;
+}
+
+function createDeletionDate(input: SendInput, now: number): string {
+  assertExclusiveDuration(input.deletionHours, input.deletionDays, 'deletion');
+  if (input.deletionHours !== undefined) {
+    return dateAfterHours(now, input.deletionHours, 'deletion');
+  }
+  return dateAfterDays(now, input.deletionDays ?? 1);
+}
+
+function createExpirationDate(input: SendInput, now: number): string | undefined {
+  assertExclusiveDuration(input.expirationHours, input.expirationDays, 'expiration');
+  if (input.expirationHours !== undefined) {
+    return dateAfterHours(now, input.expirationHours, 'expiration');
+  }
+  if (input.expirationDays && input.expirationDays > 0) {
+    return new Date(now + input.expirationDays * DAY_MS).toISOString();
+  }
+  return undefined;
+}
+
+function updateDateFromRelativeDuration<T extends string | null>(
+  now: number,
+  hours: number | undefined,
+  days: number | undefined,
+  existing: T,
+  field: 'deletion' | 'expiration',
+): string | T {
+  assertExclusiveDuration(hours, days, field);
+  if (hours !== undefined) return dateAfterHours(now, hours, field);
+  if (days && days > 0) {
+    return field === 'deletion'
+      ? dateAfterDays(now, days)
+      : new Date(now + days * DAY_MS).toISOString();
+  }
+  return existing;
+}
+
+function assertExclusiveDuration(
+  hours: number | undefined,
+  days: number | undefined,
+  field: 'deletion' | 'expiration',
+): void {
+  if (hours !== undefined && days !== undefined) {
+    throw new TypeError(`${field} duration must use hours or legacy days, not both`);
+  }
+}
+
+function dateAfterHours(
+  now: number,
+  hours: number,
+  field: 'deletion' | 'expiration',
+): string {
+  if (!Number.isSafeInteger(hours) || hours < 1 || hours > MAX_SEND_DURATION_HOURS) {
+    throw new RangeError(`${field}Hours must be an integer between 1 and ${MAX_SEND_DURATION_HOURS}`);
+  }
+  return new Date(now + hours * HOUR_MS).toISOString();
+}
+
+function dateAfterDays(now: number, days: number): string {
+  return new Date(now + clampDays(days, 1, 31) * DAY_MS).toISOString();
+}
+
+function assertSendDateOrder(expirationDate: string | null | undefined, deletionDate: string): void {
+  if (expirationDate == null) return;
+  const expirationTime = Date.parse(expirationDate);
+  const deletionTime = Date.parse(deletionDate);
+  if (!Number.isFinite(expirationTime) || !Number.isFinite(deletionTime)) {
+    throw new TypeError('Send expiration and deletion dates must be valid ISO timestamps');
+  }
+  if (expirationTime > deletionTime) {
+    throw new RangeError('Send expiration date must not be later than its deletion date');
+  }
 }

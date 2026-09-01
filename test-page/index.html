@@ -125,8 +125,7 @@
     display: flex; align-items: center; gap: 10px; padding: 9px 12px; font-size: 12.5px; font-weight: 700;
     background: var(--panel-2); border-bottom: 1px solid var(--line);
   }
-  .result.miyu .rhead { color: var(--ok); }
-  .result.native .rhead { color: var(--warn); }
+  .result.ok .rhead { color: var(--ok); }
   .result.err .rhead { color: var(--danger); }
   .result pre { margin: 0; padding: 12px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 340px; overflow: auto; }
 
@@ -154,7 +153,7 @@
     <div class="logo">密</div>
     <div>
       <h1>MiYu · Autofill &amp; Passkey Test Page</h1>
-      <p>Exercises every autofill surface the extension exposes, plus passkey register &amp; authenticate.</p>
+      <p>Exercises login, TOTP, generator, card, and identity field flows, plus passkey register &amp; authenticate.</p>
     </div>
   </header>
 
@@ -222,7 +221,7 @@
     <h2><span class="num">4</span> Registration (password generator)
       <span class="chip" data-chip="4"><span class="dot"></span>waiting</span>
     </h2>
-    <p class="hint">Focus the <b>Create password</b> field (a <code class="i">new-password</code> field) — the inline generator panel offers a strong password and can save the new login. The confirm field is ignored on purpose.</p>
+    <p class="hint">Focus the <b>Create password</b> field (a <code class="i">new-password</code> field). Choosing <b>Use</b> fills both password fields without creating a vault item yet; submitting this website form then triggers the normal save prompt.</p>
     <form data-section="4" action="javascript:void 0">
       <div class="grid">
         <div class="field full">
@@ -247,7 +246,7 @@
     <h2><span class="num">5</span> Credit card
       <span class="chip" data-chip="5"><span class="dot"></span>waiting</span>
     </h2>
-    <p class="hint">Card fields tagged with <code class="i">cc-*</code> autocomplete tokens. A 密屿 trigger appears under a field — click it and choose a card. Also works via right-click → 密屿, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> on a focused field.</p>
+    <p class="hint">Card fields tagged with <code class="i">cc-*</code> autocomplete tokens. With Inline suggestions enabled, focus a field and choose a card from the 密屿 panel. Also works via right-click → 密屿, or the focused-fill shortcut on a focused field.</p>
     <form data-section="5" action="javascript:void 0">
       <div class="grid">
         <div class="field full">
@@ -275,7 +274,7 @@
     <h2><span class="num">6</span> Identity &amp; address
       <span class="chip" data-chip="6"><span class="dot"></span>waiting</span>
     </h2>
-    <p class="hint">Name + address fields tagged with identity autocomplete tokens. Same triggers as the card: click the 密屿 icon, right-click → 密屿, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd>.</p>
+    <p class="hint">Name + address fields tagged with identity autocomplete tokens. Same triggers as the card: focus with Inline suggestions enabled, right-click → 密屿, or use the focused-fill shortcut.</p>
     <form data-section="6" action="javascript:void 0">
       <div class="grid">
         <div class="field"><label>First name</label><input autocomplete="given-name" name="fname" /></div>
@@ -320,17 +319,16 @@
   <!-- 8. Passkey (NEW) -->
   <section class="card">
     <h2><span class="num">8</span> Passkey — register &amp; authenticate
-      <span class="chip" data-chip="8"><span class="dot"></span>ready</span>
+      <span class="chip" data-chip="8"><span class="dot"></span>manual check</span>
     </h2>
     <p class="hint">
-      This is the new section. Order matters: <b>Register</b> first (stores a passkey in the unlocked MiYu vault, attached to a login you pick), then <b>Authenticate</b>.
-      A result panel labelled <span style="color:var(--ok)">MiYu</span> means the extension handled the ceremony (duck-typed credential, not a real <code class="i">PublicKeyCredential</code>);
-      <span style="color:var(--warn)">Native</span> means it fell through to the browser/OS authenticator.
-      <b>Prerequisites:</b> open the popup and unlock the vault, and use <code class="i">http://localhost</code> (an IP rpId is rejected).
+      Order matters: <b>Register</b> first (stores a passkey in the unlocked MiYu vault, attached to a login you pick), then <b>Authenticate</b>.
+      The returned object keeps a <code class="i">PublicKeyCredential</code> prototype whether MiYu or the browser handled it, so this page does not guess the handler from <code class="i">instanceof</code>.
+      <b>Prerequisites:</b> enable Website passkeys in Settings, approve website access, and unlock the vault. Both <code class="i">http://localhost</code> and <code class="i">http://127.0.0.1</code> are supported.
     </p>
 
     <div class="pk-opts">
-      <label class="inline"><input type="checkbox" id="pk-uv" checked /> require user verification (UV)</label>
+      <label class="inline"><input type="checkbox" id="pk-uv" /> require user verification (UV; delegates to browser/OS)</label>
       <label class="inline"><input type="checkbox" id="pk-allowlist" /> get(): restrict to last-created id (non-discoverable)</label>
     </div>
 
@@ -354,7 +352,7 @@
   <div class="logwrap"><div id="log" aria-live="polite"></div></div>
 
   <p class="footer">
-    Serve this over <code class="i">http://localhost</code> (run <code class="i">npm run serve:testpage</code>) — the content scripts only inject on http/https, and passkeys need a secure context. Opening the file directly (<code class="i">file://</code>) disables everything.
+    Serve this over <code class="i">http://localhost</code> or <code class="i">http://127.0.0.1</code> (run <code class="i">npm run serve:testpage</code>) — the content scripts only inject on http/https, and passkeys need a secure context. Opening the file directly (<code class="i">file://</code>) disables everything.
   </p>
 </div>
 
@@ -401,10 +399,8 @@
   $('#env-rpid').textContent = rpId;
   const warn = $('#env-warn');
   const problems = [];
-  const isIp = /^\d+\.\d+\.\d+\.\d+$/.test(host) || (host.includes(':') && host !== 'localhost');
   if (location.protocol === 'file:') problems.push('Opened as file:// — the extension injects no content scripts here. Serve over http://localhost.');
   if (!secure) problems.push('Not a secure context — passkey create()/get() will not be intercepted.');
-  if (isIp) problems.push('Reached via an IP address — MiYu rejects a non-registrable rpId. Open http://localhost:PORT instead.');
   if (problems.length) {
     $('#env').classList.add('bad');
     warn.classList.add('show');
@@ -496,13 +492,9 @@
   const bodyEl = $('#pk-result-body');
   let lastCredentialId = null; // base64url, from the most recent create()
 
-  // A MiYu-handled credential is a duck-typed plain object, NOT a real PublicKeyCredential.
-  const handledByMiyu = (cred) =>
-    typeof PublicKeyCredential === 'undefined' ? null : !(cred instanceof PublicKeyCredential);
-
   function showResult(kind, title, obj) {
     resultEl.className = 'result show ' + kind;
-    badgeEl.textContent = kind === 'miyu' ? '● handled by MiYu' : kind === 'native' ? '● native authenticator' : '● error';
+    badgeEl.textContent = kind === 'ok' ? '● credential returned' : '● error';
     titleEl.textContent = title;
     bodyEl.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
   }
@@ -519,7 +511,7 @@
   }
 
   $('#pk-register').addEventListener('click', async () => {
-    if (!secure) { showResult('err', 'create() needs a secure context', 'Serve over http://localhost.'); return; }
+    if (!secure) { showResult('err', 'create() needs a secure context', 'Serve over an HTTP loopback URL.'); return; }
     const uv = $('#pk-uv').checked ? 'required' : 'discouraged';
     const userId = rand(16);
     const challenge = rand(32);
@@ -535,15 +527,18 @@
       attestation: 'none',
       excludeCredentials: [],
     };
-    log(`create(): rpId=${rpId}, UV=${uv} — approve the MiYu dialog (or pick where to save the passkey)…`, 'accent');
+    log(
+      `create(): rpId=${rpId}, UV=${uv} — ${uv === 'required' ? 'delegating to the browser/OS authenticator' : 'approve the MiYu dialog and choose where to save'}…`,
+      'accent',
+    );
     try {
       const cred = await navigator.credentials.create({ publicKey });
       if (!cred) { showResult('err', 'create() returned null', 'No credential was produced.'); log('create() → null', 'warn'); return; }
-      const miyu = handledByMiyu(cred);
       lastCredentialId = cred.id;
       const r = cred.response;
       const out = {
-        handledBy: miyu === null ? 'unknown' : miyu ? 'MiYu extension (duck-typed)' : 'native PublicKeyCredential',
+        handler: 'Not inferred from the returned object; confirm the visible approval UI',
+        publicKeyCredentialPrototype: typeof PublicKeyCredential === 'function' && cred instanceof PublicKeyCredential,
         id: cred.id,
         type: cred.type,
         authenticatorAttachment: cred.authenticatorAttachment,
@@ -553,8 +548,8 @@
         authData: r.getAuthenticatorData ? { flags: describeFlags(new Uint8Array(r.getAuthenticatorData())) } : '(n/a)',
         attestationObject_b64url: b64url.encode(r.attestationObject),
       };
-      showResult(miyu ? 'miyu' : 'native', 'Passkey registered — create()', out);
-      log(`create() ✓ ${miyu ? 'MiYu' : 'native'} · id=${cred.id.slice(0, 12)}…`, miyu ? 'good' : 'warn');
+      showResult('ok', 'Passkey registered — create()', out);
+      log(`create() ✓ credential returned · id=${cred.id.slice(0, 12)}…`, 'good');
     } catch (e) {
       showResult('err', 'create() failed', `${e.name}: ${e.message}`);
       log(`create() ✗ ${e.name}: ${e.message}`, 'err');
@@ -562,7 +557,7 @@
   });
 
   $('#pk-authenticate').addEventListener('click', async () => {
-    if (!secure) { showResult('err', 'get() needs a secure context', 'Serve over http://localhost.'); return; }
+    if (!secure) { showResult('err', 'get() needs a secure context', 'Serve over an HTTP loopback URL.'); return; }
     const uv = $('#pk-uv').checked ? 'required' : 'discouraged';
     const challenge = rand(32);
     const allowList = $('#pk-allowlist').checked;
@@ -579,15 +574,18 @@
         ? [{ type: 'public-key', id: b64url.toBytes(lastCredentialId) }]
         : [],
     };
-    log(`get(): rpId=${rpId}, UV=${uv}, allowList=${allowList} — approve the MiYu dialog…`, 'accent');
+    log(
+      `get(): rpId=${rpId}, UV=${uv}, allowList=${allowList} — ${uv === 'required' ? 'delegating to the browser/OS authenticator' : 'approve the MiYu dialog'}…`,
+      'accent',
+    );
     try {
       const cred = await navigator.credentials.get({ publicKey });
       if (!cred) { showResult('err', 'get() returned null', 'No assertion produced.'); log('get() → null', 'warn'); return; }
-      const miyu = handledByMiyu(cred);
       const r = cred.response;
       const authData = new Uint8Array(r.authenticatorData);
       const out = {
-        handledBy: miyu === null ? 'unknown' : miyu ? 'MiYu extension (duck-typed)' : 'native PublicKeyCredential',
+        handler: 'Not inferred from the returned object; confirm the visible approval UI',
+        publicKeyCredentialPrototype: typeof PublicKeyCredential === 'function' && cred instanceof PublicKeyCredential,
         id: cred.id,
         type: cred.type,
         authenticatorAttachment: cred.authenticatorAttachment,
@@ -596,8 +594,8 @@
         userHandle_b64url: r.userHandle ? b64url.encode(r.userHandle) : null,
         signature_b64url: b64url.encode(r.signature),
       };
-      showResult(miyu ? 'miyu' : 'native', 'Assertion produced — get()', out);
-      log(`get() ✓ ${miyu ? 'MiYu' : 'native'} · UV=${out.authenticatorData.UV} · id=${cred.id.slice(0, 12)}…`, miyu ? 'good' : 'warn');
+      showResult('ok', 'Assertion produced — get()', out);
+      log(`get() ✓ credential returned · UV=${out.authenticatorData.UV} · id=${cred.id.slice(0, 12)}…`, 'good');
     } catch (e) {
       showResult('err', 'get() failed', `${e.name}: ${e.message}`);
       log(`get() ✗ ${e.name}: ${e.message}`, 'err');

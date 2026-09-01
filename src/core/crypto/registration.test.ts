@@ -10,18 +10,19 @@ describe('buildRegistration', () => {
   const email = 'newuser@example.com';
   const password = 'Sup3r-Secret-Master!';
   const iterations = 600000;
+  const kdf = { kdf: 0, kdfIterations: iterations } as const;
 
   it('produces a master password hash matching the KDF derivation', async () => {
-    const reg = await buildRegistration(email, password, iterations);
-    const masterKey = await deriveMasterKey(password, email, iterations);
+    const reg = await buildRegistration(email, password, kdf);
+    const masterKey = await deriveMasterKey(password, email, kdf);
     expect(reg.masterPasswordHash).toBe(await deriveMasterPasswordHash(masterKey, password));
     expect(reg.kdf).toBe(0);
     expect(reg.kdfIterations).toBe(iterations);
   });
 
   it('wraps a 64-byte UserKey under the stretched master key (unwraps back cleanly)', async () => {
-    const reg = await buildRegistration(email, password, iterations);
-    const masterKey = await deriveMasterKey(password, email, iterations);
+    const reg = await buildRegistration(email, password, kdf);
+    const masterKey = await deriveMasterKey(password, email, kdf);
     const stretched = await stretchMasterKey(masterKey);
     const userKey = await unwrapSymmetricKey(reg.key, stretched);
     expect(userKey.encKey.length).toBe(32);
@@ -29,8 +30,8 @@ describe('buildRegistration', () => {
   });
 
   it('wraps an RSA private key that decrypts under the UserKey and matches the public key', async () => {
-    const reg = await buildRegistration(email, password, iterations);
-    const masterKey = await deriveMasterKey(password, email, iterations);
+    const reg = await buildRegistration(email, password, kdf);
+    const masterKey = await deriveMasterKey(password, email, kdf);
     const userKey = await unwrapSymmetricKey(reg.key, await stretchMasterKey(masterKey));
     const pkcs8 = await decryptPrivateKey(reg.keys.encryptedPrivateKey, userKey);
 
@@ -44,8 +45,8 @@ describe('buildRegistration', () => {
   });
 
   it('generates a fresh UserKey each call', async () => {
-    const a = await buildRegistration(email, password, iterations);
-    const b = await buildRegistration(email, password, iterations);
+    const a = await buildRegistration(email, password, kdf);
+    const b = await buildRegistration(email, password, kdf);
     expect(a.key).not.toBe(b.key);
   });
 });

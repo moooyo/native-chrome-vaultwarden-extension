@@ -53,7 +53,7 @@ export class VwTotpView extends LitElement {
       .group-label { font-size:11px; font-weight:500; color:var(--vw-muted); padding:8px 8px 4px; }
 
       .row {
-        display:flex; align-items:center; gap:10px; width:100%; min-height:50px; padding:7px 8px;
+        display:flex; align-items:center; gap:10px; width:100%; min-height:var(--vw-totp-row-min, 50px); padding:var(--vw-totp-row-padding-block, 7px) 8px;
         border:0; border-radius:12px; background:transparent; color:inherit;
         cursor:pointer; text-align:left; font:inherit; animation:mvStag .24s ease-out both;
       }

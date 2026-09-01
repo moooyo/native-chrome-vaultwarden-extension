@@ -12,7 +12,7 @@ export interface UsernameGenOptions {
   randomLength: number;
   /** random-word: capitalize the first letter. */
   capitalize: boolean;
-  /** random-word: append one 0-9 digit. */
+  /** random-word: append four 0-9 digits. */
   includeNumber: boolean;
 }
 
@@ -28,7 +28,7 @@ export function randomAlphanumeric(length: number, randomInt: (maxExclusive: num
   return out;
 }
 
-/** `local+<random>@domain`. A base without '@' becomes `base+<random>` (no domain). Trims the base. */
+/** Add a random subaddress tag, extending an existing `+tag` without inserting a second plus. */
 export function generatePlusAddressedEmail(
   baseEmail: string,
   options: UsernameGenOptions,
@@ -39,7 +39,8 @@ export function generatePlusAddressedEmail(
   const at = trimmed.indexOf('@');
   const domain = at < 0 ? '' : trimmed.slice(at + 1);
   const local = at < 0 ? trimmed : trimmed.slice(0, at);
-  return domain ? `${local}+${rand}@${domain}` : `${local}+${rand}`;
+  const separator = local.includes('+') ? '' : '+';
+  return domain ? `${local}${separator}${rand}@${domain}` : `${local}${separator}${rand}`;
 }
 
 /** `<random>@domain`. A leading '@' on the domain is stripped; an empty domain yields just the random part. */
@@ -53,7 +54,7 @@ export function generateCatchAllEmail(
   return d ? `${rand}@${d}` : rand;
 }
 
-/** A random word, optionally capitalized, optionally with a trailing 0-9 digit. */
+/** A random word, optionally capitalized, optionally with a four-digit suffix. */
 export function generateRandomWordUsername(
   options: UsernameGenOptions,
   randomInt: (maxExclusive: number) => number = cryptoRandomInt,
@@ -62,7 +63,9 @@ export function generateRandomWordUsername(
   if (words.length === 0) return '';
   let word = words[randomInt(words.length)]!;
   if (options.capitalize) word = word.charAt(0).toUpperCase() + word.slice(1);
-  if (options.includeNumber) word = `${word}${randomInt(10)}`;
+  if (options.includeNumber) {
+    for (let i = 0; i < 4; i++) word = `${word}${randomInt(10)}`;
+  }
   return word;
 }
 

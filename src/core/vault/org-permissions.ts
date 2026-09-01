@@ -4,32 +4,118 @@ import type { OrganizationResponse } from '../api/types.js';
 export interface OrgPermission {
   id: string;
   name: string;
+  canCreateCollections: boolean;
+  canEditCollections: boolean;
+  canDeleteCollections: boolean;
+  /** Compatibility aggregate. Consumers must use the operation-specific gates for actions. */
   canManageCollections: boolean;
+  /** Migration fields populated once the sync metadata helper is wired into VaultService. */
+  isMember?: boolean;
+  isProviderUser?: boolean;
+  canCreateItems?: boolean;
 }
 
-/** UI gate: may this user manage collections in this org at all? This is intentionally a single
- *  COARSE boolean: for a Custom member it is true when ANY of create / edit-any / delete-any is
- *  granted, so a create-only member reads as "can manage". It is not split into create vs
- *  edit/delete because the sole consumer only needs the coarse entry-point gate; the server enforces
- *  the specific operation and rejects anything the member lacks. FAILS CLOSED; the server remains the
- *  final authority on every operation. */
-export function canManageCollections(org: OrganizationResponse): boolean {
-  if (org.status !== 2) return false; // Confirmed members only
-  const type = org.type;
-  if (type === 0 || type === 1) return true; // Owner / Admin — gated by type, not permissions
-  if (type === 3) return true; // Manager — harmless fallback; Vaultwarden actually remaps this to Custom(4)
-  if (type === 4) {
-    const p = org.permissions;
-    // Coarse OR: any collection-management grant surfaces the control; the server gates the exact op.
-    return Boolean(p?.createNewCollections || p?.editAnyCollection || p?.deleteAnyCollection);
+export interface OrgPermissionContext {
+  readonly isMember: boolean;
+  readonly isProviderUser: boolean;
+  readonly keyAvailable: boolean;
+}
+
+type CollectionPermissions = Pick<OrgPermission,
+  'canCreateCollections' | 'canEditCollections' | 'canDeleteCollections'>;
+
+const NO_COLLECTION_PERMISSIONS: CollectionPermissions = {
+  canCreateCollections: false,
+  canEditCollections: false,
+  canDeleteCollections: false,
+};
+
+const ALL_COLLECTION_PERMISSIONS: CollectionPermissions = {
+  canCreateCollections: true,
+  canEditCollections: true,
+  canDeleteCollections: true,
+};
+
+function collectionPermissions(org: OrganizationResponse): CollectionPermissions {
+  if (org.status !== 2) return NO_COLLECTION_PERMISSIONS;
+
+  if (org.type === 0 || org.type === 1) {
+    return ALL_COLLECTION_PERMISSIONS;
   }
-  return false; // User(2), undefined, or any unknown value
+
+  if (org.type === 4) {
+    return {
+      canCreateCollections: Boolean(org.permissions?.createNewCollections),
+      canEditCollections: Boolean(org.permissions?.editAnyCollection),
+      canDeleteCollections: Boolean(org.permissions?.deleteAnyCollection),
+    };
+  }
+
+  // A User's create/delete rights depend on organization settings and per-collection access that
+  // are not present here. Legacy Manager(3) was removed by Bitwarden and is remapped by Vaultwarden.
+  return NO_COLLECTION_PERMISSIONS;
+}
+
+/** Coarse compatibility gate. Action controls must use the operation-specific permission fields. */
+export function canManageCollections(org: OrganizationResponse): boolean {
+  const permissions = collectionPermissions(org);
+  return permissions.canCreateCollections
+    || permissions.canEditCollections
+    || permissions.canDeleteCollections;
 }
 
 export function toOrgPermission(org: OrganizationResponse): OrgPermission {
+  return projectOrgPermission(org);
+}
+
+export function toContextualOrgPermission(
+  org: OrganizationResponse,
+  context: OrgPermissionContext,
+): OrgPermission {
+  return projectOrgPermission(org, context);
+}
+
+function projectOrgPermission(
+  org: OrganizationResponse,
+  context?: OrgPermissionContext,
+): OrgPermission {
+  const permissions = context
+    ? contextualCollectionPermissions(org, context)
+    : collectionPermissions(org);
   return {
     id: org.id,
     name: org.name ?? '(unnamed organization)',
-    canManageCollections: canManageCollections(org),
+    ...permissions,
+    canManageCollections: permissions.canCreateCollections
+      || permissions.canEditCollections
+      || permissions.canDeleteCollections,
+    ...(context ? {
+      isMember: context.isMember,
+      isProviderUser: context.isProviderUser,
+      canCreateItems: context.isMember
+        && context.keyAvailable
+        && org.status === 2
+        && org.enabled === true,
+    } : {}),
   };
+}
+
+function contextualCollectionPermissions(
+  org: OrganizationResponse,
+  context: OrgPermissionContext,
+): CollectionPermissions {
+  if (!context.keyAvailable) {
+    return NO_COLLECTION_PERMISSIONS;
+  }
+  // Official clients treat Provider users as owners for collection administration. A direct member
+  // can simultaneously be a Provider user; that does not remove either authority.
+  if (context.isProviderUser) {
+    if ((org.status !== undefined && org.status !== null && org.status !== 2)
+        || (org.enabled !== undefined && org.enabled !== null && org.enabled !== true)) {
+      return NO_COLLECTION_PERMISSIONS;
+    }
+    return ALL_COLLECTION_PERMISSIONS;
+  }
+  if (org.status !== 2 || org.enabled !== true) return NO_COLLECTION_PERMISSIONS;
+  return collectionPermissions(org);
 }

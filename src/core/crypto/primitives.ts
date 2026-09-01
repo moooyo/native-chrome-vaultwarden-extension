@@ -1,4 +1,4 @@
-import { utf8ToBytes } from './encoding.js';
+import { constantTimeEqual, utf8ToBytes } from './encoding.js';
 
 const subtle = globalThis.crypto.subtle;
 
@@ -67,17 +67,33 @@ export async function hkdfExpandSha256(
   const out = new Uint8Array(lengthBytes);
   let previous: Uint8Array = new Uint8Array(0);
   let pos = 0;
-  for (let counter = 1; pos < lengthBytes; counter++) {
-    const input = new Uint8Array(previous.length + infoBytes.length + 1);
-    input.set(previous, 0);
-    input.set(infoBytes, previous.length);
-    input[input.length - 1] = counter & 0xff;
-    previous = await hmacSha256(prk, input);
-    const take = Math.min(previous.length, lengthBytes - pos);
-    out.set(previous.subarray(0, take), pos);
-    pos += take;
+  let succeeded = false;
+  try {
+    for (let counter = 1; pos < lengthBytes; counter++) {
+      const input = new Uint8Array(previous.length + infoBytes.length + 1);
+      input.set(previous, 0);
+      input.set(infoBytes, previous.length);
+      input[input.length - 1] = counter & 0xff;
+      let next: Uint8Array | undefined;
+      try {
+        next = await hmacSha256(prk, input);
+      } finally {
+        input.fill(0);
+      }
+      if (!next) throw new Error('HKDF expansion did not produce a block');
+      previous.fill(0);
+      previous = next;
+      const take = Math.min(previous.length, lengthBytes - pos);
+      out.set(previous.subarray(0, take), pos);
+      pos += take;
+    }
+    succeeded = true;
+    return out;
+  } finally {
+    previous.fill(0);
+    infoBytes.fill(0);
+    if (!succeeded) out.fill(0);
   }
-  return out;
 }
 
 export async function aesCbc256Decrypt(
@@ -107,14 +123,19 @@ export async function rsaOaepDecrypt(
   data: Uint8Array,
   hash: 'SHA-1' | 'SHA-256' = 'SHA-1',
 ): Promise<Uint8Array> {
-  const key = await subtle.importKey(
-    'pkcs8',
-    privateKeyPkcs8 as BufferSource,
-    { name: 'RSA-OAEP', hash },
-    false,
-    ['decrypt'],
-  );
+  if (!(data instanceof Uint8Array) || data.byteLength !== 256) {
+    throw new Error('RSA-OAEP ciphertext must contain exactly 256 bytes');
+  }
+  const key = await importRsa2048OaepPrivateKey(privateKeyPkcs8, hash);
   return new Uint8Array(await subtle.decrypt({ name: 'RSA-OAEP' }, key, data as BufferSource));
+}
+
+/** Validate a Bitwarden account private key without retaining an extractable CryptoKey. */
+export async function validateRsa2048OaepPrivateKey(
+  privateKeyPkcs8: Uint8Array,
+  hash: 'SHA-1' | 'SHA-256' = 'SHA-1',
+): Promise<void> {
+  await importRsa2048OaepPrivateKey(privateKeyPkcs8, hash);
 }
 
 /** RSA-OAEP encrypt to a public key (SPKI DER). Used to wrap a symmetric key to another party's
@@ -126,4 +147,35 @@ export async function rsaOaepEncrypt(
 ): Promise<Uint8Array> {
   const key = await subtle.importKey('spki', spkiPublicKey as BufferSource, { name: 'RSA-OAEP', hash }, false, ['encrypt']);
   return new Uint8Array(await subtle.encrypt({ name: 'RSA-OAEP' }, key, data as BufferSource));
+}
+
+async function importRsa2048OaepPrivateKey(
+  privateKeyPkcs8: Uint8Array,
+  hash: 'SHA-1' | 'SHA-256',
+): Promise<CryptoKey> {
+  if (
+    !(privateKeyPkcs8 instanceof Uint8Array)
+    || privateKeyPkcs8.byteLength < 512
+    || privateKeyPkcs8.byteLength > 4_096
+  ) {
+    throw new Error('RSA-OAEP private key PKCS8 length is invalid');
+  }
+  const key = await subtle.importKey(
+    'pkcs8',
+    privateKeyPkcs8 as BufferSource,
+    { name: 'RSA-OAEP', hash },
+    false,
+    ['decrypt'],
+  );
+  const algorithm = key.algorithm as Partial<RsaHashedKeyAlgorithm>;
+  if (
+    algorithm.name !== 'RSA-OAEP'
+    || algorithm.modulusLength !== 2_048
+    || algorithm.hash?.name !== hash
+    || !(algorithm.publicExponent instanceof Uint8Array)
+    || !constantTimeEqual(algorithm.publicExponent, Uint8Array.from([1, 0, 1]))
+  ) {
+    throw new Error('RSA-OAEP private key must be RSA-2048 with exponent 65537');
+  }
+  return key;
 }

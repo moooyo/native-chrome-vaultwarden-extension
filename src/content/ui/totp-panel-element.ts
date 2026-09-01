@@ -5,12 +5,22 @@ import { SIDE_PANEL_CSS, sideWrap } from './side-panel.js';
 // TODO i18n: content-script surfaces are isolated from the extension i18n module, so these
 // user-facing strings are hardcoded in Chinese to match the 密屿/MiYu design.
 
-export type TotpPanelView = 'panel' | 'filled' | 'status';
+export type TotpPanelView = 'candidates' | 'panel' | 'filled' | 'status';
+
+export interface TotpPanelCandidate {
+  key: string;
+  name: string;
+  username: string;
+  reprompt: boolean;
+}
 
 /** The full render state of the 2FA panel surface. Held by the factory (see totp-fill.ts) and passed
  *  to `renderTotpPanel` on every state change — no cipher id ever reaches this state or the DOM. */
 export interface TotpPanelState {
   view: TotpPanelView;
+  candidates: readonly TotpPanelCandidate[];
+  overflowCount: number;
+  loadingKey: string;
   itemName: string;
   itemUser: string;
   code: string;
@@ -21,6 +31,8 @@ export interface TotpPanelState {
 /** Privileged callbacks. Every click that reaches them is gated on `Event.isTrusted` in the template,
  *  so a page script cannot synthesize a click to fill / copy / undo. */
 export interface TotpPanelHandlers {
+  onSelect?: (candidateKey: string) => void;
+  onChooseOther?: () => void;
   onFill?: () => void;
   onCopy?: () => void;
   onUndo?: () => void;
@@ -74,6 +86,15 @@ export const TOTP_PANEL_STYLES = `
     .meta-col { min-width: 0; flex: 1; }
     .title { font-size: 12.5px; font-weight: 600; color: var(--mi-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sub { font-size: 11px; color: var(--mi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .candidate-list { display:grid; gap:4px; padding:2px 8px 8px; max-height:240px; overflow:auto; }
+    .candidate { width:100%; display:flex; align-items:center; gap:9px; padding:7px 6px; border:0; border-radius:8px; background:transparent; color:inherit; text-align:left; cursor:pointer; font:inherit; }
+    .candidate:hover, .candidate:focus-visible { background:var(--mi-row-hover); }
+    .candidate[disabled] { cursor:wait; opacity:.68; }
+    .candidate .meta-col { display:block; }
+    .candidate-state { margin-left:auto; color:var(--mi-faint); font-size:10px; flex:none; }
+    .candidate-note { padding:0 13px 9px; color:var(--mi-muted); font-size:11px; }
+    .candidate-error { color:#b3261e; }
+    .change-candidate { border:0; background:none; color:var(--mi-teal-text); padding:0; font:500 10.5px/1.2 "Roboto",sans-serif; cursor:pointer; }
 
     .code-box { margin: 0 13px; padding: 9px 11px; background: var(--mi-fill-2); border: 1px solid var(--mi-line); border-radius: 10px; display: flex; align-items: center; gap: 9px; }
     .code { flex:1; display:flex; align-items:baseline; font-family:"Roboto Mono", ui-monospace, monospace; font-weight:500; font-size:18px; color:var(--mi-teal-text); }
@@ -146,21 +167,61 @@ export function renderTotpPanel(state: TotpPanelState, handlers: TotpPanelHandle
 function renderBody(state: TotpPanelState, handlers: TotpPanelHandlers): TemplateResult {
   if (state.view === 'status') {
     return html`<div class="head">${logoGlyph()}<span class="brand">密屿</span></div>
-      <div class="status"><span class="status-msg">${state.statusMessage}</span></div>`;
+      <div class="status" role="status" aria-live="polite" aria-atomic="true">
+        <span class="status-msg">${state.statusMessage}</span>
+      </div>`;
   }
+  const matchCount = state.candidates.length + state.overflowCount;
   return html`
     <div class="head">
       ${logoGlyph()}<span class="brand">密屿</span>
-      <span class="meta">1 个匹配项 · 2FA</span>
+      <span class="meta">${matchCount} 个匹配项 · 2FA</span>
     </div>
+    ${state.view === 'candidates' ? renderCandidates(state, handlers) : html`
     <div class="row">
-      <span class="tile" style="background:${tileColor(state.itemName)}">${monogramLetter(state.itemName)}</span>
+      <span class="tile" aria-hidden="true" style="background:${tileColor(state.itemName)}">${monogramLetter(state.itemName)}</span>
       <span class="meta-col">
         <span class="title">${state.itemName}</span>
         <span class="sub">${state.itemUser}</span>
       </span>
+      ${matchCount > 1 && state.view === 'panel'
+        ? html`<button type="button" class="change-candidate" @click=${(e: MouseEvent) => trusted(e, handlers.onChooseOther)}>切换账户</button>`
+        : nothing}
     </div>
     ${state.view === 'filled' ? renderFilled(handlers) : renderPanel(state, handlers)}
+    `}
+  `;
+}
+
+function renderCandidates(state: TotpPanelState, handlers: TotpPanelHandlers): TemplateResult {
+  return html`
+    <div class="candidate-list" role="listbox" aria-label="选择验证码账户">
+      ${state.candidates.map((candidate) => html`
+        <button
+          type="button"
+          class="candidate"
+          role="option"
+          data-candidate-key=${candidate.key}
+          ?disabled=${state.loadingKey === candidate.key}
+          @click=${(event: MouseEvent) => trusted(event, () => handlers.onSelect?.(candidate.key))}
+        >
+          <span class="tile" aria-hidden="true" style="background:${tileColor(candidate.name)}">${monogramLetter(candidate.name)}</span>
+          <span class="meta-col">
+            <span class="title">${candidate.name}</span>
+            <span class="sub">${candidate.username}</span>
+          </span>
+          <span class="candidate-state">${state.loadingKey === candidate.key
+            ? '加载中…'
+            : candidate.reprompt ? '需验证' : ''}</span>
+        </button>
+      `)}
+    </div>
+    ${state.overflowCount > 0
+      ? html`<div class="candidate-note">另有 ${state.overflowCount} 个匹配项未显示</div>`
+      : nothing}
+    ${state.statusMessage
+      ? html`<div class="candidate-note candidate-error" role="status">${state.statusMessage}</div>`
+      : nothing}
   `;
 }
 
@@ -171,8 +232,8 @@ function renderPanel(state: TotpPanelState, handlers: TotpPanelHandlers): Templa
   const offset = CIRC * (1 - frac);
   return html`
     <div class="code-box">
-      <span class="code">${codeGroups(state.code)}</span>
-      <span class="secs">${state.remaining}s</span>
+      <span class="code" aria-label=${`验证码 ${state.code}`}>${codeGroups(state.code)}</span>
+      <span class="secs" aria-label=${`${state.remaining} 秒后更新`}>${state.remaining}s</span>
       <svg class="cd-ring" viewBox="0 0 20 20" aria-hidden="true">
         <circle class="cd-track" cx="10" cy="10" r="8"></circle>
         <circle class="cd-arc" cx="10" cy="10" r="8" stroke-dasharray="${CIRC.toFixed(2)}" stroke-dashoffset="${offset.toFixed(2)}"></circle>
@@ -180,14 +241,14 @@ function renderPanel(state: TotpPanelState, handlers: TotpPanelHandlers): Templa
     </div>
     <div class="actions">
       <button type="button" class="btn-primary" @click=${(e: MouseEvent) => trusted(e, handlers.onFill)}>填充验证码</button>
-      <button type="button" class="icon-btn" title="复制验证码" @click=${(e: MouseEvent) => trusted(e, handlers.onCopy)}>${uiIcon('copy')}</button>
+      <button type="button" class="icon-btn" title="复制验证码" aria-label="复制验证码" @click=${(e: MouseEvent) => trusted(e, handlers.onCopy)}>${uiIcon('copy')}</button>
     </div>
   `;
 }
 
 function renderFilled(handlers: TotpPanelHandlers): TemplateResult {
   return html`
-    <div class="filled">
+    <div class="filled" role="status" aria-live="polite" aria-atomic="true">
       <span class="badge">${uiIcon('check')}已填充验证码</span>
       ${handlers.onUndo ? html`<button type="button" class="undo" @click=${(e: MouseEvent) => trusted(e, handlers.onUndo)}>撤销</button>` : nothing}
     </div>

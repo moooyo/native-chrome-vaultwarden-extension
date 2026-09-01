@@ -14,6 +14,24 @@ export const KDF_VECTOR_600K = {
   masterPasswordHashB64: 'Ed32k/NteQHP1mkPQDcCsxylmWzEly7BxSD48blLBEQ=',
 };
 
+// Official Bitwarden Argon2id vector. Argon2 receives SHA-256(UTF-8 salt), memory is expressed in
+// MiB by the API and converted to KiB for the implementation.
+export const ARGON2_KDF_VECTOR = {
+  email: 'test_key',
+  password: '67t9b5g67$%Dh89n',
+  config: { kdf: 1, kdfIterations: 4, kdfMemory: 32, kdfParallelism: 2 } as const,
+  masterKeyHex: 'cff0e1b1a213a34c626ab3afe00911f01493ed2ff6968db83ee183f23335e1f2',
+  masterPasswordHashB64: 'r3Eince9qETXVbhwh9B2OSVoJZLxvqHS2ig2kCocNrg=',
+};
+
+// Independently checked with argon2-cffi 25.1.0 to cover encrypted-export salt handling directly.
+export const ARGON2_EXPORT_KDF_VECTOR = {
+  password: 'export-password',
+  salt: 'AgICAgICAgICAgICAgICAg==',
+  config: { kdf: 1, kdfIterations: 4, kdfMemory: 32, kdfParallelism: 2 } as const,
+  materialHex: '0e15ce43abe2f55480c30094a411dc610050144e8c0845d6ea5ed2cb5d502cb0',
+};
+
 export const STRETCH_VECTOR = {
   encKeyHex: 'd2425697ee6622bac49a08c019c169ad0aa04ccb08f1ec76b580938e5c4d71ac',
   macKeyHex: '0586d3103bfe6a5e5c72ec94d05907bda43b6b26bafeb67e896885e5addab596',

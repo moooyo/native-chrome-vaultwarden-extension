@@ -46,16 +46,17 @@ describe('vw-tools-menu', () => {
   it('lists the safe, fully wired tool actions', async () => {
     const menu = await open(await mount());
     const text = (menu.shadowRoot?.textContent ?? '').toLowerCase();
-    for (const label of ['generator', 'health', 'send', 'sync']) {
+    for (const label of ['generator', 'health', 'send', 'archive', 'trash', 'sync']) {
       expect(text).toContain(label);
     }
-    expect(text).not.toContain('trash');
   });
 
   it.each([
     ['Generator', 'generator'],
     ['health', 'health'],
     ['Send', 'sends'],
+    ['Archive', 'archive'],
+    ['Trash', 'trash'],
     ['Sync', 'sync'],
   ] as const)('emits %s as the %s tool action', async (label, action) => {
     const el = await mount();
@@ -89,7 +90,7 @@ describe('vw-tools-menu', () => {
     el.addEventListener('vw-tool-action', emitted);
     const menu = await open(el);
     const buttons = [...menu.shadowRoot!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
-    expect(buttons.map((button) => button.tabIndex)).toEqual([0, -1, -1, -1]);
+    expect(buttons.map((button) => button.tabIndex)).toEqual([0, -1, -1, -1, -1, -1]);
     buttons[1]!.focus();
     await menu.updateComplete;
     buttons[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, composed: true }));

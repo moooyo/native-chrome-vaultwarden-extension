@@ -11,13 +11,8 @@
 
 ## 实现范围决策（Scope decisions）
 
-- **Argon2id KDF 暂不实现**。客户端目前仅支持 PBKDF2-HMAC-SHA256；遇到
-  `kdf != 0`（Argon2id）的账户在 prelogin 与登录成功两处 **fail-close 抛错**
-  （`src/core/session/auth-service.ts`），不静默降级。这是有意的范围边界，不是缺陷。
-  - **影响**：用 Argon2id（Bitwarden 新账户默认值）创建的账户当前无法登录 / 解锁 / 注册。
-  - **后续若要纳入**：引入 WASM 或纯 JS 的 Argon2 实现（如 `hash-wasm`），在
-    `src/core/crypto/kdf.ts` 增加 `deriveMasterKey` 的 Argon2id 分支，并放开
-    `auth-service` 的两处守卫。
+- **KDF support:** PBKDF2-HMAC-SHA256 and Argon2id are supported. All server-provided parameters
+  are validated before derivation, and Argon2id calls are serialized to bound concurrent memory use.
 
 ## 测试
 

@@ -12,7 +12,7 @@ describe('UI foundation', () => {
   });
 
   it('renders the sun and moon theme glyphs', () => {
-    for (const name of ['sun', 'moon'] as const) {
+    for (const name of ['sun', 'moon', 'download'] as const) {
       const host = document.createElement('div');
       render(uiIcon(name), host);
       expect(host.querySelector('svg')).not.toBeNull();

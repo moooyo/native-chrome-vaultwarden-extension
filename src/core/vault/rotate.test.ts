@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { rotateCipher, rotateFolder, rotateSend, verifyRotatedCipher } from './rotate.js';
+import type { RotatedCipher } from './rotate.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
-import { encryptToText, encryptToBytes, decryptToBytes } from '../crypto/encstring.js';
+import { encryptToText, encryptToBytes, decryptToBytes, decryptToText } from '../crypto/encstring.js';
 import type { CipherResponse, FolderResponse, SendResponse } from '../api/types.js';
 
 const oldK = symmetricKeyFromBytes(new Uint8Array(64).fill(7));
@@ -11,10 +12,18 @@ const dec = new TextDecoder();
 it('keyed cipher: re-wraps only the item key, leaves field ciphertext byte-identical', async () => {
   const itemKeyBytes = new Uint8Array(64).fill(3);
   const wrappedItemKey = await encryptToBytes(itemKeyBytes, oldK);
-  const raw = { id: 'c1', type: 1, key: wrappedItemKey, name: '2.field-ciphertext-unchanged==', login: { password: '2.pw-unchanged==' } } as unknown as CipherResponse;
+  const raw = {
+    id: 'c1',
+    type: 1,
+    key: wrappedItemKey,
+    name: '2.field-ciphertext-unchanged==',
+    login: { password: '2.pw-unchanged==' },
+    data: JSON.stringify({ Name: '2.field-ciphertext-unchanged==', Password: '2.pw-unchanged==' }),
+  } as unknown as CipherResponse;
   const out = await rotateCipher(raw, oldK, newK) as unknown as { name: string; login: { password: string }; key: string };
   expect(out.name).toBe('2.field-ciphertext-unchanged=='); // untouched
   expect(out.login.password).toBe('2.pw-unchanged==');
+  expect(out).not.toHaveProperty('data');
   expect(out.key).not.toBe(wrappedItemKey);
   expect([...await decryptToBytes(out.key, newK)]).toEqual([...itemKeyBytes]); // item key preserved
 });
@@ -34,8 +43,123 @@ it('keyless cipher: re-wraps every EncString field under the new UserKey; preser
   expect(dec.decode(await decryptToBytes(out.fields[0]!.value, newK))).toBe('fv');
 });
 
+it('audits redundant Data, omits it and the URI alias, and leaves no old UserKey ciphertext', async () => {
+  const name = await encryptToText('Canonical item', oldK);
+  const username = await encryptToText('alice', oldK);
+  const password = await encryptToText('correct horse', oldK);
+  const uri = await encryptToText('https://example.test', oldK);
+  const raw = {
+    id: 'canonical-login',
+    type: 1,
+    name,
+    login: { uri, uris: [{ uri, match: null }], username, password },
+    data: JSON.stringify({ Name: name, Uris: [{ Uri: uri, Match: null }], Username: username, Password: password }),
+  } as CipherResponse;
+
+  const out = await rotateCipher(raw, oldK, newK) as RotatedCipher & {
+    name: string;
+    login: { uri?: string; uris: Array<{ uri: string }>; username: string; password: string };
+  };
+  const serialized = JSON.stringify(out);
+
+  expect(out).not.toHaveProperty('data');
+  expect(out.login).not.toHaveProperty('uri');
+  for (const oldCiphertext of [name, username, password, uri]) {
+    expect(serialized).not.toContain(oldCiphertext);
+  }
+  expect(await decryptToText(out.name, newK)).toBe('Canonical item');
+  expect(await decryptToText(out.login.username, newK)).toBe('alice');
+  expect(await decryptToText(out.login.password, newK)).toBe('correct horse');
+  expect(await decryptToText(out.login.uris[0]!.uri, newK)).toBe('https://example.test');
+  await expect(verifyRotatedCipher(out, newK)).resolves.toBeUndefined();
+});
+
+it.each([
+  ['mismatched Data', (name: string) => ({
+    id: 'mismatch', type: 1, name, login: {}, data: JSON.stringify({ Name: '2.different==' }),
+  })],
+  ['unknown Data field', (name: string) => ({
+    id: 'unknown', type: 1, name, login: {}, data: JSON.stringify({ Name: name, FutureSecret: name }),
+  })],
+  ['sealed Data blob', (name: string) => ({
+    id: 'blob', type: 1, name, login: {}, data: JSON.stringify({ format_version: 1, wrapped_cek: name }),
+  })],
+] as const)('rejects %s before doing any rotation', async (_label, build) => {
+  const name = await encryptToText('Blocked', oldK);
+  await expect(rotateCipher(build(name) as CipherResponse, oldK, newK))
+    .rejects.toThrow(/incompatible cipher representation/i);
+});
+
+it('rejects a mismatched obsolete URI alias before removing it', async () => {
+  const name = await encryptToText('Blocked alias', oldK);
+  const firstUri = await encryptToText('https://first.test', oldK);
+  const alias = await encryptToText('https://other.test', oldK);
+  await expect(rotateCipher({
+    id: 'alias-mismatch',
+    type: 1,
+    name,
+    login: { uri: alias, uris: [{ uri: firstUri }] },
+    data: JSON.stringify({ Name: name, Uris: [{ Uri: firstUri }] }),
+  }, oldK, newK)).rejects.toThrow(/login_uri_alias_mismatch/i);
+});
+
+it('rejects accessor-backed input without invoking it before the compatibility gate', async () => {
+  const typeGetter = vi.fn(() => 1);
+  const hostile = Object.defineProperty({ id: 'accessor' }, 'type', {
+    enumerable: true,
+    get: typeGetter,
+  });
+
+  await expect(rotateCipher(hostile as CipherResponse, oldK, newK))
+    .rejects.toThrow(/incompatible cipher representation \(invalid_cipher\)/i);
+  expect(typeGetter).not.toHaveBeenCalled();
+});
+
+it('keyless SSH cipher explicitly re-wraps every SSH field under the new UserKey', async () => {
+  const name = await encryptToText('Deploy key', oldK);
+  const notes = await encryptToText('Production', oldK);
+  const sshKey = {
+    privateKey: await encryptToText('PRIVATE', oldK),
+    publicKey: await encryptToText('ssh-ed25519 PUBLIC', oldK),
+    keyFingerprint: await encryptToText('SHA256:fingerprint', oldK),
+  };
+  const raw = {
+    id: 'ssh-keyless',
+    type: 5,
+    name,
+    notes,
+    sshKey,
+    data: JSON.stringify({
+      Name: name,
+      Notes: notes,
+      PrivateKey: sshKey.privateKey,
+      PublicKey: sshKey.publicKey,
+      KeyFingerprint: sshKey.keyFingerprint,
+    }),
+  } as CipherResponse;
+
+  const out = await rotateCipher(raw, oldK, newK) as unknown as {
+    sshKey: { privateKey: string; publicKey: string; keyFingerprint: string };
+  };
+
+  expect(out).not.toHaveProperty('data');
+  for (const field of ['privateKey', 'publicKey', 'keyFingerprint'] as const) {
+    expect(out.sshKey[field]).not.toBe(sshKey[field]);
+    await expect(decryptToBytes(out.sshKey[field], oldK)).rejects.toBeTruthy();
+  }
+  expect(dec.decode(await decryptToBytes(out.sshKey.privateKey, newK))).toBe('PRIVATE');
+  expect(dec.decode(await decryptToBytes(out.sshKey.publicKey, newK))).toBe('ssh-ed25519 PUBLIC');
+  expect(dec.decode(await decryptToBytes(out.sshKey.keyFingerprint, newK))).toBe('SHA256:fingerprint');
+  await expect(verifyRotatedCipher(out as unknown as RotatedCipher, newK)).resolves.toBeUndefined();
+  for (const field of ['privateKey', 'publicKey', 'keyFingerprint'] as const) {
+    const corrupted = structuredClone(out) as typeof out;
+    corrupted.sshKey[field] = await encryptToText('still-under-old-key', oldK);
+    await expect(verifyRotatedCipher(corrupted as unknown as RotatedCipher, newK)).rejects.toBeTruthy();
+  }
+});
+
 it('keyless cipher with attachments: re-wraps attachment keys into attachments2', async () => {
-  const raw = { id: 'c3', type: 1, name: await encryptToText('n', oldK), attachments: [{ id: 'a1', key: await encryptToText('attkey', oldK), fileName: await encryptToText('file.txt', oldK), size: '10', url: 'u' }] } as unknown as CipherResponse;
+  const raw = { id: 'c3', type: 1, name: await encryptToText('n', oldK), login: {}, attachments: [{ id: 'a1', key: await encryptToText('attkey', oldK), fileName: await encryptToText('file.txt', oldK), size: '10', url: 'u' }] } as unknown as CipherResponse;
   const out = await rotateCipher(raw, oldK, newK) as unknown as {
     attachments2: Record<string, { key: string; fileName: string }>;
     attachments: Array<{ id: string; fileName: string }>;
@@ -46,7 +170,7 @@ it('keyless cipher with attachments: re-wraps attachment keys into attachments2'
 });
 
 it('throws (fail-close) when a personal cipher field cannot be decrypted with the old key', async () => {
-  const raw = { id: 'c4', type: 1, name: await encryptToText('n', newK) /* wrong key */ } as unknown as CipherResponse;
+  const raw = { id: 'c4', type: 1, name: await encryptToText('n', newK) /* wrong key */, login: {} } as unknown as CipherResponse;
   await expect(rotateCipher(raw, oldK, newK)).rejects.toBeTruthy();
 });
 
@@ -55,14 +179,14 @@ it('throws (fail-close) when an attachment has no per-attachment key (legacy blo
   // per-attachment `key`. Rotating away the UserKey would make that blob permanently undecryptable, and
   // neither branch re-wraps it — so rotation must fail closed rather than silently orphan the file.
   const keyless = {
-    id: 'c9', type: 1, name: await encryptToText('n', oldK),
+    id: 'c9', type: 1, name: await encryptToText('n', oldK), login: {},
     attachments: [{ id: 'a1', fileName: await encryptToText('file.txt', oldK), size: '10', url: 'u' }],
   } as unknown as CipherResponse;
   await expect(rotateCipher(keyless, oldK, newK)).rejects.toBeTruthy();
 
   // Same legacy attachment under a KEYED cipher, whose branch would otherwise ignore attachments entirely.
   const keyed = {
-    id: 'c10', type: 1, key: await encryptToBytes(new Uint8Array(64).fill(3), oldK),
+    id: 'c10', type: 1, key: await encryptToBytes(new Uint8Array(64).fill(3), oldK), login: {},
     attachments: [{ id: 'a1', fileName: '2.filename==', size: '10', url: 'u' }],
   } as unknown as CipherResponse;
   await expect(rotateCipher(keyed, oldK, newK)).rejects.toBeTruthy();
@@ -89,7 +213,7 @@ describe('verifyRotatedCipher', () => {
     const itemKey = symmetricKeyFromBytes(itemKeyBytes);
     const wrappedItemKey = await encryptToBytes(itemKeyBytes, oldK);
     const raw = {
-      id: 'c5', type: 1, key: wrappedItemKey,
+      id: 'c5', type: 1, key: wrappedItemKey, name: await encryptToText('Keyed', itemKey), login: {},
       attachments: [{ id: 'a1', key: await encryptToBytes(new TextEncoder().encode('attkey'), itemKey), fileName: '2.filename-unchanged==' }],
     } as unknown as CipherResponse;
     const out = await rotateCipher(raw, oldK, newK);
@@ -100,7 +224,7 @@ describe('verifyRotatedCipher', () => {
     const itemKeyBytes = new Uint8Array(64).fill(3);
     const wrappedItemKey = await encryptToBytes(itemKeyBytes, oldK);
     const raw = {
-      id: 'c6', type: 1, key: wrappedItemKey,
+      id: 'c6', type: 1, key: wrappedItemKey, name: await encryptToText('Keyed', symmetricKeyFromBytes(itemKeyBytes)), login: {},
       // Legacy cross-client attachment: the attachment key is wrapped under the account UserKey
       // (oldK), not the item key — rotateCipher's keyed branch leaves attachments untouched, so
       // this must be caught by verifyRotatedCipher, not silently POSTed.
@@ -110,19 +234,115 @@ describe('verifyRotatedCipher', () => {
     await expect(verifyRotatedCipher(out, newK)).rejects.toBeTruthy();
   });
 
+  it('keeps keyed SSH fields byte-identical and authenticates all of them with the item key', async () => {
+    const itemKeyBytes = new Uint8Array(64).fill(4);
+    const itemKey = symmetricKeyFromBytes(itemKeyBytes);
+    const sshKey = {
+      privateKey: await encryptToText('PRIVATE', itemKey),
+      publicKey: await encryptToText('PUBLIC', itemKey),
+      keyFingerprint: await encryptToText('SHA256:fingerprint', itemKey),
+    };
+    const raw = {
+      id: 'ssh-keyed',
+      type: 5,
+      key: await encryptToBytes(itemKeyBytes, oldK),
+      name: await encryptToText('Deploy key', itemKey),
+      notes: await encryptToText('Production', itemKey),
+      fields: [{
+        type: 0,
+        name: await encryptToText('Environment', itemKey),
+        value: await encryptToText('production', itemKey),
+      }],
+      sshKey,
+    } as CipherResponse;
+
+    const out = await rotateCipher(raw, oldK, newK);
+    expect(out.sshKey).toEqual(sshKey);
+    expect(out.key).not.toBe(raw.key);
+    await expect(verifyRotatedCipher(out, newK)).resolves.toBeUndefined();
+
+    for (const field of ['privateKey', 'publicKey', 'keyFingerprint'] as const) {
+      const corrupted = structuredClone(out) as RotatedCipher & {
+        sshKey: Record<typeof field, string>;
+      };
+      corrupted.sshKey[field] = await encryptToText('wrong-key', oldK);
+      await expect(verifyRotatedCipher(corrupted, newK)).rejects.toBeTruthy();
+    }
+
+    const wrongName = structuredClone(out);
+    wrongName.name = await encryptToText('wrong-name-key', oldK);
+    await expect(verifyRotatedCipher(wrongName, newK)).rejects.toBeTruthy();
+    const wrongNotes = structuredClone(out);
+    wrongNotes.notes = await encryptToText('wrong-notes-key', oldK);
+    await expect(verifyRotatedCipher(wrongNotes, newK)).rejects.toBeTruthy();
+    const wrongField = structuredClone(out);
+    (wrongField.fields as Array<Record<string, unknown>>)[0]!.value = await encryptToText(
+      'wrong-field-key',
+      oldK,
+    );
+    await expect(verifyRotatedCipher(wrongField, newK)).rejects.toBeTruthy();
+  });
+
+  it('supports sparse read-side SSH data but rejects missing privateKey or unknown SSH fields', async () => {
+    const sparse = {
+      id: 'ssh-sparse',
+      type: 5,
+      name: await encryptToText('Imported key', oldK),
+      sshKey: { privateKey: await encryptToText('PRIVATE', oldK) },
+    } as CipherResponse;
+    const rotated = await rotateCipher(sparse, oldK, newK);
+    await expect(verifyRotatedCipher(rotated, newK)).resolves.toBeUndefined();
+
+    await expect(rotateCipher({
+      id: 'ssh-missing-private',
+      type: 5,
+      name: await encryptToText('Broken', oldK),
+      sshKey: {},
+    } as unknown as CipherResponse, oldK, newK)).rejects.toThrow(/invalid_structured_projection/i);
+    await expect(rotateCipher({
+      id: 'ssh-extra-field',
+      type: 5,
+      name: await encryptToText('Broken', oldK),
+      sshKey: { privateKey: await encryptToText('PRIVATE', oldK), futureField: '2.opaque' },
+    } as unknown as CipherResponse, oldK, newK)).rejects.toThrow(/invalid_structured_projection/i);
+  });
+
+  it('rejects unsupported types and malformed per-cipher key markers before rotation', async () => {
+    await expect(rotateCipher({
+      id: 'future', type: 6, name: '2.opaque',
+    } as CipherResponse, oldK, newK)).rejects.toThrow(/unsupported cipher type/i);
+    await expect(rotateCipher({
+      id: 'ssh-empty-key',
+      type: 5,
+      key: '',
+      name: await encryptToText('Broken', oldK),
+      sshKey: { privateKey: await encryptToText('PRIVATE', oldK) },
+    }, oldK, newK)).rejects.toThrow(/invalid_cipher/i);
+  });
+
   it('passes for a normally-rotated keyless cipher', async () => {
-    const raw = { id: 'c7', type: 2, name: await encryptToText('Note', oldK), notes: await encryptToText('secret', oldK) } as unknown as CipherResponse;
+    const raw = { id: 'c7', type: 2, name: await encryptToText('Note', oldK), notes: await encryptToText('secret', oldK), secureNote: { type: 0 } } as unknown as CipherResponse;
     const out = await rotateCipher(raw, oldK, newK);
     await expect(verifyRotatedCipher(out, newK)).resolves.toBeUndefined();
   });
 
   it('throws when a keyless cipher passwordHistory leaf is corrupted (decryptCipher never checks this field)', async () => {
     const raw = {
-      id: 'c8', type: 1, name: await encryptToText('Note', oldK),
+      id: 'c8', type: 1, name: await encryptToText('Note', oldK), login: {},
       passwordHistory: [{ password: await encryptToText('oldpw', oldK), lastUsedDate: '2026-01-01T00:00:00Z' }],
     } as unknown as CipherResponse;
     const out = await rotateCipher(raw, oldK, newK);
     (out as unknown as { passwordHistory: Array<{ password: string }> }).passwordHistory[0]!.password = await encryptToText('corrupt', oldK); // hand-corrupted: still under oldK, not newK
     await expect(verifyRotatedCipher(out, newK)).rejects.toBeTruthy();
+  });
+
+  it('rejects any defense-in-depth result that reintroduces Data or the URI alias', async () => {
+    const name = await encryptToText('Rotated', newK);
+    await expect(verifyRotatedCipher({
+      id: 'has-data', type: 1, name, login: {}, data: JSON.stringify({ Name: name }),
+    }, newK)).rejects.toThrow(/omit the redundant data/i);
+    await expect(verifyRotatedCipher({
+      id: 'has-alias', type: 1, name, login: { uri: name, uris: [{ uri: name }] },
+    }, newK)).rejects.toThrow(/omit the obsolete URI alias/i);
   });
 });

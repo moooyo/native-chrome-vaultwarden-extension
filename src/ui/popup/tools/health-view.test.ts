@@ -29,6 +29,7 @@ async function mount(): Promise<VwHealthView> {
 const entries: HealthEntry[] = [
   { id: 'a', name: 'Weak site', weak: true, reuseCount: 1 },
   { id: 'b', name: 'Reused site', weak: false, reuseCount: 3 },
+  { id: 'c', name: 'Strong site', weak: false, reuseCount: 1 },
 ];
 
 async function ready(el: VwHealthView): Promise<void> {
@@ -79,13 +80,14 @@ describe('vw-health-view', () => {
     expect(statusText(el)).toContain('无法读取密码健康');
   });
 
-  it('shows a clean-vault empty state with a check-circle', async () => {
+  it('describes an empty local report without claiming that breach checks ran', async () => {
     const el = await mount();
     el.report = { status: 'empty' };
     await el.updateComplete;
     expect(el.shadowRoot!.querySelector('[data-empty]')).toBeTruthy();
     expect(el.shadowRoot!.querySelector('[data-empty] svg')).toBeTruthy();
-    expect(statusText(el)).toContain('未发现问题'); // health.healthy
+    expect(statusText(el)).toContain('没有可检查的密码条目'); // health.noCheckable
+    expect(statusText(el)).not.toContain('未发现弱密码、重复使用或泄露密码');
   });
 
   it('lists weak and reused entries with severity chips', async () => {
@@ -97,6 +99,23 @@ describe('vw-health-view', () => {
     expect(text).toContain('弱密码'); // health.weak
     expect(text).toContain('重复使用'); // health.reused
     expect(text).toContain('×3'); // reuse count
+    expect(text).not.toContain('Strong site');
+  });
+
+  it('keeps the breach check available when every local password is strong and unique', async () => {
+    const el = await mount();
+    el.report = { status: 'ready', data: [entries[2]!] };
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelectorAll('[data-entry]')).toHaveLength(0);
+    expect(el.shadowRoot!.querySelector('[data-check]')).toBeTruthy();
+    expect(statusText(el)).toContain('未发现弱密码或重复使用'); // health.localHealthy
+  });
+
+  it('does not render a fabricated health score', async () => {
+    const el = await mount();
+    await ready(el);
+    expect(el.shadowRoot!.querySelector('.score-ring')).toBeNull();
+    expect(el.shadowRoot!.textContent).not.toContain('86');
   });
 
   it('opens an item when a row is clicked', async () => {
@@ -132,12 +151,27 @@ describe('vw-health-view', () => {
   it('renders breach chips once the pwned result is ready', async () => {
     const el = await mount();
     await ready(el);
-    el.pwned = { status: 'ready', data: new Map([['a', 5], ['b', 0]]) };
+    el.pwned = { status: 'ready', data: new Map([['a', 5], ['b', 0], ['c', 17]]) };
     await el.updateComplete;
     const text = el.shadowRoot!.textContent ?? '';
     expect(text).toContain('已泄露'); // health.pwned, with count
     expect(text).toContain('5');
     expect(text).toContain('未泄露'); // safe marker
+    expect(text).toContain('Strong site');
+    expect(text).toContain('17');
+    expect(el.shadowRoot!.querySelector('[data-entry="c"]')).toBeTruthy();
+  });
+
+  it('keeps failed HIBP lookups unknown and reports an incomplete result', async () => {
+    const el = await mount();
+    await ready(el);
+    el.pwned = { status: 'ready', data: new Map([['a', 5], ['b', 0]]) };
+    await el.updateComplete;
+    const strongRow = el.shadowRoot!.querySelector('[data-entry="c"]')!;
+    expect(strongRow).toBeTruthy();
+    expect(strongRow.textContent).toContain('泄露状态未知'); // health.unknown
+    expect(strongRow.textContent).not.toContain('未泄露');
+    expect(statusText(el)).toContain('1 个条目未能完成检查'); // health.incomplete
   });
 
   it('surfaces a pwned-check error', async () => {
@@ -146,5 +180,8 @@ describe('vw-health-view', () => {
     el.pwned = { status: 'error', message: '泄露检查失败' };
     await el.updateComplete;
     expect(statusText(el)).toContain('泄露检查失败');
+    expect(el.shadowRoot!.querySelectorAll('[data-entry]')).toHaveLength(entries.length);
+    expect(el.shadowRoot!.querySelector('[data-entry="c"]')!.textContent).toContain('泄露状态未知');
+    expect(el.shadowRoot!.textContent).not.toContain('未泄露');
   });
 });

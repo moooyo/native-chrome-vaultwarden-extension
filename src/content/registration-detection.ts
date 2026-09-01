@@ -3,7 +3,8 @@
 // field, one per form scope, with the scope's username field resolved for the save. Login forms use
 // the *current* password (selectCurrentPassword excludes new-password), so this never overlaps them.
 
-import { isFillableInput, isNewPasswordField } from './form-detection.js';
+import { inputControlsInScope, isFillableInput, isNewPasswordField } from './form-detection.js';
+import { classifyCardField } from './field-map.js';
 
 export interface DetectedRegistrationField {
   id: string;
@@ -16,6 +17,11 @@ export interface DetectedRegistrationField {
 const CONFIRM_HINT = /confirm|retype|repeat|again|verify/;
 const USERNAME_TYPES = ['email', 'text', 'tel', 'url'];
 let nextGenId = 0;
+const generationIds = new WeakMap<HTMLInputElement, {
+  readonly scope: ParentNode;
+  readonly usernameInput: HTMLInputElement | undefined;
+  readonly id: string;
+}>();
 
 function fieldHint(input: HTMLInputElement): string {
   return `${input.name} ${input.id} ${input.autocomplete} ${input.getAttribute('aria-label') ?? ''}`.toLowerCase();
@@ -26,22 +32,38 @@ function isConfirmField(input: HTMLInputElement): boolean {
 }
 
 function scopeOf(input: HTMLInputElement): ParentNode {
-  return input.form ?? input.closest('form, section, main, article') ?? document;
+  const root = input.getRootNode();
+  return input.form
+    ?? input.closest('section, main, article')
+    ?? (root.nodeType === Node.DOCUMENT_NODE ? root as Document : root as ShadowRoot);
 }
 
 function findUsernameInput(scope: ParentNode, exclude: HTMLInputElement): HTMLInputElement | undefined {
-  return Array.from(scope.querySelectorAll<HTMLInputElement>('input'))
+  return inputControlsInScope(scope)
     .filter((input) => input !== exclude && isFillableInput(input) && USERNAME_TYPES.includes(input.type))
+    .filter((input) => classifyCardField({
+      autocomplete: input.autocomplete,
+      name: input.name,
+      id: input.id,
+      ariaLabel: input.getAttribute('aria-label') ?? '',
+      placeholder: input.placeholder,
+      type: input.type,
+    }) === undefined)
     .find((input) => {
       const hint = fieldHint(input);
       return input.type === 'email' || hint.includes('user') || hint.includes('email') || hint.includes('login');
     });
 }
 
-function assignId(input: HTMLInputElement): string {
-  if (input.dataset.vwGenId) return input.dataset.vwGenId;
+function assignId(
+  input: HTMLInputElement,
+  scope: ParentNode,
+  usernameInput: HTMLInputElement | undefined,
+): string {
+  const existing = generationIds.get(input);
+  if (existing?.scope === scope && existing.usernameInput === usernameInput) return existing.id;
   const id = `vw-gen-${nextGenId++}`;
-  input.dataset.vwGenId = id;
+  generationIds.set(input, { scope, usernameInput, id });
   return id;
 }
 
@@ -68,7 +90,7 @@ export function matchRegistrationField(input: HTMLInputElement): DetectedRegistr
   const scope = scopeOf(input);
   const usernameInput = findUsernameInput(scope, input);
   return {
-    id: assignId(input),
+    id: assignId(input, scope, usernameInput),
     input,
     form: input.form,
     anchor: input,
@@ -81,7 +103,7 @@ export function matchRegistrationField(input: HTMLInputElement): DetectedRegistr
  *  "confirm password" field doesn't stay empty and block submission. */
 export function findConfirmPasswordFields(passwordInput: HTMLInputElement): HTMLInputElement[] {
   const scope = scopeOf(passwordInput);
-  return Array.from(scope.querySelectorAll<HTMLInputElement>('input[type="password"]'))
-    .filter((el) => el !== passwordInput && isFillableInput(el) && isConfirmField(el));
+  return inputControlsInScope(scope)
+    .filter((el) => el.type === 'password' && el !== passwordInput && isFillableInput(el) && isConfirmField(el));
 }
 

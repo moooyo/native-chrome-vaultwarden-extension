@@ -4,13 +4,12 @@ import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
+import {
+  MAX_PIN_UTF16_CODE_UNITS,
+  pinConstraintViolation,
+} from '../../../core/session/pin-constraints.js';
 import '../../components/status-message.js';
 import type { DetailStatus, PinSetDetail } from '../types.js';
-
-const MIN_PIN_LENGTH = 4;
-// inputmode=numeric is only a keyboard hint — letters/symbols can still be typed or pasted. The copy
-// promises "at least 4 digits", so enforce exactly that: MIN_PIN_LENGTH+ ASCII digits, nothing else.
-const PIN_PATTERN = new RegExp(`^\\d{${MIN_PIN_LENGTH},}$`);
 
 /**
  * PIN unlock management. The root loads the current PIN status (`auth.pinStatus`) and passes it as
@@ -24,12 +23,16 @@ const PIN_PATTERN = new RegExp(`^\\d{${MIN_PIN_LENGTH},}$`);
 export class VwPinView extends LitElement {
   static override properties = {
     enabled: { type: Boolean },
+    allowed: { type: Boolean },
+    requireMasterPasswordOnRestart: { type: Boolean },
     pending: { type: Boolean },
     status: { attribute: false },
     validationError: { state: true },
   };
 
   declare enabled: boolean;
+  declare allowed: boolean;
+  declare requireMasterPasswordOnRestart: boolean;
   declare pending: boolean;
   declare status: DetailStatus | undefined;
   declare validationError: string | undefined;
@@ -39,6 +42,8 @@ export class VwPinView extends LitElement {
   constructor() {
     super();
     this.enabled = false;
+    this.allowed = true;
+    this.requireMasterPasswordOnRestart = true;
     this.pending = false;
     this.status = undefined;
     this.validationError = undefined;
@@ -109,6 +114,19 @@ export class VwPinView extends LitElement {
         font-size: 11.5px;
         color: var(--vw-faint);
       }
+      .check-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        font-size: 12px;
+        line-height: 1.4;
+        color: var(--vw-muted);
+        cursor: pointer;
+      }
+      .check-row input {
+        margin: 2px 0 0;
+        flex: none;
+      }
       .block {
         width: 100%;
       }
@@ -132,14 +150,18 @@ export class VwPinView extends LitElement {
   }
 
   private setPin(): void {
-    if (this.pending) return;
+    if (this.pending || !this.allowed) return;
     this.validationError = undefined;
-    const pin = (this.renderRoot.querySelector<HTMLInputElement>('[data-pin]')?.value ?? '').trim();
-    if (!PIN_PATTERN.test(pin)) {
-      this.validationError = 'PIN 码至少需要 4 位数字'; // TODO i18n
+    const pin = this.renderRoot.querySelector<HTMLInputElement>('[data-pin]')?.value ?? '';
+    const violation = pinConstraintViolation(pin);
+    if (violation) {
+      this.validationError = t(violation === 'too_long' ? 'auth.pinMaximum' : 'auth.pinMinimum');
       return;
     }
-    emit<PinSetDetail>(this, 'vw-pin-set', { pin });
+    emit<PinSetDetail>(this, 'vw-pin-set', {
+      pin,
+      requireMasterPasswordOnRestart: this.requireMasterPasswordOnRestart,
+    });
   }
 
   private onKeydown(event: KeyboardEvent): void {
@@ -165,8 +187,12 @@ export class VwPinView extends LitElement {
         <div class="row">
           <span class="badge">${uiIcon('lock')}</span>
           <div class="row-text">
-            <span class="row-title">PIN 解锁已开启<!-- TODO i18n --></span>
-            <span class="section-label">在此设备上使用 PIN 快速解锁。<!-- TODO i18n --></span>
+            <span class="row-title">${t('auth.pinEnabledTitle')}</span>
+            <span class="section-label">
+              ${this.requireMasterPasswordOnRestart
+                ? t('auth.pinRestartRequiredDesc')
+                : t('auth.pinRestartPersistentDesc')}
+            </span>
           </div>
         </div>
         <button
@@ -176,7 +202,7 @@ export class VwPinView extends LitElement {
           ?disabled=${this.pending}
           @click=${() => this.emitRemove()}
         >
-          ${uiIcon('trash')}<span>移除 PIN<!-- TODO i18n --></span>
+          ${uiIcon('trash')}<span>${t('auth.removePin')}</span>
         </button>
       </div>
     `;
@@ -185,17 +211,30 @@ export class VwPinView extends LitElement {
   private renderSetForm() {
     return html`
       <div class="card">
-        <span class="section-label">设置一个 PIN，即可在此设备上快速解锁，无需输入完整主密码。<!-- TODO i18n --></span>
+        <span class="section-label">${t('auth.pinEnabledDesc')}</span>
         <input
           class="input"
           data-pin
-          inputmode="numeric"
+          type="password"
           autocomplete="off"
+          maxlength=${MAX_PIN_UTF16_CODE_UNITS}
           placeholder=${t('auth.pin')}
           ?disabled=${this.pending}
           @keydown=${(e: KeyboardEvent) => this.onKeydown(e)}
         />
-        <span class="hint">至少 4 位数字。<!-- TODO i18n --></span>
+        <span class="hint">${t('auth.pinRange')}</span>
+        <label class="check-row">
+          <input
+            data-require-restart
+            type="checkbox"
+            .checked=${this.requireMasterPasswordOnRestart}
+            ?disabled=${this.pending}
+            @change=${(event: Event) => {
+              this.requireMasterPasswordOnRestart = (event.target as HTMLInputElement).checked;
+            }}
+          />
+          <span>${t('auth.pinRequireMasterPasswordOnRestart')}</span>
+        </label>
         <button
           type="button"
           class="btn primary block"
@@ -205,6 +244,20 @@ export class VwPinView extends LitElement {
         >
           ${uiIcon('lock')}<span>${t('auth.setPin')}</span>
         </button>
+      </div>
+    `;
+  }
+
+  private renderManaged() {
+    return html`
+      <div class="card" data-managed role="status">
+        <div class="row">
+          <span class="badge">${uiIcon('lock')}</span>
+          <div class="row-text">
+            <span class="row-title">${t('auth.pinManaged')}</span>
+            <span class="section-label">${t('auth.pinManagedDesc')}</span>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -224,7 +277,7 @@ export class VwPinView extends LitElement {
         </button>
         <h1>${t('auth.usePin')}</h1>
       </div>
-      ${this.enabled ? this.renderEnabled() : this.renderSetForm()}
+      ${!this.allowed ? this.renderManaged() : this.enabled ? this.renderEnabled() : this.renderSetForm()}
       ${this.renderStatus()}
     `;
   }

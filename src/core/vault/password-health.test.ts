@@ -9,12 +9,22 @@ describe('scorePasswordStrength', () => {
     expect(scorePasswordStrength('')).toBe(0);
   });
 
-  it('caps short passwords as weak even with high variety', () => {
+  it('scores short passwords as weak even with high variety', () => {
     expect(scorePasswordStrength('aA1!')).toBeLessThanOrEqual(1);
   });
 
   it('scores long, varied passwords as strong', () => {
     expect(scorePasswordStrength('Tr0ub4dour&3xplore!')).toBeGreaterThanOrEqual(3);
+  });
+
+  it('detects common substitutions that character-class heuristics miss', () => {
+    expect(scorePasswordStrength('P@ssw0rd2026!')).toBeLessThanOrEqual(2);
+    expect(isWeakPassword('P@ssw0rd2026!')).toBe(true);
+  });
+
+  it('uses the login username as account-specific dictionary input', () => {
+    expect(scorePasswordStrength('alice@example.com2026!', ['alice@example.com']))
+      .toBeLessThanOrEqual(2);
   });
 });
 

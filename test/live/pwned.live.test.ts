@@ -1,7 +1,7 @@
-// Live HIBP contract check. Skipped unless LIVE=1. Run: LIVE=1 npx vitest run test/live/pwned.live.test.ts
+// Live HIBP contract check. Run: $env:LIVE = '1'; npm run test:live -- test/live/pwned.live.test.ts
 import { describe, it, expect } from 'vitest';
 import { pwnedCount } from '../../src/core/vault/pwned.js';
-const LIVE = Boolean(process.env.LIVE);
+const LIVE = process.env.LIVE === '1';
 
 (LIVE ? describe : describe.skip)('live HIBP', () => {
   it('reports a large breach count for the notorious "password"', async () => {

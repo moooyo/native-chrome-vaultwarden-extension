@@ -158,6 +158,15 @@ describe('confirmPasskeyUse', () => {
     await expect(promise).resolves.toBe(false);
   });
 
+  it('resolves false and removes the dialog when the ceremony is aborted', async () => {
+    const controller = new AbortController();
+    const promise = confirmPasskeyUse('example.com', controller.signal);
+    const { remove } = latest();
+    controller.abort();
+    await expect(promise).resolves.toBe(false);
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
   it('settles at most once', async () => {
     vi.useFakeTimers();
     const promise = confirmPasskeyUse('example.com');
@@ -240,6 +249,15 @@ describe('choosePasskeyTarget', () => {
     host.remove();
     await expect(promise).resolves.toEqual({ cancelled: true });
   });
+
+  it('resolves cancelled and removes the dialog when the ceremony is aborted', async () => {
+    const controller = new AbortController();
+    const promise = choosePasskeyTarget('example.com', [{ id: 'c1', name: 'Example' }], controller.signal);
+    const { remove } = latest();
+    controller.abort();
+    await expect(promise).resolves.toEqual({ cancelled: true });
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('choosePasskeyLogin', () => {
@@ -299,5 +317,18 @@ describe('choosePasskeyLogin', () => {
     const { host } = latest();
     host.remove();
     await expect(promise).resolves.toEqual({ cancelled: true });
+  });
+
+  it('resolves cancelled and removes the dialog when the ceremony is aborted', async () => {
+    const controller = new AbortController();
+    const promise = choosePasskeyLogin(
+      'acme.com',
+      [{ credentialId: 'cred-a', name: 'Work' }],
+      controller.signal,
+    );
+    const { remove } = latest();
+    controller.abort();
+    await expect(promise).resolves.toEqual({ cancelled: true });
+    expect(remove).toHaveBeenCalledTimes(1);
   });
 });

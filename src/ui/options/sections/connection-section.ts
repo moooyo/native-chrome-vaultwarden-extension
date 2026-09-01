@@ -3,17 +3,15 @@ import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
-import { getPrefs, setPref, subscribePrefs } from '../../prefs.js';
 import '../../components/setting-card.js';
-import '../../components/toggle.js';
 import '../../components/status-message.js';
 import type { ConnectionSaveDetail, SectionStatus } from '../types.js';
 
 /**
  * Account & sync (账户与同步) — the MiYu redesign of the connection section. It shows the signed-in
  * account, the self-hosted server URL (the sole control that leads to a host-permission prompt), the
- * vault sync status, and the auto-sync preference. Validation/normalization stays local and
- * synchronous: the server-URL Save parses with `new URL(...)` and emits an already-normalized value on
+ * vault sync status. Validation/normalization stays local and synchronous: the server-URL Save
+ * parses with `new URL(...)` and emits an already-normalized value on
  * `vw-connection-save`, so the root can request host permission in the same user gesture. Sync is a
  * fire-and-forget `vw-sync-now`; the root performs the request and drives `syncing`/`lastSync`/status.
  */
@@ -39,7 +37,6 @@ export class VwConnectionSection extends LitElement {
   declare validationError: string | undefined;
 
   private i18n = new LocalizeController(this);
-  private unsubscribe: (() => void) | undefined = undefined;
 
   constructor() {
     super();
@@ -51,17 +48,6 @@ export class VwConnectionSection extends LitElement {
     this.pending = false;
     this.status = undefined;
     this.validationError = undefined;
-  }
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    this.unsubscribe = subscribePrefs(() => this.requestUpdate());
-  }
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
   }
 
   static override styles = [
@@ -161,7 +147,6 @@ export class VwConnectionSection extends LitElement {
 
   protected override render() {
     const displayName = this.accountName || this.accountEmail || t('popup.account');
-    const prefs = getPrefs();
     return html`
       <div class="account" data-account>
         <div class="avatar" aria-hidden="true">${this.avatarInitial()}</div>
@@ -199,13 +184,6 @@ export class VwConnectionSection extends LitElement {
 
       <vw-setting-card heading=${t('options.account.encryption')} description=${t('options.account.encryptionDesc')}>
         <span style="color:var(--grn);font-size:12px;font-weight:500">${t('options.account.enabled')}</span>
-      </vw-setting-card>
-
-      <vw-setting-card heading=${t('options.account.autoSync')} description=${t('options.account.autoSyncDesc')}>
-        <vw-toggle
-          .checked=${prefs.autoSync}
-          @vw-toggle-change=${(e: CustomEvent<{ checked: boolean }>) => setPref('autoSync', e.detail.checked)}
-        ></vw-toggle>
       </vw-setting-card>
 
       ${this.renderStatus()}

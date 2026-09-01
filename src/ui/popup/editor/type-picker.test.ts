@@ -17,8 +17,9 @@ import './type-picker.js';
 import type { VwTypePicker } from './type-picker.js';
 import type { EditorTypeDetail } from './editor-types.js';
 
-async function mount(): Promise<VwTypePicker> {
+async function mount(sshAvailability: VwTypePicker['sshAvailability'] = 'loading'): Promise<VwTypePicker> {
   const el = document.createElement('vw-type-picker') as VwTypePicker;
+  el.sshAvailability = sshAvailability;
   document.body.append(el);
   await el.updateComplete;
   return el;
@@ -46,6 +47,24 @@ describe('vw-type-picker', () => {
       el.shadowRoot!.querySelector<HTMLButtonElement>('[data-type="3"]')!.click();
     });
     expect(detail).toEqual({ type: 3 });
+  });
+
+  it('offers SSH only after the root confirms write availability', async () => {
+    const loading = await mount('loading');
+    expect(loading.shadowRoot!.querySelector('[data-type="5"]')).toBeNull();
+    expect(loading.shadowRoot!.querySelector('[data-ssh-checking]')).not.toBeNull();
+
+    const unavailable = await mount('unavailable');
+    expect(unavailable.shadowRoot!.querySelector('[data-type="5"]')).toBeNull();
+    expect(unavailable.shadowRoot!.querySelector('[data-ssh-checking]')).toBeNull();
+
+    const available = await mount('available');
+    const ssh = available.shadowRoot!.querySelector<HTMLButtonElement>('[data-type="5"]')!;
+    const detail = await new Promise<EditorTypeDetail>((resolve) => {
+      available.addEventListener('vw-editor-type', (event) => resolve((event as CustomEvent<EditorTypeDetail>).detail), { once: true });
+      ssh.click();
+    });
+    expect(detail).toEqual({ type: 5 });
   });
 
   it('emits vw-item-back from the back button', async () => {

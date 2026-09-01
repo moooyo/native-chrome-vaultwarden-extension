@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from 'lit';
+import { html, nothing, type TemplateResult } from 'lit';
 
 /**
  * Render-based surface backing the save/update bar. Content scripts run in an isolated world with no
@@ -15,9 +15,11 @@ import { html, type TemplateResult } from 'lit';
 
 /** The render state of the save bar. Held by the factory and passed to `renderSaveBar` on each change. */
 export interface SaveBarState {
+  view: 'prompt' | 'saving' | 'uncertain' | 'saved';
   /** Plain-text message (no HTML); bound with `${}` so site data can't inject markup. */
   message: string;
   actionLabel: string;
+  statusMessage: string;
 }
 
 /** Privileged callbacks. Every click that reaches them is gated on `Event.isTrusted` in the template,
@@ -62,11 +64,13 @@ export const SAVE_BAR_STYLES = `
     .dot { position: absolute; left: 4px; top: 4px; width: 3px; height: 3px; border-radius: 50%; background: #fff; }
 
     .msg { min-width:0; overflow-wrap:anywhere; font-size:12.5px; color:var(--mi-ink); }
+    .msg[role="alert"] { color:#c2185b; }
     button { font:inherit; font-size:12px; font-weight:500; border-radius:17px; padding:9px 14px; cursor:pointer; border:1px solid transparent; }
     .act { grid-column:1 / 3; background:#0b57d0; color:#fff; }
     .act:hover { background: var(--mi-ink-hover); }
     .dismiss { grid-column:1 / 3; background:transparent; color:var(--mi-text-2); padding:5px 10px; }
     .dismiss:hover { color: var(--mi-ink); background: var(--mi-row-hover); }
+    button:disabled { cursor:default; opacity:.62; }
     button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--mi-teal); }
 
     @media (prefers-color-scheme: dark) {
@@ -91,11 +95,17 @@ export function renderSaveBar(state: SaveBarState, handlers: SaveBarHandlers): T
   // TODO i18n: content-script surfaces are isolated from the extension i18n module, so the dismiss
   // label / aria strings are hardcoded in Chinese here (message + actionLabel come from the caller).
   return html`
-    <div class="bar" role="dialog" aria-label="保存到密屿">
+    <div class="bar" role="dialog" aria-label="保存到密屿" aria-busy=${state.view === 'saving' ? 'true' : 'false'}>
       <span class="logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 15.5a5.5 5.5 0 1 1 4.9-8H22v4h-2v2h-3v2h-4.6a5.5 5.5 0 0 1-4.9 3Zm0-3.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg></span>
-      <span class="msg">${state.message}</span>
-      <button type="button" class="act" id="vw-save-act" @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onAction?.(); }}>${state.actionLabel}</button>
-      <button type="button" class="dismiss" id="vw-save-dismiss" aria-label="关闭" @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onDismiss?.(); }}>暂不</button>
+      <span class="msg" role=${state.view === 'uncertain' ? 'alert' : nothing}>${state.view === 'prompt' ? state.message : state.statusMessage}</span>
+      ${state.view === 'prompt' || state.view === 'saving' ? html`
+        <button type="button" class="act" id="vw-save-act" ?disabled=${state.view === 'saving'}
+          @click=${(event: MouseEvent) => { if (event.isTrusted && state.view === 'prompt') handlers.onAction?.(); }}>${state.view === 'saving' ? '正在保存…' : state.actionLabel}</button>
+      ` : nothing}
+      ${state.view !== 'saved' ? html`
+        <button type="button" class="dismiss" id="vw-save-dismiss" aria-label="关闭"
+          @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onDismiss?.(); }}>${state.view === 'prompt' ? '暂不' : '关闭'}</button>
+      ` : nothing}
     </div>
   `;
 }

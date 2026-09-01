@@ -1,9 +1,12 @@
 // Password health: weak-password scoring and reuse detection. Runs in the worker over decrypted
-// passwords; only non-sensitive flags (weak/reuse count) ever cross the messaging boundary.
+// passwords; only item identity and non-sensitive flags ever cross the messaging boundary.
+
+import zxcvbn from 'zxcvbn';
 
 export interface PasswordHealthInput {
   id: string;
   name: string;
+  username?: string;
   password?: string;
 }
 
@@ -15,32 +18,23 @@ export interface PasswordHealthEntry {
   reuseCount: number;
 }
 
-const COMMON = /^(password|passw0rd|123456|12345678|1234567890|qwerty|qwertyuiop|letmein|admin|welcome|iloveyou|abc123|monkey|dragon|111111|000000)$/i;
+const MAX_PASSWORD_SCORE_LENGTH = 256;
+const MAX_USER_INPUT_LENGTH = 256;
 
-/** Heuristic strength score 0 (very weak) – 4 (strong) from length and character variety. */
-export function scorePasswordStrength(password: string): number {
+/** zxcvbn strength score 0 (very weak) to 4 (strong), aligned with Bitwarden reports. */
+export function scorePasswordStrength(password: string, userInputs: readonly string[] = []): number {
   if (!password) return 0;
-  if (/^(.)\1*$/.test(password)) return 0; // all one repeated character
-  if (COMMON.test(password)) return 0;
-
-  let score = 0;
-  const len = password.length;
-  if (len >= 8) score++;
-  if (len >= 12) score++;
-  if (len >= 16) score++;
-  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].filter((re) => re.test(password)).length;
-  score += Math.max(0, classes - 1);
-
-  // A password under 8 chars is weak regardless of variety.
-  if (len < 8) return Math.min(1, score);
-  return Math.min(4, score);
+  const boundedInputs = userInputs
+    .filter((value) => typeof value === 'string' && value.length > 0)
+    .map((value) => value.slice(0, MAX_USER_INPUT_LENGTH));
+  return zxcvbn(password.slice(0, MAX_PASSWORD_SCORE_LENGTH), boundedInputs).score;
 }
 
-export function isWeakPassword(password: string): boolean {
-  return scorePasswordStrength(password) <= 1;
+export function isWeakPassword(password: string, userInputs: readonly string[] = []): boolean {
+  return scorePasswordStrength(password, userInputs) <= 2;
 }
 
-/** Build a per-login health report (weak + reuse count), skipping logins with no password. */
+/** Build non-secret health metadata for every login with a password. */
 export function buildPasswordHealthReport(items: PasswordHealthInput[]): PasswordHealthEntry[] {
   const counts = new Map<string, number>();
   for (const item of items) {
@@ -51,7 +45,7 @@ export function buildPasswordHealthReport(items: PasswordHealthInput[]): Passwor
     .map((item) => ({
       id: item.id,
       name: item.name,
-      weak: isWeakPassword(item.password),
+      weak: isWeakPassword(item.password, item.username ? [item.username] : []),
       reuseCount: counts.get(item.password) ?? 1,
     }));
 }

@@ -9,16 +9,15 @@ import {
 } from './release-lib.mjs';
 
 function parseArguments(args) {
-  const options = { distDir: 'dist', outDir: 'release' };
+  const options = { distDir: 'dist' };
   for (let index = 0; index < args.length; index += 1) {
     const name = args[index];
     const value = args[index + 1];
-    if (!['--tag', '--dist-dir', '--out-dir'].includes(name) || value === undefined || value.startsWith('--')) {
+    if (!['--tag', '--dist-dir'].includes(name) || value === undefined || value.startsWith('--')) {
       throw new Error(`Unknown or incomplete argument: ${name}`);
     }
     if (name === '--tag') options.tag = value;
     if (name === '--dist-dir') options.distDir = value;
-    if (name === '--out-dir') options.outDir = value;
     index += 1;
   }
   if (!options.tag) throw new Error('Missing required --tag');
@@ -36,7 +35,7 @@ function absolutePath(path) {
 async function prepareRelease() {
   const options = parseArguments(process.argv.slice(2));
   const distDir = resolve(options.distDir);
-  const outDir = resolve(options.outDir);
+  const outDir = resolve('release');
   const packageJson = await readJson(resolve('package.json'));
   const sourceManifest = await readJson(resolve('src', 'manifest.json'));
   const builtManifest = await readJson(join(distDir, 'manifest.json'));

@@ -22,7 +22,15 @@ afterEach(() => {
 function mount(state: Partial<PopoverState>, handlers: PopoverHandlers = {}): HTMLElement {
   container = document.createElement('div');
   document.body.append(container);
-  const full: PopoverState = { kind: 'login', view: 'trigger', statusMessage: '', candidates: [], sidePanel: false, ...state };
+  const full: PopoverState = {
+    kind: 'login',
+    view: 'trigger',
+    statusMessage: '',
+    candidates: [],
+    activeIndex: -1,
+    sidePanel: false,
+    ...state,
+  };
   render(renderPopover(full, handlers), container);
   return container;
 }
@@ -31,6 +39,13 @@ function trustedClick(el: Element | null): void {
   const event = new MouseEvent('click', { bubbles: true, cancelable: true });
   Object.defineProperty(event, 'isTrusted', { value: true });
   el?.dispatchEvent(event);
+}
+
+function trustedKey(el: Element, key: string, options: KeyboardEventInit = {}): KeyboardEvent {
+  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options });
+  Object.defineProperty(event, 'isTrusted', { value: true });
+  el.dispatchEvent(event);
+  return event;
 }
 
 describe('popover surface', () => {
@@ -50,6 +65,17 @@ describe('popover surface', () => {
     const status = root.querySelector('.status');
     expect(status?.querySelector('img')).toBeNull();
     expect(status?.textContent).toContain('Locked');
+    expect(status?.getAttribute('role')).toBe('status');
+    expect(status?.getAttribute('aria-live')).toBe('polite');
+    expect(status?.getAttribute('aria-atomic')).toBe('true');
+  });
+
+  it('announces a completed fill without moving focus', () => {
+    const root = mount({ view: 'filled' });
+    const filled = root.querySelector('.filled');
+    expect(filled?.getAttribute('role')).toBe('status');
+    expect(filled?.getAttribute('aria-live')).toBe('polite');
+    expect(filled?.getAttribute('aria-atomic')).toBe('true');
   });
 
   it.each([
@@ -106,6 +132,80 @@ describe('popover surface', () => {
     const row = root.querySelector('[role="option"]')!;
     expect(row.getAttribute('aria-selected')).toBe('true');
     expect(root.innerHTML).not.toContain('cipher-secret-id');
+  });
+
+  it('uses a single listbox tab stop and an index-only active descendant', () => {
+    const root = mount({
+      view: 'list',
+      activeIndex: 1,
+      candidates: [
+        { id: 'cipher-secret-a', name: 'Alpha', favorite: false },
+        { id: 'cipher-secret-b', name: 'Beta', favorite: false },
+      ],
+    });
+    const listbox = root.querySelector<HTMLElement>('[role="listbox"]')!;
+    const options = root.querySelectorAll<HTMLElement>('[role="option"]');
+
+    expect(listbox.tabIndex).toBe(0);
+    expect(listbox.getAttribute('aria-activedescendant')).toBe('vw-autofill-option-1');
+    expect([...options].map((option) => option.tabIndex)).toEqual([-1, -1]);
+    expect([...options].map((option) => option.getAttribute('aria-selected'))).toEqual(['false', 'true']);
+    expect(root.innerHTML).not.toContain('cipher-secret-a');
+    expect(root.innerHTML).not.toContain('cipher-secret-b');
+  });
+
+  it('maps trusted movement keys to the next roving option index', () => {
+    const onActiveIndexChange = vi.fn();
+    const root = mount({
+      view: 'list',
+      activeIndex: 1,
+      candidates: [
+        { id: 'a', name: 'Alpha', favorite: false },
+        { id: 'b', name: 'Beta', favorite: false },
+        { id: 'c', name: 'Gamma', favorite: false },
+      ],
+    }, { onActiveIndexChange });
+    const listbox = root.querySelector<HTMLElement>('[role="listbox"]')!;
+
+    for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End']) trustedKey(listbox, key);
+
+    expect(onActiveIndexChange.mock.calls.map(([index]) => index)).toEqual([2, 0, 0, 2]);
+  });
+
+  it('selects the active option only from a trusted, non-repeating Enter or Space key', () => {
+    const onKeyboardSelect = vi.fn();
+    const root = mount({
+      view: 'list',
+      activeIndex: 1,
+      candidates: [
+        { id: 'a', name: 'Alpha', favorite: false },
+        { id: 'b', name: 'Beta', favorite: false },
+      ],
+    }, { onKeyboardSelect });
+    const listbox = root.querySelector<HTMLElement>('[role="listbox"]')!;
+
+    listbox.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    trustedKey(listbox, 'Enter', { repeat: true });
+    trustedKey(listbox, 'Enter');
+    trustedKey(listbox, ' ');
+
+    expect(onKeyboardSelect.mock.calls.map(([index]) => index)).toEqual([1, 1]);
+  });
+
+  it('cancels on Escape but lets Tab continue its native focus movement', () => {
+    const onDismiss = vi.fn();
+    const root = mount({
+      view: 'list',
+      candidates: [{ id: 'a', name: 'Alpha', favorite: false }],
+    }, { onDismiss });
+    const listbox = root.querySelector<HTMLElement>('[role="listbox"]')!;
+
+    const escape = trustedKey(listbox, 'Escape');
+    const tab = trustedKey(listbox, 'Tab');
+
+    expect(escape.defaultPrevented).toBe(true);
+    expect(tab.defaultPrevented).toBe(false);
+    expect(onDismiss.mock.calls.map(([reason]) => reason)).toEqual(['escape', 'tab']);
   });
 
   it('caps the list height and marks long lists as locally scrollable', () => {

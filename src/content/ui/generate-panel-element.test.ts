@@ -24,6 +24,7 @@ function mount(over: Partial<GeneratePanelViewState> = {}, handlers: GeneratePan
   document.body.append(container);
   const state: GeneratePanelViewState = {
     view: 'panel',
+    mode: 'password',
     username: '',
     password: 'Ab3$xz9K',
     strength: '极强',
@@ -35,8 +36,12 @@ function mount(over: Partial<GeneratePanelViewState> = {}, handlers: GeneratePan
     minNumbers: 1,
     minSymbols: 0,
     avoidAmbiguous: true,
-    savedName: '',
-    savedUser: '',
+    words: 6,
+    capitalize: false,
+    includeNumber: false,
+    managed: false,
+    disabledReason: '',
+    filledUser: '',
     ...over,
   };
   render(renderGeneratePanel(state, handlers), container);
@@ -122,10 +127,19 @@ describe('generate panel surface', () => {
     expect(onUsername).toHaveBeenCalledWith('new@quill.app');
   });
 
-  it('shows the saved confirmation in the saved view', () => {
-    const root = mount({ view: 'saved', savedName: 'quill.app', savedUser: 'me@x.dev' });
-    expect(root.querySelector('.saved .t')!.textContent).toContain('已保存到密屿');
+  it('shows a filled confirmation without claiming persistence', () => {
+    const root = mount({ view: 'filled', filledUser: 'me@x.dev' });
+    expect(root.querySelector('.saved .t')!.textContent).toContain('密码已填入');
     expect(root.querySelector('.saved .s')!.textContent).toContain('me@x.dev');
+    expect(root.textContent).toContain('提交后可保存到密屿');
+    expect(root.textContent).not.toContain('已保存到密屿');
+    expect(root.querySelector('.undo')).toBeNull();
+  });
+
+  it('explains that persistence follows the website submission', () => {
+    const root = mount();
+    expect(root.querySelector('.foot')!.textContent).toContain('网站提交时询问是否保存');
+    expect(root.textContent).not.toContain('立即保存');
   });
 
   it('declares dark and reduced-motion tokens', () => {

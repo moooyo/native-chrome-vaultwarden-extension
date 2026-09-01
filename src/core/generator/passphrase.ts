@@ -14,10 +14,10 @@ export interface PassphraseGenOptions {
 }
 
 export const DEFAULT_PASSPHRASE_OPTIONS: PassphraseGenOptions = {
-  numWords: 4,
+  numWords: 6,
   separator: '-',
-  capitalize: true,
-  includeNumber: true,
+  capitalize: false,
+  includeNumber: false,
 };
 
 const MIN_WORDS = 3;

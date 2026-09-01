@@ -3,22 +3,35 @@ import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
 import { tileColor, tileInitial } from '../../components/tile-color.js';
-import { LocalizeController, t } from '../../i18n/index.js';
+import { getLocale, LocalizeController, t } from '../../i18n/index.js';
 import type { MessageKey } from '../../i18n/index.js';
+import { isKnownCipherType } from '../../../core/vault/models.js';
 import type { CipherSummary } from '../../../core/vault/models.js';
-import type { DetailExtras, DetailStatus, SuggestionsViewState, TotpSnapshot } from '../types.js';
+import { summaryAllowsCipherAccess } from '../../../core/vault/cipher-access.js';
+import { filterSummaries, sortCipherSummaries } from '../../../core/vault/search.js';
+import type {
+  DetailExtras,
+  DetailStatus,
+  ItemLifecycleDetail,
+  SuggestionsViewState,
+  TotpSnapshot,
+  VaultMode,
+  VaultModeChangeDetail,
+} from '../types.js';
 import type { TabAutofillSuggestion } from '../../../messaging/protocol.js';
 import '../../components/totp-meter.js';
 import '../../components/status-message.js';
 
-export type CategoryId = 'all' | 'login' | 'card' | 'totp' | 'note' | 'identity';
+export type CategoryId = 'all' | 'favorite' | 'login' | 'card' | 'totp' | 'note' | 'identity' | 'ssh';
 
 const CATEGORIES: ReadonlyArray<{ id: CategoryId; key: MessageKey }> = [
   { id: 'all', key: 'cat.all' },
+  { id: 'favorite', key: 'cat.favorite' },
   { id: 'login', key: 'cat.login' },
   { id: 'card', key: 'cat.card' },
   { id: 'note', key: 'cat.note' },
   { id: 'identity', key: 'cat.identity' },
+  { id: 'ssh', key: 'cat.ssh' },
 ];
 
 const DOTS = '••••••••••••';
@@ -31,21 +44,61 @@ const STAGGER_LIMIT = 12;
 function matchesCategory(item: CipherSummary, category: CategoryId): boolean {
   switch (category) {
     case 'all': return true;
+    case 'favorite': return item.favorite;
     case 'login': return item.type === 1;
     case 'card': return item.type === 3;
     case 'identity': return item.type === 4;
+    case 'ssh': return item.type === 5;
     case 'note': return item.type === 2;
-    case 'totp': return item.type === 1 && Boolean(item.hasTotp);
+    case 'totp': return item.type === 1
+      && Boolean(item.hasTotp)
+      && summaryAllowsCipherAccess(item, 'viewTotp');
   }
 }
 
-function typeLabelKey(item: CipherSummary): MessageKey {
+function isUnsupported(item: CipherSummary): boolean {
+  return item.unsupported === true || !isKnownCipherType(item.type);
+}
+
+function matchesVaultMode(item: CipherSummary, mode: VaultMode): boolean {
+  if (mode === 'trash') return Boolean(item.deletedDate);
+  if (mode === 'archive') return Boolean(item.archivedDate) && !item.deletedDate;
+  return !item.deletedDate && !item.archivedDate;
+}
+
+function canOpenEditor(item: CipherSummary): boolean {
+  if (!summaryAllowsCipherAccess(item, 'edit')) return false;
+  if (item.hasTotp && !summaryAllowsCipherAccess(item, 'viewTotp')) return false;
+  return (item.type !== 1 && item.type !== 5)
+    || summaryAllowsCipherAccess(item, 'viewPassword');
+}
+
+function itemTitle(item: CipherSummary): string {
+  return isUnsupported(item) ? t('detail.unsupportedItem') : item.name;
+}
+
+function typeLabel(item: CipherSummary): string {
   switch (item.type) {
-    case 3: return 'cat.card';
-    case 4: return 'cat.identity';
-    case 2: return 'cat.note';
-    default: return 'cat.login';
+    case 1: return t('cat.login');
+    case 2: return t('cat.note');
+    case 3: return t('cat.card');
+    case 4: return t('cat.identity');
+    case 5: return t('detail.sshKey');
+    default: return t('detail.unsupportedType', { type: item.type });
   }
+}
+
+function suggestionTypeLabel(suggestion: TabAutofillSuggestion): string {
+  switch (suggestion.kind) {
+    case 'login': return t('cat.login');
+    case 'card': return t('cat.card');
+    case 'identity': return t('cat.identity');
+  }
+}
+
+function suggestionSubtitle(suggestion: TabAutofillSuggestion): string {
+  if (suggestion.kind === 'login') return suggestion.username ?? suggestion.matchedUri;
+  return suggestion.subtitle ?? '';
 }
 
 /**
@@ -61,8 +114,11 @@ export class VwVaultView extends LitElement {
     suggestionsState: { attribute: false },
     query: { type: String },
     category: { type: String },
+    mode: { type: String },
+    pending: { type: Boolean },
     selectedCipherId: { attribute: false },
     extras: { attribute: false },
+    status: { attribute: false },
     currentDomain: { type: String },
   };
 
@@ -70,8 +126,11 @@ export class VwVaultView extends LitElement {
   declare suggestionsState: SuggestionsViewState;
   declare query: string;
   declare category: CategoryId;
+  declare mode: VaultMode;
+  declare pending: boolean;
   declare selectedCipherId: string | null;
   declare extras: DetailExtras | undefined;
+  declare status: DetailStatus | undefined;
   declare currentDomain: string;
 
   private i18n = new LocalizeController(this);
@@ -80,11 +139,13 @@ export class VwVaultView extends LitElement {
   private totp: TotpSnapshot | undefined;
   private totpTimer: number | undefined;
   private commandIndex = 0;
-  /** In-flight guard so a slow `getTotp` (>1s) can't stack concurrent derives from the 1s tick. */
-  private totpLoading = false;
-  /** Local feedback for the open item when an on-demand secret release is refused (reprompt/locked).
-   *  The root records its own detailed error, but that banner is not rendered in this view. */
+  /** Identifies the selection/extras pair that owns all on-demand detail state. */
+  private detailGeneration = 0;
+  /** Generation-scoped guard so an old request cannot block or clear the current TOTP load. */
+  private totpLoadingGeneration: number | undefined;
+  /** Local feedback for on-demand view operations; root-owned request feedback arrives via `status`. */
   private detailStatus: DetailStatus | undefined = undefined;
+  private lifecycleSubmittedId: string | undefined;
 
   constructor() {
     super();
@@ -92,8 +153,11 @@ export class VwVaultView extends LitElement {
     this.suggestionsState = { status: 'loading' };
     this.query = '';
     this.category = 'all';
+    this.mode = 'active';
+    this.pending = false;
     this.selectedCipherId = null;
     this.extras = undefined;
+    this.status = undefined;
     this.currentDomain = '';
   }
 
@@ -116,6 +180,18 @@ export class VwVaultView extends LitElement {
 
       .chips { display:flex; gap:6px; margin:10px 14px 8px; overflow-x:auto; scrollbar-width:none; flex:none; }
       .chips::-webkit-scrollbar { display:none; }
+      .mode-bar {
+        display:flex; align-items:center; gap:8px; min-height:40px; padding:5px 10px;
+        border-bottom:1px solid var(--vw-line-1); flex:none;
+      }
+      .mode-back {
+        width:30px; height:30px; display:grid; place-items:center; border:0; border-radius:8px;
+        background:transparent; color:var(--vw-text-2); cursor:pointer;
+      }
+      .mode-back:hover { background:var(--vw-icon-hover); }
+      .mode-back svg { width:17px; height:17px; }
+      .mode-title { min-width:0; color:var(--vw-ink); font-size:13px; font-weight:600; }
+      .mode-status { margin:8px 14px 0; }
       .chip {
         height:28px; padding:0 11px; display:inline-flex; align-items:center; gap:5px; flex:none;
         border:1px solid var(--vw-line-3); border-radius:8px; background:transparent; color:var(--vw-text-2);
@@ -137,35 +213,50 @@ export class VwVaultView extends LitElement {
       .hero-copy { min-width:0; flex:1; }
       .hero-domain { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--onpc); font-size:13px; font-weight:500; }
       .hero-meta { margin-top:1px; color:var(--vw-text-2); font-size:11px; }
-      .hero-accounts { margin:9px 0 10px; border-radius:11px; background:color-mix(in srgb, var(--sf) 72%, transparent); overflow:hidden; }
-      .hero-account { display:flex; align-items:center; gap:8px; min-height:40px; padding:5px 9px; }
+      .hero-accounts { margin:9px 0 10px; border-block:1px solid var(--vw-line-1); }
+      .hero-account { display:flex; align-items:center; gap:4px; min-height:var(--vw-list-row-min, 46px); padding:2px; }
       .hero-account + .hero-account { border-top:1px solid var(--vw-line-1); }
+      .hero-account-main {
+        display:flex; align-items:center; gap:8px; min-width:0; min-height:40px; padding:3px 7px; flex:1;
+        border:0; border-radius:8px; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer;
+      }
+      .hero-account-main:hover { background:var(--vw-row-hover); }
       .hero-account .dot { width:9px; height:9px; border:2px solid var(--p); border-radius:50%; flex:none; }
       .hero-account:first-child .dot { background:var(--p); box-shadow:inset 0 0 0 2px var(--sf); }
       .hero-account .account-copy { min-width:0; flex:1; }
       .hero-account .account-user { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:500; }
       .hero-account .account-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--vw-muted); font-size:10.5px; }
+      .hero-account .chev { margin-left:2px; }
+      .hero-account .fill-pill { margin-right:5px; }
       .fill-pill { height:28px; padding:0 11px; border:0; border-radius:14px; background:var(--pc); color:var(--onpc); font:500 11.5px/1 var(--vw-font-ui); cursor:pointer; flex:none; }
       .fill-pill:hover { filter:brightness(.97); }
-      .hero-fill { width:100%; height:42px; border-radius:21px; background:var(--p); color:var(--onp); font-size:12.5px; }
-      .hero-fill:hover { background:var(--vw-primary-bg-hover); }
-
-      .row { display:flex; align-items:center; min-height:46px; border-radius:12px; animation:mvStag .24s ease-out both; }
+      .row { display:flex; align-items:center; min-height:var(--vw-list-row-min, 46px); border-radius:12px; animation:mvStag .24s ease-out both; }
       .row:hover, .row.selected { background:var(--vw-row-hover); }
       .row-main {
-        display:flex; align-items:center; gap:10px; flex:1; min-width:0; min-height:46px; padding:5px 8px;
+        display:flex; align-items:center; gap:10px; flex:1; min-width:0; min-height:var(--vw-list-row-min, 46px); padding:var(--vw-list-row-padding-block, 5px) 8px;
         border:0; border-radius:12px; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer;
       }
+      .row-main[aria-disabled="true"] { cursor:default; }
       .tile { width:32px; height:32px; border-radius:10px; display:grid; place-items:center; color:#fff; font-size:13px; font-weight:500; flex:none; }
       .meta { flex:1; min-width:0; }
       .title-row { display:flex; align-items:center; gap:5px; min-width:0; }
-      .title { font-size:13px; font-weight:500; color:var(--vw-ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .title { flex:1; min-width:0; font-size:13px; font-weight:500; color:var(--vw-ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .favorite-marker { width:13px; height:13px; flex:none; display:inline-flex; color:var(--vw-sync-amber); }
+      .favorite-marker svg { width:13px; height:13px; fill:currentColor; }
       .pk { width:13px; height:13px; color:var(--grn); flex:none; display:inline-flex; }
       .sub { display:block; font-size:11.5px; color:var(--vw-text-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .row-copy { width:28px; height:28px; margin-right:7px; border-radius:9px; display:grid; place-items:center; color:var(--vw-muted); background:transparent; border:0; cursor:pointer; opacity:.65; flex:none; }
       .row:hover .row-copy { opacity:1; }
       .row-copy:hover { background:var(--vw-icon-hover); }
       .row-copy svg { width:14px; height:14px; }
+      .row-lifecycle {
+        min-height:30px; margin-right:7px; padding:0 10px; border:0; border-radius:8px;
+        display:inline-flex; align-items:center; gap:5px; flex:none; background:var(--pc);
+        color:var(--onpc); font:500 11.5px/1 var(--vw-font-ui); cursor:pointer;
+      }
+      .row-lifecycle:hover:not(:disabled) { filter:brightness(.97); }
+      .row-lifecycle:disabled { cursor:default; opacity:.55; }
+      .row-lifecycle svg { width:14px; height:14px; }
       .chev { width:15px; height:15px; color:var(--vw-chevron); flex:none; display:inline-flex; transition:transform var(--vw-dur-fast); }
       .row.selected .chev { transform:rotate(90deg); }
 
@@ -187,7 +278,7 @@ export class VwVaultView extends LitElement {
       .btn-outline:only-child { flex:1; }
 
       .commands { flex:1; min-height:0; overflow:auto; padding:8px 8px 12px; }
-      .command { width:100%; min-height:46px; display:flex; align-items:center; gap:11px; padding:0 11px; border:0; border-radius:12px; background:transparent; color:var(--vw-ink); font:400 13px/1.3 var(--vw-font-ui); text-align:left; cursor:pointer; }
+      .command { width:100%; min-height:var(--vw-command-row-min, 46px); display:flex; align-items:center; gap:11px; padding:0 11px; border:0; border-radius:12px; background:transparent; color:var(--vw-ink); font:400 13px/1.3 var(--vw-font-ui); text-align:left; cursor:pointer; }
       .command:hover, .command.on { background:var(--sfch); }
       .command-icon { width:20px; color:var(--vw-text-2); display:inline-flex; }
       .command.on .command-icon { color:var(--p); }
@@ -200,18 +291,38 @@ export class VwVaultView extends LitElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.stopTotp();
+    this.detailGeneration++;
+    this.resetDetailState();
+  }
+
+  protected override willUpdate(changed: Map<string, unknown>): void {
+    if (changed.has('selectedCipherId') || changed.has('extras') || changed.has('mode')) {
+      this.detailGeneration++;
+      this.resetDetailState();
+    }
+    if (changed.has('mode') || changed.has('items')) this.lifecycleSubmittedId = undefined;
+    if (changed.has('pending') && changed.get('pending') === true && !this.pending) {
+      this.lifecycleSubmittedId = undefined;
+    }
   }
 
   protected override updated(changed: Map<string, unknown>): void {
-    if (changed.has('selectedCipherId')) {
-      this.revealed = false;
-      this.password = '';
-      this.detailStatus = undefined;
-      this.stopTotp();
+    if (changed.has('selectedCipherId') || changed.has('extras') || changed.has('mode')) {
       const item = this.selected();
-      if (item?.hasTotp && this.extras) void this.loadTotp();
+      if (this.mode === 'active'
+        && item?.hasTotp
+        && summaryAllowsCipherAccess(item, 'viewTotp')
+        && this.extras) {
+        void this.loadTotp();
+      }
     }
+  }
+
+  private resetDetailState(): void {
+    this.revealed = false;
+    this.password = '';
+    this.detailStatus = undefined;
+    this.clearTotp();
   }
 
   private selected(): CipherSummary | undefined {
@@ -238,15 +349,36 @@ export class VwVaultView extends LitElement {
   private async reveal(): Promise<void> {
     if (this.revealed) {
       this.revealed = false;
+      this.password = '';
       this.requestUpdate();
       return;
     }
-    if (!this.extras) return;
-    const result = await this.extras.getField('password');
+    const context = this.detailRequestContext();
+    if (!context) return;
+    const selected = this.selected();
+    if (!selected || !summaryAllowsCipherAccess(selected, 'viewPassword')) return;
+    const result = await context.extras.getField('password');
+    if (!this.isCurrentDetailRequest(context)) return;
     if (result.ok) {
-      this.password = result.value ?? '';
+      const visiblePassword = result.value ?? '';
+      this.password = visiblePassword;
       this.revealed = true;
       this.detailStatus = undefined;
+      this.requestUpdate();
+      await this.updateComplete;
+      const renderedPassword = this.renderRoot.querySelector<HTMLElement>('.field-val.mono');
+      if (!this.isCurrentDetailRequest(context)
+          || !this.revealed
+          || this.password !== visiblePassword
+          || !renderedPassword
+          || renderedPassword.classList.contains('masked')
+          || renderedPassword.textContent !== visiblePassword) return;
+      try {
+        result.acknowledgeVisible?.();
+      } catch {
+        // Audit acknowledgement is best-effort after the secret is visibly rendered.
+      }
+      return;
     } else {
       // The worker refused to release the secret (reprompt-protected / locked / sync required). The
       // root has already recorded the detailed error on its own status, which this view never renders,
@@ -257,26 +389,53 @@ export class VwVaultView extends LitElement {
   }
 
   private async loadTotp(): Promise<void> {
-    if (!this.extras) return;
-    if (this.totpLoading) return;
-    this.totpLoading = true;
+    const context = this.detailRequestContext();
+    if (!context) return;
+    if (this.totpLoadingGeneration === context.generation) return;
+    this.totpLoadingGeneration = context.generation;
     try {
-      const result = await this.extras.getTotp();
+      const result = await context.extras.getTotp();
+      if (!this.isCurrentDetailRequest(context)) return;
       if (!result.ok || !result.totp) return;
       this.totp = result.totp;
       this.requestUpdate();
       this.startTotpTick();
     } finally {
-      this.totpLoading = false;
+      if (this.totpLoadingGeneration === context.generation) {
+        this.totpLoadingGeneration = undefined;
+      }
     }
   }
 
+  private detailRequestContext(): { cipherId: string; extras: DetailExtras; generation: number } | undefined {
+    const selected = this.selected();
+    if (this.mode !== 'active'
+      || !this.selectedCipherId
+      || !this.extras
+      || !selected
+      || isUnsupported(selected)) return undefined;
+    return {
+      cipherId: this.selectedCipherId,
+      extras: this.extras,
+      generation: this.detailGeneration,
+    };
+  }
+
+  private isCurrentDetailRequest(context: { cipherId: string; extras: DetailExtras; generation: number }): boolean {
+    return (
+      this.selectedCipherId === context.cipherId &&
+      this.extras === context.extras &&
+      this.detailGeneration === context.generation &&
+      this.isConnected
+    );
+  }
+
   private startTotpTick(): void {
-    this.stopTotp();
+    this.stopTotpTimer();
     this.totpTimer = window.setInterval(() => {
       if (!this.totp) return;
       // A previous refresh is still deriving — skip this tick rather than stack concurrent derives.
-      if (this.totpLoading) return;
+      if (this.totpLoadingGeneration === this.detailGeneration) return;
       if (this.totp.remaining <= 1) {
         void this.loadTotp();
       } else {
@@ -286,28 +445,67 @@ export class VwVaultView extends LitElement {
     }, 1000);
   }
 
-  private stopTotp(): void {
+  private stopTotpTimer(): void {
     if (this.totpTimer !== undefined) {
       clearInterval(this.totpTimer);
       this.totpTimer = undefined;
     }
+  }
+
+  private clearTotp(): void {
+    this.stopTotpTimer();
     this.totp = undefined;
+    this.totpLoadingGeneration = undefined;
   }
 
   private copySecret(field: 'password', label: string): void {
+    const selected = this.selected();
+    if (this.mode !== 'active'
+      || !selected
+      || isUnsupported(selected)
+      || !summaryAllowsCipherAccess(selected, 'viewPassword')) return;
     this.emit('vw-secret-request', { kind: 'field', field, label });
   }
 
   private copyValue(value: string, label: string): void {
-    if (value) this.emit('vw-copy', { value, label });
+    if (this.mode === 'active' && value) this.emit('vw-copy', { value, label });
   }
 
   protected override render() {
+    const active = this.mode === 'active';
     return html`
+      ${active ? nothing : this.renderModeHeader()}
+      ${!active && this.status
+        ? html`<vw-status-message
+            class="mode-status"
+            tone=${this.status.tone}
+            .icon=${this.status.tone === 'success' ? 'checkCircle' : 'alert'}
+            .message=${this.status.message}
+          ></vw-status-message>`
+        : nothing}
       ${this.renderSearch()}
-      ${this.query.trim().startsWith('/')
+      ${active && this.query.trim().startsWith('/')
         ? this.renderCommands()
-        : html`${this.renderChips()}<div class="list">${this.renderList()}</div>`}
+        : html`${active ? this.renderChips() : nothing}<div class="list">${this.renderList()}</div>`}
+    `;
+  }
+
+  private renderModeHeader() {
+    const title = this.mode === 'archive' ? t('popup.archive') : t('popup.trash');
+    return html`
+      <div class="mode-bar">
+        <button
+          type="button"
+          class="mode-back"
+          title=${t('common.back')}
+          aria-label=${t('common.back')}
+          @click=${() => this.emit(
+            'vw-vault-mode-change',
+            { mode: 'active' } satisfies VaultModeChangeDetail,
+          )}
+        >${uiIcon('back')}</button>
+        <span class="mode-title">${title}</span>
+      </div>
     `;
   }
 
@@ -318,12 +516,12 @@ export class VwVaultView extends LitElement {
         <input
           type="search"
           aria-label=${t('popup.search')}
-          placeholder=${t('popup.searchCommand')}
+          placeholder=${t(this.mode === 'active' ? 'popup.searchCommand' : 'popup.search')}
           .value=${this.query}
           @input=${(e: Event) => this.onSearch((e.target as HTMLInputElement).value)}
-          @keydown=${(e: KeyboardEvent) => this.onSearchKeydown(e)}
+          @keydown=${(e: KeyboardEvent) => { if (this.mode === 'active') this.onSearchKeydown(e); }}
         />
-        ${this.query.trim().startsWith('/') ? html`<span class="command-badge">${t('popup.command')}</span>` : nothing}
+        ${this.mode === 'active' && this.query.trim().startsWith('/') ? html`<span class="command-badge">${t('popup.command')}</span>` : nothing}
         ${this.query ? html`<button type="button" class="clear" aria-label=${t('common.close')} @click=${() => this.onSearch('')}>${uiIcon('close')}</button>` : nothing}
       </label>
     `;
@@ -387,6 +585,7 @@ export class VwVaultView extends LitElement {
             <button
               type="button"
               role="tab"
+              data-category=${cat.id}
               class="chip ${this.category === cat.id ? 'on' : ''}"
               aria-selected=${this.category === cat.id ? 'true' : 'false'}
               @click=${() => this.selectCategory(cat.id)}
@@ -400,30 +599,39 @@ export class VwVaultView extends LitElement {
   }
 
   private filteredItems(): CipherSummary[] {
-    const q = this.query.trim().toLowerCase();
-    return this.items.filter((item) => {
-      if (item.deletedDate) return false;
-      if (!matchesCategory(item, this.category)) return false;
-      if (!q) return true;
-      return (
-        item.name.toLowerCase().includes(q) ||
-        (item.username ?? '').toLowerCase().includes(q) ||
-        item.uris.some((u) => u.toLowerCase().includes(q))
-      );
+    const candidates = this.items.filter((item) => {
+      if (!matchesVaultMode(item, this.mode)) return false;
+      if (this.mode === 'active' && !matchesCategory(item, this.category)) return false;
+      return true;
     });
+    return sortCipherSummaries(filterSummaries(candidates, this.query), getLocale());
   }
 
   private suggestions(): TabAutofillSuggestion[] {
-    return this.suggestionsState.status === 'ready' ? this.suggestionsState.suggestions : [];
+    return this.mode === 'active' && this.suggestionsState.status === 'ready'
+      ? this.suggestionsState.suggestions
+      : [];
   }
 
   private renderList() {
     const items = this.filteredItems();
-    const showSuggestions = !this.query.trim() && this.category === 'all' && this.suggestions().length > 0;
+    const showSuggestions = this.mode === 'active'
+      && !this.query.trim()
+      && this.category === 'all'
+      && this.suggestions().length > 0;
     if (items.length === 0 && !showSuggestions) {
-      return html`<div class="empty">${this.query.trim() ? t('list.emptySearch') : t('list.empty')}</div>`;
+      const emptyKey = this.mode === 'archive'
+        ? 'list.archiveEmpty'
+        : this.mode === 'trash'
+          ? 'list.trashEmpty'
+          : 'list.empty';
+      return html`<div class="empty">${this.query.trim() ? t('list.emptySearch') : t(emptyKey)}</div>`;
     }
-    const mainLabel = this.query.trim()
+    const mainLabel = this.mode === 'archive'
+      ? t('popup.archive')
+      : this.mode === 'trash'
+        ? t('popup.trash')
+      : this.query.trim()
       ? t('list.results', { count: items.length })
       : this.category === 'all'
         ? t('list.allItems')
@@ -441,12 +649,15 @@ export class VwVaultView extends LitElement {
     const suggestions = this.suggestions();
     const byId = new Map(this.items.map((i) => [i.id, i] as const));
     const first = suggestions[0];
+    const firstLogin = suggestions.find((suggestion) => suggestion.kind === 'login');
     const firstItem = first ? byId.get(first.id) : undefined;
-    const rawDomain = this.currentDomain || first?.matchedUri || firstItem?.uris[0] || '';
+    const rawDomain = this.currentDomain
+      || firstLogin?.matchedUri
+      || firstItem?.uris[0]
+      || '';
     let domain = rawDomain || t('list.currentSiteBare');
     try { domain = new URL(rawDomain).hostname; } catch { /* Keep the display-safe fallback. */ }
-    const primary = first && firstItem && !firstItem.reprompt && !first.reprompt ? first : undefined;
-    const hasPasskey = suggestions.some((suggestion) => byId.get(suggestion.id)?.hasPasskey);
+    const hasPasskey = suggestions.some((suggestion) => suggestion.kind === 'login' && byId.get(suggestion.id)?.hasPasskey);
     return html`
       <section class="hero" aria-label=${t('list.currentSite', { domain })}>
         <div class="hero-head">
@@ -459,85 +670,187 @@ export class VwVaultView extends LitElement {
         </div>
         <div class="hero-accounts">
           ${suggestions.map((suggestion) => {
-            const item = byId.get(suggestion.id);
-            return item ? html`
-              <div class="hero-account">
-                <span class="dot" aria-hidden="true"></span>
-                <span class="account-copy">
-                  <span class="account-user">${item.username || item.name}</span>
-                  <span class="account-name">${item.name}</span>
-                </span>
+            const subtitle = suggestionSubtitle(suggestion);
+            const canFill = Boolean(suggestion.target);
+            return html`
+              <div class="hero-account" data-kind=${suggestion.kind}>
+                <button
+                  type="button"
+                  class="hero-account-main"
+                  title=${t('detail.viewDetails')}
+                  @click=${() => this.emit('vw-item-open', { cipherId: suggestion.id })}
+                >
+                  <span class="dot" aria-hidden="true"></span>
+                  <span class="account-copy">
+                    <span class="account-user">${suggestion.name}</span>
+                    <span class="account-name">${subtitle ? `${subtitle} - ` : ''}${suggestionTypeLabel(suggestion)}</span>
+                  </span>
+                  <span class="chev">${uiIcon('chevron')}</span>
+                </button>
+                ${canFill
+                  ? html`<button
+                      type="button"
+                      class="fill-pill"
+                      aria-label=${`${t('list.fill')}: ${suggestion.name}`}
+                      @click=${() => this.fillSuggestion(suggestion)}
+                    >${t('list.fill')}</button>`
+                  : nothing}
               </div>
-            ` : nothing;
+            `;
           })}
         </div>
-        ${primary ? html`<button type="button" class="fill-pill hero-fill" @click=${() => this.fillSuggestion(primary)}>${t('list.fill')} · ${primary.name}</button>` : nothing}
       </section>
     `;
   }
 
+  private renderFavoriteMarker(item: CipherSummary) {
+    return item.favorite
+      ? html`<span
+          class="favorite-marker"
+          role="img"
+          title=${t('list.favoriteItem')}
+          aria-label=${t('list.favoriteItem')}
+        >${uiIcon('star')}</span>`
+      : nothing;
+  }
+
   private renderItem(item: CipherSummary, isSuggestion: boolean, suggestion?: TabAutofillSuggestion, rowDelay?: string) {
-    const expanded = this.selectedCipherId === item.id;
-    // A reprompt-protected item cannot be released inline (the worker refuses with reprompt_required),
-    // so an inline Fill/copy pill would fail silently. Route the row to open (toggle) instead, which
-    // reaches the master-password reprompt flow — mirroring how the editor route gates protected items.
+    if (isUnsupported(item)) return this.renderUnsupportedItem(item, rowDelay);
+
+    const expanded = this.mode === 'active' && this.selectedCipherId === item.id;
+    // Row navigation still opens protected detail, while an explicit Fill button records a continuation
+    // that resumes automatically after the worker issues a one-time reprompt proof.
     const needsReprompt = item.reprompt === true || suggestion?.reprompt === true;
+    const needsFullDetail = needsReprompt || item.type === 5;
+    const title = itemTitle(item);
     return html`
       <div>
         <div class="row ${expanded ? 'selected' : ''}" style=${rowDelay ? `animation-delay:${rowDelay}` : nothing}>
-          <button type="button" class="row-main" aria-expanded=${expanded ? 'true' : 'false'} @click=${() => this.toggleItem(item.id)}>
-            <span class="tile" style=${`background:${tileColor(item.id)}`}>${tileInitial(item.name)}</span>
+          <button
+            type="button"
+            class="row-main"
+            aria-expanded=${expanded ? 'true' : 'false'}
+            @click=${() => {
+              if (this.mode !== 'active' || needsFullDetail) this.emit('vw-item-open', { cipherId: item.id });
+              else this.toggleItem(item.id);
+            }}
+          >
+            <span class="tile" style=${`background:${tileColor(item.id)}`}>${tileInitial(title)}</span>
             <span class="meta">
               <span class="title-row">
-                <span class="title">${item.name}</span>
+                ${this.renderFavoriteMarker(item)}
+                <span class="title">${title}</span>
                 ${item.hasPasskey
                   ? html`<span class="pk" title=${t('list.passkeySupported')}>${uiIcon('passkey')}</span>`
                   : nothing}
               </span>
               <span class="sub">${item.username ?? item.subtitle ?? ''}</span>
             </span>
-            ${needsReprompt || !isSuggestion ? html`<span class="chev">${uiIcon('chevron')}</span>` : nothing}
+            ${needsFullDetail || !isSuggestion ? html`<span class="chev">${uiIcon('chevron')}</span>` : nothing}
           </button>
-          ${needsReprompt
-            ? nothing
-            : isSuggestion && suggestion
-              ? html`<button
+          ${this.mode === 'active' && item.type === 1
+            ? html`<button
+                type="button"
+                class="fill-pill"
+                @click=${() => suggestion?.target
+                  ? this.fillSuggestion(suggestion)
+                  : this.emit('vw-item-fill', { cipherId: item.id })}
+              >${t('list.fill')}</button>`
+            : nothing}
+          ${this.mode === 'active' && !needsFullDetail && !isSuggestion && item.type === 1
+            ? html`
+                <button
                   type="button"
-                  class="fill-pill"
-                  @click=${() => this.fillSuggestion(suggestion)}
-                >${t('list.fill')}</button>`
-              : item.type === 1
-                ? html`
-                    <button
-                      type="button"
-                      class="row-copy"
-                      title=${t('list.copyPassword')}
-                      aria-label=${t('list.copyPassword')}
-                      @click=${() => this.copySecret('password', t('detail.password'))}
-                    >${uiIcon('copy')}</button>
-                  `
-                : nothing}
+                  class="row-copy"
+                  title=${t('list.copyPassword')}
+                  aria-label=${t('list.copyPassword')}
+                  @click=${() => this.copySecret('password', t('detail.password'))}
+                >${uiIcon('copy')}</button>
+              `
+            : nothing}
+          ${this.renderArchiveAction(item)}
         </div>
         ${expanded ? this.renderCard(item, suggestion) : nothing}
       </div>
     `;
   }
 
+  private renderUnsupportedItem(item: CipherSummary, rowDelay?: string) {
+    const title = itemTitle(item);
+    return html`
+      <div>
+        <div class="row" style=${rowDelay ? `animation-delay:${rowDelay}` : nothing}>
+          <div class="row-main" aria-disabled="true">
+            <span class="tile" style=${`background:${tileColor(item.id)}`}>${tileInitial(title)}</span>
+            <span class="meta">
+              <span class="title-row">${this.renderFavoriteMarker(item)}<span class="title">${title}</span></span>
+              <span class="sub">${typeLabel(item)}</span>
+            </span>
+          </div>
+          ${this.renderArchiveAction(item)}
+        </div>
+      </div>
+    `;
+  }
+
+  private renderArchiveAction(item: CipherSummary) {
+    if (this.mode !== 'archive') return nothing;
+    const busy = this.pending || this.lifecycleSubmittedId !== undefined;
+    return html`
+      <button
+        type="button"
+        class="row-lifecycle"
+        data-unarchive
+        title=${t('detail.unarchive')}
+        aria-label=${`${t('detail.unarchive')}: ${itemTitle(item)}`}
+        ?disabled=${busy}
+        @click=${() => this.submitUnarchive(item)}
+      >${uiIcon('refresh')}<span>${t('detail.unarchive')}</span></button>
+    `;
+  }
+
+  private submitUnarchive(item: CipherSummary): void {
+    if (
+      this.mode !== 'archive'
+      || this.pending
+      || this.lifecycleSubmittedId !== undefined
+      || !item.archivedDate
+      || item.deletedDate
+    ) return;
+    this.lifecycleSubmittedId = item.id;
+    this.requestUpdate();
+    this.emit('vw-unarchive-item', {
+      action: 'unarchive',
+      cipherId: item.id,
+      sourceMode: 'archive',
+      targetMode: 'active',
+    } satisfies ItemLifecycleDetail);
+  }
+
   private fillSuggestion(suggestion: TabAutofillSuggestion): void {
     if (suggestion.target) this.emit('vw-suggestion-fill', { cipherId: suggestion.id, target: suggestion.target });
-    else this.emit('vw-item-fill', { cipherId: suggestion.id });
+    else this.emit('vw-item-open', { cipherId: suggestion.id });
   }
 
   private renderCard(item: CipherSummary, suggestion?: TabAutofillSuggestion) {
+    if (isUnsupported(item)) {
+      return html`
+        <div class="card">
+          <div class="field-label">${typeLabel(item)}</div>
+          <div class="field-val">${t('detail.unsupportedDescription')}</div>
+        </div>
+      `;
+    }
     const isLogin = item.type === 1;
     const canOpenOrFill = isLogin && Boolean(suggestion?.target || item.uris[0]);
+    const status = this.detailStatus ?? this.status;
     return html`
       <div class="card" @click=${(e: Event) => e.stopPropagation()}>
-        ${this.detailStatus
+        ${status
           ? html`<vw-status-message
-              tone=${this.detailStatus.tone}
+              tone=${status.tone}
               .icon=${'alert'}
-              .message=${this.detailStatus.message}
+              .message=${status.message}
             ></vw-status-message>`
           : nothing}
         ${item.username
@@ -550,7 +863,7 @@ export class VwVaultView extends LitElement {
                 </div>
               </div>`
           : nothing}
-        ${isLogin
+        ${isLogin && summaryAllowsCipherAccess(item, 'viewPassword')
           ? html`
               <div>
                 <div class="field-label">${t('detail.password')}</div>
@@ -561,7 +874,7 @@ export class VwVaultView extends LitElement {
                 </div>
               </div>`
           : nothing}
-        ${item.hasTotp && this.totp
+        ${item.hasTotp && summaryAllowsCipherAccess(item, 'viewTotp') && this.totp
           ? html`
               <div>
                 <div class="field-label">${t('detail.totp')}</div>
@@ -572,19 +885,25 @@ export class VwVaultView extends LitElement {
               </div>`
           : nothing}
         ${!isLogin && item.subtitle
-          ? html`<div><div class="field-label">${t(typeLabelKey(item))}</div><div class="field-val">${item.subtitle}</div></div>`
+          ? html`<div><div class="field-label">${typeLabel(item)}</div><div class="field-val">${item.subtitle}</div></div>`
           : nothing}
         <div class="actions">
           ${canOpenOrFill
-            ? html`<button class="btn-primary" @click=${() => this.openAndFill(item, suggestion)}>${t('detail.openAndFill')}</button>`
+            ? html`<button class="btn-primary" @click=${() => this.openOrFill(item, suggestion)}>${t(
+                suggestion?.target ? 'detail.fillCurrentPage' : 'detail.openWebsite',
+              )}</button>`
             : nothing}
-          <button class="btn-outline" @click=${() => this.emit('vw-edit-item', { cipherId: item.id })}>${t('common.edit')}</button>
+          ${canOpenEditor(item)
+            ? html`<button class="btn-outline" @click=${() => this.emit('vw-edit-item', { cipherId: item.id })}>${t('common.edit')}</button>`
+            : nothing}
+          <button class="btn-outline" @click=${() => this.emit('vw-item-open', { cipherId: item.id })}>${t('detail.viewDetails')}</button>
         </div>
       </div>
     `;
   }
 
-  private openAndFill(item: CipherSummary, suggestion?: TabAutofillSuggestion): void {
+  private openOrFill(item: CipherSummary, suggestion?: TabAutofillSuggestion): void {
+    if (isUnsupported(item)) return;
     if (suggestion?.target) this.emit('vw-suggestion-fill', { cipherId: item.id, target: suggestion.target });
     else this.emit('vw-item-fill', { cipherId: item.id });
   }

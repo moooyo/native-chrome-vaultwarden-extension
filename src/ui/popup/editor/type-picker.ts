@@ -1,4 +1,4 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
@@ -6,7 +6,7 @@ import { uiIcon, type IconName } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import type { EditorTypeDetail } from './editor-types.js';
 
-/** The four creatable cipher types, in the design's order (登录/银行卡/身份/笔记), each with its tile icon. */
+/** The baseline creatable cipher types, in the design's order, each with its tile icon. */
 const TYPES: ReadonlyArray<readonly [1 | 2 | 3 | 4, () => string, IconName]> = [
   [1, () => t('editor.typeLogin'), 'key'],
   [3, () => t('editor.typeCard'), 'card'],
@@ -21,7 +21,18 @@ const TYPES: ReadonlyArray<readonly [1 | 2 | 3 | 4, () => string, IconName]> = [
  * tile + label + chevron.
  */
 export class VwTypePicker extends LitElement {
+  static override properties = {
+    sshAvailability: { type: String },
+  };
+
+  declare sshAvailability: 'loading' | 'available' | 'unavailable';
+
   private i18n = new LocalizeController(this);
+
+  constructor() {
+    super();
+    this.sshAvailability = 'loading';
+  }
 
   static override styles = [
     themeTokens,
@@ -83,6 +94,16 @@ export class VwTypePicker extends LitElement {
         outline: none;
         box-shadow: var(--vw-focus);
       }
+      .type-row:disabled {
+        cursor: progress;
+        opacity: 0.55;
+      }
+      .type-row:disabled:hover {
+        background: transparent;
+        border-color: var(--vw-line-3);
+      }
+      .checking svg { animation: mvSpin .8s linear infinite; }
+      @media (prefers-reduced-motion: reduce) { .checking svg { animation: none; } }
       .tile {
         display: inline-flex;
         align-items: center;
@@ -115,7 +136,7 @@ export class VwTypePicker extends LitElement {
     `,
   ];
 
-  private pick(type: 1 | 2 | 3 | 4): void {
+  private pick(type: 1 | 2 | 3 | 4 | 5): void {
     emit<EditorTypeDetail>(this, 'vw-editor-type', { type });
   }
 
@@ -141,6 +162,23 @@ export class VwTypePicker extends LitElement {
             </button>
           `,
         )}
+        ${this.sshAvailability === 'available'
+          ? html`
+              <button type="button" class="type-row" data-type="5" @click=${() => this.pick(5)}>
+                <span class="tile">${uiIcon('key')}</span>
+                <span class="name">${t('editor.typeSshKey')}</span>
+                <span class="chev">${uiIcon('chevron')}</span>
+              </button>
+            `
+          : this.sshAvailability === 'loading'
+            ? html`
+                <button type="button" class="type-row" data-ssh-checking disabled>
+                  <span class="tile checking">${uiIcon('refresh')}</span>
+                  <span class="name">${t('ssh.checkingAvailability')}</span>
+                  <span class="chev">${uiIcon('chevron')}</span>
+                </button>
+              `
+            : nothing}
       </div>
     `;
   }

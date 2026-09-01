@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { pbkdf2Sha256, hkdfExpandSha256, hmacSha256, aesCbc256Decrypt, aesCbc256Encrypt, rsaOaepDecrypt, rsaOaepEncrypt } from './primitives.js';
+import { pbkdf2Sha256, hkdfExpandSha256, hmacSha256, aesCbc256Decrypt, aesCbc256Encrypt, rsaOaepDecrypt, rsaOaepEncrypt, validateRsa2048OaepPrivateKey } from './primitives.js';
 import { utf8ToBytes, bytesToHex, hexToBytes, base64ToBytes, bytesToUtf8 } from './encoding.js';
 import { RSA_VECTOR, ORG_KEY_VECTOR } from '../../../test/vectors.js';
 
@@ -98,6 +98,16 @@ describe('primitives', () => {
     const ct = base64ToBytes(RSA_VECTOR.encType4EncString.slice(2));
     const out = await rsaOaepDecrypt(pkcs8, ct);
     expect(bytesToUtf8(out)).toBe(RSA_VECTOR.plaintext);
+  });
+
+  it('strictly validates the RSA-2048 account private key profile', async () => {
+    const pkcs8 = base64ToBytes(RSA_VECTOR.privateKeyPkcs8B64);
+    try {
+      await expect(validateRsa2048OaepPrivateKey(pkcs8, 'SHA-1')).resolves.toBeUndefined();
+      await expect(validateRsa2048OaepPrivateKey(pkcs8.subarray(0, 256), 'SHA-1')).rejects.toThrow();
+    } finally {
+      pkcs8.fill(0);
+    }
   });
 
   it('RSA-OAEP-SHA256 decrypts an encType=3 wrapped key when given the SHA-256 hash', async () => {

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { showNotice } from './notice.js';
+import { clearNotice, showNotice } from './notice.js';
 
 // showNotice is the stable content factory; it delegates to the render-based closed-shadow notice
 // surface (no custom element — content scripts run in an isolated world with no custom-element
@@ -43,5 +43,18 @@ describe('showNotice', () => {
     expect(document.querySelector('[data-vw-notice]')).not.toBeNull();
     handle.remove();
     expect(document.querySelector('[data-vw-notice]')).toBeNull();
+  });
+
+  it('clears the active notice and its dismissal timer during teardown', () => {
+    vi.useFakeTimers();
+    try {
+      showNotice('dismiss on teardown');
+      clearNotice();
+      expect(document.querySelector('[data-vw-notice]')).toBeNull();
+      vi.advanceTimersByTime(4000);
+      expect(document.querySelector('[data-vw-notice]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,37 +1,40 @@
-import { describe, it, expect } from 'vitest';
-import { addPasswordToHistory, MAX_PASSWORD_HISTORY } from './history.js';
+import { describe, expect, it } from 'vitest';
+import {
+  GENERATOR_HISTORY_ENTRY_TYPES,
+  isGeneratorHistoryEntryType,
+  parseGeneratorHistoryEntries,
+} from './history.js';
 
-describe('addPasswordToHistory', () => {
-  it('prepends the new password as the most recent entry', () => {
-    expect(addPasswordToHistory(['a'], 'b')).toEqual(['b', 'a']);
+describe('generator history wire model', () => {
+  it('accepts every closed entry type including PIN', () => {
+    expect(GENERATOR_HISTORY_ENTRY_TYPES).toEqual(['password', 'passphrase', 'pin', 'username']);
+    expect(GENERATOR_HISTORY_ENTRY_TYPES.every(isGeneratorHistoryEntryType)).toBe(true);
   });
 
-  it('moves an existing entry to the front instead of duplicating it', () => {
-    expect(addPasswordToHistory(['a', 'b', 'c'], 'b')).toEqual(['b', 'a', 'c']);
+  it('strictly parses and freezes exact worker entries', () => {
+    const parsed = parseGeneratorHistoryEntries([
+      { generatedAt: 2, type: 'pin', value: '123456' },
+      { generatedAt: 1, type: 'password', value: 'secret' },
+    ]);
+    expect(parsed).toEqual([
+      { generatedAt: 2, type: 'pin', value: '123456' },
+      { generatedAt: 1, type: 'password', value: 'secret' },
+    ]);
+    expect(Object.isFrozen(parsed)).toBe(true);
+    expect(Object.isFrozen(parsed?.[0])).toBe(true);
   });
 
-  it('caps the history at the maximum length, dropping the oldest', () => {
-    const full = Array.from({ length: MAX_PASSWORD_HISTORY }, (_, i) => `p${i}`);
-    const next = addPasswordToHistory(full, 'newest');
-    expect(next).toHaveLength(MAX_PASSWORD_HISTORY);
-    expect(next[0]).toBe('newest');
-    expect(next).not.toContain(`p${MAX_PASSWORD_HISTORY - 1}`);
-  });
-
-  it('honors a custom maximum', () => {
-    expect(addPasswordToHistory(['a', 'b'], 'c', 2)).toEqual(['c', 'a']);
-  });
-
-  it('ignores an empty password and returns a copy of the history', () => {
-    const history = ['a'];
-    const result = addPasswordToHistory(history, '');
-    expect(result).toEqual(['a']);
-    expect(result).not.toBe(history);
-  });
-
-  it('does not mutate the input history', () => {
-    const history = ['a', 'b'];
-    addPasswordToHistory(history, 'c');
-    expect(history).toEqual(['a', 'b']);
+  it.each([
+    [{ generatedAt: 1, type: 'password', value: '' }],
+    [{ generatedAt: 1, type: 'password', value: 'line\nbreak' }],
+    [{ generatedAt: 1, type: 'email', value: 'value' }],
+    [{ generatedAt: -1, type: 'password', value: 'value' }],
+    [{ generatedAt: 1, type: 'password', value: 'value', extra: true }],
+    [
+      { generatedAt: 2, type: 'password', value: 'duplicate' },
+      { generatedAt: 1, type: 'pin', value: 'duplicate' },
+    ],
+  ])('rejects malformed or duplicate entry data: %j', (...entries) => {
+    expect(parseGeneratorHistoryEntries(entries)).toBeNull();
   });
 });

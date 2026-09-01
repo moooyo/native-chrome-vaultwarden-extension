@@ -18,6 +18,12 @@ export async function sha256(data: Uint8Array): Promise<Uint8Array> {
 }
 
 /** Build a WebAuthn clientDataJSON. Property order matches what browsers emit; challenge stays base64url. */
-export function buildClientDataJSON(type: 'webauthn.get' | 'webauthn.create', challenge: string, origin: string): string {
-  return JSON.stringify({ type, challenge, origin, crossOrigin: false });
+export function buildClientDataJSON(
+  type: 'webauthn.get' | 'webauthn.create',
+  challenge: string,
+  origin: string,
+  crossOrigin = false,
+): string {
+  if (typeof crossOrigin !== 'boolean') throw new TypeError('crossOrigin must be a boolean');
+  return JSON.stringify({ type, challenge, origin, crossOrigin });
 }

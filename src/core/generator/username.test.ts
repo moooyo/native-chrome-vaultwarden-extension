@@ -37,6 +37,9 @@ describe('generateRandomWordUsername', () => {
     expect(generateRandomWordUsername(DEFAULT_USERNAME_OPTIONS, fixed(0), words)).toBe('alpha');
   });
   it('capitalize + includeNumber', () => {
-    expect(generateRandomWordUsername({ ...DEFAULT_USERNAME_OPTIONS, capitalize: true, includeNumber: true }, fixed(0), words)).toBe('Alpha0');
+    expect(generateRandomWordUsername({ ...DEFAULT_USERNAME_OPTIONS, capitalize: true, includeNumber: true }, fixed(0), words)).toBe('Alpha0000');
+  });
+  it('extends an existing subaddress tag without adding a second plus', () => {
+    expect(generatePlusAddressedEmail('me+tag@example.com', { ...DEFAULT_USERNAME_OPTIONS, randomLength: 4 }, fixed(0))).toBe('me+tagaaaa@example.com');
   });
 });

@@ -15,6 +15,7 @@ import { createServer } from 'node:http';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ext = join(root, 'dist');
+const browserExecutable = process.env.MIYU_BROWSER_EXECUTABLE;
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Signup</title>
 <style>body{font-family:sans-serif;max-width:360px;margin:60px auto}input{display:block;width:100%;height:34px;margin:8px 0;box-sizing:border-box}</style></head>
@@ -30,6 +31,7 @@ const port = server.address().port;
 
 const ctx = await chromium.launchPersistentContext('', {
   headless: false,
+  ...(browserExecutable ? { executablePath: browserExecutable } : {}),
   args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`, '--no-sandbox'],
 });
 let [sw] = ctx.serviceWorkers();

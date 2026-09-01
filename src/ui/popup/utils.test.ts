@@ -44,6 +44,47 @@ describe('fileToBase64', () => {
     const b64 = await fileToBase64(file);
     expect(b64).toBe(btoa('hi'));
   });
+
+  it.each([0, 3, 4])('allows a declared size of %i at or below an inclusive byte limit', async (size) => {
+    const blob = new Blob([new Uint8Array([104, 105])]);
+    Object.defineProperty(blob, 'size', { value: size });
+    const read = vi.spyOn(blob, 'arrayBuffer');
+
+    await expect(fileToBase64(blob, 4)).resolves.toBe(btoa('hi'));
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it('rejects limit + 1 before reading the blob', async () => {
+    const blob = new Blob([new Uint8Array([104, 105])]);
+    Object.defineProperty(blob, 'size', { value: 5 });
+    const read = vi.spyOn(blob, 'arrayBuffer');
+
+    await expect(fileToBase64(blob, 4)).rejects.toThrow(RangeError);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an unsafe declared size (%s) before reading the blob',
+    async (size) => {
+      const blob = new Blob([new Uint8Array([104, 105])]);
+      Object.defineProperty(blob, 'size', { value: size });
+      const read = vi.spyOn(blob, 'arrayBuffer');
+
+      await expect(fileToBase64(blob, 4)).rejects.toThrow(RangeError);
+      expect(read).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects an invalid byte limit (%s) before reading the blob',
+    async (maxBytes) => {
+      const blob = new Blob([new Uint8Array([104, 105])]);
+      const read = vi.spyOn(blob, 'arrayBuffer');
+
+      await expect(fileToBase64(blob, maxBytes)).rejects.toThrow(RangeError);
+      expect(read).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('triggerDownload', () => {

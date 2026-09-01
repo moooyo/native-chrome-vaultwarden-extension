@@ -5,10 +5,9 @@
 import type { CipherInput, DecryptedCipher, DecryptedCard, DecryptedIdentity, FolderSummary } from './models.js';
 import type { LoginUri } from './uri-match.js';
 import type { SymmetricKey } from '../crypto/keys.js';
-import { pbkdf2Sha256 } from '../crypto/primitives.js';
-import { stretchMasterKey } from '../crypto/kdf.js';
-import { encryptToText, decryptToText } from '../crypto/encstring.js';
-import { utf8ToBytes, bytesToBase64 } from '../crypto/encoding.js';
+import { deriveKdfMaterial, parseKdfConfig, stretchMasterKey, type KdfConfig } from '../crypto/kdf.js';
+import { encryptToBytes, decryptToBytes, EncStringMacError } from '../crypto/encstring.js';
+import { utf8ToBytes, bytesToBase64, bytesToUtf8 } from '../crypto/encoding.js';
 
 interface ExportItem {
   id: string;
@@ -94,32 +93,46 @@ export interface EncryptedExportDeps {
 export async function buildEncryptedExportJson(
   plaintextJson: string,
   password: string,
-  kdfIterations: number,
+  kdf: KdfConfig,
   deps: EncryptedExportDeps = {},
 ): Promise<string> {
   const randomBytes = deps.randomBytes ?? ((n) => globalThis.crypto.getRandomValues(new Uint8Array(n)));
   const newGuid = deps.newGuid ?? (() => globalThis.crypto.randomUUID());
-  const saltB64 = bytesToBase64(randomBytes(16));
-  const key = await deriveExportKey(password, saltB64, kdfIterations);
-  return JSON.stringify({
-    encrypted: true,
-    passwordProtected: true,
-    salt: saltB64,
-    kdfType: 0,
-    kdfIterations,
-    kdfMemory: null,
-    kdfParallelism: null,
-    // Lets an importer verify the password before decrypting the payload.
-    encKeyValidation_DO_NOT_EDIT: await encryptToText(newGuid(), key),
-    data: await encryptToText(plaintextJson, key),
-  }, null, 2);
+  const saltBytes = randomBytes(16);
+  let saltB64: string;
+  try {
+    saltB64 = bytesToBase64(saltBytes);
+  } finally {
+    saltBytes.fill(0);
+  }
+  const key = await deriveExportKey(password, saltB64, kdf);
+  const validationBytes = utf8ToBytes(newGuid());
+  const plaintextBytes = utf8ToBytes(plaintextJson);
+  try {
+    return JSON.stringify({
+      encrypted: true,
+      passwordProtected: true,
+      salt: saltB64,
+      kdfType: kdf.kdf,
+      kdfIterations: kdf.kdfIterations,
+      kdfMemory: kdf.kdf === 1 ? kdf.kdfMemory : null,
+      kdfParallelism: kdf.kdf === 1 ? kdf.kdfParallelism : null,
+      // Lets an importer verify the password before decrypting the payload.
+      encKeyValidation_DO_NOT_EDIT: await encryptToBytes(validationBytes, key),
+      data: await encryptToBytes(plaintextBytes, key),
+    }, null, 2);
+  } finally {
+    validationBytes.fill(0);
+    plaintextBytes.fill(0);
+    destroySymmetricKey(key);
+  }
 }
 
 /** True when the content is a Bitwarden password-protected encrypted export. */
 export function isEncryptedExport(json: string): boolean {
   try {
     const p = JSON.parse(json) as Record<string, unknown>;
-    return isRecord(p) && p.encrypted === true && p.passwordProtected === true && typeof p.data === 'string';
+    return isRecord(p) && p.encrypted === true && p.passwordProtected === true;
   } catch {
     return false;
   }
@@ -128,29 +141,69 @@ export function isEncryptedExport(json: string): boolean {
 /** Decrypt a password-protected export to its inner plaintext export JSON; throws on a wrong password. */
 export async function decryptEncryptedExport(json: string, password: string): Promise<string> {
   const p = JSON.parse(json) as Record<string, unknown>;
-  if (p.kdfType !== undefined && p.kdfType !== null && p.kdfType !== 0) {
-    throw new Error('This export uses Argon2 KDF, which is not supported');
+  if (!isRecord(p) || p.encrypted !== true || p.passwordProtected !== true) {
+    throw new Error('This is not a password-protected Bitwarden export');
   }
-  // Validate the iteration count up front: a missing / zero / non-integer value would otherwise reach
-  // WebCrypto (deriveExportKey → PBKDF2) and surface as an opaque OperationError.
-  const kdfIterations = Number(p.kdfIterations ?? 0);
-  if (!Number.isInteger(kdfIterations) || kdfIterations <= 0) {
+  if (
+    typeof p.salt !== 'string'
+    || p.salt.length === 0
+    || typeof p.encKeyValidation_DO_NOT_EDIT !== 'string'
+    || p.encKeyValidation_DO_NOT_EDIT.length === 0
+    || typeof p.data !== 'string'
+    || p.data.length === 0
+  ) {
+    throw new Error('This encrypted export is incomplete or malformed');
+  }
+  let kdf: KdfConfig;
+  try {
+    kdf = parseKdfConfig(p);
+  } catch {
     throw new Error('This export is missing valid KDF parameters');
   }
-  const key = await deriveExportKey(password, String(p.salt ?? ''), kdfIterations);
+  const key = await deriveExportKey(password, p.salt, kdf);
   try {
-    await decryptToText(String(p.encKeyValidation_DO_NOT_EDIT ?? ''), key); // password check (MAC)
-  } catch {
-    throw new Error('Incorrect export password');
+    try {
+      const validation = await decryptToBytes(p.encKeyValidation_DO_NOT_EDIT, key);
+      validation.fill(0); // password check (MAC)
+    } catch (error) {
+      if (error instanceof EncStringMacError) {
+        throw new Error('Incorrect export password or damaged validation data', { cause: error });
+      }
+      throw new Error('This encrypted export has malformed validation data', { cause: error });
+    }
+    try {
+      const plaintext = await decryptToBytes(p.data, key);
+      try {
+        return bytesToUtf8(plaintext);
+      } finally {
+        plaintext.fill(0);
+      }
+    } catch (error) {
+      throw new Error('This encrypted export payload is corrupted', { cause: error });
+    }
+  } finally {
+    destroySymmetricKey(key);
   }
-  return decryptToText(String(p.data ?? ''), key);
 }
 
-/** Derive the export encryption key: PBKDF2-SHA256(password, utf8(saltB64)) → stretch to enc+mac.
- *  The base64 salt string itself is the PBKDF2 salt input, matching Bitwarden's export format. */
-async function deriveExportKey(password: string, saltB64: string, iterations: number): Promise<SymmetricKey> {
-  const masterKey = await pbkdf2Sha256(utf8ToBytes(password), utf8ToBytes(saltB64), iterations, 32);
-  return stretchMasterKey(masterKey);
+/** Derive an export key from the base64 salt string, matching Bitwarden's encrypted-export format. */
+async function deriveExportKey(password: string, saltB64: string, kdf: KdfConfig): Promise<SymmetricKey> {
+  const passwordBytes = utf8ToBytes(password);
+  const saltBytes = utf8ToBytes(saltB64);
+  let masterKey: Uint8Array | undefined;
+  try {
+    masterKey = await deriveKdfMaterial(passwordBytes, saltBytes, kdf);
+    return await stretchMasterKey(masterKey);
+  } finally {
+    passwordBytes.fill(0);
+    saltBytes.fill(0);
+    masterKey?.fill(0);
+  }
+}
+
+function destroySymmetricKey(key: SymmetricKey): void {
+  key.encKey.fill(0);
+  key.macKey.fill(0);
 }
 
 /**
@@ -160,7 +213,11 @@ async function deriveExportKey(password: string, saltB64: string, iterations: nu
  */
 export async function parseImport(content: string, password?: string): Promise<CipherInput[]> {
   if (content.trimStart().startsWith('{')) {
-    if (isEncryptedExport(content)) {
+    const parsed = JSON.parse(content) as unknown;
+    if (isRecord(parsed) && parsed.encrypted === true) {
+      if (parsed.passwordProtected !== true) {
+        throw new Error('Account-restricted encrypted exports are not supported yet');
+      }
       if (!password) throw new Error('This export is password-protected; enter its password to import');
       return parseImportJson(await decryptEncryptedExport(content, password));
     }

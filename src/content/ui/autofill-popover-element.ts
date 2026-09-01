@@ -21,16 +21,23 @@ export interface PopoverState {
   view: PopoverView;
   statusMessage: string;
   candidates: PopoverCandidate[];
+  /** Active descendant within the non-modal listbox. Candidate ids remain closure-only. */
+  activeIndex: number;
   /** Login autofill (design 2c) mounts to the RIGHT of the focused field with a connector and shows the
    *  match list directly (no click-to-open trigger). Card/identity keep the compact trigger popover. */
   sidePanel: boolean;
 }
+
+export type PopoverDismissReason = 'escape' | 'tab';
 
 /** Privileged callbacks. Every click that reaches them is gated on `Event.isTrusted` in the template,
  *  so a page script cannot synthesize a click to open the panel or pick a candidate. */
 export interface PopoverHandlers {
   onOpen?: () => void;
   onSelect?: (cipherId: string) => void;
+  onActiveIndexChange?: (index: number) => void;
+  onKeyboardSelect?: (index: number) => void;
+  onDismiss?: (reason: PopoverDismissReason) => void;
 }
 
 // TODO i18n: content-script surfaces are isolated from the extension i18n module, so these
@@ -122,6 +129,8 @@ export const POPOVER_STYLES = `
     @keyframes mvStag { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
     button.candidate:hover { background: var(--mi-row-hover); }
     button.candidate:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--mi-teal); }
+    button.candidate[aria-selected="true"] { background: var(--mi-row-hover); box-shadow: inset 0 0 0 2px var(--mi-teal); }
+    .list:focus { outline: none; }
     .tile { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: 9px; color: #fff; font-weight: 700; font-size: 13px; text-transform: uppercase; }
     .meta-col { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
     .title { display: flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 600; color: var(--mi-ink); }
@@ -196,7 +205,11 @@ function renderBody(state: PopoverState, handlers: PopoverHandlers): TemplateRes
 
 /** Post-fill confirmation shown in the login side panel: a 已填充 badge (design 2c). */
 function renderFilled(): TemplateResult {
-  return html`<div class="filled"><span class="badge">${uiIcon('check')}已填充</span></div>`;
+  return html`
+    <div class="filled" role="status" aria-live="polite" aria-atomic="true">
+      <span class="badge">${uiIcon('check')}已填充</span>
+    </div>
+  `;
 }
 
 function renderHeader(state: PopoverState): TemplateResult {
@@ -218,7 +231,7 @@ function headerMeta(state: PopoverState): string {
 
 function renderStatus(message: string): TemplateResult {
   return html`
-    <div class="status">
+    <div class="status" role="status" aria-live="polite" aria-atomic="true">
       <span class="status-ico">${uiIcon('lock')}</span>
       <span class="status-msg">${message}</span>
     </div>
@@ -230,18 +243,41 @@ function renderList(state: PopoverState, handlers: PopoverHandlers): TemplateRes
     return html`${renderHeader(state)}${renderStatus(EMPTY_STATES[state.kind])}`;
   }
   const scrollable = state.candidates.length > SCROLL_THRESHOLD;
+  const activeIndex = normalizedActiveIndex(state.activeIndex, state.candidates.length);
   return html`
     ${renderHeader(state)}
-    <div class="list ${scrollable ? 'scrollable' : ''}">
-      ${state.candidates.map((candidate, index) => renderCandidate(candidate, index, handlers))}
+    <div
+      class="list ${scrollable ? 'scrollable' : ''}"
+      role="listbox"
+      aria-orientation="vertical"
+      aria-label=${state.kind === 'login' ? '密屿' : META_LABELS[state.kind]}
+      aria-activedescendant=${optionDomId(activeIndex)}
+      tabindex="0"
+      @keydown=${(event: KeyboardEvent) => handleListKeydown(event, state, handlers)}
+    >
+      ${state.candidates.map((candidate, index) => renderCandidate(candidate, index, activeIndex, handlers))}
     </div>
   `;
 }
 
-function renderCandidate(candidate: PopoverCandidate, index: number, handlers: PopoverHandlers): TemplateResult {
+function renderCandidate(
+  candidate: PopoverCandidate,
+  index: number,
+  activeIndex: number,
+  handlers: PopoverHandlers,
+): TemplateResult {
   return html`
-    <button type="button" class="candidate" role="option" aria-selected=${index === 0 ? 'true' : 'false'} style="animation-delay:${index * 60}ms" @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onSelect?.(candidate.id); }}>
-      <span class="tile" style="background:${tileColor(candidate.name)}">${monogramLetter(candidate.name)}</span>
+    <button
+      type="button"
+      class="candidate"
+      id=${optionDomId(index)}
+      role="option"
+      aria-selected=${index === activeIndex ? 'true' : 'false'}
+      tabindex="-1"
+      style="animation-delay:${index * 60}ms"
+      @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onSelect?.(candidate.id); }}
+    >
+      <span class="tile" aria-hidden="true" style="background:${tileColor(candidate.name)}">${monogramLetter(candidate.name)}</span>
       <span class="meta-col">
         <span class="title">
           ${candidate.favorite
@@ -254,6 +290,63 @@ function renderCandidate(candidate: PopoverCandidate, index: number, handlers: P
       <span class="fill">填充</span>
     </button>
   `;
+}
+
+function handleListKeydown(
+  event: KeyboardEvent,
+  state: PopoverState,
+  handlers: PopoverHandlers,
+): void {
+  if (!event.isTrusted || event.altKey || event.ctrlKey || event.metaKey) return;
+  const count = state.candidates.length;
+  if (count === 0) return;
+  const activeIndex = normalizedActiveIndex(state.activeIndex, count);
+
+  let nextIndex: number | undefined;
+  switch (event.key) {
+    case 'ArrowDown':
+      nextIndex = (activeIndex + 1) % count;
+      break;
+    case 'ArrowUp':
+      nextIndex = (activeIndex - 1 + count) % count;
+      break;
+    case 'Home':
+      nextIndex = 0;
+      break;
+    case 'End':
+      nextIndex = count - 1;
+      break;
+    case 'Enter':
+    case ' ':
+    case 'Spacebar':
+      if (event.repeat) return;
+      event.preventDefault();
+      event.stopPropagation();
+      handlers.onKeyboardSelect?.(activeIndex);
+      return;
+    case 'Escape':
+      event.preventDefault();
+      event.stopPropagation();
+      handlers.onDismiss?.('escape');
+      return;
+    case 'Tab':
+      handlers.onDismiss?.('tab');
+      return;
+    default:
+      return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  handlers.onActiveIndexChange?.(nextIndex);
+}
+
+function normalizedActiveIndex(index: number, count: number): number {
+  return Number.isSafeInteger(index) && index >= 0 && index < count ? index : 0;
+}
+
+function optionDomId(index: number): string {
+  return `vw-autofill-option-${index}`;
 }
 
 /** The 密屿 concentric-circle glyph on its moss-green block — pure static markup, no page data. */

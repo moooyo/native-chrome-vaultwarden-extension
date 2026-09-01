@@ -1,11 +1,11 @@
 // Live end-to-end test against a disposable test Vaultwarden (MIYU_SERVER / MIYU_EMAIL / MIYU_PASSWORD).
-// Skipped by default; run with: LIVE=1 npx vitest run test/live/crud.live.test.ts
+// Excluded by default; run with: $env:LIVE = '1'; npm run test:live -- test/live/crud.live.test.ts
 // Exercises the real server contract: login -> create -> sync -> decrypt -> update -> delete.
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('webextension-polyfill', () => ({ default: { storage: { local: {}, session: {} } } }));
 
-import { ApiClient } from '../../src/core/api/client.js';
+import { ApiClient, type RegistrationStartResult } from '../../src/core/api/client.js';
 import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey } from '../../src/core/crypto/kdf.js';
 import { unwrapSymmetricKey } from '../../src/core/crypto/keys.js';
 import { buildRegistration } from '../../src/core/crypto/registration.js';
@@ -17,7 +17,7 @@ const SERVER = process.env.MIYU_SERVER || 'http://localhost:8080';
 const EMAIL = process.env.MIYU_EMAIL || 'test@example.com';
 const PASSWORD = process.env.MIYU_PASSWORD || '';
 
-const LIVE = Boolean(process.env.LIVE);
+const LIVE = process.env.LIVE === '1';
 
 function memStore(): KeyValueStore {
   const m = new Map<string, unknown>();
@@ -28,12 +28,32 @@ function memStore(): KeyValueStore {
   } as KeyValueStore;
 }
 
+/** Best-effort cleanup for accounts created by live registration tests. */
+async function deleteAccount(token: string, masterPasswordHash: string): Promise<void> {
+  try {
+    await fetch(`${SERVER}/api/accounts`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ masterPasswordHash }),
+    });
+  } catch {
+    // Cleanup must not mask the protocol failure under test.
+  }
+}
+
+function registrationTokenForAutomatedTest(start: RegistrationStartResult): string | undefined {
+  if (start.kind === 'email_required') {
+    throw new Error('test server requires email verification; no inline registration token is available');
+  }
+  return start.kind === 'inline' ? start.emailVerificationToken : undefined;
+}
+
 (LIVE ? describe : describe.skip)('live cipher CRUD against the test server', () => {
   it('logs in, creates, updates, and deletes a cipher with full round-trip', async () => {
     const api = new ApiClient({ serverUrlProvider: async () => SERVER, fetchFn: fetch, localStore: memStore() });
 
     const pre = await api.prelogin(EMAIL);
-    const masterKey = await deriveMasterKey(PASSWORD, EMAIL, pre.kdfIterations);
+    const masterKey = await deriveMasterKey(PASSWORD, EMAIL, pre);
     const hash = await deriveMasterPasswordHash(masterKey, PASSWORD);
     const login = await api.passwordLogin({ email: EMAIL, masterPasswordHash: hash });
     expect(login.kind).toBe('success');
@@ -74,28 +94,86 @@ function memStore(): KeyValueStore {
     const api = new ApiClient({ serverUrlProvider: async () => SERVER, fetchFn: fetch, localStore: memStore() });
     const email = `reg-${Date.now()}@example.com`;
     const password = 'Reg-Test-Pass-1!';
+    let token: string | undefined;
+    let masterPasswordHash: string | undefined;
 
-    const reg = await buildRegistration(email, password);
-    await api.register({
-      email, name: 'Reg Test', masterPasswordHash: reg.masterPasswordHash,
-      key: reg.key, keys: reg.keys, kdf: reg.kdf, kdfIterations: reg.kdfIterations,
-    });
+    try {
+      const reg = await buildRegistration(email, password);
+      const emailVerificationToken = registrationTokenForAutomatedTest(
+        await api.startRegistration({ email, name: 'Reg Test' }),
+      );
+      await api.register({
+        ...reg,
+        masterPasswordHint: '',
+        email,
+        name: 'Reg Test',
+        ...(emailVerificationToken ? { emailVerificationToken } : {}),
+      });
 
-    // Log in to the brand-new account.
-    const pre = await api.prelogin(email);
-    const masterKey = await deriveMasterKey(password, email, pre.kdfIterations);
-    const hash = await deriveMasterPasswordHash(masterKey, password);
-    const login = await api.passwordLogin({ email, masterPasswordHash: hash });
-    expect(login.kind, 'login after register').toBe('success');
-    if (login.kind !== 'success') return;
-    const token = login.data.access_token;
-    const userKey = await unwrapSymmetricKey(login.data.Key, await stretchMasterKey(masterKey));
+      // Log in to the brand-new account.
+      const pre = await api.prelogin(email);
+      const masterKey = await deriveMasterKey(password, email, pre);
+      masterPasswordHash = await deriveMasterPasswordHash(masterKey, password);
+      const login = await api.passwordLogin({ email, masterPasswordHash });
+      expect(login.kind, 'login after register').toBe('success');
+      if (login.kind !== 'success') return;
+      token = login.data.access_token;
+      const userKey = await unwrapSymmetricKey(login.data.Key, await stretchMasterKey(masterKey));
 
-    // The generated keys actually work: create + decrypt a cipher.
-    await api.createCipher(token, await encryptCipher({ type: 1, name: 'reg-cipher', login: { password: 'works' } }, userKey));
-    const sync = await api.sync(token);
-    const found = (await Promise.all(sync.ciphers.map((c) => decryptCipher(c, userKey)))).find((d) => d?.name === 'reg-cipher');
-    expect(found, 'created cipher decrypts under the new account key').toBeTruthy();
-    expect(found).toMatchObject({ name: 'reg-cipher', password: 'works' });
+      // The generated keys actually work: create + decrypt a cipher.
+      await api.createCipher(token, await encryptCipher({ type: 1, name: 'reg-cipher', login: { password: 'works' } }, userKey));
+      const sync = await api.sync(token);
+      const found = (await Promise.all(sync.ciphers.map((c) => decryptCipher(c, userKey)))).find((d) => d?.name === 'reg-cipher');
+      expect(found, 'created cipher decrypts under the new account key').toBeTruthy();
+      expect(found).toMatchObject({ name: 'reg-cipher', password: 'works' });
+    } finally {
+      if (token && masterPasswordHash) await deleteAccount(token, masterPasswordHash);
+    }
   }, 30_000);
+
+  it('registers and uses an Argon2id account with the server-reported KDF settings', async () => {
+    const api = new ApiClient({ serverUrlProvider: async () => SERVER, fetchFn: fetch, localStore: memStore() });
+    const email = `argon-${Date.now()}@example.com`;
+    const password = 'Argon-Live-Test-1!';
+    const expectedKdf = { kdf: 1, kdfIterations: 2, kdfMemory: 16, kdfParallelism: 1 } as const;
+    let token: string | undefined;
+    let masterPasswordHash: string | undefined;
+
+    try {
+      const reg = await buildRegistration(email, password, expectedKdf);
+      const emailVerificationToken = registrationTokenForAutomatedTest(
+        await api.startRegistration({ email, name: 'Argon Live Test' }),
+      );
+      await api.register({
+        ...reg,
+        masterPasswordHint: '',
+        email,
+        name: 'Argon Live Test',
+        ...(emailVerificationToken ? { emailVerificationToken } : {}),
+      });
+
+      const pre = await api.prelogin(email);
+      expect(pre).toEqual(expectedKdf);
+      const masterKey = await deriveMasterKey(password, email, pre);
+      masterPasswordHash = await deriveMasterPasswordHash(masterKey, password);
+      const login = await api.passwordLogin({ email, masterPasswordHash });
+      expect(login.kind, 'Argon2 login after register').toBe('success');
+      if (login.kind !== 'success') return;
+      token = login.data.access_token;
+      const userKey = await unwrapSymmetricKey(login.data.Key, await stretchMasterKey(masterKey));
+
+      const marker = `argon-cipher-${Date.now()}`;
+      await api.createCipher(token, await encryptCipher({
+        type: 1,
+        name: marker,
+        login: { username: 'argon-user', password: 'argon-works' },
+      }, userKey));
+      const sync = await api.sync(token);
+      const found = (await Promise.all(sync.ciphers.map((cipher) => decryptCipher(cipher, userKey))))
+        .find((cipher) => cipher?.name === marker);
+      expect(found).toMatchObject({ name: marker, username: 'argon-user', password: 'argon-works' });
+    } finally {
+      if (token && masterPasswordHash) await deleteAccount(token, masterPasswordHash);
+    }
+  }, 60_000);
 });

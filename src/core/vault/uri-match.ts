@@ -26,6 +26,10 @@ export interface UriMatchResult {
 
 const MAX_REGEX_PATTERN_LENGTH = 512;
 
+const DOMAIN_MATCH_BLOCKLIST: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['google.com', new Set(['script.google.com'])],
+]);
+
 const MATCH_SCORE: Record<UriMatchStrategySetting, number> = {
   [UriMatchStrategy.Exact]: 0,
   [UriMatchStrategy.StartsWith]: 1,
@@ -92,17 +96,27 @@ function domainMatches(savedUri: string, frameUrl: string, equivalentIndex?: Map
   const savedDomain = getBaseDomain(savedUri);
   const frameDomain = getBaseDomain(frameUrl);
   if (!savedDomain || !frameDomain) return false;
-  if (savedDomain === frameDomain) return true;
-  return equivalentIndex ? areDomainsEquivalent(savedDomain, frameDomain, equivalentIndex) : false;
+  const domainsMatch = savedDomain === frameDomain
+    || (equivalentIndex ? areDomainsEquivalent(savedDomain, frameDomain, equivalentIndex) : false);
+  if (!domainsMatch) return false;
+
+  const blockedTargetHosts = DOMAIN_MATCH_BLOCKLIST.get(savedDomain);
+  if (!blockedTargetHosts) return true;
+  const frameHost = fullHost(frameUrl);
+  return frameHost !== undefined && !blockedTargetHosts.has(frameHost);
 }
 
 function hostMatches(savedUri: string, frameUrl: string): boolean {
   if (isHttpsDowngrade(savedUri, frameUrl)) return false;
-  const saved = getHostAndPort(savedUri);
-  const frame = getHostAndPort(frameUrl);
-  if (!saved || !frame) return false;
-  if (saved.host !== frame.host) return false;
-  return saved.port === undefined || saved.port === frame.port;
+  const savedHost = fullHost(savedUri);
+  const frameHost = fullHost(frameUrl);
+  return savedHost !== undefined && savedHost === frameHost;
+}
+
+function fullHost(value: string): string | undefined {
+  const parsed = getHostAndPort(value);
+  if (!parsed) return undefined;
+  return parsed.port ? `${parsed.host}:${parsed.port}` : parsed.host;
 }
 
 function isHttpsDowngrade(savedUri: string, frameUrl: string): boolean {

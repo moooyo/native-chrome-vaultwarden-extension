@@ -39,10 +39,12 @@ describe('isRegistrableRpId', () => {
     expect(isRegistrableRpId('evil.com', 'victim.com')).toBe(false);
     expect(isRegistrableRpId('example.com', 'notexample.com')).toBe(false); // not a dot-suffix
   });
-  it('rejects an IP rpId and allows only exact localhost', () => {
+  it('allows only the two exact development loopbacks and rejects other IP rpIds', () => {
     expect(isRegistrableRpId('1.2.3.4', '1.2.3.4')).toBe(false);
     expect(isRegistrableRpId('localhost', 'localhost')).toBe(true);
     expect(isRegistrableRpId('localhost', 'app.localhost')).toBe(false);
+    expect(isRegistrableRpId('127.0.0.1', '127.0.0.1')).toBe(true);
+    expect(isRegistrableRpId('127.0.0.1', '127.0.0.2')).toBe(false);
   });
   it('is case-insensitive and rejects empty', () => {
     expect(isRegistrableRpId('Example.com', 'APP.EXAMPLE.COM')).toBe(true);

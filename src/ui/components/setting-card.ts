@@ -38,13 +38,13 @@ export class VwSettingCard extends LitElement {
         display: flex;
         align-items: center;
         gap: 14px;
-        min-height:68px;
-        padding:13px 16px;
+        min-height:var(--vw-setting-row-min, 68px);
+        padding:var(--vw-setting-row-padding-block, 13px) 16px;
         background: var(--vw-card);
         border:1px solid var(--vw-line-1);
         border-radius:16px;
       }
-      .card.stacked { flex-direction: column; align-items: stretch; gap: 12px; }
+      .card.stacked { flex-direction: column; align-items: stretch; gap: var(--vw-setting-stack-gap, 12px); }
       .card.danger { border-color: var(--vw-danger-border); }
       .text { flex: 1; min-width: 0; }
       .title { font-size:13px; font-weight:400; color:var(--vw-ink); }

@@ -17,10 +17,12 @@ vi.mock('webextension-polyfill', () => ({
 import './pin-view.js';
 import type { VwPinView } from './pin-view.js';
 import type { PinSetDetail } from '../types.js';
+import { MAX_PIN_UTF16_CODE_UNITS } from '../../../core/session/pin-constraints.js';
 
-async function mount(enabled = false): Promise<VwPinView> {
+async function mount(enabled = false, allowed = true): Promise<VwPinView> {
   const el = document.createElement('vw-pin-view') as VwPinView;
   el.enabled = enabled;
+  el.allowed = allowed;
   document.body.append(el);
   await el.updateComplete;
   return el;
@@ -49,6 +51,15 @@ describe('vw-pin-view', () => {
     expect(el.shadowRoot!.textContent).toContain('PIN 解锁已开启');
   });
 
+  it('shows only organization-managed status when PIN unlock is denied', async () => {
+    const el = await mount(true, false);
+    expect(el.shadowRoot!.querySelector('[data-managed]')).not.toBeNull();
+    expect(el.shadowRoot!.textContent).toContain('组织');
+    expect(el.shadowRoot!.querySelector('[data-pin]')).toBeNull();
+    expect(el.shadowRoot!.querySelector('[data-set]')).toBeNull();
+    expect(el.shadowRoot!.querySelector('[data-remove]')).toBeNull();
+  });
+
   it('always renders a back control', async () => {
     const el = await mount(false);
     expect(q(el, '[data-back]')).toBeTruthy();
@@ -66,16 +77,31 @@ describe('vw-pin-view', () => {
     expect(q(el, 'vw-status-message')).toBeTruthy();
   });
 
-  it('rejects a PIN containing non-digit characters', async () => {
+  it('enforces the shared UTF-16 maximum in the DOM and local submission guard', async () => {
     const el = await mount(false);
     const set = vi.fn();
     el.addEventListener('vw-pin-set', set);
-    // Four characters long, but inputmode=numeric is only a hint — letters can still be typed/pasted.
-    q<HTMLInputElement>(el, '[data-pin]').value = '12ab';
+    const input = q<HTMLInputElement>(el, '[data-pin]');
+    expect(input.maxLength).toBe(MAX_PIN_UTF16_CODE_UNITS);
+    input.value = 'a'.repeat(MAX_PIN_UTF16_CODE_UNITS + 1);
+
     q<HTMLButtonElement>(el, '[data-set]').click();
     await el.updateComplete;
+
     expect(set).not.toHaveBeenCalled();
-    expect(el.validationError ?? '').toContain('4');
+    expect(el.validationError).toContain('256');
+  });
+
+  it('accepts a PIN containing non-digit characters', async () => {
+    const el = await mount(false);
+    const set = vi.fn();
+    el.addEventListener('vw-pin-set', (e) => set((e as CustomEvent<PinSetDetail>).detail));
+    q<HTMLInputElement>(el, '[data-pin]').value = '12ab';
+    q<HTMLButtonElement>(el, '[data-set]').click();
+    expect(set).toHaveBeenCalledWith({
+      pin: '12ab',
+      requireMasterPasswordOnRestart: true,
+    });
   });
 
   it('emits a validated PIN', async () => {
@@ -84,7 +110,10 @@ describe('vw-pin-view', () => {
     el.addEventListener('vw-pin-set', (e) => set((e as CustomEvent<PinSetDetail>).detail));
     q<HTMLInputElement>(el, '[data-pin]').value = '1234';
     q<HTMLButtonElement>(el, '[data-set]').click();
-    expect(set).toHaveBeenCalledWith({ pin: '1234' });
+    expect(set).toHaveBeenCalledWith({
+      pin: '1234',
+      requireMasterPasswordOnRestart: true,
+    });
   });
 
   it('emits a validated PIN on Enter', async () => {
@@ -94,7 +123,25 @@ describe('vw-pin-view', () => {
     const input = q<HTMLInputElement>(el, '[data-pin]');
     input.value = '1234';
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    expect(set).toHaveBeenCalledWith({ pin: '1234' });
+    expect(set).toHaveBeenCalledWith({
+      pin: '1234',
+      requireMasterPasswordOnRestart: true,
+    });
+  });
+
+  it('only enables PIN unlock across browser restarts after an explicit opt-out', async () => {
+    const el = await mount(false);
+    const set = vi.fn();
+    el.addEventListener('vw-pin-set', (e) => set((e as CustomEvent<PinSetDetail>).detail));
+    const restart = q<HTMLInputElement>(el, '[data-require-restart]');
+    expect(restart.checked).toBe(true);
+    restart.click();
+    q<HTMLInputElement>(el, '[data-pin]').value = 'word';
+    q<HTMLButtonElement>(el, '[data-set]').click();
+    expect(set).toHaveBeenCalledWith({
+      pin: 'word',
+      requireMasterPasswordOnRestart: false,
+    });
   });
 
   it('emits a remove request', async () => {

@@ -33,7 +33,7 @@ const AMBIGUOUS = new Set(['I', 'l', '1', 'O', '0']);
 /**
  * Hard ceiling on generated length; also caps the sum of the per-class minimums. Defense-in-depth
  * against a caller passing an absurd or malformed length/minimum (e.g. 1e7, NaN) that would spin the
- * fill loop into a multi-megabyte string and hang the popup. Well above the UI's [8, 40] range.
+ * fill loop into a multi-megabyte string and hang the popup. Matches the UI's [5, 128] range.
  */
 export const MAX_PASSWORD_LENGTH = 128;
 
@@ -57,10 +57,14 @@ export function generatePassword(
   const all = lower + upper + numbers + special;
   if (!all) return '';
 
-  // Clamp per-class minimums so their sum can never exceed MAX_PASSWORD_LENGTH (a huge minNumbers
-  // otherwise forces an equally huge, class-skewed password regardless of `length`).
+  // Normalize each per-class minimum before validating the combined guarantee against the hard cap.
   const minNum = options.numbers ? clampInt(options.minNumbers, 0, MAX_PASSWORD_LENGTH) : 0;
-  const minSpec = options.special ? clampInt(options.minSpecial, 0, MAX_PASSWORD_LENGTH - minNum) : 0;
+  const minSpec = options.special ? clampInt(options.minSpecial, 0, MAX_PASSWORD_LENGTH) : 0;
+  const requiredLength = (lower ? 1 : 0)
+    + (upper ? 1 : 0)
+    + (numbers ? Math.max(minNum, 1) : 0)
+    + (special ? Math.max(minSpec, 1) : 0);
+  if (requiredLength > MAX_PASSWORD_LENGTH) return '';
 
   const chars: string[] = [];
   for (let i = 0; i < minNum; i++) chars.push(pick(numbers, randomInt));
@@ -73,8 +77,7 @@ export function generatePassword(
 
   // Clamp the requested length to [chars.length, MAX_PASSWORD_LENGTH] (never below the guaranteed
   // characters already collected), coercing an absurd or non-finite length instead of looping on it.
-  const cap = Math.max(MAX_PASSWORD_LENGTH, chars.length);
-  const targetLength = Math.max(clampInt(options.length, 0, cap), chars.length);
+  const targetLength = Math.max(clampInt(options.length, 0, MAX_PASSWORD_LENGTH), chars.length);
   while (chars.length < targetLength) chars.push(pick(all, randomInt));
 
   shuffle(chars, randomInt);

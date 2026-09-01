@@ -14,3 +14,8 @@ export function showNotice(message: string): NoticeHandle {
   activeNotice = presentNotice(message);
   return activeNotice;
 }
+
+export function clearNotice(): void {
+  activeNotice?.remove();
+  activeNotice = null;
+}

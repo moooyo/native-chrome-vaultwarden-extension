@@ -17,6 +17,19 @@ describe('buildAuthenticatorData', () => {
     expect(data[32]).toBe(0x05);
     expect(Array.from(data.slice(33))).toEqual([0, 0, 0, 7]);
   });
+
+  it('encodes the maximum uint32 counter without truncation', async () => {
+    const data = await buildAuthenticatorData('example.com', 0x01, 0xffff_ffff);
+    expect(Array.from(data.slice(33))).toEqual([0xff, 0xff, 0xff, 0xff]);
+  });
+
+  it.each([-1, 1.5, 0x1_0000_0000, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects a non-uint32 signCount: %s',
+    async (counter) => {
+      await expect(buildAuthenticatorData('example.com', 0x01, counter))
+        .rejects.toThrow('unsigned 32-bit integer');
+    },
+  );
 });
 
 describe('derToRawSignature', () => {
@@ -67,6 +80,22 @@ describe('signFido2Assertion', () => {
     expect(base64UrlToBytes(withUv.authenticatorData)[32]! & 0x04).toBe(0x04);
     expect(base64UrlToBytes(noUv.authenticatorData)[32]! & 0x04).toBe(0);
     expect(base64UrlToBytes(noUv.authenticatorData)[32]! & 0x01).toBe(0x01); // UP always set
+  });
+
+  it('binds a browser-owned cross-origin ancestor result into clientDataJSON', async () => {
+    const { pkcs8 } = await makeKeypair();
+    const result = await signFido2Assertion(pkcs8, {
+      rpId: 'example.com',
+      origin: 'https://login.example.com',
+      challenge: 'Y2hhbGxlbmdl',
+      crossOrigin: true,
+    });
+    const clientData = JSON.parse(new TextDecoder().decode(base64UrlToBytes(result.clientDataJSON)));
+    expect(clientData).toMatchObject({
+      type: 'webauthn.get',
+      origin: 'https://login.example.com',
+      crossOrigin: true,
+    });
   });
 
   it('assertion authData carries BE|BS (and UP), UV only when requested', async () => {

@@ -1,10 +1,9 @@
 // Zero-dependency static server for the MiYu autofill/passkey test page.
 //
 // WHY a server (not file://): the extension's content scripts only match http/https,
-// and passkey create()/get() require a secure context. `http://localhost` is a secure
-// context and matches the content-script globs, so it satisfies both. Bound to 127.0.0.1
-// so it is never exposed off-box; open it as http://localhost:PORT (an IP host makes MiYu
-// reject the rpId as non-registrable — use the localhost name).
+// and passkey create()/get() require a secure context. Both `http://localhost` and
+// `http://127.0.0.1` are secure loopback contexts accepted by MiYu. The server binds only to
+// 127.0.0.1 so it is never exposed off-box, and prints localhost as the canonical test origin.
 //
 // Usage: node test-page/serve.mjs [port]   (or: npm run serve:testpage)
 
@@ -50,5 +49,6 @@ const server = createServer(async (req, res) => {
 
 server.listen(port, '127.0.0.1', () => {
   console.log(`MiYu test page → http://localhost:${port}/`);
-  console.log('Open that exact URL (localhost, not 127.0.0.1) so passkeys work. Ctrl+C to stop.');
+  console.log(`Loopback alternative → http://127.0.0.1:${port}/`);
+  console.log('Press Ctrl+C to stop.');
 });

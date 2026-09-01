@@ -8,7 +8,7 @@ vi.mock('webextension-polyfill', () => ({
 import './options-shell.js';
 import type { VwOptionsShell, OptionsNavItem } from './options-shell.js';
 import { getLocale, setLocale } from '../i18n/index.js';
-import { getTheme, setTheme } from '../theme.js';
+import { getTheme, setDensity, setTheme } from '../theme.js';
 
 const ITEMS: OptionsNavItem[] = [
   { id: 'account', labelKey: 'options.nav.account' },
@@ -28,6 +28,7 @@ async function mount(): Promise<VwOptionsShell> {
 // Theme + locale are module-global singletons; reset them so tests don't leak into each other.
 beforeEach(() => {
   setTheme('light', false);
+  setDensity('comfortable', false);
   setLocale('zh-CN', false);
 });
 afterEach(() => document.body.replaceChildren());
@@ -81,6 +82,14 @@ describe('vw-options-shell', () => {
     btn().click();
     await el.updateComplete;
     expect(btn().getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('mirrors density changes onto the palette-owning root host', async () => {
+    const el = await mount();
+    expect(el.getAttribute('data-density')).toBe('comfortable');
+    setDensity('compact', false);
+    await el.updateComplete;
+    expect(el.getAttribute('data-density')).toBe('compact');
   });
 
   it('language segments switch the active locale', async () => {

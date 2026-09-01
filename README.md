@@ -14,19 +14,23 @@ only in `storage.session` and is cleared on lock, logout, or account switch.
 
 - Sign in to a self-hosted Vaultwarden server, with authenticator- and email-based two-factor auth.
 - Sync, search, view, create, edit, move, and delete logins, cards, identities, and notes.
-- Autofill logins, cards, and identities from the popup, an on-page side panel, the context menu, or a
-  focused-fill keyboard shortcut — nothing is ever submitted automatically.
+- Autofill logins, cards, and identities from the popup, context menu, or focused-fill keyboard
+  shortcut. When inline suggestions are enabled, focusing a recognized field opens the on-page
+  chooser. Nothing is ever submitted automatically.
 - A dedicated authenticator (2FA) view showing every login's live TOTP with a countdown ring.
-- Passkeys: register and sign in with WebAuthn credentials stored in the vault (with an account picker
-  when a site has more than one).
-- Generate passwords, passphrases, and usernames; check password health and Have I Been Pwned.
+- Website passkeys are disabled by default. After enabling the feature in Settings and granting
+  website access, register and sign in with WebAuthn credentials stored in the vault. Requests that
+  require user verification are left to the browser or OS authenticator.
+- Generate passwords, passphrases, and usernames; check password health and Have I Been Pwned. The
+  inline registration generator fills the page, then the normal save or update prompt follows only
+  when the website form is submitted.
 - Collections, file attachments, and Vaultwarden Sends.
 
 Targets Chromium MV3 (Chrome / Edge). Firefox and Safari are not supported. Server configurations
 vary — test against your own server before relying on it daily.
 
-> **KDF note:** only PBKDF2-HMAC-SHA256 accounts are supported today. Accounts created with Argon2id
-> (the current Bitwarden default) cannot yet log in, and fail closed rather than downgrade.
+> **KDF note:** PBKDF2-HMAC-SHA256 and Argon2id accounts are supported. KDF parameters are validated
+> before derivation, and Argon2id work is serialized to keep concurrent operations within its memory budget.
 
 ## Install from GitHub Releases
 
@@ -84,10 +88,12 @@ npm run build          # dev build with sourcemaps
 npm run test:ui        # smoke the built extension in real Chromium (0 console errors)
 ```
 
-Live / end-to-end tests (`test/live/`, `npm run verify:e2e`, `npm run seed:testvault`) need a
-Vaultwarden test server you configure yourself via `MIYU_SERVER` / `MIYU_EMAIL` / `MIYU_PASSWORD`, and
-are skipped by default. `npm run serve:testpage` serves a local autofill/passkey test page at
-`http://localhost:8770`. Never commit real server addresses or credentials.
+Live / end-to-end checks (`test/live/`, `npm run verify:e2e`, `npm run seed:testvault`) need a
+Vaultwarden test server you configure yourself via `MIYU_SERVER` / `MIYU_EMAIL` / `MIYU_PASSWORD`.
+Files under `test/live/` are excluded from the unit-test suite; run that suite only through
+`npm run test:live` after explicitly setting `LIVE=1` (`$env:LIVE = '1'` in PowerShell). The other
+commands remain separate entry points. `npm run serve:testpage` serves a local autofill/passkey test
+page at `http://localhost:8770`. Never commit real server addresses or credentials.
 
 ## Release (maintainers)
 
@@ -99,9 +105,12 @@ git tag -a vX.Y.Z -m "Release vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The Release workflow checks out the tag, runs lint / typecheck / tests / production build, packages a
-root-manifest ZIP, writes `SHA256SUMS.txt`, and publishes both to GitHub Releases. A `-beta.N` tag
-becomes a prerelease while its package/manifest version stays `X.Y.Z`.
+The Release workflow checks out the tag without persisted credentials, runs lint / typecheck / unit
+tests / production build / Chromium smoke, packages a root-manifest ZIP, and writes `SHA256SUMS.txt`
+in a read-only verification job. A separate publish job only downloads those verified assets and
+creates the GitHub Release. Re-running an existing release is a no-op only when its tag commit,
+prerelease state, asset names, and asset digests are identical; any mismatch fails closed. A
+`-beta.N` tag becomes a prerelease while its package/manifest version stays `X.Y.Z`.
 
 ## Security
 

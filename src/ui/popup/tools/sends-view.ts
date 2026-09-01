@@ -6,20 +6,50 @@ import { uiIcon } from '../../components/icon.js';
 import { getLocale, LocalizeController, t } from '../../i18n/index.js';
 import '../../components/status-message.js';
 import type { AsyncState } from '../../components/async-state.js';
-import type { SendInput, UpdateSendInput } from '../../../core/vault/sends.js';
+import {
+  SEND_DATE_PRESET_HOURS,
+  type SendInput,
+  type UpdateSendInput,
+} from '../../../core/vault/sends.js';
+import type { GeneratorHistoryEntry } from '../../../core/generator/history.js';
+import {
+  UNAVAILABLE_GENERATOR_POLICY_SNAPSHOT,
+  type GeneratorPolicySnapshot,
+} from '../../../core/generator/enterprise-password-policy.js';
+import {
+  normalizeSendDraft,
+  sendDraftHasEdits,
+  type SendDraftSnapshot,
+} from '../../send-form-draft.js';
 import { fileToBase64 } from '../utils.js';
 import type {
   CopyDetail,
   DetailStatus,
+  GeneratorSelectionDetail,
   SendCreateDetail,
   SendDeleteDetail,
   SendSummary,
   SendUpdateDetail,
 } from '../types.js';
+import './generator-view.js';
 
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 
 type SendMode = 'text' | 'file';
+
+type SendGeneratorOwner =
+  | { readonly kind: 'create'; readonly revision: number }
+  | { readonly kind: 'edit'; readonly revision: number; readonly id: string };
+
+const SEND_DATE_PRESETS = [
+  { hours: SEND_DATE_PRESET_HOURS.oneHour, label: 'options.send.expiry.1h' },
+  { hours: SEND_DATE_PRESET_HOURS.oneDay, label: 'options.send.expiry.1d' },
+  { hours: SEND_DATE_PRESET_HOURS.twoDays, label: 'options.send.expiry.2d' },
+  { hours: SEND_DATE_PRESET_HOURS.threeDays, label: 'options.send.expiry.3d' },
+  { hours: SEND_DATE_PRESET_HOURS.sevenDays, label: 'options.send.expiry.7d' },
+  { hours: SEND_DATE_PRESET_HOURS.fourteenDays, label: 'options.send.expiry.14d' },
+  { hours: SEND_DATE_PRESET_HOURS.thirtyDays, label: 'options.send.expiry.30d' },
+] as const;
 
 /**
  * The Sends surface: create text/file Sends, list/copy/delete existing ones, and edit a Send's
@@ -39,6 +69,10 @@ export class VwSendsView extends LitElement {
     validationError: { state: true },
     encoding: { state: true },
     confirmingDeleteId: { state: true },
+    generatorHistory: { attribute: false },
+    generatorPolicy: { attribute: false },
+    generatorAccountEmail: { attribute: false },
+    generatorOwner: { state: true },
   };
 
   declare sends: AsyncState<SendSummary[]>;
@@ -52,9 +86,17 @@ export class VwSendsView extends LitElement {
    *  is emitted). Drives the create button's disabled + spinner state so the popup never looks frozen. */
   declare encoding: boolean;
   declare confirmingDeleteId: string | null;
+  declare generatorHistory: readonly GeneratorHistoryEntry[];
+  declare generatorPolicy: GeneratorPolicySnapshot;
+  declare generatorAccountEmail: string | undefined;
+  declare generatorOwner: SendGeneratorOwner | null;
 
-  private submitting: 'create' | 'edit' | null = null;
+  private submitting: { kind: 'create' | 'edit'; revision: number; ownerId?: string } | null = null;
   private wasPending = false;
+  private draftBaseline: SendDraftSnapshot | undefined;
+  private draftRevision = 0;
+  private editSource: SendSummary | undefined;
+  private encodeGeneration = 0;
   private deleteTrigger: HTMLButtonElement | null = null;
   private i18n = new LocalizeController(this);
 
@@ -69,6 +111,10 @@ export class VwSendsView extends LitElement {
     this.validationError = undefined;
     this.encoding = false;
     this.confirmingDeleteId = null;
+    this.generatorHistory = [];
+    this.generatorPolicy = UNAVAILABLE_GENERATOR_POLICY_SNAPSHOT;
+    this.generatorAccountEmail = undefined;
+    this.generatorOwner = null;
   }
 
   static override styles = [
@@ -76,6 +122,7 @@ export class VwSendsView extends LitElement {
     controlStyles,
     css`
       :host {
+        position: relative;
         display: flex;
         flex: 1;
         min-height: 0;
@@ -191,6 +238,27 @@ export class VwSendsView extends LitElement {
         min-width: 0;
         font-size: 11px;
         color: var(--vw-muted);
+      }
+      .password-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .password-row .input {
+        flex: 1;
+        min-width: 0;
+      }
+      .generator-overlay {
+        position: absolute;
+        z-index: 10;
+        inset: 0;
+        display: flex;
+        min-height: 0;
+        background: var(--vw-panel);
+      }
+      .generator-overlay vw-generator-view {
+        flex: 1;
+        min-height: 0;
       }
       textarea.input {
         min-height: 76px;
@@ -324,34 +392,62 @@ export class VwSendsView extends LitElement {
     `,
   ];
 
-  protected override updated(changed: PropertyValues<this>): void {
-    if (changed.has('pending')) {
-      if (this.wasPending && !this.pending) this.onRequestComplete();
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has('pending') || changed.has('status')) {
+      if (!this.pending && this.submitting && (this.wasPending || changed.has('status'))) {
+        this.onRequestComplete();
+      }
       this.wasPending = this.pending;
     }
   }
 
-  /** After a create/update round-trip: reset the create form or exit edit mode unless it failed. */
-  private onRequestComplete(): void {
-    const failed = this.status?.tone === 'danger';
-    if (!failed && this.submitting === 'create') this.resetCreateForm();
-    if (!failed && this.submitting === 'edit') this.editingId = null;
-    this.submitting = null;
+  protected override updated(changed: PropertyValues<this>): void {
+    if (changed.has('creating') && this.creating) {
+      const deletion = this.renderRoot.querySelector<HTMLSelectElement>('[data-deletion]');
+      if (deletion) deletion.value = String(SEND_DATE_PRESET_HOURS.sevenDays);
+    }
   }
 
-  private resetCreateForm(): void {
-    const restoreFocus = this.creating;
-    for (const sel of ['[data-name]', '[data-text]', '[data-file]']) {
+  override disconnectedCallback(): void {
+    this.draftRevision += 1;
+    this.encodeGeneration += 1;
+    this.submitting = null;
+    this.generatorOwner = null;
+    super.disconnectedCallback();
+  }
+
+  /** After a matching create/update round-trip, discard the submitted draft only on explicit success. */
+  private onRequestComplete(): void {
+    const submission = this.submitting;
+    this.submitting = null;
+    if (!submission || submission.revision !== this.draftRevision) return;
+    if (this.status?.tone !== 'success' && this.status?.tone !== 'warning') return;
+    if (submission.kind === 'create' && this.creating) this.resetCreateForm();
+    if (submission.kind === 'edit' && this.editSource?.id === submission.ownerId) this.resetEditForm();
+  }
+
+  private resetCreateForm(shouldRestoreFocus = true): void {
+    const wasCreating = this.creating;
+    for (const sel of ['[data-name]', '[data-notes]', '[data-text]', '[data-file]', '[data-password]']) {
       const el = this.renderRoot.querySelector<HTMLInputElement | HTMLTextAreaElement>(sel);
       if (el) el.value = '';
     }
+    this.draftRevision += 1;
+    this.encodeGeneration += 1;
+    this.draftBaseline = undefined;
     this.validationError = undefined;
+    this.generatorOwner = null;
     this.creating = false;
-    if (restoreFocus) this.focusAfterRender('[data-new-send]', '[data-back]');
+    this.mode = 'text';
+    if (shouldRestoreFocus && wasCreating) this.focusAfterRender('[data-new-send]', '[data-back]');
   }
 
   private openCreate(): void {
+    this.draftRevision += 1;
+    this.mode = 'text';
+    this.generatorOwner = null;
     this.creating = true;
+    this.draftBaseline = this.createBaseline();
     this.focusAfterRender('[data-name]');
   }
 
@@ -370,7 +466,7 @@ export class VwSendsView extends LitElement {
   }
 
   private readValue(sel: string): string {
-    const el = this.renderRoot.querySelector<HTMLInputElement | HTMLTextAreaElement>(sel);
+    const el = this.renderRoot.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(sel);
     return el?.value ?? '';
   }
 
@@ -378,13 +474,186 @@ export class VwSendsView extends LitElement {
     return this.renderRoot.querySelector<HTMLInputElement>(sel)?.checked ?? false;
   }
 
+  private createBaseline(): SendDraftSnapshot {
+    return normalizeSendDraft({
+      owner: 'create',
+      type: 'text',
+      passwordMode: 'none',
+      deletionHours: SEND_DATE_PRESET_HOURS.sevenDays,
+    });
+  }
+
+  private currentCreateDraft(): SendDraftSnapshot {
+    const password = this.readValue('[data-password]');
+    const file = this.renderRoot.querySelector<HTMLInputElement>('[data-file]')?.files?.[0];
+    return normalizeSendDraft({
+      owner: 'create',
+      type: this.mode,
+      name: this.readValue('[data-name]'),
+      notes: this.readValue('[data-notes]'),
+      text: this.readValue('[data-text]'),
+      ...(file ? { file } : {}),
+      hidden: this.readChecked('[data-hidden]'),
+      hideEmail: this.readChecked('[data-hide-email]'),
+      passwordMode: password ? 'set' : 'none',
+      password,
+      expirationHours: this.readValue('[data-expiry]'),
+      deletionHours: this.readValue('[data-deletion]'),
+      maxAccessCount: this.readValue('[data-max]'),
+    });
+  }
+
+  private editBaseline(send: SendSummary): SendDraftSnapshot {
+    return normalizeSendDraft({
+      owner: `edit:${send.id}`,
+      type: send.type === 1 ? 'file' : 'text',
+      name: send.name,
+      notes: send.notesUnavailable ? '' : (send.notes ?? ''),
+      text: send.type === 0 ? (send.text ?? '') : '',
+      hidden: send.type === 0 && send.hidden,
+      disabled: send.disabled,
+      hideEmail: send.hideEmail,
+      passwordMode: 'keep',
+      maxAccessCount: send.maxAccessCount ?? null,
+    });
+  }
+
+  private currentEditDraft(send: SendSummary): SendDraftSnapshot {
+    const password = this.readValue('[data-e-password]');
+    const removePassword = this.readChecked('[data-e-removepw]');
+    return normalizeSendDraft({
+      owner: `edit:${send.id}`,
+      type: send.type === 1 ? 'file' : 'text',
+      name: this.readValue('[data-e-name]'),
+      notes: send.notesUnavailable ? '' : this.readValue('[data-e-notes]'),
+      text: send.type === 0 ? this.readValue('[data-e-text]') : '',
+      hidden: send.type === 0 && this.readChecked('[data-e-hidden]'),
+      disabled: this.readChecked('[data-e-disabled]'),
+      hideEmail: this.readChecked('[data-e-hide-email]'),
+      passwordMode: removePassword ? 'remove' : password ? 'set' : 'keep',
+      password,
+      expirationHours: this.readValue('[data-e-expiry]'),
+      deletionHours: this.readValue('[data-e-deletion]'),
+      maxAccessCount: this.readValue('[data-e-max]'),
+    });
+  }
+
+  private currentDraft(): SendDraftSnapshot | undefined {
+    if (this.editSource) return this.currentEditDraft(this.editSource);
+    if (this.creating) return this.currentCreateDraft();
+    return undefined;
+  }
+
+  private openPasswordGenerator(kind: 'create' | 'edit', id?: string): void {
+    if (this.pending || this.encoding) return;
+    if (kind === 'create') {
+      if (!this.creating || this.editSource) return;
+      this.generatorOwner = { kind, revision: this.draftRevision };
+      return;
+    }
+    if (!id || this.editSource?.id !== id || this.editingId !== id) return;
+    this.generatorOwner = { kind, id, revision: this.draftRevision };
+  }
+
+  private closePasswordGenerator(event?: Event): void {
+    event?.stopPropagation();
+    this.generatorOwner = null;
+  }
+
+  private applyGeneratedPassword(event: CustomEvent<GeneratorSelectionDetail>): void {
+    event.stopPropagation();
+    const owner = this.generatorOwner;
+    const { target, value } = event.detail;
+    if (!owner
+      || owner.revision !== this.draftRevision
+      || target !== 'password'
+      || typeof value !== 'string'
+      || !value
+      || value.length > 1_024) return;
+    const selector = owner.kind === 'create' ? '[data-password]' : '[data-e-password]';
+    if (owner.kind === 'edit'
+      && (this.editSource?.id !== owner.id || this.editingId !== owner.id)) return;
+    const input = this.renderRoot.querySelector<HTMLInputElement>(selector);
+    if (!input) return;
+    input.value = value;
+    if (owner.kind === 'edit') {
+      const remove = this.renderRoot.querySelector<HTMLInputElement>('[data-e-removepw]');
+      if (remove) remove.checked = false;
+    }
+    this.closePasswordGenerator();
+  }
+
+  /** Used by the parent before user-initiated navigation away from the Send route. */
+  sendFormHasEdits(): boolean {
+    return sendDraftHasEdits(this.draftBaseline, this.currentDraft());
+  }
+
+  promptForUnsavedEdits(): boolean {
+    if ((this.creating || this.editSource) && (this.pending || this.encoding)) return false;
+    if (!this.sendFormHasEdits()) return true;
+    return typeof window === 'undefined' || window.confirm(t('send.unsavedChanges'));
+  }
+
+  private resetEditForm(restoreFocus = true): void {
+    const hadEdit = this.editSource !== undefined;
+    this.draftRevision += 1;
+    this.draftBaseline = undefined;
+    this.editingId = null;
+    this.editSource = undefined;
+    this.validationError = undefined;
+    this.generatorOwner = null;
+    if (restoreFocus && hadEdit) this.focusAfterRender('[data-new-send]', '[data-back]');
+  }
+
+  private discardActiveDraft(): void {
+    if (this.editSource) this.resetEditForm(false);
+    if (this.creating) this.resetCreateForm(false);
+  }
+
+  private closeCreate(): void {
+    if (this.pending || this.encoding || !this.promptForUnsavedEdits()) return;
+    this.resetCreateForm();
+  }
+
+  private closeEdit(): void {
+    if (this.pending || this.encoding || !this.promptForUnsavedEdits()) return;
+    this.resetEditForm();
+  }
+
+  private openEdit(send: SendSummary): void {
+    if (this.pending || this.encoding) return;
+    if ((this.creating || this.editSource) && !this.promptForUnsavedEdits()) return;
+    this.discardActiveDraft();
+    const source = { ...send };
+    this.draftRevision += 1;
+    this.editingId = source.id;
+    this.editSource = source;
+    this.generatorOwner = null;
+    this.draftBaseline = this.editBaseline(source);
+    this.validationError = undefined;
+  }
+
+  private changeCreateMode(mode: SendMode): void {
+    if (mode === this.mode || this.pending || this.encoding) return;
+    const variantHasValue = this.mode === 'text'
+      ? this.readValue('[data-text]') !== '' || this.readChecked('[data-hidden]')
+      : Boolean(this.renderRoot.querySelector<HTMLInputElement>('[data-file]')?.files?.[0]);
+    if (variantHasValue && typeof window !== 'undefined' && !window.confirm(t('send.unsavedChanges'))) return;
+    this.mode = mode;
+    this.validationError = undefined;
+  }
+
   private back(): void {
     if (this.pending || this.encoding) return;
+    if (!this.promptForUnsavedEdits()) return;
+    this.discardActiveDraft();
     emit(this, 'vw-item-back');
   }
 
   private receive(): void {
     if (this.pending || this.encoding) return;
+    if (!this.promptForUnsavedEdits()) return;
+    this.discardActiveDraft();
     emit(this, 'vw-send-receive');
   }
 
@@ -418,12 +687,15 @@ export class VwSendsView extends LitElement {
   private baseInput(): SendInput {
     const input: SendInput = {
       name: this.readValue('[data-name]').trim() || t('send.defaultName'),
-      deletionDays: Number(this.readValue('[data-deletion]')) || 7,
+      deletionHours: Number(this.readValue('[data-deletion]')) || SEND_DATE_PRESET_HOURS.sevenDays,
+      hideEmail: this.readChecked('[data-hide-email]'),
     };
+    const notes = this.readValue('[data-notes]');
+    if (notes) input.notes = notes;
     const password = this.readValue('[data-password]');
     if (password) input.password = password;
     const expiry = Number(this.readValue('[data-expiry]'));
-    if (expiry > 0) input.expirationDays = expiry;
+    if (expiry > 0) input.expirationHours = expiry;
     const max = Number(this.readValue('[data-max]'));
     if (max > 0) input.maxAccessCount = max;
     return input;
@@ -438,29 +710,41 @@ export class VwSendsView extends LitElement {
     if (this.mode === 'file') {
       const file = this.renderRoot.querySelector<HTMLInputElement>('[data-file]')?.files?.[0];
       if (!file) { this.validationError = t('send.error.fileRequired'); return; }
-      if (file.size > MAX_FILE_BYTES) { this.validationError = t('send.error.fileTooLarge', { max: '100 MB' }); return; }
+      const fileSize = file.size;
+      if (!Number.isSafeInteger(fileSize) || fileSize < 0 || fileSize > MAX_FILE_BYTES) {
+        this.validationError = t('send.error.fileTooLarge', { max: '100 MB' });
+        return;
+      }
       // base64-encoding a large file blocks the popup's main thread; flip the busy flag before the
       // first await so the button disables and shows a spinner rather than appearing frozen.
+      const draftRevision = this.draftRevision;
+      const encodeGeneration = ++this.encodeGeneration;
       this.encoding = true;
       emit(this, 'vw-send-encoding', { encoding: true });
       let dataB64: string;
       try {
-        dataB64 = await fileToBase64(file);
+        dataB64 = await fileToBase64(file, MAX_FILE_BYTES);
       } catch {
-        this.validationError = t('send.error.fileRead');
+        if (encodeGeneration === this.encodeGeneration && draftRevision === this.draftRevision) {
+          this.validationError = t('send.error.fileRead');
+        }
         return;
       } finally {
-        this.encoding = false;
-        emit(this, 'vw-send-encoding', { encoding: false });
+        if (encodeGeneration === this.encodeGeneration) {
+          this.encoding = false;
+          emit(this, 'vw-send-encoding', { encoding: false });
+        }
       }
-      this.submitting = 'create';
+      const currentFile = this.renderRoot.querySelector<HTMLInputElement>('[data-file]')?.files?.[0];
+      if (!this.isConnected || draftRevision !== this.draftRevision || this.mode !== 'file' || currentFile !== file) return;
+      this.submitting = { kind: 'create', revision: draftRevision };
       emit<SendCreateDetail>(this, 'vw-send-create', { kind: 'file', input: { ...base, name: rawName || file.name }, dataB64, fileName: file.name });
       return;
     }
 
     const text = this.readValue('[data-text]');
     if (!text.trim()) { this.validationError = t('send.error.textRequired'); return; }
-    this.submitting = 'create';
+    this.submitting = { kind: 'create', revision: this.draftRevision };
     emit<SendCreateDetail>(this, 'vw-send-create', { kind: 'text', input: { ...base, text, hidden: this.readChecked('[data-hidden]') } });
   }
 
@@ -469,7 +753,9 @@ export class VwSendsView extends LitElement {
     const input: UpdateSendInput = {
       name: this.readValue('[data-e-name]').trim() || t('send.defaultName'),
       disabled: this.readChecked('[data-e-disabled]'),
+      hideEmail: this.readChecked('[data-e-hide-email]'),
     };
+    if (!send.notesUnavailable) input.notes = this.readValue('[data-e-notes]');
     if (send.type === 0) {
       input.text = this.readValue('[data-e-text]');
       input.hidden = this.readChecked('[data-e-hidden]');
@@ -477,14 +763,14 @@ export class VwSendsView extends LitElement {
     const max = Number(this.readValue('[data-e-max]'));
     input.maxAccessCount = max > 0 ? max : 0; // 0 clears the limit
     const expiry = Number(this.readValue('[data-e-expiry]'));
-    if (expiry > 0) input.expirationDays = expiry;
+    if (expiry > 0) input.expirationHours = expiry;
     const deletion = Number(this.readValue('[data-e-deletion]'));
-    if (deletion > 0) input.deletionDays = deletion;
+    if (deletion > 0) input.deletionHours = deletion;
     if (this.readChecked('[data-e-removepw]')) input.passwordMode = 'remove';
     else if (this.readValue('[data-e-password]')) { input.passwordMode = 'set'; input.newPassword = this.readValue('[data-e-password]'); }
     else input.passwordMode = 'keep';
 
-    this.submitting = 'edit';
+    this.submitting = { kind: 'edit', revision: this.draftRevision, ownerId: send.id };
     emit<SendUpdateDetail>(this, 'vw-send-update', { id: send.id, input });
   }
 
@@ -493,36 +779,77 @@ export class VwSendsView extends LitElement {
     return html`<vw-status-message class="status" tone=${this.status.tone} .message=${this.status.message}></vw-status-message>`;
   }
 
+  private renderPasswordGeneratorOverlay() {
+    if (!this.generatorOwner) return nothing;
+    return html`
+      <div class="generator-overlay" data-generator-overlay>
+        <vw-generator-view
+          .history=${this.generatorHistory}
+          .generatorPolicy=${this.generatorPolicy}
+          .accountEmail=${this.generatorAccountEmail}
+          .selectionTarget=${'password'}
+          @vw-generator-select=${(event: CustomEvent<GeneratorSelectionDetail>) => this.applyGeneratedPassword(event)}
+          @vw-item-back=${(event: Event) => this.closePasswordGenerator(event)}
+        ></vw-generator-view>
+      </div>
+    `;
+  }
+
+  private renderDatePresetOptions(blankLabel?: string, selectedHours?: number) {
+    return html`
+      ${blankLabel === undefined ? nothing : html`<option value="">${blankLabel}</option>`}
+      ${SEND_DATE_PRESETS.map(({ hours, label }) => hours === selectedHours
+        ? html`<option value=${String(hours)} selected>${t(label)}</option>`
+        : html`<option value=${String(hours)}>${t(label)}</option>`)}
+    `;
+  }
+
   private renderEdit(send: SendSummary) {
     const back = t('common.back');
     return html`
       <div class="head">
-        <button type="button" class="icon-btn sm" data-back title=${back} aria-label=${back} ?disabled=${this.pending} @click=${() => { this.editingId = null; }}>${uiIcon('back')}</button>
+        <button type="button" class="icon-btn sm" data-back title=${back} aria-label=${back} ?disabled=${this.pending || this.encoding} @click=${() => this.closeEdit()}>${uiIcon('back')}</button>
         <h1>${t('send.editTitle')}</h1>
       </div>
       <div class="content">
         <div class="card">
           <span class="section-label">${send.type === 1 ? t('send.typeFile') : t('send.typeText')}${send.fileName ? ` · ${send.fileName}` : ''}</span>
           <label class="field"><span>${t('options.send.name')}</span><input class="input" data-e-name .value=${send.name} ?disabled=${this.pending} /></label>
+          ${send.notesUnavailable
+            ? html`<vw-status-message tone="warning" .icon=${'alert'} .message=${t('send.notesUnavailable')}></vw-status-message>`
+            : html`<label class="field"><span>${t('detail.notes')}</span><textarea class="input" data-e-notes .value=${send.notes ?? ''} ?disabled=${this.pending}></textarea></label>`}
           ${send.type === 0
             ? html`
                 <label class="field"><span>${t('send.text')}</span><textarea class="input" data-e-text .value=${send.text ?? ''} ?disabled=${this.pending}></textarea></label>
                 <label class="check"><input type="checkbox" data-e-hidden .checked=${send.hidden} ?disabled=${this.pending} /><span>${t('send.hideText')}</span></label>`
             : nothing}
           <label class="check"><input type="checkbox" data-e-disabled .checked=${send.disabled} ?disabled=${this.pending} /><span>${t('send.disabled')}</span></label>
-          <input class="input" data-e-password type="password" placeholder=${t('send.passwordKeep')} autocomplete="new-password" ?disabled=${this.pending} />
+          <label class="check"><input type="checkbox" data-e-hide-email .checked=${send.hideEmail} ?disabled=${this.pending} /><span>${t('send.hideEmail')}</span></label>
+          <div class="password-row">
+            <input class="input" data-e-password type="password" placeholder=${t('send.passwordKeep')} autocomplete="new-password" ?disabled=${this.pending} />
+            <button
+              type="button"
+              class="icon-btn sm"
+              data-generate-password="edit"
+              title=${t('editor.generatePassword')}
+              aria-label=${t('editor.generatePassword')}
+              ?disabled=${this.pending || this.encoding}
+              @click=${() => this.openPasswordGenerator('edit', send.id)}
+            >${uiIcon('wand')}</button>
+          </div>
           ${send.passwordProtected
             ? html`<label class="check"><input type="checkbox" data-e-removepw ?disabled=${this.pending} /><span>${t('send.removePassword')}</span></label>`
             : nothing}
           <div class="grid">
-            <label class="field"><span>${t('send.expirationDays')}</span><input class="input" data-e-expiry type="number" min="0" ?disabled=${this.pending} /></label>
-            <label class="field"><span>${t('send.deletionDays')}</span><input class="input" data-e-deletion type="number" min="1" ?disabled=${this.pending} /></label>
+            <label class="field"><span>${t('send.expirationDays')}</span><select class="input" data-e-expiry ?disabled=${this.pending}>${this.renderDatePresetOptions(t('send.keepCurrentDate'))}</select></label>
+            <label class="field"><span>${t('send.deletionDays')}</span><select class="input" data-e-deletion ?disabled=${this.pending}>${this.renderDatePresetOptions(t('send.keepCurrentDate'))}</select></label>
             <label class="field"><span>${t('send.maxViews')}</span><input class="input" data-e-max type="number" min="0" .value=${send.maxAccessCount != null ? String(send.maxAccessCount) : ''} ?disabled=${this.pending} /></label>
           </div>
           <button type="button" class="btn primary block" data-save ?disabled=${this.pending} @click=${() => this.saveEdit(send)}>${uiIcon('check')}<span>${t('common.save')}</span></button>
         </div>
         ${this.renderStatus()}
       </div>
+      ${this.renderPasswordGeneratorOverlay()}
     `;
   }
 
@@ -544,25 +871,40 @@ export class VwSendsView extends LitElement {
       <div class="card">
         <div class="card-head">
           <span class="section-label">${t('options.send.new')}</span>
-          <button type="button" class="icon-btn sm" data-cancel-create title=${t('common.close')} aria-label=${t('common.close')} ?disabled=${this.pending || this.encoding} @click=${() => this.resetCreateForm()}>${uiIcon('close')}</button>
+          <button type="button" class="icon-btn sm" data-cancel-create title=${t('common.close')} aria-label=${t('common.close')} ?disabled=${this.pending || this.encoding} @click=${() => this.closeCreate()}>${uiIcon('close')}</button>
         </div>
         <div class="seal">${uiIcon('lock')}<span>${t('send.localEncryption')}</span></div>
         <div class="seg" role="tablist">
           <button type="button" class="seg-btn ${this.mode === 'text' ? 'is-active' : ''}" data-mode-text role="tab"
-            aria-selected=${this.mode === 'text' ? 'true' : 'false'} @click=${() => { this.mode = 'text'; this.validationError = undefined; }}>${t('options.send.typeText')}</button>
+            aria-selected=${this.mode === 'text' ? 'true' : 'false'} ?disabled=${this.pending || this.encoding}
+            @click=${() => this.changeCreateMode('text')}>${t('options.send.typeText')}</button>
           <button type="button" class="seg-btn ${this.mode === 'file' ? 'is-active' : ''}" data-mode-file role="tab"
-            aria-selected=${this.mode === 'file' ? 'true' : 'false'} @click=${() => { this.mode = 'file'; this.validationError = undefined; }}>${t('options.send.typeFile')}</button>
+            aria-selected=${this.mode === 'file' ? 'true' : 'false'} ?disabled=${this.pending || this.encoding}
+            @click=${() => this.changeCreateMode('file')}>${t('options.send.typeFile')}</button>
         </div>
         <label class="field"><span>${t('options.send.name')}</span><input class="input" data-name placeholder=${t('options.send.namePlaceholder')} ?disabled=${this.pending || this.encoding} /></label>
+        <label class="field"><span>${t('detail.notes')}</span><textarea class="input" data-notes ?disabled=${this.pending || this.encoding}></textarea></label>
         ${this.mode === 'text'
           ? html`
               <label class="field"><span>${t('send.textToShare')}</span><textarea class="input" data-text placeholder=${t('options.send.contentPlaceholder')} ?disabled=${this.pending || this.encoding}></textarea></label>
               <label class="check"><input type="checkbox" data-hidden ?disabled=${this.pending || this.encoding} /><span>${t('send.hideText')}</span></label>`
           : html`<label class="field"><span>${t('send.fileToShare')}</span><input class="input" data-file type="file" ?disabled=${this.pending || this.encoding} /></label>`}
-        <input class="input" data-password type="password" placeholder=${t('send.passwordOptional')} autocomplete="new-password" ?disabled=${this.pending || this.encoding} />
+        <label class="check"><input type="checkbox" data-hide-email ?disabled=${this.pending || this.encoding} /><span>${t('send.hideEmail')}</span></label>
+        <div class="password-row">
+          <input class="input" data-password type="password" placeholder=${t('send.passwordOptional')} autocomplete="new-password" ?disabled=${this.pending || this.encoding} />
+          <button
+            type="button"
+            class="icon-btn sm"
+            data-generate-password="create"
+            title=${t('editor.generatePassword')}
+            aria-label=${t('editor.generatePassword')}
+            ?disabled=${this.pending || this.encoding}
+            @click=${() => this.openPasswordGenerator('create')}
+          >${uiIcon('wand')}</button>
+        </div>
         <div class="grid">
-          <label class="field"><span>${t('send.expirationDays')}</span><input class="input" data-expiry type="number" min="0" placeholder="—" ?disabled=${this.pending || this.encoding} /></label>
-          <label class="field"><span>${t('send.deletionDays')}</span><input class="input" data-deletion type="number" min="1" value="7" ?disabled=${this.pending || this.encoding} /></label>
+          <label class="field"><span>${t('send.expirationDays')}</span><select class="input" data-expiry ?disabled=${this.pending || this.encoding}>${this.renderDatePresetOptions(t('send.noSeparateExpiration'))}</select></label>
+          <label class="field"><span>${t('send.deletionDays')}</span><select class="input" data-deletion ?disabled=${this.pending || this.encoding}>${this.renderDatePresetOptions(undefined, SEND_DATE_PRESET_HOURS.sevenDays)}</select></label>
           <label class="field"><span>${t('send.maxViews')}</span><input class="input" data-max type="number" min="0" placeholder="—" ?disabled=${this.pending || this.encoding} /></label>
         </div>
         ${this.validationError ? html`<vw-status-message tone="danger" .icon=${'alert'} .message=${this.validationError}></vw-status-message>` : nothing}
@@ -597,7 +939,14 @@ export class VwSendsView extends LitElement {
   }
 
   private renderSendRow(send: SendSummary) {
-    const deletes = new Intl.DateTimeFormat(getLocale()).format(new Date(send.deletionDate));
+    const deletionTime = Date.parse(send.deletionDate);
+    const expirationTime = send.expirationDate ? Date.parse(send.expirationDate) : Number.POSITIVE_INFINITY;
+    const expiresFirst = Number.isFinite(expirationTime) && expirationTime < deletionTime;
+    const deadline = expiresFirst ? expirationTime : deletionTime;
+    const formattedDeadline = new Intl.DateTimeFormat(getLocale(), {
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(new Date(deadline));
     const confirming = this.confirmingDeleteId === send.id;
     return html`
       <div class="send-row" data-send=${send.id}>
@@ -608,13 +957,13 @@ export class VwSendsView extends LitElement {
           ${send.disabled ? html`<span class="badge">${t('send.disabledBadge')}</span>` : nothing}
         </div>
         <span class="send-sub">
-          ${send.type === 1 && send.fileName ? html`${send.fileName}${send.sizeName ? ` · ${send.sizeName}` : ''} · ` : nothing}${t('send.deletesOn', { date: deletes })}${send.maxAccessCount != null ? ` · ${t('send.viewsCount', { used: send.accessCount, max: send.maxAccessCount })}` : ''}
+          ${send.type === 1 && send.fileName ? html`${send.fileName}${send.sizeName ? ` · ${send.sizeName}` : ''} · ` : nothing}${t(expiresFirst ? 'send.expiresOn' : 'send.deletesOn', { date: formattedDeadline })}${send.maxAccessCount != null ? ` · ${t('send.viewsCount', { used: send.accessCount, max: send.maxAccessCount })}` : ''}
         </span>
         <div class="send-url-row">
           <code class="send-url">${send.url}</code>
           <span class="row-actions">
             <button type="button" class="icon-btn sm" data-copy title=${t('options.send.copyLink')} aria-label=${t('send.copyAria')} ?disabled=${this.pending || this.encoding} @click=${() => this.copyUrl(send.url)}>${uiIcon('copy')}</button>
-            <button type="button" class="icon-btn sm" data-edit title=${t('common.edit')} aria-label=${t('send.editAria')} ?disabled=${this.pending || this.encoding} @click=${() => { this.editingId = send.id; this.validationError = undefined; }}>${uiIcon('edit')}</button>
+            <button type="button" class="icon-btn sm" data-edit title=${t('common.edit')} aria-label=${t('send.editAria')} ?disabled=${this.pending || this.encoding} @click=${() => this.openEdit(send)}>${uiIcon('edit')}</button>
             <button type="button" class="icon-btn sm" data-delete title=${t('common.delete')} aria-label=${t('send.deleteAria')} ?disabled=${this.pending || this.encoding} @click=${(event: Event) => this.promptDelete(send.id, event.currentTarget as HTMLButtonElement)}>${uiIcon('trash')}</button>
           </span>
         </div>
@@ -630,10 +979,7 @@ export class VwSendsView extends LitElement {
   }
 
   protected override render() {
-    if (this.editingId !== null && this.sends.status === 'ready') {
-      const editing = this.sends.data.find((send) => send.id === this.editingId);
-      if (editing) return this.renderEdit(editing);
-    }
+    if (this.editSource && this.editingId === this.editSource.id) return this.renderEdit(this.editSource);
     return html`
       <div class="head">
         <button type="button" class="icon-btn sm" data-back title=${t('common.back')} aria-label=${t('common.back')} ?disabled=${this.pending || this.encoding} @click=${() => this.back()}>${uiIcon('back')}</button>
@@ -643,6 +989,7 @@ export class VwSendsView extends LitElement {
         ${this.renderCreate()}
         ${this.renderList()}
       </div>
+      ${this.renderPasswordGeneratorOverlay()}
     `;
   }
 }

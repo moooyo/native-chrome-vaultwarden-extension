@@ -94,6 +94,28 @@ export const paletteTokens = css`
     --vw-dur-fast:150ms;
     --vw-dur:220ms;
     --vw-focus:0 0 0 3px rgba(11,87,208,.28);
+
+    /* Density is a page-root preference. These inherited layout tokens let nested shadow trees
+     * tighten repeated rows without shrinking type or the primary controls themselves. */
+    --vw-list-row-min:46px;
+    --vw-list-row-padding-block:5px;
+    --vw-totp-row-min:50px;
+    --vw-totp-row-padding-block:7px;
+    --vw-command-row-min:46px;
+    --vw-setting-row-min:68px;
+    --vw-setting-row-padding-block:13px;
+    --vw-setting-stack-gap:12px;
+  }
+
+  :host([data-density='compact']) {
+    --vw-list-row-min:40px;
+    --vw-list-row-padding-block:4px;
+    --vw-totp-row-min:40px;
+    --vw-totp-row-padding-block:4px;
+    --vw-command-row-min:40px;
+    --vw-setting-row-min:56px;
+    --vw-setting-row-padding-block:8px;
+    --vw-setting-stack-gap:8px;
   }
 
   :host([data-theme='dark']) {

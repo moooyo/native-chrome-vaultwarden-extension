@@ -21,21 +21,37 @@ export interface SaveBarOptions {
   /** Plain-text message (no HTML); bound with `${}` so site data can't inject markup. */
   message: string;
   actionLabel: string;
-  onAction(): void;
+  onAction(): Promise<boolean>;
   onDismiss?(): void;
+  successMessage?: string;
+  uncertainMessage?: string;
 }
 
 export function createSaveBar(options: SaveBarOptions): SaveBar {
-  const state: SaveBarState = { message: options.message, actionLabel: options.actionLabel };
+  const state: SaveBarState = {
+    view: 'prompt',
+    message: options.message,
+    actionLabel: options.actionLabel,
+    statusMessage: '',
+  };
   const surface = mountRenderSurface(SAVE_BAR_STYLES);
+  let removed = false;
+  let removeTimer: number | undefined;
+
+  const remove = (): void => {
+    if (removed) return;
+    removed = true;
+    if (removeTimer !== undefined) window.clearTimeout(removeTimer);
+    surface.remove();
+  };
+
   const handlers: SaveBarHandlers = {
     onAction: () => {
-      options.onAction();
-      surface.remove();
+      void commit();
     },
     onDismiss: () => {
       options.onDismiss?.();
-      surface.remove();
+      remove();
     },
   };
 
@@ -46,5 +62,29 @@ export function createSaveBar(options: SaveBarOptions): SaveBar {
   };
   draw();
 
-  return { remove: () => surface.remove() };
+  async function commit(): Promise<void> {
+    if (state.view !== 'prompt') return;
+    state.view = 'saving';
+    state.statusMessage = '正在保存到密屿…';
+    draw();
+    let confirmed = false;
+    try {
+      confirmed = await options.onAction();
+    } catch {
+      // An unknown transport outcome must not be retried because the vault write may have succeeded.
+    }
+    if (removed) return;
+    if (!confirmed) {
+      state.view = 'uncertain';
+      state.statusMessage = options.uncertainMessage ?? '无法确认保存结果。请在密屿中检查。';
+      draw();
+      return;
+    }
+    state.view = 'saved';
+    state.statusMessage = options.successMessage ?? '已保存到密屿';
+    draw();
+    removeTimer = window.setTimeout(remove, 1000);
+  }
+
+  return { remove };
 }

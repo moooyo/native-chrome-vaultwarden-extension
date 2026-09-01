@@ -1,6 +1,6 @@
 // Factory for the 密屿/MiYu inline password-generation panel (design 2e). Owns the positioned
 // closed-shadow host and the imperative handle the autofill controller drives (push generated
-// state / mark saved / remove). Closed root + `Event.isTrusted` gating live in the render module.
+// state / mark filled / remove). Closed root + `Event.isTrusted` gating live in the render module.
 
 import { mountRenderSurface } from './ui/render-surface.js';
 import {
@@ -12,6 +12,7 @@ import {
 import { repositionSidePanel } from './ui/side-panel.js';
 
 export interface GeneratePanelState {
+  mode: 'password' | 'passphrase';
   username: string;
   password: string;
   strength: string;
@@ -23,13 +24,18 @@ export interface GeneratePanelState {
   minNumbers: number;
   minSymbols: number;
   avoidAmbiguous: boolean;
+  words: number;
+  capitalize: boolean;
+  includeNumber: boolean;
+  managed: boolean;
+  disabledReason: string;
 }
 
 export interface GeneratePanel {
   element: HTMLElement;
   root: ShadowRoot;
   update(state: GeneratePanelState): void;
-  showSaved(info: { name: string; user: string }): void;
+  showFilled(info: { user: string }): void;
   remove(): void;
 }
 
@@ -45,13 +51,16 @@ export interface GeneratePanelOptions {
   onMinNumbers(n: number): void;
   onMinSymbols(n: number): void;
   onAvoidAmbiguous(on: boolean): void;
+  onWords(words: number): void;
+  onCapitalize(on: boolean): void;
+  onIncludeNumber(on: boolean): void;
   onUse(): void;
-  onUndo(): void;
 }
 
 export function createGeneratePanel(options: GeneratePanelOptions): GeneratePanel {
   const state: GeneratePanelViewState = {
     view: 'panel',
+    mode: 'password',
     username: '',
     password: '',
     strength: '极强',
@@ -63,8 +72,12 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
     minNumbers: 1,
     minSymbols: 0,
     avoidAmbiguous: true,
-    savedName: '',
-    savedUser: '',
+    words: 6,
+    capitalize: false,
+    includeNumber: false,
+    managed: false,
+    disabledReason: '',
+    filledUser: '',
   };
   const handlers: GeneratePanelHandlers = {
     onUsername: options.onUsername,
@@ -77,8 +90,10 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
     onMinNumbers: options.onMinNumbers,
     onMinSymbols: options.onMinSymbols,
     onAvoidAmbiguous: options.onAvoidAmbiguous,
+    onWords: options.onWords,
+    onCapitalize: options.onCapitalize,
+    onIncludeNumber: options.onIncludeNumber,
     onUse: options.onUse,
-    onUndo: options.onUndo,
   };
   const surface = mountRenderSurface(GENERATE_PANEL_STYLES);
   const host = surface.host;
@@ -86,7 +101,7 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
   host.style.zIndex = '2147483647';
 
   // Render, then re-place as a side panel to the right of the new-password field. `render()` is
-  // synchronous, so the surface's size is final by the time we measure it (panel → saved).
+  // synchronous, so the surface's size is final by the time we measure it (panel -> filled).
   const draw = (): void => {
     surface.render(renderGeneratePanel(state, handlers));
     repositionSidePanel(host, options.anchor);
@@ -97,6 +112,7 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
     element: host,
     root: surface.root,
     update(next) {
+      state.mode = next.mode;
       state.username = next.username;
       state.password = next.password;
       state.strength = next.strength;
@@ -108,12 +124,17 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
       state.minNumbers = next.minNumbers;
       state.minSymbols = next.minSymbols;
       state.avoidAmbiguous = next.avoidAmbiguous;
+      state.words = next.words;
+      state.capitalize = next.capitalize;
+      state.includeNumber = next.includeNumber;
+      state.managed = next.managed;
+      state.disabledReason = next.disabledReason;
+      state.view = 'panel';
       draw();
     },
-    showSaved(info) {
-      state.savedName = info.name;
-      state.savedUser = info.user;
-      state.view = 'saved';
+    showFilled(info) {
+      state.filledUser = info.user;
+      state.view = 'filled';
       draw();
     },
     remove() {

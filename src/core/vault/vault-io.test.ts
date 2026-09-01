@@ -59,7 +59,12 @@ describe('encrypted export', () => {
 
   it('round-trips through buildEncryptedExportJson / decryptEncryptedExport with the right password', async () => {
     const plaintext = buildExportJson([login, card], folders);
-    const enc = await buildEncryptedExportJson(plaintext, 'correct horse', 600_000, deps);
+    const enc = await buildEncryptedExportJson(
+      plaintext,
+      'correct horse',
+      { kdf: 0, kdfIterations: 600_000 },
+      deps,
+    );
     const parsed = JSON.parse(enc);
     expect(parsed).toMatchObject({ encrypted: true, passwordProtected: true, kdfType: 0, kdfIterations: 600_000 });
     expect(typeof parsed.salt).toBe('string');
@@ -70,7 +75,26 @@ describe('encrypted export', () => {
   });
 
   it('rejects a wrong password (validation MAC) without leaking the payload', async () => {
-    const enc = await buildEncryptedExportJson(buildExportJson([login], folders), 'right', 600_000, deps);
+    const enc = await buildEncryptedExportJson(
+      buildExportJson([login], folders),
+      'right',
+      { kdf: 0, kdfIterations: 600_000 },
+      deps,
+    );
+    await expect(decryptEncryptedExport(enc, 'wrong')).rejects.toThrow(/Incorrect export password/);
+  });
+
+  it('round-trips an Argon2id password-protected export with its embedded KDF settings', async () => {
+    const plaintext = buildExportJson([login], folders);
+    const kdf = { kdf: 1, kdfIterations: 4, kdfMemory: 32, kdfParallelism: 2 } as const;
+    const enc = await buildEncryptedExportJson(plaintext, 'export-password', kdf, deps);
+    expect(JSON.parse(enc)).toMatchObject({
+      kdfType: 1,
+      kdfIterations: 4,
+      kdfMemory: 32,
+      kdfParallelism: 2,
+    });
+    await expect(decryptEncryptedExport(enc, 'export-password')).resolves.toBe(plaintext);
     await expect(decryptEncryptedExport(enc, 'wrong')).rejects.toThrow(/Incorrect export password/);
   });
 
@@ -86,6 +110,19 @@ describe('encrypted export', () => {
       });
       await expect(decryptEncryptedExport(json, 'pw')).rejects.toThrow(/valid KDF parameters/);
     }
+  });
+
+  it('rejects malformed password-protected envelopes before running crypto', async () => {
+    const malformed = JSON.stringify({
+      encrypted: true,
+      passwordProtected: true,
+      salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+      kdfType: 0,
+      kdfIterations: 600_000,
+      data: null,
+    });
+    expect(isEncryptedExport(malformed)).toBe(true);
+    await expect(parseImport(malformed, 'pw')).rejects.toThrow(/incomplete or malformed/);
   });
 });
 
@@ -133,13 +170,22 @@ describe('parseImport (format dispatch)', () => {
   });
 
   it('decrypts and routes an encrypted export when given its password', async () => {
-    const enc = await buildEncryptedExportJson(buildExportJson([login], folders), 'pw', 600_000, { randomBytes: (n) => new Uint8Array(n).fill(2), newGuid: () => 'g' });
+    const enc = await buildEncryptedExportJson(buildExportJson([login], folders), 'pw', { kdf: 0, kdfIterations: 600_000 }, { randomBytes: (n) => new Uint8Array(n).fill(2), newGuid: () => 'g' });
     const inputs = await parseImport(enc, 'pw');
     expect(inputs[0]).toMatchObject({ type: 1, name: 'GitHub', login: { password: 's3cret' } });
   });
 
   it('throws when an encrypted export is imported without a password', async () => {
-    const enc = await buildEncryptedExportJson(buildExportJson([login], folders), 'pw', 600_000, { randomBytes: (n) => new Uint8Array(n).fill(3), newGuid: () => 'g' });
+    const enc = await buildEncryptedExportJson(buildExportJson([login], folders), 'pw', { kdf: 0, kdfIterations: 600_000 }, { randomBytes: (n) => new Uint8Array(n).fill(3), newGuid: () => 'g' });
     await expect(parseImport(enc)).rejects.toThrow(/password-protected/);
+  });
+
+  it('fails closed for account-restricted encrypted JSON instead of importing ciphertext', async () => {
+    const accountRestricted = JSON.stringify({
+      encrypted: true,
+      passwordProtected: false,
+      items: [{ type: 1, name: '2.encrypted-name', login: { password: '2.encrypted-password' } }],
+    });
+    await expect(parseImport(accountRestricted)).rejects.toThrow(/Account-restricted/);
   });
 });

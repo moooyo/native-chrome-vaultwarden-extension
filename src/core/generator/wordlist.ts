@@ -653,3 +653,18 @@ export const PASSPHRASE_WORDLIST: readonly string[] = [
   'zebra', 'zen', 'zeppelin', 'zero', 'zestfully', 'zesty', 'zigzagged', 'zipfile', 'zipping', 'zippy', 'zips', 'zit',
   'zodiac', 'zombie', 'zone', 'zoning', 'zookeeper', 'zoologist', 'zoology', 'zoom',
 ];
+
+const FINGERPRINT_WORDS_AFTER: Readonly<Record<string, string>> = Object.freeze({
+  droop: 'drop-down',
+  feline: 'felt-tip',
+  system: 't-shirt',
+  yippee: 'yo-yo',
+});
+
+/** The complete, ordered 7776-word EFF list used by Bitwarden fingerprint phrases. */
+export const FINGERPRINT_WORDLIST: readonly string[] = Object.freeze(
+  PASSPHRASE_WORDLIST.flatMap((word) => {
+    const inserted = FINGERPRINT_WORDS_AFTER[word];
+    return inserted === undefined ? [word] : [word, inserted];
+  }),
+);

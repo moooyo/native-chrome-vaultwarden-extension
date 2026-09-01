@@ -1,8 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { generateFido2Keypair, buildAttestationObject, buildCreateClientDataJSON } from './fido2-create.js';
+import {
+  MAX_PASSKEY_CREDENTIAL_DESCRIPTORS,
+  buildAttestationObject,
+  buildCreateClientDataJSON,
+  decidePasskeyCreationRoute,
+  generateFido2Keypair,
+  normalizePasskeyChallenge,
+  normalizePasskeyCredentialSelection,
+  normalizePasskeyExcludeCredentialIds,
+  normalizePasskeyResidentSelection,
+  normalizePasskeyUserHandle,
+} from './fido2-create.js';
 import { cborDecode } from '../crypto/cbor.js';
 import { signFido2Assertion, derToRawSignature } from './fido2.js';
-import { base64UrlToBytes } from '../crypto/encoding.js';
+import { base64UrlToBytes, bytesToBase64Url } from '../crypto/encoding.js';
 
 const subtle = globalThis.crypto.subtle;
 
@@ -65,5 +76,71 @@ describe('fido2-create', () => {
   it('clientDataJSON has type webauthn.create and passes challenge/origin through', () => {
     const json = JSON.parse(buildCreateClientDataJSON('Y2hhbA', 'https://example.com'));
     expect(json).toEqual({ type: 'webauthn.create', challenge: 'Y2hhbA', origin: 'https://example.com', crossOrigin: false });
+    expect(JSON.parse(buildCreateClientDataJSON('Y2hhbA', 'https://example.com', true)))
+      .toEqual({ type: 'webauthn.create', challenge: 'Y2hhbA', origin: 'https://example.com', crossOrigin: true });
+  });
+
+  it.each([
+    [undefined, undefined, 'discouraged', false, false],
+    ['discouraged', undefined, 'discouraged', false, false],
+    ['preferred', undefined, 'preferred', false, true],
+    ['required', undefined, 'required', true, true],
+    [undefined, true, 'required', true, true],
+    ['discouraged', true, 'required', true, true],
+  ] as const)(
+    'normalizes residentKey=%s requireResidentKey=%s into one canonical resident policy',
+    (residentKey, requireResidentKey, normalizedResidentKey, normalizedRequired, discoverable) => {
+      expect(normalizePasskeyResidentSelection(residentKey, requireResidentKey)).toEqual({
+        residentKey: normalizedResidentKey,
+        requireResidentKey: normalizedRequired,
+        discoverable,
+      });
+    },
+  );
+
+  it('routes cross-platform requests to native fallback and never treats an invalid value as vault-backed', () => {
+    expect(decidePasskeyCreationRoute(undefined)).toEqual({ kind: 'vault' });
+    expect(decidePasskeyCreationRoute('platform')).toEqual({ kind: 'vault' });
+    expect(decidePasskeyCreationRoute('cross-platform')).toEqual({
+      kind: 'native-fallback',
+      reason: 'cross-platform-authenticator',
+    });
+    expect(() => decidePasskeyCreationRoute('hybrid' as never)).toThrow(/attachment/i);
+  });
+
+  it('deduplicates and bounds exact allowCredential IDs while treating an empty list as resident', () => {
+    expect(normalizePasskeyCredentialSelection(undefined)).toEqual({
+      mode: 'resident',
+      credentialIds: [],
+    });
+    expect(normalizePasskeyCredentialSelection([])).toEqual({
+      mode: 'resident',
+      credentialIds: [],
+    });
+    expect(normalizePasskeyCredentialSelection(['cred-a', 'cred-a', 'cred-b'])).toEqual({
+      mode: 'allow-list',
+      credentialIds: ['cred-a', 'cred-b'],
+    });
+    expect(() => normalizePasskeyCredentialSelection(Array.from(
+      { length: MAX_PASSKEY_CREDENTIAL_DESCRIPTORS + 1 },
+      (_, index) => `cred-${index}`,
+    ))).toThrow(/descriptor/i);
+  });
+
+  it('requires canonical bounded base64url for excludeCredentials, user handles, and challenges', () => {
+    const credentialId = bytesToBase64Url(new TextEncoder().encode('credential'));
+    expect(normalizePasskeyExcludeCredentialIds([credentialId, credentialId])).toEqual([credentialId]);
+    expect(() => normalizePasskeyExcludeCredentialIds([`${credentialId}=`])).toThrow(/credential/i);
+
+    const oneByte = bytesToBase64Url(new Uint8Array([1]));
+    const maxHandle = bytesToBase64Url(new Uint8Array(64).fill(2));
+    expect(normalizePasskeyUserHandle(oneByte)).toBe(oneByte);
+    expect(normalizePasskeyUserHandle(maxHandle)).toBe(maxHandle);
+    expect(() => normalizePasskeyUserHandle('')).toThrow(/userHandle/i);
+    expect(() => normalizePasskeyUserHandle(bytesToBase64Url(new Uint8Array(65)))).toThrow(/userHandle/i);
+    expect(() => normalizePasskeyUserHandle(`${oneByte}=`)).toThrow(/userHandle/i);
+
+    expect(normalizePasskeyChallenge('AAAA')).toBe('AAAA');
+    expect(() => normalizePasskeyChallenge('')).toThrow(/challenge/i);
   });
 });

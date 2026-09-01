@@ -5,7 +5,7 @@ import { SIDE_PANEL_CSS, sideWrap } from './side-panel.js';
 // TODO i18n: content-script surfaces are isolated from the extension i18n module, so these
 // user-facing strings are hardcoded in Chinese to match the 密屿/MiYu design.
 
-export type GeneratePanelView = 'panel' | 'saved';
+export type GeneratePanelView = 'panel' | 'filled';
 
 /**
  * The full render state of the 密屿/MiYu inline password-generation panel (design 2e). Held by the
@@ -14,7 +14,8 @@ export type GeneratePanelView = 'panel' | 'saved';
  */
 export interface GeneratePanelViewState {
   view: GeneratePanelView;
-  /** The detected registration username/email, editable in the panel; saved with the login on use. */
+  mode: 'password' | 'passphrase';
+  /** The detected registration username/email, editable in the panel and filled on use. */
   username: string;
   password: string;
   strength: string;
@@ -26,8 +27,12 @@ export interface GeneratePanelViewState {
   minNumbers: number;
   minSymbols: number;
   avoidAmbiguous: boolean;
-  savedName: string;
-  savedUser: string;
+  words: number;
+  capitalize: boolean;
+  includeNumber: boolean;
+  managed: boolean;
+  disabledReason: string;
+  filledUser: string;
 }
 
 /** Privileged callbacks. Every click/input that reaches them is gated on `Event.isTrusted` in the
@@ -42,9 +47,11 @@ export interface GeneratePanelHandlers {
   onMinNumbers?: (n: number) => void;
   onMinSymbols?: (n: number) => void;
   onAvoidAmbiguous?: (on: boolean) => void;
+  onWords?: (words: number) => void;
+  onCapitalize?: (on: boolean) => void;
+  onIncludeNumber?: (on: boolean) => void;
   onRegenerate?: () => void;
   onUse?: () => void;
-  onUndo?: () => void;
 }
 
 /**
@@ -117,6 +124,8 @@ export const GENERATE_PANEL_STYLES = `
 
     .use { width:100%; height:38px; border:0; border-radius:19px; background:var(--mi-ink-btn); color:var(--mi-ink-btn-fg); font:500 12px/1 "Roboto", system-ui, sans-serif; cursor:pointer; }
     .use:hover { background:#0842a0; }
+    .use:disabled, button:disabled, input:disabled { cursor:default; opacity:.62; }
+    .save-alert { margin:0 0 9px; color:var(--mi-red); font-size:10.5px; line-height:1.45; }
     .foot { font-size: 10.5px; color: var(--mi-faint); margin-top: 8px; }
     button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--mi-teal); }
     svg { stroke-width: 1.7; }
@@ -128,9 +137,6 @@ export const GENERATE_PANEL_STYLES = `
     .saved .col { flex: 1; min-width: 0; }
     .saved .t { font-size: 12px; font-weight: 600; color: var(--mi-ink); }
     .saved .s { font-size: 10.5px; color: var(--mi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .undo { font-size: 11.5px; font-weight: 600; color: var(--mi-teal-text); cursor: pointer; background: none; border: 0; font-family: inherit; }
-    .undo:hover { text-decoration: underline; }
-
     @media (prefers-color-scheme: dark) {
       :host {
         --mi-panel:#1f1f1f; --mi-ink:#e3e3e3; --mi-muted:#c4c7c5; --mi-faint:#8e918f; --mi-text-3:#c4c7c5;
@@ -146,7 +152,7 @@ export const GENERATE_PANEL_STYLES = `
 /** Render the generation panel for the given state. The page cannot forge the privileged events: each
  *  handler bails unless `event.isTrusted`. Mounts as a right-side panel (design 2c/3a-consistent). */
 export function renderGeneratePanel(state: GeneratePanelViewState, handlers: GeneratePanelHandlers): TemplateResult {
-  return sideWrap(html`<div class="box">${state.view === 'saved' ? renderSaved(state, handlers) : renderPanel(state, handlers)}</div>`);
+  return sideWrap(html`<div class="box">${state.view === 'filled' ? renderFilled(state) : renderPanel(state, handlers)}</div>`);
 }
 
 function colorize(password: string) {
@@ -157,26 +163,29 @@ function colorize(password: string) {
   });
 }
 
-function pill(label: string, on: boolean, toggle: (on: boolean) => void): TemplateResult {
+function pill(label: string, on: boolean, disabled: boolean, toggle: (on: boolean) => void): TemplateResult {
   return html`<button type="button" class="pill ${on ? 'on' : ''}" aria-pressed=${on ? 'true' : 'false'}
-    @click=${(e: MouseEvent) => { if (e.isTrusted) toggle(!on); }}>${label}</button>`;
+    ?disabled=${disabled} @click=${(e: MouseEvent) => { if (e.isTrusted) toggle(!on); }}>${label}</button>`;
 }
 
-function stepper(label: string, value: number, set: (n: number) => void): TemplateResult {
+function stepper(label: string, value: number, disabled: boolean, set: (n: number) => void): TemplateResult {
   return html`
     <div class="min">
       <span class="lab">${label}</span>
       <span class="step">
-        <button type="button" aria-label="${label} 减少" @click=${(e: MouseEvent) => { if (e.isTrusted) set(value - 1); }}>−</button>
+        <button type="button" aria-label="${label} 减少" ?disabled=${disabled} @click=${(e: MouseEvent) => { if (e.isTrusted) set(value - 1); }}>−</button>
         <span class="val">${value}</span>
-        <button type="button" aria-label="${label} 增加" @click=${(e: MouseEvent) => { if (e.isTrusted) set(value + 1); }}>+</button>
+        <button type="button" aria-label="${label} 增加" ?disabled=${disabled} @click=${(e: MouseEvent) => { if (e.isTrusted) set(value + 1); }}>+</button>
       </span>
     </div>
   `;
 }
 
 function renderPanel(state: GeneratePanelViewState, handlers: GeneratePanelHandlers): TemplateResult {
-  const meta = `${state.strength} · ${state.length} 字符${state.symbols ? ' · 含符号' : ''}`;
+  const meta = state.mode === 'passphrase'
+    ? `${state.strength} · ${state.words} 个词`
+    : `${state.strength} · ${state.length} 字符${state.symbols ? ' · 含符号' : ''}`;
+  const controlsDisabled = state.managed || Boolean(state.disabledReason);
   return html`
     <div class="head">
       ${logoGlyph()}<span class="brand">密屿 · 强密码建议</span>
@@ -187,43 +196,67 @@ function renderPanel(state: GeneratePanelViewState, handlers: GeneratePanelHandl
       <input type="text" .value=${state.username} placeholder="用户名（可编辑）"
         @input=${(e: Event) => { if (e.isTrusted) handlers.onUsername?.((e.target as HTMLInputElement).value); }} />
     </div>
+    ${state.disabledReason
+      ? html`<p class="save-alert" data-generator-disabled>${state.disabledReason}</p>`
+      : state.managed
+        ? html`<p class="foot" data-generator-managed>生成规则由组织管理</p>`
+        : nothing}
     <div class="suggest">${colorize(state.password)}</div>
     <div class="len">
-      <span class="lab">长度</span>
-      <input type="range" min="8" max="40" .value=${String(state.length)}
-        @input=${(e: Event) => { if (e.isTrusted) handlers.onLength?.(Number((e.target as HTMLInputElement).value)); }} />
-      <span class="val">${state.length}</span>
+      <span class="lab">${state.mode === 'passphrase' ? '词数' : '长度'}</span>
+      <input type="range" min=${state.mode === 'passphrase' ? 3 : 8} max=${state.mode === 'passphrase' ? 20 : 128}
+        .value=${String(state.mode === 'passphrase' ? state.words : state.length)} ?disabled=${controlsDisabled}
+        @input=${(e: Event) => {
+          if (!e.isTrusted) return;
+          const value = Number((e.target as HTMLInputElement).value);
+          if (state.mode === 'passphrase') handlers.onWords?.(value);
+          else handlers.onLength?.(value);
+        }} />
+      <span class="val">${state.mode === 'passphrase' ? state.words : state.length}</span>
     </div>
     <div class="pills">
-      ${pill('A-Z', state.uppercase, (on) => handlers.onUppercase?.(on))}
-      ${pill('a-z', state.lowercase, (on) => handlers.onLowercase?.(on))}
-      ${pill('0-9', state.numbers, (on) => handlers.onNumbers?.(on))}
-      ${pill('!@#$', state.symbols, (on) => handlers.onSymbols?.(on))}
+      ${state.mode === 'passphrase'
+        ? html`
+            ${pill('A-Z', state.capitalize, controlsDisabled, (on) => handlers.onCapitalize?.(on))}
+            ${pill('0-9', state.includeNumber, controlsDisabled, (on) => handlers.onIncludeNumber?.(on))}
+          `
+        : html`
+            ${pill('A-Z', state.uppercase, controlsDisabled, (on) => handlers.onUppercase?.(on))}
+            ${pill('a-z', state.lowercase, controlsDisabled, (on) => handlers.onLowercase?.(on))}
+            ${pill('0-9', state.numbers, controlsDisabled, (on) => handlers.onNumbers?.(on))}
+            ${pill('!@#$', state.symbols, controlsDisabled, (on) => handlers.onSymbols?.(on))}
+          `}
       <span class="spacer"></span>
-      <button type="button" class="refresh" title="换一个" @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onRegenerate?.(); }}>${uiIcon('refresh')}</button>
+      <button type="button" class="refresh" title="换一个" ?disabled=${Boolean(state.disabledReason)}
+        @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onRegenerate?.(); }}>${uiIcon('refresh')}</button>
     </div>
-    <div class="mins">
-      ${stepper('最少数字', state.minNumbers, (n) => handlers.onMinNumbers?.(n))}
-      ${stepper('最少符号', state.minSymbols, (n) => handlers.onMinSymbols?.(n))}
-    </div>
-    <button type="button" class="ambig ${state.avoidAmbiguous ? 'on' : ''}" aria-pressed=${state.avoidAmbiguous ? 'true' : 'false'}
-      @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onAvoidAmbiguous?.(!state.avoidAmbiguous); }}>
-      <span class="check">${state.avoidAmbiguous ? uiIcon('check') : nothing}</span>避免易混淆字符
-    </button>
-    <button type="button" class="use" @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onUse?.(); }}>使用此密码</button>
-    <div class="foot">使用后将自动保存到你的密钥库</div>
+    ${state.mode === 'password'
+      ? html`
+          <div class="mins">
+            ${stepper('最少数字', state.minNumbers, controlsDisabled, (n) => handlers.onMinNumbers?.(n))}
+            ${stepper('最少符号', state.minSymbols, controlsDisabled, (n) => handlers.onMinSymbols?.(n))}
+          </div>
+          <button type="button" class="ambig ${state.avoidAmbiguous ? 'on' : ''}" aria-pressed=${state.avoidAmbiguous ? 'true' : 'false'}
+            ?disabled=${controlsDisabled}
+            @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onAvoidAmbiguous?.(!state.avoidAmbiguous); }}>
+            <span class="check">${state.avoidAmbiguous ? uiIcon('check') : nothing}</span>避免易混淆字符
+          </button>
+        `
+      : nothing}
+    <button type="button" class="use" ?disabled=${Boolean(state.disabledReason)}
+      @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onUse?.(); }}>使用此密码</button>
+    <div class="foot">填写后，将在网站提交时询问是否保存</div>
   `;
 }
 
-function renderSaved(state: GeneratePanelViewState, handlers: GeneratePanelHandlers): TemplateResult {
+function renderFilled(state: GeneratePanelViewState): TemplateResult {
   return html`
     <div class="saved">
       <span class="saved-ico">${uiIcon('check')}</span>
       <span class="col">
-        <span class="t">已保存到密屿</span>
-        ${state.savedUser ? html`<span class="s">${state.savedName ? state.savedName + ' · ' : ''}${state.savedUser}</span>` : nothing}
+        <span class="t">密码已填入</span>
+        <span class="s">${state.filledUser ? `${state.filledUser} · ` : ''}提交后可保存到密屿</span>
       </span>
-      ${handlers.onUndo ? html`<button type="button" class="undo" @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onUndo?.(); }}>撤销</button>` : nothing}
     </div>
   `;
 }

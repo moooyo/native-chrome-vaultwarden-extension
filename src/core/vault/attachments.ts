@@ -22,7 +22,12 @@ export function generateAttachmentKey(randomBytes: (n: number) => Uint8Array = d
 
 /** Wrap an attachment key under the cipher key as an encType=2 EncString (stored as attachment.key). */
 export async function wrapAttachmentKey(attachmentKey: SymmetricKey, cipherKey: SymmetricKey): Promise<string> {
-  return encryptToBytes(serializeSymmetricKey(attachmentKey), cipherKey);
+  const plaintext = serializeSymmetricKey(attachmentKey);
+  try {
+    return await encryptToBytes(plaintext, cipherKey);
+  } finally {
+    plaintext.fill(0);
+  }
 }
 
 /** Encrypt file bytes into an EncArrayBuffer: [2] ‖ iv ‖ mac ‖ ct (Encrypt-then-MAC). */
@@ -33,15 +38,22 @@ export async function encryptAttachmentFile(
 ): Promise<Uint8Array> {
   const ct = await aesCbc256Encrypt(key.encKey, iv, data);
   const macData = new Uint8Array(iv.length + ct.length);
-  macData.set(iv, 0);
-  macData.set(ct, iv.length);
-  const mac = await hmacSha256(key.macKey, macData);
-  const out = new Uint8Array(1 + iv.length + mac.length + ct.length);
-  out[0] = ENC_TYPE_AESCBC_HMAC;
-  out.set(iv, 1);
-  out.set(mac, 1 + iv.length);
-  out.set(ct, 1 + iv.length + mac.length);
-  return out;
+  let mac: Uint8Array | undefined;
+  try {
+    macData.set(iv, 0);
+    macData.set(ct, iv.length);
+    mac = await hmacSha256(key.macKey, macData);
+    const out = new Uint8Array(1 + iv.length + mac.length + ct.length);
+    out[0] = ENC_TYPE_AESCBC_HMAC;
+    out.set(iv, 1);
+    out.set(mac, 1 + iv.length);
+    out.set(ct, 1 + iv.length + mac.length);
+    return out;
+  } finally {
+    ct.fill(0);
+    macData.fill(0);
+    mac?.fill(0);
+  }
 }
 
 /** Decrypt an EncArrayBuffer ([2] ‖ iv ‖ mac ‖ ct) back to the original file bytes; throws on a bad MAC. */
@@ -54,11 +66,17 @@ export async function decryptAttachmentFile(buffer: Uint8Array, key: SymmetricKe
   const mac = buffer.subarray(17, 49);
   const ct = buffer.subarray(49);
   const macData = new Uint8Array(iv.length + ct.length);
-  macData.set(iv, 0);
-  macData.set(ct, iv.length);
-  const expected = await hmacSha256(key.macKey, macData);
-  if (!constantTimeEqual(expected, mac)) throw new Error('attachment MAC verification failed');
-  return aesCbc256Decrypt(key.encKey, iv, ct);
+  let expected: Uint8Array | undefined;
+  try {
+    macData.set(iv, 0);
+    macData.set(ct, iv.length);
+    expected = await hmacSha256(key.macKey, macData);
+    if (!constantTimeEqual(expected, mac)) throw new Error('attachment MAC verification failed');
+    return await aesCbc256Decrypt(key.encKey, iv, ct);
+  } finally {
+    macData.fill(0);
+    expected?.fill(0);
+  }
 }
 
 function defaultRandomBytes(n: number): Uint8Array {

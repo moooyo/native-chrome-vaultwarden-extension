@@ -92,9 +92,18 @@ describe('vw-connection-section', () => {
     expect(q<HTMLButtonElement>(busy, '[data-sync-now]').disabled).toBe(true);
   });
 
-  it('reflects the auto-sync preference as a toggle', async () => {
+  it('does not advertise an auto-sync preference without a background consumer', async () => {
     const el = await mount();
-    // Default pref (autoSync: true) renders a checked toggle.
-    expect(el.shadowRoot!.querySelector('vw-toggle')).not.toBeNull();
+    expect(el.shadowRoot!.querySelector('vw-toggle')).toBeNull();
+  });
+
+  it('describes both supported account KDF families without claiming one fixed iteration count', async () => {
+    const el = await mount();
+    const cards = [...el.shadowRoot!.querySelectorAll('vw-setting-card')];
+    const encryption = cards.find((card) => card.getAttribute('heading') === '端到端加密');
+    const description = encryption?.getAttribute('description') ?? '';
+    expect(description).toContain('PBKDF2');
+    expect(description).toContain('Argon2id');
+    expect(description).not.toContain('600,000');
   });
 });

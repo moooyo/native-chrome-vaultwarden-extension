@@ -17,6 +17,7 @@ export type IconName =
   | 'user'
   | 'refresh'
   | 'logout'
+  | 'download'
   | 'chevron'
   | 'chevronDown'
   | 'back'
@@ -45,6 +46,7 @@ export type IconName =
   | 'trash'
   | 'close'
   | 'shield'
+  | 'scan'
   | 'globe'
   | 'sun'
   | 'moon';
@@ -63,6 +65,7 @@ const ICONS: Record<IconName, IconDef> = {
   user: { d: svg`<circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.5 3-5.5 7-5.5s7 2 7 5.5"/>`, sw: 1.7 },
   refresh: { d: svg`<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v4h-4"/>`, sw: 1.7 },
   logout: { d: svg`<path d="M14 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-2"/><path d="M9 12h11M17 9l3 3-3 3"/>`, sw: 1.7 },
+  download: { d: svg`<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 20h14"/>`, sw: 1.8 },
   chevron: { d: svg`<path d="M9 6l6 6-6 6"/>`, sw: 1.8 },
   chevronDown: { d: svg`<path d="M6 9l6 6 6-6"/>`, sw: 2 },
   back: { d: svg`<path d="M19 12H5M11 6l-6 6 6 6"/>`, sw: 1.8 },
@@ -94,6 +97,7 @@ const ICONS: Record<IconName, IconDef> = {
   trash: { d: svg`<path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/>`, sw: 1.7 },
   close: { d: svg`<path d="M6 6l12 12M18 6L6 18"/>`, sw: 1.8 },
   shield: { d: svg`<path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/>`, sw: 1.7 },
+  scan: { d: svg`<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10"/>`, sw: 1.8 },
   globe: { d: svg`<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.5 2.5 15 0 18M12 3c-2.5 2.5-2.5 15 0 18"/>`, sw: 1.7 },
   sun: { d: svg`<circle cx="12" cy="12" r="4"/><path d="M12 2v2.5M12 19.5V22M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2 12h2.5M19.5 12H22M4.2 19.8l1.8-1.8M18 6l1.8-1.8"/>`, sw: 1.7 },
   moon: { d: svg`<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.5 6.5 0 0 0 9.8 9.8z"/>`, sw: 1.7 },

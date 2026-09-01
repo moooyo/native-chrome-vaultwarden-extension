@@ -6,6 +6,7 @@ import { bytesToBase64Url, utf8ToBytes } from '../crypto/encoding.js';
 import { FLAG_UP, FLAG_UV, FLAG_BE, FLAG_BS, sha256, buildClientDataJSON } from './fido2-common.js';
 
 const subtle = globalThis.crypto.subtle;
+export const MAX_FIDO2_SIGNATURE_COUNTER = 0xffff_ffff;
 
 export interface AssertionParams {
   rpId: string;
@@ -14,6 +15,8 @@ export interface AssertionParams {
   challenge: string;
   counter?: number;
   userVerified?: boolean;
+  /** Browser-owned ancestor-lineage result. Never derive this from page options. */
+  crossOrigin?: boolean;
 }
 
 export interface AssertionResult {
@@ -33,6 +36,9 @@ export interface PasskeyAssertion extends AssertionResult {
 
 /** authenticatorData = SHA-256(rpId) ‖ flags ‖ signCount(uint32 big-endian). No attested cred data for get(). */
 export async function buildAuthenticatorData(rpId: string, flags: number, signCount: number): Promise<Uint8Array> {
+  if (!Number.isSafeInteger(signCount) || signCount < 0 || signCount > MAX_FIDO2_SIGNATURE_COUNTER) {
+    throw new TypeError('signCount must be an unsigned 32-bit integer');
+  }
   const rpIdHash = await sha256(utf8ToBytes(rpId));
   const out = new Uint8Array(37);
   out.set(rpIdHash, 0);
@@ -49,7 +55,12 @@ export async function signFido2Assertion(pkcs8: Uint8Array, params: AssertionPar
   const key = await subtle.importKey('pkcs8', pkcs8 as BufferSource, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
   const flags = FLAG_UP | FLAG_BE | FLAG_BS | (params.userVerified ? FLAG_UV : 0);
   const authData = await buildAuthenticatorData(params.rpId, flags, params.counter ?? 0);
-  const clientDataJSON = buildClientDataJSON('webauthn.get', params.challenge, params.origin);
+  const clientDataJSON = buildClientDataJSON(
+    'webauthn.get',
+    params.challenge,
+    params.origin,
+    params.crossOrigin ?? false,
+  );
   const clientDataBytes = utf8ToBytes(clientDataJSON);
   const signedData = new Uint8Array([...authData, ...(await sha256(clientDataBytes))]);
   const rawSig = new Uint8Array(await subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, signedData as BufferSource));

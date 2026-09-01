@@ -4,8 +4,17 @@ import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import type { AsyncState } from '../../components/async-state.js';
-import type { SendInput, SendSummary } from '../../../core/vault/sends.js';
+import {
+  SEND_DATE_PRESET_HOURS,
+  type SendInput,
+  type SendSummary,
+} from '../../../core/vault/sends.js';
 import { bytesToBase64 } from '../../../core/crypto/encoding.js';
+import {
+  normalizeSendDraft,
+  sendDraftHasEdits,
+  type SendDraftSnapshot,
+} from '../../send-form-draft.js';
 import '../../components/segmented.js';
 import '../../components/select-menu.js';
 import '../../components/toggle.js';
@@ -13,10 +22,12 @@ import '../../components/status-message.js';
 import type { SectionStatus } from '../types.js';
 
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
 
 /**
  * Options Send section: an intro card + a "new Send" create form (text/file, name, content, expiry,
- * max access, optional password) and the active-Send list. Dumb — it emits `vw-send-create`,
+ * max access, optional password, sender-email visibility) and the active-Send list. Dumb — it emits `vw-send-create`,
  * `vw-send-delete`, and `vw-copy`; the root performs the `sends.*` requests. Compatible with the
  * Bitwarden/Vaultwarden Send protocol via the existing core.
  */
@@ -42,7 +53,10 @@ export class VwSendSection extends LitElement {
   private kind: 'text' | 'file' = 'text';
   private passwordOn = false;
   private file: File | undefined;
-  private submitted = false;
+  private draftBaseline: SendDraftSnapshot | undefined;
+  private draftRevision = 0;
+  private submittedRevision: number | undefined;
+  private encodeGeneration = 0;
   private wasPending = false;
 
   constructor() {
@@ -112,65 +126,187 @@ export class VwSendSection extends LitElement {
     return this.renderRoot.querySelector<T>(sel);
   }
 
-  private openForm(): void { this.formOpen = true; this.requestUpdate(); }
+  override disconnectedCallback(): void {
+    this.draftRevision += 1;
+    this.encodeGeneration += 1;
+    this.submittedRevision = undefined;
+    super.disconnectedCallback();
+  }
+
+  private selectValue(sel: string): string {
+    return this.q<HTMLElement & { value: string }>(sel)?.value ?? '';
+  }
+
+  private toggleChecked(sel: string): boolean {
+    return this.q<HTMLElement & { checked: boolean }>(sel)?.checked ?? false;
+  }
+
+  private createBaseline(): SendDraftSnapshot {
+    return normalizeSendDraft({
+      owner: 'create',
+      type: 'text',
+      passwordMode: 'none',
+      expirationHours: SEND_DATE_PRESET_HOURS.sevenDays,
+      deletionHours: SEND_DATE_PRESET_HOURS.sevenDays,
+      maxAccessCount: null,
+    });
+  }
+
+  private currentDraft(): SendDraftSnapshot | undefined {
+    if (!this.formOpen) return undefined;
+    const password = this.passwordOn ? (this.q<HTMLInputElement>('[data-pass]')?.value ?? '') : '';
+    const expiry = this.selectValue('[data-expiry]');
+    return normalizeSendDraft({
+      owner: 'create',
+      type: this.kind,
+      name: this.q<HTMLInputElement>('[data-name]')?.value ?? '',
+      text: this.q<HTMLTextAreaElement>('[data-content]')?.value ?? '',
+      ...(this.file ? { file: this.file } : {}),
+      hideEmail: this.toggleChecked('[data-hide-email]'),
+      passwordMode: password ? 'set' : 'none',
+      password,
+      expirationHours: expiry,
+      deletionHours: expiry,
+      maxAccessCount: this.selectValue('[data-max]'),
+    });
+  }
+
+  /** Used by the options root before switching to another section. */
+  sendFormHasEdits(): boolean {
+    return sendDraftHasEdits(this.draftBaseline, this.currentDraft());
+  }
+
+  promptForUnsavedEdits(): boolean {
+    if (this.formOpen && (this.pending || this.encoding)) return false;
+    if (!this.sendFormHasEdits()) return true;
+    return typeof window === 'undefined' || window.confirm(t('send.unsavedChanges'));
+  }
+
+  private changeKind(event: CustomEvent<{ id: string }>): void {
+    const control = event.currentTarget as HTMLElement & { value: string };
+    const next = event.detail.id as 'text' | 'file';
+    if (this.pending || this.encoding || next === this.kind) {
+      control.value = this.kind;
+      return;
+    }
+    const variantHasValue = this.kind === 'text'
+      ? (this.q<HTMLTextAreaElement>('[data-content]')?.value ?? '') !== ''
+      : this.file !== undefined;
+    if (variantHasValue && typeof window !== 'undefined' && !window.confirm(t('send.unsavedChanges'))) {
+      control.value = this.kind;
+      return;
+    }
+    if (this.kind === 'file') this.file = undefined;
+    this.kind = next;
+    this.validationError = undefined;
+    this.requestUpdate();
+  }
+
+  private changePasswordEnabled(event: CustomEvent<{ checked: boolean }>): void {
+    const control = event.currentTarget as HTMLElement & { checked: boolean };
+    if (this.pending || this.encoding) {
+      control.checked = this.passwordOn;
+      return;
+    }
+    if (!event.detail.checked && this.passwordOn) {
+      const password = this.q<HTMLInputElement>('[data-pass]')?.value ?? '';
+      if (password && typeof window !== 'undefined' && !window.confirm(t('send.unsavedChanges'))) {
+        control.checked = true;
+        return;
+      }
+    }
+    this.passwordOn = event.detail.checked;
+    this.requestUpdate();
+  }
+
+  private openForm(): void {
+    if (this.locked || this.pending || this.encoding) return;
+    this.draftRevision += 1;
+    this.formOpen = true;
+    this.draftBaseline = this.createBaseline();
+    this.requestUpdate();
+  }
   private resetFormState(): void {
+    this.draftRevision += 1;
+    this.encodeGeneration += 1;
     this.formOpen = false;
     this.file = undefined;
+    this.encoding = false;
     this.passwordOn = false;
     this.kind = 'text';
+    this.draftBaseline = undefined;
     this.validationError = undefined;
-    this.submitted = false;
+    this.submittedRevision = undefined;
     this.wasPending = false;
   }
 
   private closeForm(): void {
+    if (this.pending || this.encoding || !this.promptForUnsavedEdits()) return;
     this.resetFormState();
     this.requestUpdate();
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
-    if (this.submitted && changed.has('status') && !this.pending && this.status && this.status.tone !== 'danger') {
+    if (changed.has('locked') && this.locked) {
       this.resetFormState();
       return;
     }
-    if (!changed.has('pending')) return;
-    if (this.wasPending && !this.pending && this.submitted) {
-      if (this.status?.tone !== 'danger') this.resetFormState();
-      this.submitted = false;
+    if ((changed.has('pending') || changed.has('status')) && !this.pending
+      && this.submittedRevision !== undefined && (this.wasPending || changed.has('status'))) {
+      const revision = this.submittedRevision;
+      this.submittedRevision = undefined;
+      if (revision === this.draftRevision
+        && (this.status?.tone === 'success' || this.status?.tone === 'warning')) {
+        this.resetFormState();
+        return;
+      }
     }
-    this.wasPending = this.pending;
+    if (changed.has('pending')) this.wasPending = this.pending;
   }
 
   private async create(): Promise<void> {
-    if (this.pending || this.encoding) return;
+    if (this.locked || this.pending || this.encoding) return;
     this.validationError = undefined;
     const rawName = (this.q<HTMLInputElement>('[data-name]')?.value ?? '').trim();
     const name = rawName || t('send.defaultName');
-    const deletionDays = Number(this.q<HTMLSelectElement>('[data-expiry]')?.value ?? '7') || 7;
+    const deletionHours = Number(this.q<HTMLSelectElement>('[data-expiry]')?.value)
+      || SEND_DATE_PRESET_HOURS.sevenDays;
     const maxRaw = this.q<HTMLSelectElement>('[data-max]')?.value ?? '';
     const password = this.passwordOn ? (this.q<HTMLInputElement>('[data-pass]')?.value ?? '') : '';
-    const base: SendInput = { name, deletionDays, expirationDays: deletionDays };
+    const base: SendInput = {
+      name,
+      deletionHours,
+      expirationHours: deletionHours,
+      hideEmail: this.toggleChecked('[data-hide-email]'),
+    };
     if (maxRaw) base.maxAccessCount = Number(maxRaw);
     if (password) base.password = password;
     if (this.kind === 'file') {
-      if (!this.file) { this.validationError = t('send.error.fileRequired'); return; }
-      if (this.file.size > MAX_FILE_BYTES) { this.validationError = t('send.error.fileTooLarge', { max: '100 MB' }); return; }
+      const file = this.file;
+      if (!file) { this.validationError = t('send.error.fileRequired'); return; }
+      if (file.size > MAX_FILE_BYTES) { this.validationError = t('send.error.fileTooLarge', { max: '100 MB' }); return; }
+      const draftRevision = this.draftRevision;
+      const encodeGeneration = ++this.encodeGeneration;
       this.encoding = true;
       let dataB64: string;
       try {
-        dataB64 = bytesToBase64(new Uint8Array(await this.file.arrayBuffer()));
+        dataB64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
       } catch {
-        this.validationError = t('send.error.fileRead');
+        if (!this.locked && encodeGeneration === this.encodeGeneration && draftRevision === this.draftRevision) {
+          this.validationError = t('send.error.fileRead');
+        }
         return;
       } finally {
-        this.encoding = false;
+        if (encodeGeneration === this.encodeGeneration) this.encoding = false;
       }
-      this.submitted = true;
-      this.emit('vw-send-create', { kind: 'file', input: { ...base, name: rawName || this.file.name }, dataB64, fileName: this.file.name });
+      if (this.locked || !this.isConnected || draftRevision !== this.draftRevision
+        || this.kind !== 'file' || this.file !== file) return;
+      this.submittedRevision = draftRevision;
+      this.emit('vw-send-create', { kind: 'file', input: { ...base, name: rawName || file.name }, dataB64, fileName: file.name });
     } else {
       const text = this.q<HTMLTextAreaElement>('[data-content]')?.value ?? '';
       if (!text.trim()) { this.validationError = t('send.error.textRequired'); return; }
-      this.submitted = true;
+      this.submittedRevision = this.draftRevision;
       this.emit('vw-send-create', { kind: 'text', input: { ...base, text } });
     }
   }
@@ -178,14 +314,30 @@ export class VwSendSection extends LitElement {
   private meta(send: SendSummary): string {
     const parts: string[] = [];
     const now = Date.now();
-    const dead = send.disabled || new Date(send.deletionDate).getTime() < now;
+    const deadline = this.effectiveDeadline(send);
+    const dead = send.disabled || deadline <= now;
     if (dead) parts.push(t('options.send.expired'));
     else {
-      const days = Math.max(0, Math.round((new Date(send.deletionDate).getTime() - now) / 86400000));
-      parts.push(days <= 1 ? t('options.send.expiresTomorrow') : t('options.send.expiresInDays', { count: days }));
+      const remaining = deadline - now;
+      if (remaining < DAY_MS) {
+        const hours = Math.max(1, Math.ceil(remaining / HOUR_MS));
+        parts.push(hours === 1
+          ? t('options.send.expiresInOneHour')
+          : t('options.send.expiresInHours', { count: hours }));
+      } else {
+        parts.push(t('options.send.expiresInDays', { count: Math.ceil(remaining / DAY_MS) }));
+      }
     }
     if (send.maxAccessCount != null) parts.push(t('options.send.accessed', { used: send.accessCount, max: send.maxAccessCount }));
     return parts.join(' · ');
+  }
+
+  private effectiveDeadline(send: SendSummary): number {
+    const deletionTime = Date.parse(send.deletionDate);
+    const expirationTime = send.expirationDate ? Date.parse(send.expirationDate) : Number.POSITIVE_INFINITY;
+    return Number.isFinite(expirationTime)
+      ? Math.min(deletionTime, expirationTime)
+      : deletionTime;
   }
 
   protected override render() {
@@ -214,10 +366,13 @@ export class VwSendSection extends LitElement {
 
   private renderForm() {
     const expiryOptions = [
-      { value: '1', label: t('options.send.expiry.1d') },
-      { value: '3', label: t('options.send.expiry.3d') },
-      { value: '7', label: t('options.send.expiry.7d') },
-      { value: '30', label: t('options.send.expiry.30d') },
+      { value: String(SEND_DATE_PRESET_HOURS.oneHour), label: t('options.send.expiry.1h') },
+      { value: String(SEND_DATE_PRESET_HOURS.oneDay), label: t('options.send.expiry.1d') },
+      { value: String(SEND_DATE_PRESET_HOURS.twoDays), label: t('options.send.expiry.2d') },
+      { value: String(SEND_DATE_PRESET_HOURS.threeDays), label: t('options.send.expiry.3d') },
+      { value: String(SEND_DATE_PRESET_HOURS.sevenDays), label: t('options.send.expiry.7d') },
+      { value: String(SEND_DATE_PRESET_HOURS.fourteenDays), label: t('options.send.expiry.14d') },
+      { value: String(SEND_DATE_PRESET_HOURS.thirtyDays), label: t('options.send.expiry.30d') },
     ];
     const maxOptions = [
       { value: '1', label: t('options.send.access.1') },
@@ -226,7 +381,7 @@ export class VwSendSection extends LitElement {
       { value: '', label: t('options.send.access.unlimited') },
     ];
     return html`
-      <div class="card form">
+      <div class="card form" ?inert=${this.pending || this.encoding}>
         <div class="form-head">
           <span class="t">${t('options.send.formTitle')}</span>
           <vw-segmented
@@ -234,7 +389,7 @@ export class VwSendSection extends LitElement {
             .options=${[{ id: 'text', label: t('options.send.typeText') }, { id: 'file', label: t('options.send.typeFile') }]}
             .value=${this.kind}
             .height=${25}
-            @vw-segmented-change=${(e: CustomEvent<{ id: string }>) => { this.kind = e.detail.id as 'text' | 'file'; this.requestUpdate(); }}
+            @vw-segmented-change=${(e: CustomEvent<{ id: string }>) => this.changeKind(e)}
           ></vw-segmented>
         </div>
         <div class="field">
@@ -245,20 +400,29 @@ export class VwSendSection extends LitElement {
           <label>${this.kind === 'text' ? t('options.send.textContent') : t('options.send.fileContent')}</label>
           ${this.kind === 'text'
             ? html`<textarea data-content rows="3" placeholder=${t('options.send.contentPlaceholder')} ?disabled=${this.pending || this.encoding}></textarea>`
-            : html`<input data-file type="file" ?disabled=${this.pending || this.encoding} @change=${(e: Event) => { this.file = (e.target as HTMLInputElement).files?.[0]; this.validationError = undefined; }} />`}
+            : html`<input data-file type="file" ?disabled=${this.pending || this.encoding} @change=${(e: Event) => {
+                if (this.pending || this.encoding) return;
+                this.file = (e.target as HTMLInputElement).files?.[0];
+                this.validationError = undefined;
+              }} />`}
         </div>
         <div class="controls">
           <div class="field">
             <label>${t('options.send.expiry')}</label>
-            <vw-select data-expiry .options=${expiryOptions} .value=${'7'} .label=${t('options.send.expiry')}></vw-select>
+            <vw-select data-expiry .options=${expiryOptions} .value=${String(SEND_DATE_PRESET_HOURS.sevenDays)} .label=${t('options.send.expiry')}></vw-select>
           </div>
           <div class="field">
             <label>${t('options.send.maxAccess')}</label>
-            <vw-select data-max .options=${maxOptions} .value=${'5'} .label=${t('options.send.maxAccess')}></vw-select>
+            <vw-select data-max .options=${maxOptions} .value=${''} .label=${t('options.send.maxAccess')}></vw-select>
           </div>
           <div class="row-toggle">
             <span style="font-size:12px;color:var(--vw-text-4)">${t('options.send.accessPassword')}</span>
-            <vw-toggle size="sm" .checked=${this.passwordOn} @vw-toggle-change=${(e: CustomEvent<{ checked: boolean }>) => { this.passwordOn = e.detail.checked; this.requestUpdate(); }}></vw-toggle>
+            <vw-toggle size="sm" .checked=${this.passwordOn} .disabled=${this.pending || this.encoding}
+              @vw-toggle-change=${(e: CustomEvent<{ checked: boolean }>) => this.changePasswordEnabled(e)}></vw-toggle>
+          </div>
+          <div class="row-toggle">
+            <span style="font-size:12px;color:var(--vw-text-4)">${t('send.hideEmail')}</span>
+            <vw-toggle data-hide-email size="sm" .disabled=${this.pending || this.encoding}></vw-toggle>
           </div>
         </div>
         ${this.passwordOn ? html`<div class="field"><input data-pass type="password" placeholder=${t('options.send.accessPassword')} ?disabled=${this.pending || this.encoding} /></div>` : nothing}
@@ -274,6 +438,7 @@ export class VwSendSection extends LitElement {
   }
 
   private renderList() {
+    if (this.locked) return html`<div class="empty">${t('options.locked')}</div>`;
     const state = this.sends;
     if (state.status === 'loading') return html`<div class="empty">${t('common.loading')}</div>`;
     if (state.status === 'empty' || state.status === 'idle') return html`<div class="group-label">${t('options.send.active')}</div><div class="empty">${t('options.send.empty')}</div>`;
@@ -285,7 +450,7 @@ export class VwSendSection extends LitElement {
   }
 
   private renderSend(send: SendSummary) {
-    const dead = send.disabled || new Date(send.deletionDate).getTime() < Date.now();
+    const dead = send.disabled || this.effectiveDeadline(send) <= Date.now();
     const isFile = send.type === 1;
     return html`
       <div class="send ${dead ? 'dead' : ''}">
@@ -294,8 +459,8 @@ export class VwSendSection extends LitElement {
           <div class="name">${send.name}</div>
           <div class="sub">${this.meta(send)}</div>
         </div>
-        <button type="button" class="icon-btn" title=${t('options.send.copyLink')} aria-label=${t('send.copyAria')} ?disabled=${this.pending || this.encoding} @click=${() => this.emit('vw-copy', { value: send.url })}>${uiIcon('link')}</button>
-        <button type="button" class="icon-btn danger" title=${t('common.delete')} aria-label=${t('send.deleteAria')} ?disabled=${this.pending || this.encoding} @click=${() => this.emit('vw-send-delete', { id: send.id })}>${uiIcon('trash')}</button>
+        <button type="button" class="icon-btn" title=${t('options.send.copyLink')} aria-label=${t('send.copyAria')} ?disabled=${this.locked || this.pending || this.encoding} @click=${() => this.emit('vw-copy', { value: send.url })}>${uiIcon('link')}</button>
+        <button type="button" class="icon-btn danger" title=${t('common.delete')} aria-label=${t('send.deleteAria')} ?disabled=${this.locked || this.pending || this.encoding} @click=${() => this.emit('vw-send-delete', { id: send.id })}>${uiIcon('trash')}</button>
       </div>
     `;
   }

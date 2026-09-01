@@ -1,25 +1,30 @@
 import { symmetricKeyFromBytes, type SymmetricKey } from '../crypto/keys.js';
-import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey } from '../crypto/kdf.js';
+import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey, type KdfConfig } from '../crypto/kdf.js';
 import { encryptToBytes } from '../crypto/encstring.js';
 import { rsaOaepEncrypt } from '../crypto/primitives.js';
 import { base64ToBytes, bytesToBase64 } from '../crypto/encoding.js';
 import { rotateCipher, rotateFolder, rotateSend, verifyRotatedCipher, type RotatedCipher } from '../vault/rotate.js';
-import type { RotateKeyData, RotateOrgRecoveryData } from '../api/types.js';
+import type {
+  KeyRotationUnlockRecordsStatus,
+  RotateKeyData,
+  RotateOrgRecoveryData,
+  SyncResponse,
+} from '../api/types.js';
 import { AppError } from '../errors.js';
 
 export interface KeyRotationDeps {
   api: {
-    sync(token: string): Promise<unknown>;
+    sync(token: string): Promise<SyncResponse & { sends?: unknown[] }>;
     getTrustedEmergencyAccess(token: string): Promise<Array<{ id: string }>>;
     getOrganizationPublicKey(token: string, orgId: string): Promise<{ publicKey: string }>;
     getAccountPublicKey(token: string): Promise<{ publicKey: string }>;
+    getKeyRotationUnlockRecordsStatus(token: string): Promise<KeyRotationUnlockRecordsStatus>;
     rotateAccountKey(token: string, body: RotateKeyData): Promise<void>;
   };
   session: {
-    getPersistedAuth(): Promise<{ email: string; accessToken: string; kdfIterations: number; encPrivateKey?: string } | undefined>;
+    getPersistedAuth(): Promise<({ email: string; accessToken: string; encPrivateKey?: string } & KdfConfig) | undefined>;
     loadUserKey(): Promise<SymmetricKey | undefined>;
     loadPrivateKey(): Promise<Uint8Array | undefined>;
-    logout(): Promise<void>;
   };
   verifyMasterPassword(masterPassword: string): Promise<boolean>;
 }
@@ -33,17 +38,16 @@ export async function rotateAccountKey(masterPassword: string, deps: KeyRotation
   if (!(await deps.verifyMasterPassword(masterPassword))) throw new AppError('error', 'Master password is incorrect');
   const token = auth.accessToken;
 
+  // The first remote preflight is an authoritative full sync taken inside the account barrier.
+  const sync = await deps.api.sync(token);
+  if (sync.profile.email.trim().toLowerCase() !== auth.email.trim().toLowerCase()) {
+    throw new AppError('session_expired', 'The synchronized vault belongs to a different account.');
+  }
+
   // Fail-close: emergency-access grants can't be re-wrapped in this milestone.
   if ((await deps.api.getTrustedEmergencyAccess(token)).length > 0) {
     throw new AppError('error', 'Remove your emergency-access contacts before rotating your encryption key.');
   }
-
-  const sync = await deps.api.sync(token) as {
-    ciphers: unknown[];
-    folders?: unknown[];
-    sends?: unknown[];
-    profile?: { organizations?: unknown[] };
-  }; // authoritative full current vault
   const newUserKeyBytes = globalThis.crypto.getRandomValues(new Uint8Array(64));
   const newUserKey = symmetricKeyFromBytes(newUserKeyBytes);
 
@@ -57,7 +61,7 @@ export async function rotateAccountKey(masterPassword: string, deps: KeyRotation
   for (const s of (sync.sends ?? [])) sends.push(await rotateSend(s as never, oldUserKey, newUserKey));
 
   // Wrap the new UserKey under the current (stretched) master key; re-wrap the private key under the new UserKey.
-  const masterKey = await deriveMasterKey(masterPassword, auth.email, auth.kdfIterations);
+  const masterKey = await deriveMasterKey(masterPassword, auth.email, auth);
   const masterHash = await deriveMasterPasswordHash(masterKey, masterPassword);
   const masterKeyEncryptedUserKey = await encryptToBytes(newUserKeyBytes, await stretchMasterKey(masterKey));
   const pkcs8 = await deps.session.loadPrivateKey();
@@ -82,17 +86,44 @@ export async function rotateAccountKey(masterPassword: string, deps: KeyRotation
     throw new AppError('error', 'Rotation self-check failed; aborting.');
   }
 
+  // These key sets can unlock the existing UserKey and therefore must be re-wrapped atomically with
+  // rotation. Until that implementation exists, only strict, authoritative empty inventories are
+  // safe. A malformed, unsupported, or failed inventory request rejects before the terminal POST.
+  const unlockRecords = await deps.api.getKeyRotationUnlockRecordsStatus(token);
+  if (unlockRecords.passkeyUnlockData !== 'empty') {
+    throw new AppError(
+      'error',
+      'Remove every passkey used for account login before rotating your encryption key.',
+    );
+  }
+  if (unlockRecords.deviceKeyUnlockData !== 'empty') {
+    throw new AppError(
+      'error',
+      'Remove trust from every trusted device before rotating your encryption key.',
+    );
+  }
+
   const body: RotateKeyData = {
     oldMasterKeyAuthenticationHash: masterHash,
     accountUnlockData: {
-      masterPasswordUnlockData: { kdfType: 0, kdfIterations: auth.kdfIterations, kdfParallelism: null, kdfMemory: null, email: auth.email, masterKeyAuthenticationHash: masterHash, masterKeyEncryptedUserKey },
+      masterPasswordUnlockData: {
+        kdfType: auth.kdf,
+        kdfIterations: auth.kdfIterations,
+        kdfParallelism: auth.kdf === 1 ? auth.kdfParallelism : null,
+        kdfMemory: auth.kdf === 1 ? auth.kdfMemory : null,
+        email: auth.email,
+        masterKeyAuthenticationHash: masterHash,
+        masterKeyEncryptedUserKey,
+      },
       emergencyAccessUnlockData: [],
       organizationAccountRecoveryUnlockData: orgRecovery,
+      passkeyUnlockData: [],
+      deviceKeyUnlockData: [],
     },
     accountKeys: { userKeyEncryptedAccountPrivateKey, accountPublicKey },
     accountData: { ciphers, folders, sends },
   };
 
-  await deps.api.rotateAccountKey(token, body); // atomic; throws on non-2xx (local material unchanged, retryable)
-  await deps.session.logout(); // security stamp rotated → old tokens dead; re-login refetches new material
+  // The caller owns the durable marker and unconditional local cleanup around this irreversible POST.
+  await deps.api.rotateAccountKey(token, body);
 }

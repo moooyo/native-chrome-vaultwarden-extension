@@ -9,6 +9,8 @@ const app = document.createElement('vw-popup-app') as VwPopupApp;
 app.request = sendRequest;
 app.browser = {
   getActiveTabId: async () => (await browser.tabs.query({ active: true, currentWindow: true }))[0]?.id,
+  getActiveTabUrl: async () => (await browser.tabs.query({ active: true, currentWindow: true }))[0]?.url,
+  captureVisibleTab: () => browser.tabs.captureVisibleTab(undefined, { format: 'png' }),
   openOptions: () => browser.runtime.openOptionsPage(),
   openReceive: async () => {
     await browser.tabs.create({ url: browser.runtime.getURL('ui/receive/receive.html') });

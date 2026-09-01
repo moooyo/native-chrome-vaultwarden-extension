@@ -12,13 +12,15 @@ const TOOL_ITEMS: { id: string; key: MessageKey; icon: NonNullable<MenuItem['ico
   { id: 'generator', key: 'popup.generator', icon: 'wand', action: 'generator' },
   { id: 'health', key: 'popup.health', icon: 'checkCircle', action: 'health' },
   { id: 'sends', key: 'popup.sends', icon: 'mail', action: 'sends' },
+  { id: 'archive', key: 'popup.archive', icon: 'folder', action: 'archive' },
+  { id: 'trash', key: 'popup.trash', icon: 'trash', action: 'trash' },
   { id: 'sync', key: 'popup.sync', icon: 'refresh', action: 'sync' },
 ];
 
 /**
  * The tools control: a trigger button and a keyboard `vw-menu` for the fully wired generator,
- * health, Send, and sync actions. Incomplete destructive tools stay out of the visible menu. It
- * performs no requests; every selection is a typed action, and closing restores trigger focus.
+ * health, Send, Archive, Trash, and sync actions. It performs no requests; every selection is a typed
+ * action, and closing restores trigger focus.
  */
 export class VwToolsMenu extends LitElement {
   static override properties = {

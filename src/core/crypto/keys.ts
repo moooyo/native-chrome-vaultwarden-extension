@@ -26,7 +26,12 @@ export async function unwrapSymmetricKey(
   protectedKey: string,
   wrappingKey: SymmetricKey,
 ): Promise<SymmetricKey> {
-  return symmetricKeyFromBytes(await decryptToBytes(protectedKey, wrappingKey));
+  const plaintext = await decryptToBytes(protectedKey, wrappingKey);
+  try {
+    return symmetricKeyFromBytes(plaintext);
+  } finally {
+    plaintext.fill(0);
+  }
 }
 
 /**
@@ -50,9 +55,16 @@ export async function unwrapRsaWrappedKey(
   protectedKey: string,
   privateKeyPkcs8: Uint8Array,
 ): Promise<SymmetricKey> {
-  const { encType, data } = parseRsaEncString(protectedKey);
+  const { encType, data, mac } = parseRsaEncString(protectedKey);
   const hash = RSA_SHA256_ENC_TYPES.has(encType) ? 'SHA-256' : 'SHA-1';
-  return symmetricKeyFromBytes(await rsaOaepDecrypt(privateKeyPkcs8, data, hash));
+  const plaintext = await rsaOaepDecrypt(privateKeyPkcs8, data, hash);
+  try {
+    return symmetricKeyFromBytes(plaintext);
+  } finally {
+    data.fill(0);
+    mac?.fill(0);
+    plaintext.fill(0);
+  }
 }
 
 const RSA_SHA256_ENC_TYPES = new Set([3, 5]);

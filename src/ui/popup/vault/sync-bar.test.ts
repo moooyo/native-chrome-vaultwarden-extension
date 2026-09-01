@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('webextension-polyfill', () => ({
   default: {
@@ -12,6 +12,7 @@ vi.mock('webextension-polyfill', () => ({
 
 import './sync-bar.js';
 import type { VwSyncBar } from './sync-bar.js';
+import { setLocale } from '../../i18n/index.js';
 
 async function mount(over: Partial<VwSyncBar> = {}): Promise<VwSyncBar> {
   const el = document.createElement('vw-sync-bar') as VwSyncBar;
@@ -22,12 +23,36 @@ async function mount(over: Partial<VwSyncBar> = {}): Promise<VwSyncBar> {
 }
 
 describe('vw-sync-bar action rail', () => {
-  afterEach(() => document.body.replaceChildren());
+  beforeEach(() => {
+    setLocale('en', false);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:05:00Z'));
+  });
 
-  it('renders the keyboard hint and five fixed actions', async () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.useRealTimers();
+  });
+
+  it('renders unknown scheduler state and five fixed actions', async () => {
     const el = await mount();
-    expect(el.shadowRoot?.textContent).toContain('⌘L');
+    expect(el.shadowRoot?.textContent).toContain('Sync status unknown');
     expect(el.shadowRoot?.querySelectorAll('button')).toHaveLength(5);
+  });
+
+  it('renders scheduler-owned syncing, dirty, and successful-time states', async () => {
+    const el = await mount({ syncing: true });
+    expect(el.shadowRoot?.textContent).toContain('Syncing');
+
+    el.syncing = false;
+    el.dirty = true;
+    await el.updateComplete;
+    expect(el.shadowRoot?.textContent).toContain('Changes waiting to sync');
+
+    el.dirty = false;
+    el.lastSuccessfulSyncAt = Date.now() - 120_000;
+    await el.updateComplete;
+    expect(el.shadowRoot?.textContent).toContain('Synced · 2 min ago');
   });
 
   it.each([

@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0TefrEOlT8AmPlzs9BWitgBw3tNCFrvW22wKryGWc3F2p+IxIgnqVSdPRwVBE0iXVRpLW/Qq/GRhLrplJF7OR+bEkTmGc8n+ustIHGQxqXlny03JW0v1yFisBd5Imd+TM1zjXii9aeEn2K++ZjQtukDx1IJrcTGhGRCB9ad99EWKUo9g6NPrQ+VCg7mhK6ysjmOfsLq5s9/47yJhsZ/6eOHjEj7Xo2tm6DdpZhxgGArZwlE1m8MbzjfEMMsTMP4wDOtvqHkb0a0/DDoGSFXX4fzJLxXSIVvuXT2/GJceaCDunkR9pQfx4eT6o5drEKJeBAinyQm/qoBQgkPEZZryOwIDAQAB",
   "name": "密屿 MiYu",
   "version": "0.0.2",
@@ -7,6 +8,9 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
   "icons": {
     "16": "icons/icon16.png",
@@ -18,10 +22,10 @@
     "default_popup": "ui/popup/popup.html",
     "default_title": "密屿",
     "default_icon": {
-      "16": "icons/icon16.png",
-      "32": "icons/icon32.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+      "16": "icons/icon16_neutral.png",
+      "32": "icons/icon32_neutral.png",
+      "48": "icons/icon48_neutral.png",
+      "128": "icons/icon128_neutral.png"
     }
   },
   "options_ui": {
@@ -30,13 +34,19 @@
   },
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "alarms",
+    "clipboardRead",
     "clipboardWrite",
     "contextMenus",
     "idle",
+    "notifications",
     "offscreen",
     "activeTab",
-    "webNavigation"
+    "webNavigation",
+    "webRequest",
+    "webRequestAuthProvider",
+    "scripting"
   ],
   "host_permissions": [
     "https://api.pwnedpasswords.com/*"
@@ -56,29 +66,6 @@
       ],
       "run_at": "document_idle",
       "all_frames": true
-    },
-    {
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ],
-      "js": [
-        "content/page-webauthn.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": true,
-      "world": "MAIN"
-    },
-    {
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ],
-      "js": [
-        "content/webauthn-bridge.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": true
     }
   ],
   "commands": {
@@ -87,7 +74,37 @@
         "default": "Ctrl+Shift+F",
         "mac": "Command+Shift+F"
       },
-      "description": "从密屿填充当前聚焦的登录 / 银行卡 / 身份字段"
+      "description": "从密屿填充当前聚焦的登录字段"
+    },
+    "autofill-login": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "Fill or cycle matching logins for the current site"
+    },
+    "autofill-card": {
+      "description": "Fill or cycle cards for the current site"
+    },
+    "autofill-identity": {
+      "description": "Fill or cycle identities for the current site"
+    },
+    "generate-password": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+9",
+        "mac": "Command+Shift+9"
+      },
+      "description": "Generate a password and copy it to the clipboard"
+    },
+    "lock-vault": {
+      "description": "Lock the vault"
+    },
+    "open-popup": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Open the extension popup"
     }
   },
   "web_accessible_resources": [

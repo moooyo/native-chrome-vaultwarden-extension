@@ -53,25 +53,47 @@ function trustedClick(el: Element | null): void {
 
 describe('createSaveBar', () => {
   it('mounts a render surface with the save-bar styles and the message and action label', () => {
-    createSaveBar({ message: 'Save this login?', actionLabel: 'Save', onAction: () => {} });
+    createSaveBar({ message: 'Save this login?', actionLabel: 'Save', onAction: async () => true });
     expect(mountRenderSurface).toHaveBeenCalledWith(SAVE_BAR_STYLES);
     const { container } = state.surfaces[0]!;
     expect(container.textContent).toContain('Save this login?');
     expect(container.querySelector('#vw-save-act')?.textContent).toContain('Save');
   });
 
-  it('runs onAction then removes the bar on a trusted action click', () => {
-    const onAction = vi.fn();
+  it('shows saving, confirms success, then removes the bar', async () => {
+    vi.useFakeTimers();
+    const onAction = vi.fn(async () => true);
     createSaveBar({ message: 'm', actionLabel: 'Save', onAction });
     const { container, remove } = state.surfaces[0]!;
     trustedClick(container.querySelector('#vw-save-act'));
     expect(onAction).toHaveBeenCalledTimes(1);
-    expect(remove).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('正在保存到密屿');
+    expect(remove).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.textContent).toContain('已保存到密屿');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(remove).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
+  it('keeps an uncertain terminal state and never retries the write', async () => {
+    const onAction = vi.fn(async () => false);
+    createSaveBar({ message: 'm', actionLabel: 'Save', onAction });
+    const { container, remove } = state.surfaces[0]!;
+
+    trustedClick(container.querySelector('#vw-save-act'));
+    trustedClick(container.querySelector('#vw-save-act'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onAction).toHaveBeenCalledOnce();
+    expect(container.querySelector('[role="alert"]')!.textContent).toContain('无法确认保存结果');
+    expect(container.querySelector('#vw-save-act')).toBeNull();
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it('runs onDismiss then removes the bar on a trusted dismiss click', () => {
     const onDismiss = vi.fn();
-    createSaveBar({ message: 'm', actionLabel: 'Save', onAction: () => {}, onDismiss });
+    createSaveBar({ message: 'm', actionLabel: 'Save', onAction: async () => true, onDismiss });
     const { container, remove } = state.surfaces[0]!;
     trustedClick(container.querySelector('#vw-save-dismiss'));
     expect(onDismiss).toHaveBeenCalledTimes(1);
@@ -79,14 +101,14 @@ describe('createSaveBar', () => {
   });
 
   it('tolerates a dismiss with no onDismiss handler and still removes the bar', () => {
-    createSaveBar({ message: 'm', actionLabel: 'Save', onAction: () => {} });
+    createSaveBar({ message: 'm', actionLabel: 'Save', onAction: async () => true });
     const { container, remove } = state.surfaces[0]!;
     expect(() => trustedClick(container.querySelector('#vw-save-dismiss'))).not.toThrow();
     expect(remove).toHaveBeenCalledTimes(1);
   });
 
   it('remove() detaches the mounted surface', () => {
-    const bar = createSaveBar({ message: 'm', actionLabel: 'Save', onAction: () => {} });
+    const bar = createSaveBar({ message: 'm', actionLabel: 'Save', onAction: async () => true });
     bar.remove();
     expect(state.surfaces[0]!.remove).toHaveBeenCalledTimes(1);
   });

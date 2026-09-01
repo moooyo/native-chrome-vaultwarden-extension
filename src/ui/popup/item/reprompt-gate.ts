@@ -179,7 +179,7 @@ export class VwRepromptGate extends LitElement {
             ?disabled=${this.pending}
             @click=${() => this.submit()}
           >
-            ${uiIcon('lock')}<span>${t('auth.unlock')}</span>
+            ${uiIcon('lock')}<span>${t('detail.verify')}</span>
           </button>
         </div>
         ${this.error

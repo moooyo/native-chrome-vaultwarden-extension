@@ -4,5 +4,6 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts', 'src/**/*.test.ts', 'tools/**/*.test.mjs'],
+    exclude: ['test/live/**'],
   },
 });

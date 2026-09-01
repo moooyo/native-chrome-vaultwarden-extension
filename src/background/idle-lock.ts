@@ -4,8 +4,12 @@ export const IDLE_LOCK_ALARM = 'idle-lock';
 export type IdleState = 'active' | 'idle' | 'locked';
 
 export interface IdleLockDeps {
-  /** idleSeconds=null means idle-locking is disabled (Never/On close). */
-  getConfig(): Promise<{ idleSeconds: number | null; action: OnIdleAction }>;
+  /** Idle and system-lock triggers are independent so event-only policies need no fake timeout. */
+  getConfig(): Promise<{
+    idleSeconds: number | null;
+    lockOnSystemLock: boolean;
+    action: OnIdleAction;
+  }>;
   isUnlocked(): Promise<boolean>;
   lock(): Promise<void>;
   logout(): Promise<void>;
@@ -15,36 +19,29 @@ export interface IdleLockDeps {
 
 /** chrome.idle detection interval minimum. */
 const MIN_DETECTION_SECONDS = 15;
-/** When disabled, set a large interval so 'idle' rarely fires; 'locked' is ignored by the applyAction gate. */
+/** When disabled, set a large interval because ordinary idle events are intentionally ignored. */
 const SENTINEL_SECONDS = 4 * 3600;
 
-/** Clamp a requested idle detection window to chrome.idle's hard minimum. Both the detection-interval
- *  setter and the backstop `queryState` call reject values below this, so every caller must clamp. */
-function clampDetection(idleSeconds: number): number {
-  return Math.max(MIN_DETECTION_SECONDS, idleSeconds);
-}
-
 export function createIdleLock(deps: IdleLockDeps) {
-  async function applyAction(idleSeconds: number | null, action: OnIdleAction): Promise<void> {
-    if (idleSeconds === null) return;                 // disabled — ignores idle AND locked
+  async function applyAction(action: OnIdleAction): Promise<void> {
     if (!(await deps.isUnlocked())) return;           // idempotent: no cascade on double-trigger
     await (action === 'logout' ? deps.logout() : deps.lock());
   }
   return {
     async applyDetection(): Promise<void> {
-      const { idleSeconds } = await deps.getConfig();
-      deps.setDetectionInterval(idleSeconds === null ? SENTINEL_SECONDS : clampDetection(idleSeconds));
+      const { lockOnSystemLock } = await deps.getConfig();
+      deps.setDetectionInterval(lockOnSystemLock ? MIN_DETECTION_SECONDS : SENTINEL_SECONDS);
     },
     async onStateChanged(state: IdleState): Promise<void> {
-      if (state !== 'idle' && state !== 'locked') return;
-      const { idleSeconds, action } = await deps.getConfig();
-      await applyAction(idleSeconds, action);
+      if (state !== 'locked') return;
+      const { lockOnSystemLock, action } = await deps.getConfig();
+      if (state === 'locked' && lockOnSystemLock) await applyAction(action);
     },
     async onBackstopAlarm(): Promise<void> {
-      const { idleSeconds, action } = await deps.getConfig();
-      if (idleSeconds === null) return;
-      const state = await deps.queryState(clampDetection(idleSeconds));
-      if (state === 'idle' || state === 'locked') await applyAction(idleSeconds, action);
+      const { lockOnSystemLock, action } = await deps.getConfig();
+      if (!lockOnSystemLock) return;
+      const state = await deps.queryState(MIN_DETECTION_SECONDS);
+      if (state === 'locked' && lockOnSystemLock) await applyAction(action);
     },
   };
 }

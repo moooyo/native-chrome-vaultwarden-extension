@@ -5,7 +5,12 @@ export type AppErrorCode =
   | 'no_match'
   | 'stale_form'
   | 'reprompt_required'
+  | 'invalid_pin'
+  | 'pin_attempts_exceeded'
   | 'session_expired'
+  | 'conflict'
+  | 'outcome_unknown'
+  | 'committed_unsynced'
   | 'denied';
 
 export class AppError extends Error {

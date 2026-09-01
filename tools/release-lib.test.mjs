@@ -208,7 +208,7 @@ describe('release CLI', () => {
 
     await execFileAsync(
       process.execPath,
-      [cliPath, '--tag', 'v1.2.3', '--dist-dir', 'dist', '--out-dir', 'release'],
+      [cliPath, '--tag', 'v1.2.3', '--dist-dir', 'dist'],
       { cwd: root, env: { ...process.env, GITHUB_OUTPUT: outputPath } },
     );
 
@@ -236,6 +236,26 @@ describe('release CLI', () => {
     await expect(execFileAsync(process.execPath, [cliPath], { cwd: root })).rejects.toMatchObject({
       stderr: expect.stringContaining('Missing required --tag'),
     });
+  });
+
+  it('rejects a caller-controlled output directory without deleting it', async () => {
+    const root = join(import.meta.dirname, '..', 'test-results', 'release-cli-out-dir');
+    const protectedDir = join(root, 'protected');
+    const sentinelPath = join(protectedDir, 'sentinel.txt');
+    await createReleaseProject(root);
+    await mkdir(protectedDir, { recursive: true });
+    await writeFile(sentinelPath, 'keep');
+
+    await expect(
+      execFileAsync(
+        process.execPath,
+        [cliPath, '--tag', 'v1.2.3', '--out-dir', protectedDir],
+        { cwd: root },
+      ),
+    ).rejects.toMatchObject({
+      stderr: expect.stringContaining('Unknown or incomplete argument: --out-dir'),
+    });
+    expect(await readFile(sentinelPath, 'utf8')).toBe('keep');
   });
 
   it('fails when the build directory is missing', async () => {

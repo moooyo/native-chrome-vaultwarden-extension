@@ -119,10 +119,7 @@ async function main(): Promise<void> {
 
   console.log(`Server: ${SERVER}\nAccount: ${EMAIL}`);
   const pre = await api.prelogin(EMAIL);
-  if (pre.kdf !== 0) {
-    throw new Error(`Account KDF is ${pre.kdf} (Argon2id) — the client only supports PBKDF2 (see CLAUDE.md). Cannot seed.`);
-  }
-  const masterKey = await deriveMasterKey(PASSWORD, EMAIL, pre.kdfIterations);
+  const masterKey = await deriveMasterKey(PASSWORD, EMAIL, pre);
   const hash = await deriveMasterPasswordHash(masterKey, PASSWORD);
   const login = await api.passwordLogin({ email: EMAIL, masterPasswordHash: hash });
   if (login.kind !== 'success') {

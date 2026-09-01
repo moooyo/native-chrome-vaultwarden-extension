@@ -18,11 +18,34 @@ describe('pwnedCount', () => {
     expect(await pwnedCount('password', fetchFn)).toBe(12345);
   });
   it('returns 0 when the suffix is absent', async () => {
-    const fetchFn = (async () => new Response('ABCDEF:3\nFEDCBA:0')) as unknown as typeof fetch;
+    const fetchFn = (async () => new Response(`${'A'.repeat(35)}:3\n${'F'.repeat(35)}:0`)) as unknown as typeof fetch;
     expect(await pwnedCount('x', fetchFn, async () => '11111' + 'Z'.repeat(35))).toBe(0);
   });
   it('throws on a non-2xx response', async () => {
     const fetchFn = (async () => new Response('', { status: 503 })) as unknown as typeof fetch;
     await expect(pwnedCount('x', fetchFn)).rejects.toThrow();
+  });
+
+  it('treats a malformed matching count as an unknown lookup rather than a safe password', async () => {
+    const suffix = 'Z'.repeat(35);
+    const fetchFn = (async () => new Response(`${suffix}:not-a-count`)) as unknown as typeof fetch;
+    await expect(pwnedCount('x', fetchFn, async () => `11111${suffix}`)).rejects.toThrow(/malformed/);
+  });
+
+  it.each(['', '<html>upstream error</html>', '{"error":"rate limited"}'])(
+    'rejects a successful HTTP response with an invalid range body: %j',
+    async (body) => {
+      const fetchFn = (async () => new Response(body)) as unknown as typeof fetch;
+      await expect(pwnedCount('x', fetchFn, async () => '11111' + 'Z'.repeat(35))).rejects.toThrow(/malformed|empty/);
+    },
+  );
+
+  it.each([
+    `${'A'.repeat(34)}:1`,
+    `${'A'.repeat(35)}:-1`,
+    `${'A'.repeat(35)}:9007199254740992`,
+  ])('rejects an invalid range line: %s', async (body) => {
+    const fetchFn = (async () => new Response(body)) as unknown as typeof fetch;
+    await expect(pwnedCount('x', fetchFn, async () => '11111' + 'Z'.repeat(35))).rejects.toThrow(/malformed|invalid/);
   });
 });

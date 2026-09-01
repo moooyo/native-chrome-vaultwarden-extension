@@ -1,4 +1,4 @@
-import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey } from './kdf.js';
+import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey, type KdfConfig } from './kdf.js';
 import { encryptToBytes } from './encstring.js';
 import { symmetricKeyFromBytes } from './keys.js';
 import { bytesToBase64 } from './encoding.js';
@@ -6,14 +6,14 @@ import { bytesToBase64 } from './encoding.js';
 const subtle = globalThis.crypto.subtle;
 
 /** Account registration material: everything the register endpoint needs, derived client-side. */
-export interface RegistrationKeys {
+export type RegistrationKeys = {
   masterPasswordHash: string;
   /** UserKey wrapped under the stretched master key (encType=2). Sent as `key`. */
   key: string;
   keys: { publicKey: string; encryptedPrivateKey: string };
-  kdf: 0;
-  kdfIterations: number;
-}
+} & KdfConfig;
+
+export const DEFAULT_REGISTRATION_KDF: KdfConfig = { kdf: 0, kdfIterations: 600_000 };
 
 /**
  * Build the client-side registration material for a new PBKDF2 account: a freshly generated 64-byte
@@ -23,10 +23,10 @@ export interface RegistrationKeys {
 export async function buildRegistration(
   email: string,
   password: string,
-  kdfIterations = 600000,
+  kdf: KdfConfig = DEFAULT_REGISTRATION_KDF,
 ): Promise<RegistrationKeys> {
   const normalizedEmail = email.trim().toLowerCase();
-  const masterKey = await deriveMasterKey(password, normalizedEmail, kdfIterations);
+  const masterKey = await deriveMasterKey(password, normalizedEmail, kdf);
   const masterPasswordHash = await deriveMasterPasswordHash(masterKey, password);
   const stretched = await stretchMasterKey(masterKey);
 
@@ -50,7 +50,6 @@ export async function buildRegistration(
     masterPasswordHash,
     key,
     keys: { publicKey: bytesToBase64(spki), encryptedPrivateKey },
-    kdf: 0,
-    kdfIterations,
+    ...kdf,
   };
 }

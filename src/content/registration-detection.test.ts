@@ -25,6 +25,15 @@ describe('registration-detection', () => {
     expect(targets[0]!.usernameInput).toBe(f.querySelector('[name="email"]'));
   });
 
+  it('does not reuse a card field as the generated credential username', () => {
+    const f = form(`
+      <input name="username" autocomplete="cc-name">
+      <input id="password" type="password" autocomplete="new-password">
+    `);
+
+    expect(matchRegistrationField(f.querySelector('#password')!)!.usernameInput).toBeUndefined();
+  });
+
   it('excludes confirm/retype fields', () => {
     const f = form(`<input type="password" name="confirm-password" autocomplete="new-password" />`);
     expect(matchRegistrationField(f.querySelector('input')!)).toBeUndefined();
@@ -56,5 +65,16 @@ describe('registration-detection', () => {
   it('returns no confirm fields when the form has none', () => {
     const f = form(`<input type="password" name="new-password" autocomplete="new-password" />`);
     expect(findConfirmPasswordFields(f.querySelector('input')!)).toEqual([]);
+  });
+
+  it('uses external form=id username and confirmation controls', () => {
+    document.body.innerHTML = `
+      <form id="signup"><input type="password" name="newPassword"></form>
+      <input form="signup" type="email" name="email">
+      <input form="signup" type="password" name="confirmPassword">`;
+    const password = document.querySelector<HTMLInputElement>('[name="newPassword"]')!;
+    const match = matchRegistrationField(password)!;
+    expect(match.usernameInput).toBe(document.querySelector('[name="email"]'));
+    expect(findConfirmPasswordFields(password)).toEqual([document.querySelector('[name="confirmPassword"]')]);
   });
 });

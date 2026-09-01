@@ -30,12 +30,27 @@ describe('uri matching', () => {
       .toBeUndefined();
   });
 
-  it('matches by host and respects a saved port when present', () => {
+  it('applies the official one-way google.com-to-script.google.com domain exception', () => {
+    expect(matchLoginUri({ uri: 'https://google.com', match: UriMatchStrategy.Domain }, 'https://script.google.com/home', UriMatchStrategy.Domain))
+      .toBeUndefined();
+    expect(matchLoginUri({ uri: 'https://script.google.com', match: UriMatchStrategy.Domain }, 'https://script.google.com/home', UriMatchStrategy.Domain))
+      .toBeUndefined();
+    expect(matchLoginUri({ uri: 'https://script.google.com', match: UriMatchStrategy.Domain }, 'https://google.com', UriMatchStrategy.Domain))
+      .toMatchObject({ matchType: UriMatchStrategy.Domain });
+    expect(matchLoginUri({ uri: 'https://google.com', match: UriMatchStrategy.Domain }, 'https://nested.script.google.com', UriMatchStrategy.Domain))
+      .toMatchObject({ matchType: UriMatchStrategy.Domain });
+  });
+
+  it('matches by the complete host and requires non-default ports to match exactly', () => {
     expect(matchLoginUri({ uri: 'https://vault.example.com', match: UriMatchStrategy.Host }, 'https://vault.example.com/login', UriMatchStrategy.Domain))
       .toMatchObject({ matchType: UriMatchStrategy.Host });
+    expect(matchLoginUri({ uri: 'https://vault.example.com', match: UriMatchStrategy.Host }, 'https://vault.example.com:8443/login', UriMatchStrategy.Domain))
+      .toBeUndefined();
     expect(matchLoginUri({ uri: 'https://vault.example.com:8443', match: UriMatchStrategy.Host }, 'https://vault.example.com/login', UriMatchStrategy.Domain))
       .toBeUndefined();
     expect(matchLoginUri({ uri: 'https://vault.example.com:8443', match: UriMatchStrategy.Host }, 'https://vault.example.com:8443/login', UriMatchStrategy.Domain))
+      .toMatchObject({ matchType: UriMatchStrategy.Host });
+    expect(matchLoginUri({ uri: 'https://vault.example.com:443', match: UriMatchStrategy.Host }, 'https://vault.example.com/login', UriMatchStrategy.Domain))
       .toMatchObject({ matchType: UriMatchStrategy.Host });
   });
 

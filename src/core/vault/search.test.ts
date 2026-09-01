@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { filterSummaries, filterByFolder, filterByCollection, filterSummariesByFolderAndQuery, filterSummariesByFolderCollectionAndQuery, NO_FOLDER } from './search.js';
+import { filterSummaries, filterByFolder, filterByCollection, filterSummariesByFolderAndQuery, filterSummariesByFolderCollectionAndQuery, NO_FOLDER, sortCipherSummaries } from './search.js';
 import type { CipherSummary } from './models.js';
 
 const items: CipherSummary[] = [
@@ -24,19 +24,45 @@ describe('filterSummaries', () => {
     expect(filterSummaries(items, 'github.com').map((i) => i.id)).toEqual(['1']);
   });
 
-  it('returns the same matches as a naive rebuild for every query (behavior unchanged)', () => {
-    const naive = (list: CipherSummary[], query: string) => {
-      const q = query.trim().toLowerCase();
-      if (!q) return list;
-      return list.filter((i) => [i.name, i.username ?? '', ...i.uris].join('\n').toLowerCase().includes(q));
-    };
-    for (const q of ['', 'git', 'ME@', 'github.com', 'example', 'MAIL', 'nope']) {
-      expect(filterSummaries(items, q).map((i) => i.id)).toEqual(naive(items, q).map((i) => i.id));
-    }
+  it('requires every normalized term while allowing terms to match different targets', () => {
+    expect(filterSummaries(items, 'octo github').map((i) => i.id)).toEqual(['1']);
+    expect(filterSummaries(items, 'github octo').map((i) => i.id)).toEqual(['1']);
+    expect(filterSummaries(items, 'github missing')).toEqual([]);
   });
 
-  it('reuses the cached lowercased haystack per item across repeated filters', () => {
-    // A summary whose `name` getter counts reads: the haystack is built by reading name/username/uris,
+  it('normalizes accents in both the query and summary targets', () => {
+    const accented: CipherSummary[] = [{
+      id: 'accent', type: 1, name: 'Caf\u00e9', username: 'r\u00e9sum\u00e9', uris: [], loginUris: [], favorite: false,
+    }];
+    expect(filterSummaries(accented, 'cafe').map((i) => i.id)).toEqual(['accent']);
+    expect(filterSummaries(accented, 'resume').map((i) => i.id)).toEqual(['accent']);
+    expect(filterSummaries(accented, 'caf\u00e9 r\u00e9sum\u00e9').map((i) => i.id)).toEqual(['accent']);
+  });
+
+  it('searches only URI hostnames, never paths, query strings, or fragments', () => {
+    const withSecretUri: CipherSummary[] = [{
+      id: 'uri', type: 1, name: 'Portal', uris: ['https://login.example/secret-path?token=hidden#private'],
+      loginUris: [], favorite: false,
+    }];
+    expect(filterSummaries(withSecretUri, 'login.example').map((i) => i.id)).toEqual(['uri']);
+    expect(filterSummaries(withSecretUri, 'secret-path')).toEqual([]);
+    expect(filterSummaries(withSecretUri, 'hidden')).toEqual([]);
+    expect(filterSummaries(withSecretUri, 'private')).toEqual([]);
+  });
+
+  it('matches an item id prefix only for terms of at least eight characters', () => {
+    const identified: CipherSummary[] = [{
+      id: 'abcdef12-3456-7890-abcd-ef1234567890', type: 1, name: 'Unrelated',
+      uris: [], loginUris: [], favorite: false,
+    }];
+    expect(filterSummaries(identified, 'abcdef1')).toEqual([]);
+    expect(filterSummaries(identified, 'ABCDEF12').map((i) => i.id)).toEqual([
+      'abcdef12-3456-7890-abcd-ef1234567890',
+    ]);
+  });
+
+  it('reuses normalized targets per item across repeated filters', () => {
+    // A summary whose `name` getter counts reads: the targets are built by reading name/username/uris,
     // so a second filter that reuses the cache must not read the fields again.
     let nameReads = 0;
     const item = {
@@ -50,8 +76,75 @@ describe('filterSummaries', () => {
     expect(afterFirst).toBeGreaterThan(0);
 
     expect(filterSummaries(list, 'hub').map((i) => i.id)).toEqual(['x']);
-    // The second filter reused the cached haystack — the item's fields were not re-read to rebuild it.
+    // The second filter reused the cached targets, so it did not read the item fields again.
     expect(nameReads).toBe(afterFirst);
+  });
+});
+
+describe('sortCipherSummaries', () => {
+  const summary = (
+    id: string,
+    name: string,
+    options: Partial<CipherSummary> = {},
+  ): CipherSummary => ({
+    id,
+    type: 2,
+    name,
+    uris: [],
+    loginUris: [],
+    favorite: false,
+    ...options,
+  } as CipherSummary);
+
+  it('uses locale-aware natural ordering without mutating the source array', () => {
+    const source = [summary('10', 'Item 10'), summary('2', 'Item 2')];
+
+    expect(sortCipherSummaries(source, 'en').map((item) => item.id)).toEqual(['2', '10']);
+    expect(source.map((item) => item.id)).toEqual(['10', '2']);
+  });
+
+  it('uses base sensitivity and preserves stable order for equivalent non-login names', () => {
+    const source = [summary('accented', 'Caf\u00e9'), summary('plain', 'cafe')];
+
+    expect(sortCipherSummaries(source, 'en').map((item) => item.id)).toEqual([
+      'accented',
+      'plain',
+    ]);
+  });
+
+  it('orders equal login names by username using the same collator', () => {
+    const source = [
+      summary('ten', 'Portal', { type: 1, username: 'user10' }),
+      summary('two', 'portal', { type: 1, username: 'user2' }),
+      summary('one', 'Portal', { type: 1, username: 'User1' }),
+    ];
+
+    expect(sortCipherSummaries(source, 'en').map((item) => item.id)).toEqual([
+      'one',
+      'two',
+      'ten',
+    ]);
+  });
+
+  it('keeps undecryptable placeholders ahead of readable items', () => {
+    const source = [
+      summary('readable', 'A readable item'),
+      summary('broken-b', '(undecryptable)', { undecryptable: true }),
+      summary('broken-a', '(undecryptable)', { undecryptable: true }),
+    ];
+
+    expect(sortCipherSummaries(source, 'en').map((item) => item.id)).toEqual([
+      'broken-b',
+      'broken-a',
+      'readable',
+    ]);
+  });
+
+  it('falls back without throwing for an invalid locale', () => {
+    expect(() => sortCipherSummaries([
+      summary('b', 'Beta'),
+      summary('a', 'Alpha'),
+    ], 'not_a_valid_locale!')).not.toThrow();
   });
 });
 

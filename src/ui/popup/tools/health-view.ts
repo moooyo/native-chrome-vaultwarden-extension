@@ -74,31 +74,20 @@ export class VwHealthView extends LitElement {
         border: 2px solid transparent;
         background-clip: content-box;
       }
-      .score-card {
-        display:flex;
-        align-items:center;
-        gap:14px;
-        padding:14px;
-        border-radius:16px;
-        background:var(--vw-fill);
+      .summary {
+        padding: 4px 2px 8px;
       }
-      .score-ring {
-        position:relative;
-        width:64px;
-        height:64px;
-        display:grid;
-        place-items:center;
-        flex:none;
-        border-radius:50%;
-        background:conic-gradient(var(--grn) 0 86%, var(--vw-track) 86% 100%);
-        color:var(--grn);
-        font:500 18px/1 var(--vw-font-mono);
+      .summary-title {
+        color: var(--vw-ink);
+        font-size: 13.5px;
+        font-weight: 600;
       }
-      .score-ring::before { content:''; position:absolute; inset:7px; border-radius:50%; background:var(--vw-fill); }
-      .score-ring span { position:relative; z-index:1; }
-      .score-copy { min-width:0; }
-      .score-title { color:var(--vw-ink); font-size:13.5px; font-weight:500; }
-      .score-desc { margin-top:3px; color:var(--vw-text-2); font-size:11.5px; line-height:1.45; }
+      .summary-desc {
+        margin-top: 3px;
+        color: var(--vw-text-2);
+        font-size: 11.5px;
+        line-height: 1.45;
+      }
 
       .row {
         display: flex;
@@ -181,6 +170,11 @@ export class VwHealthView extends LitElement {
         border-color: var(--vw-teal-25);
         background: var(--vw-teal-10);
       }
+      .chip.unknown {
+        color: var(--vw-text-2);
+        border-color: var(--vw-line-1);
+        background: var(--vw-fill);
+      }
       .chev {
         width: 14px;
         height: 14px;
@@ -241,19 +235,29 @@ export class VwHealthView extends LitElement {
     emit<ItemOpenDetail>(this, 'vw-item-open', { cipherId });
   }
 
+  private renderBreachChip(entryId: string) {
+    const pwned = this.pwned;
+    if (pwned.status === 'idle' || pwned.status === 'loading' || pwned.status === 'empty') return nothing;
+    if (pwned.status === 'error') {
+      return html`<span class="chip unknown">${t('health.unknown')}</span>`;
+    }
+    const pwnedCount = pwned.data.get(entryId);
+    if (pwnedCount === undefined) {
+      return html`<span class="chip unknown">${t('health.unknown')}</span>`;
+    }
+    return pwnedCount > 0
+      ? html`<span class="chip danger">${t('health.pwned')} · ${pwnedCount}</span>`
+      : html`<span class="chip ok">${t('health.notPwned')}</span>`;
+  }
+
   private renderChips(entry: HealthEntry) {
-    const pwnedCount = this.pwned.status === 'ready' ? this.pwned.data.get(entry.id) : undefined;
     return html`
       <span class="chips">
         ${entry.weak ? html`<span class="chip warn">${t('health.weak')}</span>` : nothing}
         ${entry.reuseCount > 1
           ? html`<span class="chip warn">${t('health.reused')} ×${entry.reuseCount}</span>`
           : nothing}
-        ${pwnedCount === undefined
-          ? nothing
-          : pwnedCount > 0
-            ? html`<span class="chip danger">${t('health.pwned')} · ${pwnedCount}</span>`
-            : html`<span class="chip ok">未泄露</span>` /* TODO i18n */}
+        ${this.renderBreachChip(entry.id)}
       </span>
     `;
   }
@@ -273,6 +277,58 @@ export class VwHealthView extends LitElement {
     `;
   }
 
+  private renderReady(entries: HealthEntry[]) {
+    const pwned = this.pwned;
+    const visibleEntries = entries.filter((entry) => {
+      const breachUnknown = pwned.status === 'error'
+        || (pwned.status === 'ready' && !pwned.data.has(entry.id));
+      const breachCount = pwned.status === 'ready' ? pwned.data.get(entry.id) : undefined;
+      return entry.weak || entry.reuseCount > 1 || breachUnknown || (breachCount ?? 0) > 0;
+    });
+    const unknownCount = pwned.status === 'error'
+      ? entries.length
+      : pwned.status === 'ready'
+        ? entries.filter((entry) => !pwned.data.has(entry.id)).length
+        : 0;
+    const emptyMessage = pwned.status === 'ready' ? t('health.healthy') : t('health.localHealthy');
+    const summaryDescription = pwned.status === 'ready' || pwned.status === 'error'
+      ? t('health.summaryDesc', { count: visibleEntries.length })
+      : t('health.localSummaryDesc', { count: visibleEntries.length });
+
+    return html`
+      <div class="summary">
+        <div class="summary-title">${t('health.summaryTitle')}</div>
+        <div class="summary-desc">${summaryDescription}</div>
+      </div>
+      ${visibleEntries.length > 0
+        ? visibleEntries.map((entry) => this.renderRow(entry))
+        : html`
+          <div class="empty" data-empty>
+            <span class="empty-icon">${uiIcon('checkCircle')}</span>
+            <span class="empty-text">${emptyMessage}</span>
+          </div>
+        `}
+      <button
+        type="button"
+        class="btn primary check"
+        data-check
+        ?disabled=${pwned.status === 'loading'}
+        @click=${() => this.check()}
+      >
+        ${uiIcon('shield')}<span>${pwned.status === 'loading' ? t('common.loading') : t('health.checkBreaches')}</span>
+      </button>
+      ${pwned.status === 'error'
+        ? html`<vw-status-message tone="danger" .icon=${'alert'} .message=${pwned.message}></vw-status-message>`
+        : unknownCount > 0
+          ? html`<vw-status-message
+              tone="warning"
+              .icon=${'alert'}
+              .message=${t('health.incomplete', { count: unknownCount })}
+            ></vw-status-message>`
+          : nothing}
+    `;
+  }
+
   private renderReport() {
     const report = this.report;
     switch (report.status) {
@@ -284,33 +340,12 @@ export class VwHealthView extends LitElement {
       case 'empty':
         return html`
           <div class="empty" data-empty>
-            <span class="empty-icon">${uiIcon('checkCircle')}</span>
-            <span class="empty-text">${t('health.healthy')}</span>
+            <span class="empty-icon">${uiIcon('shield')}</span>
+            <span class="empty-text">${t('health.noCheckable')}</span>
           </div>
         `;
       case 'ready':
-        return html`
-          <div class="score-card">
-            <div class="score-ring" aria-label="86"><span>86</span></div>
-            <div class="score-copy">
-              <div class="score-title">${t('health.summaryTitle')}</div>
-              <div class="score-desc">${t('health.summaryDesc', { count: report.data.length })}</div>
-            </div>
-          </div>
-          ${report.data.map((entry) => this.renderRow(entry))}
-          <button
-            type="button"
-            class="btn primary check"
-            data-check
-            ?disabled=${this.pwned.status === 'loading'}
-            @click=${() => this.check()}
-          >
-            ${uiIcon('shield')}<span>${this.pwned.status === 'loading' ? t('common.loading') : '检查是否泄露' /* TODO i18n */}</span>
-          </button>
-          ${this.pwned.status === 'error'
-            ? html`<vw-status-message tone="danger" .icon=${'alert'} .message=${this.pwned.message}></vw-status-message>`
-            : nothing}
-        `;
+        return this.renderReady(report.data);
     }
   }
 

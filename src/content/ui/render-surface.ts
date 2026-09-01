@@ -10,6 +10,7 @@
 // state nor forge its callbacks — the same security invariant the custom-element version held. Trusted-
 // event gating stays in each surface's own click handlers.
 import { render, type TemplateResult } from 'lit';
+import { registerExtensionOwnedShadowRoot } from '../composed-tree.js';
 
 export interface RenderSurface {
   /** The positioned host element in the page tree (its shadow root is closed — `.shadowRoot` is null). */
@@ -27,6 +28,7 @@ export interface RenderSurface {
 export function mountRenderSurface(styleText: string): RenderSurface {
   const host = document.createElement('div');
   const root = host.attachShadow({ mode: 'closed' });
+  registerExtensionOwnedShadowRoot(root);
   const style = document.createElement('style');
   style.textContent = styleText;
   root.append(style);

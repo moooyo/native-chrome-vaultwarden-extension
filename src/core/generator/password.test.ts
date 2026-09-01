@@ -89,13 +89,13 @@ describe('generatePassword', () => {
     expect(pw.length).toBeLessThanOrEqual(MAX_PASSWORD_LENGTH);
   });
 
-  it('bounds absurd per-class minimums so they cannot blow up the output length', () => {
+  it('rejects per-class minimums whose guarantees cannot fit within the hard limit', () => {
     const pw = generatePassword(
       { length: 8, lowercase: true, uppercase: true, numbers: true, special: true, minNumbers: 5000, minSpecial: 5000, avoidAmbiguous: false },
       seededRandomInt(13),
     );
-    // Each enabled class still guarantees at least one character (up to +4), so allow small headroom.
-    expect(pw.length).toBeLessThanOrEqual(MAX_PASSWORD_LENGTH + 4);
+    expect(pw).toBe('');
+    expect(pw.length).toBeLessThanOrEqual(MAX_PASSWORD_LENGTH);
   });
 
   it('is reproducible for a fixed random source and varies with the seed', () => {

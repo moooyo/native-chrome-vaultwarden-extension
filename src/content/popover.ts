@@ -10,6 +10,7 @@ import {
   POPOVER_STYLES,
   renderPopover,
   type PopoverCandidate,
+  type PopoverDismissReason,
   type PopoverHandlers,
   type PopoverKind,
   type PopoverState,
@@ -25,7 +26,7 @@ export interface AutofillPopover {
   /** Programmatically open the panel (runs the same onOpen path as a trusted shield click). Pass an
    *  anchor to re-position the panel next to a specific field (card/identity open beside the focused
    *  field); omit it to keep the current anchor (login stays on its form anchor). */
-  open(anchor?: HTMLElement): void;
+  open(anchor?: HTMLElement, options?: { focusList?: boolean }): void;
   showStatus(message: string): void;
   showCandidates(candidates: PopoverCandidate[]): void;
   /** Show the post-fill 已填充 confirmation (login side panel, design 2c). */
@@ -45,6 +46,10 @@ export interface AutofillPopoverOptions {
   candidates?: PopoverCandidate[];
   onOpen(): void;
   onSelect(cipherId: string): void;
+  /** Optional one-shot cancellation hook for keyboard-owned pickers. */
+  onDismiss?(reason: PopoverDismissReason): void;
+  /** Register controller state before restoring page focus; return cleanup for a no-op focus. */
+  beforeFocusRestore?(anchor: HTMLElement): () => void;
 }
 
 export function createAutofillPopover(options: AutofillPopoverOptions): AutofillPopover {
@@ -55,9 +60,9 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
     view: sidePanel ? 'hidden' : 'trigger',
     statusMessage: '',
     candidates: options.candidates ?? [],
+    activeIndex: -1,
     sidePanel,
   };
-  const handlers: PopoverHandlers = { onOpen: options.onOpen, onSelect: options.onSelect };
   const surface = mountRenderSurface(POPOVER_STYLES);
   const host = surface.host;
   host.style.position = 'absolute';
@@ -67,39 +72,129 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
   // measure it. The login side panel hangs to the right with a connector; card/identity drop below.
   // `anchor` is mutable so open(el) can re-mount the panel beside a freshly focused field.
   let anchor = options.anchor;
+  let requestedListFocus = false;
+  let requestedListFocusOwner: Element | null = null;
+  let suppressedOpenAnchor: HTMLElement | null = null;
+  let tabDismissTimer: number | undefined;
   const place = sidePanel ? repositionSidePanel : reposition;
-  const draw = (): void => {
+  const focusList = (): void => {
+    const list = surface.root.querySelector<HTMLElement>('[role="listbox"]');
+    if (!list) return;
+    list.focus({ preventScroll: true });
+    const option = surface.root.getElementById(`vw-autofill-option-${state.activeIndex}`);
+    const scroll = (option as HTMLElement | null)?.scrollIntoView;
+    if (typeof scroll === 'function') scroll.call(option, { block: 'nearest' });
+  };
+  const draw = (preserveSurfaceFocus = false): void => {
+    const hadSurfaceFocus = preserveSurfaceFocus && surface.root.activeElement !== null;
     surface.render(renderPopover(state, handlers));
     place(host, anchor);
+    if (state.view === 'list' && state.candidates.length > 0 && hadSurfaceFocus) focusList();
+  };
+  const focusAnchor = (): void => {
+    if (!anchor.isConnected || document.activeElement === anchor) return;
+    const clearControllerSuppression = options.beforeFocusRestore?.(anchor);
+    if (!clearControllerSuppression) suppressedOpenAnchor = anchor;
+    try {
+      anchor.focus({ preventScroll: true });
+    } finally {
+      clearControllerSuppression?.();
+    }
+    if (document.activeElement !== anchor) suppressedOpenAnchor = null;
+  };
+  const clearTabDismiss = (): void => {
+    if (tabDismissTimer === undefined) return;
+    window.clearTimeout(tabDismissTimer);
+    tabDismissTimer = undefined;
+  };
+  const dismiss = (reason: PopoverDismissReason): void => {
+    clearTabDismiss();
+    state.view = 'hidden';
+    state.activeIndex = -1;
+    draw();
+    if (reason === 'escape') focusAnchor();
+    options.onDismiss?.(reason);
+  };
+  const handlers: PopoverHandlers = {
+    onOpen: options.onOpen,
+    onSelect: options.onSelect,
+    onActiveIndexChange(index) {
+      if (state.view !== 'list' || index < 0 || index >= state.candidates.length) return;
+      state.activeIndex = index;
+      draw(true);
+    },
+    onKeyboardSelect(index) {
+      if (state.view !== 'list') return;
+      const candidate = state.candidates[index];
+      if (!candidate) return;
+      focusAnchor();
+      options.onSelect(candidate.id);
+    },
+    onDismiss(reason) {
+      if (reason === 'tab') {
+        clearTabDismiss();
+        tabDismissTimer = window.setTimeout(() => {
+          tabDismissTimer = undefined;
+          if (state.view === 'list') dismiss('tab');
+        }, 0);
+        return;
+      }
+      dismiss(reason);
+    },
   };
   draw();
 
   return {
     element: host,
     root: surface.root,
-    open(nextAnchor?: HTMLElement) {
+    open(nextAnchor?: HTMLElement, openOptions?: { focusList?: boolean }) {
+      const openingAnchor = nextAnchor ?? anchor;
+      if (suppressedOpenAnchor === openingAnchor) {
+        suppressedOpenAnchor = null;
+        return;
+      }
       if (nextAnchor) anchor = nextAnchor;
+      clearTabDismiss();
+      requestedListFocus = openOptions?.focusList === true;
+      requestedListFocusOwner = requestedListFocus ? document.activeElement : null;
       options.onOpen();
     },
     showStatus(message: string) {
+      requestedListFocus = false;
+      requestedListFocusOwner = null;
       state.statusMessage = message;
       state.view = 'status';
+      state.activeIndex = -1;
       draw();
     },
     showCandidates(candidates: PopoverCandidate[]) {
+      const hadSurfaceFocus = surface.root.activeElement !== null;
+      const honorRequestedFocus = requestedListFocus && document.activeElement === requestedListFocusOwner;
+      requestedListFocus = false;
+      requestedListFocusOwner = null;
       state.candidates = candidates;
       state.view = 'list';
+      state.activeIndex = candidates.length > 0 ? 0 : -1;
       draw();
+      if (candidates.length > 0 && (hadSurfaceFocus || honorRequestedFocus)) focusList();
     },
     showFilled() {
+      requestedListFocus = false;
+      requestedListFocusOwner = null;
       state.view = 'filled';
+      state.activeIndex = -1;
       draw();
     },
     hide() {
+      clearTabDismiss();
+      requestedListFocus = false;
+      requestedListFocusOwner = null;
       state.view = 'hidden';
+      state.activeIndex = -1;
       draw();
     },
     remove() {
+      clearTabDismiss();
       surface.remove();
     },
   };

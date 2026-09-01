@@ -31,7 +31,16 @@ export function formatTotp(code: string): string {
 }
 
 /** Read a chosen file into base64 (the worker re-encrypts it under a fresh attachment key). */
-export async function fileToBase64(file: Blob): Promise<string> {
+export async function fileToBase64(file: Blob, maxBytes?: number): Promise<string> {
+  if (maxBytes !== undefined) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+      throw new RangeError('maxBytes must be a non-negative safe integer');
+    }
+    const size = file.size;
+    if (!Number.isSafeInteger(size) || size < 0 || size > maxBytes) {
+      throw new RangeError('Blob size exceeds the allowed maximum');
+    }
+  }
   return bytesToBase64(new Uint8Array(await file.arrayBuffer()));
 }
 

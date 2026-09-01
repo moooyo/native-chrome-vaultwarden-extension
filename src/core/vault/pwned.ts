@@ -27,12 +27,20 @@ export async function pwnedCount(
   const res = await fetchFn(`${HIBP_RANGE}${prefix}`, { headers: { 'Add-Padding': 'true' } });
   if (!res.ok) throw new Error(`HIBP request failed: ${res.status}`);
   const body = await res.text();
-  for (const line of body.split('\n')) {
-    const sep = line.indexOf(':');
-    if (sep < 0) continue;
-    if (line.slice(0, sep).trim().toUpperCase() === suffix) {
-      return Number.parseInt(line.slice(sep + 1).trim(), 10) || 0;
-    }
+  let validLines = 0;
+  let matchingCount: number | undefined;
+  for (const rawLine of body.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const match = /^([0-9A-F]{35}):(\d+)$/i.exec(line);
+    if (!match) throw new Error('HIBP response was malformed');
+    const count = Number(match[2]);
+    if (!Number.isSafeInteger(count)) throw new Error('HIBP response contained an invalid breach count');
+    validLines += 1;
+    if (match[1]!.toUpperCase() !== suffix) continue;
+    if (matchingCount !== undefined) throw new Error('HIBP response contained a duplicate suffix');
+    matchingCount = count;
   }
-  return 0;
+  if (validLines === 0) throw new Error('HIBP response was empty');
+  return matchingCount ?? 0;
 }

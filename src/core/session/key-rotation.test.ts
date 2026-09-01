@@ -12,13 +12,13 @@ vi.mock('../vault/rotate.js', async (importOriginal) => {
 import { rotateAccountKey } from './key-rotation.js';
 import { rotateCipher } from '../vault/rotate.js';
 import { symmetricKeyFromBytes, unwrapSymmetricKey } from '../crypto/keys.js';
-import { deriveMasterKey, stretchMasterKey } from '../crypto/kdf.js';
+import { deriveMasterKey, stretchMasterKey, type KdfConfig } from '../crypto/kdf.js';
 import { encryptToText, encryptToBytes, decryptToBytes, decryptToText } from '../crypto/encstring.js';
 import { rsaOaepDecrypt } from '../crypto/primitives.js';
 import { base64ToBytes, bytesToBase64, bytesToHex, hexToBytes } from '../crypto/encoding.js';
 import { KDF_VECTOR_600K, USER_KEY_VECTOR, RSA_PRIVATE_KEY_VECTOR } from '../../../test/vectors.js';
 import type { CipherResponse } from '../api/types.js';
-import type { RotateKeyData } from '../api/types.js';
+import type { RotateKeyData, SyncResponse } from '../api/types.js';
 
 const subtle = globalThis.crypto.subtle;
 
@@ -29,7 +29,7 @@ const oldUserKey = symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex))
 const pkcs8 = base64ToBytes(RSA_PRIVATE_KEY_VECTOR.pkcs8B64);
 
 function makeSession(overrides: Partial<{
-  getPersistedAuth: () => Promise<{ email: string; accessToken: string; kdfIterations: number; encPrivateKey?: string } | undefined>;
+  getPersistedAuth: () => Promise<({ email: string; accessToken: string; encPrivateKey?: string } & KdfConfig) | undefined>;
   loadUserKey: () => Promise<ReturnType<typeof symmetricKeyFromBytes> | undefined>;
   loadPrivateKey: () => Promise<Uint8Array | undefined>;
   logout: () => Promise<void>;
@@ -38,6 +38,7 @@ function makeSession(overrides: Partial<{
     getPersistedAuth: vi.fn(overrides.getPersistedAuth ?? (async () => ({
       email: EMAIL,
       accessToken: 'access-token',
+      kdf: 0 as const,
       kdfIterations: ITERATIONS,
       encPrivateKey: RSA_PRIVATE_KEY_VECTOR.encPrivateKey,
     }))),
@@ -48,10 +49,13 @@ function makeSession(overrides: Partial<{
 }
 
 function makeApi(overrides: Partial<{
-  sync: (token: string) => Promise<unknown>;
+  sync: (token: string) => Promise<SyncResponse & { sends?: unknown[] }>;
   getTrustedEmergencyAccess: (token: string) => Promise<Array<{ id: string }>>;
   getOrganizationPublicKey: (token: string, orgId: string) => Promise<{ publicKey: string }>;
   getAccountPublicKey: (token: string) => Promise<{ publicKey: string }>;
+  getKeyRotationUnlockRecordsStatus: (
+    token: string,
+  ) => Promise<{ passkeyUnlockData: 'empty' | 'present'; deviceKeyUnlockData: 'empty' | 'present' }>;
   rotateAccountKey: (token: string, body: RotateKeyData) => Promise<void>;
 }> = {}) {
   return {
@@ -66,6 +70,10 @@ function makeApi(overrides: Partial<{
       throw new Error('unexpected: no org should need a public key in this fixture');
     })),
     getAccountPublicKey: vi.fn(overrides.getAccountPublicKey ?? (async () => ({ publicKey: 'account-pub-key-b64' }))),
+    getKeyRotationUnlockRecordsStatus: vi.fn(overrides.getKeyRotationUnlockRecordsStatus ?? (async () => ({
+      passkeyUnlockData: 'empty' as const,
+      deviceKeyUnlockData: 'empty' as const,
+    }))),
     rotateAccountKey: vi.fn(overrides.rotateAccountKey ?? (async () => {})),
   };
 }
@@ -73,7 +81,11 @@ function makeApi(overrides: Partial<{
 const verifyMasterPassword = vi.fn(async (pw: string) => pw === PASSWORD);
 
 async function currentUserKeyFrom(body: RotateKeyData) {
-  const stretched = await stretchMasterKey(await deriveMasterKey(PASSWORD, EMAIL, ITERATIONS));
+  const stretched = await stretchMasterKey(await deriveMasterKey(
+    PASSWORD,
+    EMAIL,
+    { kdf: 0, kdfIterations: ITERATIONS },
+  ));
   return unwrapSymmetricKey(body.accountUnlockData.masterPasswordUnlockData.masterKeyEncryptedUserKey, stretched);
 }
 
@@ -113,13 +125,58 @@ describe('rotateAccountKey — guards (fail closed, no downstream calls)', () =>
     const api = makeApi({ getTrustedEmergencyAccess: async () => [{ id: 'grant-1' }] });
     await expect(rotateAccountKey(PASSWORD, { api, session, verifyMasterPassword }))
       .rejects.toThrow(/emergency/i);
-    expect(api.sync).not.toHaveBeenCalled();
+    expect(api.sync).toHaveBeenCalledOnce();
+    expect(api.rotateAccountKey).not.toHaveBeenCalled();
+  });
+
+  it('rejects an authoritative sync that belongs to a different account', async () => {
+    const session = makeSession();
+    const api = makeApi({
+      sync: async () => ({
+        profile: { id: 'other', email: 'other@example.com', organizations: [] },
+        ciphers: [], folders: [], sends: [],
+      }),
+    });
+
+    await expect(rotateAccountKey(PASSWORD, { api, session, verifyMasterPassword }))
+      .rejects.toMatchObject({ code: 'session_expired' });
+    expect(api.getTrustedEmergencyAccess).not.toHaveBeenCalled();
+    expect(api.rotateAccountKey).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['passkey', { passkeyUnlockData: 'present', deviceKeyUnlockData: 'empty' }],
+    ['trusted device', { passkeyUnlockData: 'empty', deviceKeyUnlockData: 'present' }],
+  ] as const)('rejects authoritative %s unlock records before POST', async (_name, status) => {
+    const api = makeApi({ getKeyRotationUnlockRecordsStatus: async () => status });
+
+    await expect(rotateAccountKey(PASSWORD, {
+      api,
+      session: makeSession(),
+      verifyMasterPassword,
+    })).rejects.toThrow(/passkey|trusted device/i);
+
+    expect(api.getKeyRotationUnlockRecordsStatus).toHaveBeenCalledWith('access-token');
+    expect(api.rotateAccountKey).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the authoritative unlock-record inventory is unavailable', async () => {
+    const failure = new Error('unlock inventory schema is unsupported');
+    const api = makeApi({
+      getKeyRotationUnlockRecordsStatus: async () => { throw failure; },
+    });
+
+    await expect(rotateAccountKey(PASSWORD, {
+      api,
+      session: makeSession(),
+      verifyMasterPassword,
+    })).rejects.toBe(failure);
     expect(api.rotateAccountKey).not.toHaveBeenCalled();
   });
 });
 
 describe('rotateAccountKey — empty vault happy path', () => {
-  it('rotates an empty vault: builds an internally-consistent payload and logs out', async () => {
+  it('rotates an empty vault and delegates terminal cleanup to its caller', async () => {
     const session = makeSession();
     const api = makeApi();
 
@@ -131,6 +188,8 @@ describe('rotateAccountKey — empty vault happy path', () => {
     expect(body.accountData).toEqual({ ciphers: [], folders: [], sends: [] });
     expect(body.accountUnlockData.emergencyAccessUnlockData).toEqual([]);
     expect(body.accountUnlockData.organizationAccountRecoveryUnlockData).toEqual([]);
+    expect(body.accountUnlockData.passkeyUnlockData).toEqual([]);
+    expect(body.accountUnlockData.deviceKeyUnlockData).toEqual([]);
     expect(body.oldMasterKeyAuthenticationHash).toBe(KDF_VECTOR_600K.masterPasswordHashB64);
 
     const u = body.accountUnlockData.masterPasswordUnlockData;
@@ -150,14 +209,14 @@ describe('rotateAccountKey — empty vault happy path', () => {
     expect(bytesToHex(recoveredPkcs8)).toBe(bytesToHex(pkcs8));
     expect(body.accountKeys.accountPublicKey).toBe('account-pub-key-b64');
 
-    expect(session.logout).toHaveBeenCalledTimes(1);
+    expect(session.logout).not.toHaveBeenCalled();
   });
 });
 
 describe('rotateAccountKey — cipher/folder/send re-encryption', () => {
   it('throws before any POST when a personal cipher cannot be decrypted with the old UserKey', async () => {
     const wrongKey = symmetricKeyFromBytes(new Uint8Array(64).fill(9));
-    const badCipher = { id: 'c1', type: 1, name: await encryptToText('x', wrongKey) } as unknown as CipherResponse;
+    const badCipher = { id: 'c1', type: 1, name: await encryptToText('x', wrongKey), login: {} } as unknown as CipherResponse;
     const session = makeSession();
     const api = makeApi({
       sync: async () => ({ profile: { id: 'u1', email: EMAIL, organizations: [] }, ciphers: [badCipher], folders: [], sends: [] }),
@@ -167,9 +226,9 @@ describe('rotateAccountKey — cipher/folder/send re-encryption', () => {
   });
 
   it('rotates personal ciphers including trashed ones, and excludes organization ciphers', async () => {
-    const personalActive = { id: 'p1', type: 1, name: await encryptToText('Active', oldUserKey) } as unknown as CipherResponse;
+    const personalActive = { id: 'p1', type: 1, name: await encryptToText('Active', oldUserKey), login: {} } as unknown as CipherResponse;
     const personalTrashed = {
-      id: 'p2', type: 1, name: await encryptToText('Trashed', oldUserKey), deletedDate: '2026-01-01T00:00:00Z',
+      id: 'p2', type: 1, name: await encryptToText('Trashed', oldUserKey), login: {}, deletedDate: '2026-01-01T00:00:00Z',
     } as unknown as CipherResponse;
     const orgCipher = { id: 'o1', type: 1, organizationId: 'org-1', name: '2.some-org-ciphertext==' } as unknown as CipherResponse;
     const session = makeSession();
@@ -193,6 +252,73 @@ describe('rotateAccountKey — cipher/folder/send re-encryption', () => {
     const trashed = rotated.find((c) => c.id === 'p2')!;
     expect(await decryptToText(active.name, newUserKey)).toBe('Active');
     expect(await decryptToText(trashed.name, newUserKey)).toBe('Trashed');
+  });
+
+  it('submits one canonical structured projection with no old UserKey ciphertext or redundant Data', async () => {
+    const name = await encryptToText('Canonical', oldUserKey);
+    const username = await encryptToText('alice', oldUserKey);
+    const password = await encryptToText('secret', oldUserKey);
+    const uri = await encryptToText('https://example.test', oldUserKey);
+    const cipher = {
+      id: 'canonical',
+      type: 1,
+      name,
+      login: { uri, uris: [{ uri }], username, password },
+      data: JSON.stringify({ Name: name, Uris: [{ Uri: uri }], Username: username, Password: password }),
+    } as CipherResponse;
+    const api = makeApi({
+      sync: async () => ({
+        profile: { id: 'u1', email: EMAIL, organizations: [] },
+        ciphers: [cipher], folders: [], sends: [],
+      }),
+    });
+
+    await rotateAccountKey(PASSWORD, { api, session: makeSession(), verifyMasterPassword });
+
+    const [, body] = api.rotateAccountKey.mock.calls[0]! as [string, RotateKeyData];
+    const rotated = body.accountData.ciphers[0] as Record<string, unknown> & {
+      name: string;
+      login: Record<string, unknown> & { username: string; password: string; uris: Array<{ uri: string }> };
+    };
+    const serializedBody = JSON.stringify(body);
+    expect(rotated).not.toHaveProperty('data');
+    expect(rotated.login).not.toHaveProperty('uri');
+    for (const oldCiphertext of [name, username, password, uri]) {
+      expect(serializedBody).not.toContain(oldCiphertext);
+    }
+    const newUserKey = await currentUserKeyFrom(body);
+    expect(await decryptToText(rotated.name, newUserKey)).toBe('Canonical');
+    expect(await decryptToText(rotated.login.username, newUserKey)).toBe('alice');
+    expect(await decryptToText(rotated.login.password, newUserKey)).toBe('secret');
+    expect(await decryptToText(rotated.login.uris[0]!.uri, newUserKey)).toBe('https://example.test');
+  });
+
+  it.each([
+    ['mismatched Data', (name: string) => ({
+      id: 'mismatch', type: 1, name, login: {}, data: JSON.stringify({ Name: '2.different==' }),
+    })],
+    ['unknown Data field', (name: string) => ({
+      id: 'unknown-data', type: 1, name, login: {}, data: JSON.stringify({ Name: name, FutureSecret: name }),
+    })],
+    ['sealed Data blob', (name: string) => ({
+      id: 'blob', type: 1, name, login: {}, data: JSON.stringify({ format_version: 1, wrapped_cek: name }),
+    })],
+    ['unknown top-level field', (name: string) => ({
+      id: 'unknown-envelope', type: 1, name, login: {}, futureEncryptedField: name,
+    })],
+  ] as const)('blocks %s before the irreversible rotation POST', async (_label, buildCipher) => {
+    const name = await encryptToText('Blocked', oldUserKey);
+    const api = makeApi({
+      sync: async () => ({
+        profile: { id: 'u1', email: EMAIL, organizations: [] },
+        ciphers: [buildCipher(name) as CipherResponse], folders: [], sends: [],
+      }),
+    });
+
+    await expect(rotateAccountKey(PASSWORD, {
+      api, session: makeSession(), verifyMasterPassword,
+    })).rejects.toBeTruthy();
+    expect(api.rotateAccountKey).not.toHaveBeenCalled();
   });
 
   it('re-encrypts folders and sends under the new UserKey (round-trip decrypt matches)', async () => {
@@ -275,7 +401,7 @@ describe('rotateAccountKey — organization account-recovery re-enrollment', () 
 
 describe('rotateAccountKey — strict pre-POST self-verify', () => {
   it('aborts (no POST) when the self-verify detects an undecryptable rotated cipher', async () => {
-    const goodCipher = { id: 'c1', type: 1, name: await encryptToText('ok', oldUserKey) } as unknown as CipherResponse;
+    const goodCipher = { id: 'c1', type: 1, name: await encryptToText('ok', oldUserKey), login: {} } as unknown as CipherResponse;
     const otherKey = symmetricKeyFromBytes(new Uint8Array(64).fill(5));
     // Force rotateCipher (normally fail-closed and self-consistent) to instead return a KEYLESS
     // cipher whose name is encrypted under a key that is NEITHER old nor new — something the real
@@ -294,7 +420,7 @@ describe('rotateAccountKey — strict pre-POST self-verify', () => {
   });
 
   it('aborts (no POST) when a keyed cipher\'s attachment key is wrapped under the legacy UserKey, not the item key', async () => {
-    const goodCipher = { id: 'c1', type: 1, name: await encryptToText('ok', oldUserKey) } as unknown as CipherResponse;
+    const goodCipher = { id: 'c1', type: 1, name: await encryptToText('ok', oldUserKey), login: {} } as unknown as CipherResponse;
     const itemKeyBytes = new Uint8Array(64).fill(3);
     // Force rotateCipher to return a KEYED cipher (as the real implementation would: item key
     // re-wrapped under the actual new UserKey generated by the orchestrator, attachments untouched)

@@ -18,14 +18,20 @@ export class VwAccountMenu extends LitElement {
   static override properties = {
     accounts: { attribute: false },
     pinEnabled: { type: Boolean },
+    pinAllowed: { type: Boolean },
     deviceRemembered: { type: Boolean },
+    deviceLoginApprovalCount: { type: Number },
+    constrained: { type: Boolean },
     open: { type: Boolean },
     disabled: { type: Boolean },
   };
 
   declare accounts: AccountInfo[];
   declare pinEnabled: boolean;
+  declare pinAllowed: boolean;
   declare deviceRemembered: boolean;
+  declare deviceLoginApprovalCount: number;
+  declare constrained: boolean;
   declare open: boolean;
   declare disabled: boolean;
 
@@ -36,7 +42,10 @@ export class VwAccountMenu extends LitElement {
     super();
     this.accounts = [];
     this.pinEnabled = false;
+    this.pinAllowed = true;
     this.deviceRemembered = false;
+    this.deviceLoginApprovalCount = 0;
+    this.constrained = false;
     this.open = false;
     this.disabled = false;
   }
@@ -91,9 +100,26 @@ export class VwAccountMenu extends LitElement {
         add(`${t('auth.switchAccount')} · ${account.email}`, { action: 'switch-account', email: account.email }, { icon: 'user' });
       }
     }
+    if (this.constrained) {
+      add(t('popup.lock'), { action: 'lock' }, { icon: 'lock' });
+      add(t('auth.logout'), { action: 'logout' }, { icon: 'logout', tone: 'danger' });
+      return items;
+    }
     add(t('auth.addAccount'), { action: 'add-account' }, { icon: 'plus' });
-    add(this.pinEnabled ? t('auth.managePin') : t('auth.setPin'), { action: 'pin' }, { icon: 'lock' });
+    if (this.pinAllowed) {
+      add(this.pinEnabled ? t('auth.managePin') : t('auth.setPin'), { action: 'pin' }, { icon: 'lock' });
+    } else {
+      add(t('auth.pinManaged'), { action: 'pin' }, { icon: 'lock', disabled: true });
+    }
     add(t('popup.accountSecurity'), { action: 'account-security' }, { icon: 'key' });
+    const approvalCount = Number.isSafeInteger(this.deviceLoginApprovalCount)
+      ? Math.max(0, this.deviceLoginApprovalCount)
+      : 0;
+    add(
+      t('auth.deviceLogin.approvalsMenu', { count: approvalCount }),
+      { action: 'device-login-approvals' },
+      { icon: 'idcard' },
+    );
     add(t('popup.settings'), { action: 'options' }, { icon: 'globe' });
     if (this.deviceRemembered) {
       add(t('auth.forgetDevice'), { action: 'forget-device' }, { icon: 'alert' });

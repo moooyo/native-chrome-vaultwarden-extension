@@ -3,15 +3,16 @@ import { encryptCipher, mergeServerManagedFields } from './encrypt.js';
 import { decryptCipher } from './decrypt.js';
 import { symmetricKeyFromBytes } from '../crypto/keys.js';
 import { hexToBytes } from '../crypto/encoding.js';
+import { decryptToText } from '../crypto/encstring.js';
 import { USER_KEY_VECTOR } from '../../../test/vectors.js';
 import { CARD_FIELDS, IDENTITY_FIELDS } from './models.js';
-import type { CipherInput } from './models.js';
+import type { CipherInput, SshCipherInput, WritableCipherInput } from './models.js';
 import type { CipherResponse } from '../api/types.js';
 
 const userKey = symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex));
 
 /** Decrypt an encrypted request as if it were a synced cipher, to prove the round-trip. */
-async function roundTrip(input: CipherInput) {
+async function roundTrip(input: WritableCipherInput) {
   const req = await encryptCipher(input, userKey);
   return { req, decrypted: await decryptCipher({ id: 'new', ...req } as CipherResponse, userKey) };
 }
@@ -72,6 +73,136 @@ describe('encryptCipher', () => {
     expect(decrypted?.identity).toMatchObject({ firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com', ssn: '123-45-6789' });
   });
 
+  it('regenerates an encrypted Bitwarden checksum for every written URI', async () => {
+    const req = await encryptCipher({
+      type: 1,
+      name: 'Checksums',
+      login: { uris: [{ uri: 'https://example.com' }, { uri: 'example.org', match: 2 }] },
+    }, userKey);
+
+    expect(req.login?.uris).toHaveLength(2);
+    await expect(decryptToText(req.login!.uris![0]!.uriChecksum!, userKey)).resolves.toBe(
+      'EAaArVRs5qV39C9S3zO0z9ynVoWeZkuNfeMpsVDQnOk=',
+    );
+    await expect(decryptToText(req.login!.uris![1]!.uriChecksum!, userKey)).resolves.toBe(
+      'v6vDdDKViwYzYNOtZGHJxHNa5/jt1GWSpeDwFFKy5LU=',
+    );
+    expect(JSON.stringify(req)).not.toContain('EAaArVRs5qV39C9S3zO0z9ynVoWeZkuNfeMpsVDQnOk=');
+  });
+
+  it.each([false, true, null] as const)(
+    'writes the page-load autofill override without truthy coercion: %s',
+    async (autofillOnPageLoad) => {
+      const req = await encryptCipher({
+        type: 1,
+        name: 'Autofill override',
+        login: { autofillOnPageLoad },
+      }, userKey);
+      expect(req.login).toHaveProperty('autofillOnPageLoad', autofillOnPageLoad);
+    },
+  );
+
+  it('writes nullable password revision timestamps and rejects invalid ISO input', async () => {
+    const timestamp = '2026-08-30T01:02:03.1234567+08:00';
+    const dated = await encryptCipher({
+      type: 1,
+      name: 'Dated login',
+      login: { passwordRevisionDate: timestamp },
+    }, userKey);
+    const reset = await encryptCipher({
+      type: 1,
+      name: 'Reset date',
+      login: { passwordRevisionDate: null },
+    }, userKey);
+    expect(dated.login).toHaveProperty('passwordRevisionDate', timestamp);
+    expect(reset.login).toHaveProperty('passwordRevisionDate', null);
+    await expect(encryptCipher({
+      type: 1,
+      name: 'Invalid date',
+      login: { passwordRevisionDate: '2026-02-30T01:02:03Z' },
+    }, userKey)).rejects.toThrow(/ISO-8601/);
+  });
+
+  it('encrypts a complete SSH cipher and round-trips common fields without plaintext leakage', async () => {
+    const input: SshCipherInput = {
+      type: 5,
+      name: 'Production deploy key',
+      notes: 'Rotated quarterly',
+      favorite: true,
+      reprompt: true,
+      sshKey: {
+        privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----\nPRIVATE\n-----END OPENSSH PRIVATE KEY-----\n',
+        publicKey: 'ssh-ed25519 AAAAPUBLIC deploy@example',
+        keyFingerprint: 'SHA256:fingerprint',
+      },
+      fields: [{ type: 0, name: 'Environment', value: 'production' }],
+    };
+
+    const { req, decrypted } = await roundTrip(input);
+
+    expect(req.type).toBe(5);
+    expect(req.reprompt).toBe(1);
+    expect(req.sshKey).toEqual({
+      privateKey: expect.stringMatching(/^2\./),
+      publicKey: expect.stringMatching(/^2\./),
+      keyFingerprint: expect.stringMatching(/^2\./),
+    });
+    for (const plaintext of [
+      'PRIVATE', 'AAAAPUBLIC', 'SHA256:fingerprint', 'Rotated quarterly', 'production',
+    ]) expect(JSON.stringify(req)).not.toContain(plaintext);
+    expect(decrypted).toMatchObject({
+      type: 5,
+      name: 'Production deploy key',
+      notes: 'Rotated quarterly',
+      favorite: true,
+      reprompt: true,
+      sshKey: input.sshKey,
+      fields: [{ type: 0, name: 'Environment', value: 'production' }],
+    });
+  });
+
+  it('round-trips an SSH private key at the exact guaranteed plaintext boundary', async () => {
+    const privateKey = 'k'.repeat(3_695);
+    const { req, decrypted } = await roundTrip({
+      type: 5,
+      name: 'Boundary key',
+      sshKey: { privateKey, publicKey: 'PUBLIC', keyFingerprint: 'SHA256:x' },
+    });
+
+    expect(req.sshKey?.privateKey).toHaveLength(5_000);
+    expect(decrypted?.sshKey?.privateKey).toBe(privateKey);
+  });
+
+  it('rejects incomplete, oversized, or type-confused SSH writer input', async () => {
+    await expect(encryptCipher({
+      type: 5,
+      name: 'Missing public fields',
+      sshKey: { privateKey: 'PRIVATE' },
+    } as unknown as WritableCipherInput, userKey)).rejects.toThrow(/writer requires/i);
+    await expect(encryptCipher({
+      type: 5,
+      name: 'Oversized',
+      sshKey: { privateKey: 'k'.repeat(3_696), publicKey: 'PUBLIC', keyFingerprint: 'SHA256:x' },
+    }, userKey)).rejects.toThrow(/bounded/i);
+    await expect(encryptCipher({
+      type: 5,
+      name: 'Confused',
+      login: { password: 'must-not-encrypt' },
+      sshKey: { privateKey: 'PRIVATE', publicKey: 'PUBLIC', keyFingerprint: 'SHA256:x' },
+    }, userKey)).rejects.toThrow(/must not contain login/i);
+    await expect(encryptCipher({
+      type: 5,
+      name: 'Raw authority must not enter the writer',
+      data: '{"Name":"plaintext-conflict"}',
+      sshKey: { privateKey: 'PRIVATE', publicKey: 'PUBLIC', keyFingerprint: 'SHA256:x' },
+    } as unknown as WritableCipherInput, userKey)).rejects.toThrow(/must not contain data/i);
+    await expect(encryptCipher({
+      type: 1,
+      name: 'Login',
+      sshKey: { privateKey: 'PRIVATE', publicKey: 'PUBLIC', keyFingerprint: 'SHA256:x' },
+    }, userKey)).rejects.toThrow(/only ssh ciphers/i);
+  });
+
   it('omits empty optional fields and defaults favorite/folderId', async () => {
     const req = await encryptCipher({ type: 1, name: 'Bare', login: { username: 'u' } }, userKey);
     expect(req.favorite).toBe(false);
@@ -121,12 +252,14 @@ describe('mergeServerManagedFields', () => {
     const original: CipherResponse = {
       id: 'c1', type: 1,
       key: '2.cipherkey==',
+      archivedDate: '2026-08-30T00:00:00.000Z',
       reprompt: 1,
       fields: [{ type: 0, name: '2.fieldname==', value: '2.fieldvalue==' }],
       passwordHistory: [{ password: '2.oldpassword==', lastUsedDate: '2020-01-01T00:00:00.000Z' }],
       login: {
         username: '2.ignored==',
         fido2Credentials: [{ credentialId: '2.cid==', keyValue: '2.kv==', rpId: '2.rp==' }],
+        autofillOnPageLoad: false,
         passwordRevisionDate: '2020-01-01T00:00:00.000Z',
       },
     };
@@ -136,6 +269,7 @@ describe('mergeServerManagedFields', () => {
     // The editor's own login fields are not clobbered by the merge.
     expect(merged.login?.username).toBe(req.login!.username);
     expect(merged.login?.password).toBe(req.login!.password);
+    expect(merged.login).toHaveProperty('autofillOnPageLoad', false);
     expect(merged.login?.passwordRevisionDate).toBe('2020-01-01T00:00:00.000Z');
     expect(merged.passwordHistory).toEqual(original.passwordHistory);
     // custom fields and reprompt are now editor-controlled (encryptCipher writes them); the merge must
@@ -143,6 +277,48 @@ describe('mergeServerManagedFields', () => {
     expect(merged.fields).toBeUndefined();
     expect(merged.reprompt).toBe(0);
     expect(merged.key).toBe('2.cipherkey==');
+    expect(merged.archivedDate).toBe('2026-08-30T00:00:00.000Z');
+  });
+
+  it('rejects unknown custom-field types and lossy field/type combinations', async () => {
+    const base = { type: 1 as const, name: 'Invalid fields', login: { password: 'p' } };
+    await expect(encryptCipher({
+      ...base,
+      fields: [{ type: 9, name: 'Future', value: 'secret' }],
+    } as never, userKey)).rejects.toThrow('Custom field is invalid');
+    await expect(encryptCipher({
+      ...base,
+      fields: [{ type: 2, name: 'Enabled', value: 'yes' }],
+    }, userKey)).rejects.toThrow('Boolean custom field value is invalid');
+    await expect(encryptCipher({
+      ...base,
+      fields: [{ type: 0, name: 'Text', value: 'safe', linkedId: 100 }],
+    }, userKey)).rejects.toThrow('Only Linked custom fields can store a linkedId');
+    await expect(encryptCipher({
+      ...base,
+      fields: [{ type: 3, name: 'Alias', value: 'must-not-be-dropped', linkedId: 100 }],
+    }, userKey)).rejects.toThrow('Linked custom fields cannot store a value');
+  });
+
+  it('never overwrites explicit login metadata with carried server values', async () => {
+    const req = await encryptCipher({
+      type: 1,
+      name: 'Explicit metadata',
+      login: { autofillOnPageLoad: true, passwordRevisionDate: null },
+    }, userKey);
+    const original: CipherResponse = {
+      id: 'c1',
+      type: 1,
+      login: {
+        autofillOnPageLoad: false,
+        passwordRevisionDate: '2020-01-01T00:00:00.000Z',
+      },
+    };
+
+    mergeServerManagedFields(req, original);
+
+    expect(req.login).toHaveProperty('autofillOnPageLoad', true);
+    expect(req.login).toHaveProperty('passwordRevisionDate', null);
   });
 
   it('is a no-op on the create path (no original cipher)', async () => {

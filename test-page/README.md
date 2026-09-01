@@ -1,7 +1,7 @@
 # MiYu autofill & passkey test page
 
-A local page that exercises every autofill surface the extension exposes — **including
-passkey register + authenticate**, which the earlier test page did not cover.
+A local page that exercises MiYu's login, TOTP, generator, card, and identity field flows, plus
+**passkey register + authenticate**.
 
 ## Run it
 
@@ -12,12 +12,8 @@ npm run serve:testpage -- 9000  # → http://localhost:9000/
 ```
 
 Open the printed **`http://localhost:PORT`** URL in the browser that has the unpacked
-extension loaded.
-
-> **Use the `localhost` name, not `127.0.0.1`.** MiYu validates the passkey `rpId`
-> against the Public Suffix List and accepts `localhost` but rejects a bare IP as a
-> non-registrable domain (`src/core/vault/domain.ts` → `isRegistrableRpId`). An IP host
-> makes the passkey section fall through to the native authenticator.
+extension loaded. `http://127.0.0.1:PORT` is also supported; the server prints `localhost`
+only to keep one canonical test origin.
 
 ### Why a server (not `file://`)
 
@@ -33,8 +29,12 @@ origin is wrong.
 
 1. Load the extension unpacked and **unlock the vault** (open the popup, sign in). Autofill
    and passkey storage both need the unlocked vault in the background worker.
-2. For the **2FA** section to show a code, your vault needs a login item whose URI matches
-   `localhost` (e.g. `http://localhost:8770`) **and** that carries a TOTP secret.
+2. In **Settings → Autofill**, enable **Website passkeys** and approve the browser's website
+   access prompt. The feature is off by default and does not replace WebAuthn while disabled.
+3. To test the on-page login, TOTP, card, and identity pickers, enable **Inline suggestions** in
+   the same section.
+4. For the **2FA** section to show a code, your vault needs a login item whose URI matches the test
+   origin (for example, `http://localhost:8770`) **and** that carries a TOTP secret.
 
 ## What each section tests
 
@@ -43,9 +43,10 @@ origin is wrong.
 | 1 | Login (single step) | **Focus** username or password | Side match-panel opens to the right; picking an item fills both fields |
 | 2 | Two-step login | **Focus** the email field | Panel offers a username for the first step |
 | 3 | Two-factor code | **Focus** the code field | Live TOTP panel for the top matching login (needs a matching login with TOTP) |
-| 4 | Registration | **Focus** *Create password* | Inline generator panel; can fill + save the new login |
-| 5 | Credit card | Click the **密屿** trigger under a field, right-click → 密屿, or `Ctrl+Shift+F` | Card picker → fills name/number/exp/cvc |
-| 6 | Identity & address | Same triggers as card | Identity picker → fills name/address/contact || 7 | Hint-only fallback | Same triggers | Card + identity detected with **no** `autocomplete` tokens (regex classifier) |
+| 4 | Registration | **Focus** *Create password*, then choose **Use** | Fills the password and confirmation fields; submitting the website form then triggers the normal save prompt |
+| 5 | Credit card | Focus a recognized field with inline suggestions enabled, right-click → 密屿, or use the focused-fill shortcut | Card picker → fills name/number/exp/cvc |
+| 6 | Identity & address | Same triggers as card | Identity picker → fills name/address/contact |
+| 7 | Hint-only fallback | Same triggers | Card + identity detected with **no** `autocomplete` tokens (regex classifier) |
 | 8 | **Passkey** | Buttons in the section | See below |
 
 ### Section 8 — passkey (the new part)
@@ -56,17 +57,15 @@ Order matters:
    attach the passkey to (or create a new one). Stores an ES256 passkey in the vault.
 2. **② Authenticate · `get()`** — approve the consent dialog; MiYu signs an assertion.
 
-The result panel is labelled:
-
-- **`handled by MiYu`** (green) — the returned credential is MiYu's duck-typed object, not
-  a real `PublicKeyCredential`. This is the signal that the extension handled the ceremony.
-- **`native authenticator`** (amber) — it fell through to the browser/OS. Usually means the
-  vault was locked, the origin wasn't `localhost`, or you cancelled the MiYu dialog.
+The returned value keeps the browser's `PublicKeyCredential` prototype, so
+`instanceof PublicKeyCredential` cannot tell whether MiYu or the native authenticator handled a ceremony.
+The page therefore reports only the credential data it received. The visible MiYu approval UI is
+the reliable manual signal that the extension handled the request.
 
 Options:
 
-- **require user verification (UV)** — sends `userVerification: 'required'`; the UV flag in
-  the returned `authenticatorData` reflects it.
+- **require user verification (UV)** — sends `userVerification: 'required'`. MiYu currently
+  leaves these requests to the browser/OS authenticator, so keep this unchecked when testing MiYu.
 - **get(): restrict to last-created id** — puts the just-registered credential id in
   `allowCredentials` to test the non-discoverable path (otherwise `get()` runs discoverable
   with an empty allow-list).
@@ -76,7 +75,7 @@ handle are shown so you can confirm the challenge/origin binding.
 
 ## Live detection indicators
 
-Each section has a status chip and there's an event log at the bottom. The page watches for
+Autofill sections 1–7 have status chips and there's an event log at the bottom. The page watches for
 the `data-vw-*` attributes the content script writes on detected fields and the
 `data-vw-popover-for` panel hosts it mounts — so a chip turning **green (field detected)** or
 **accent (panel open)** is direct proof the extension engaged, without any extension

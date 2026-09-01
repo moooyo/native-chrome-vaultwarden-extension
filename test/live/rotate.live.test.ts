@@ -1,5 +1,6 @@
 // Live end-to-end test for account key rotation, against a disposable test Vaultwarden (MIYU_SERVER / MIYU_EMAIL / MIYU_PASSWORD)
-// this environment). Skipped by default; run with: LIVE=1 npx vitest run test/live/rotate.live.test.ts
+// this environment). Excluded by default; run with:
+//   $env:LIVE = '1'; npm run test:live -- test/live/rotate.live.test.ts
 //
 // Registers a throwaway account, seeds a keyless login cipher + a folder, builds a REAL rotation
 // payload using the production `rotateCipher`/`rotateFolder` (not re-encryptCipher), POSTs the
@@ -10,20 +11,28 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('webextension-polyfill', () => ({ default: { storage: { local: {}, session: {} } } }));
 
-import { ApiClient } from '../../src/core/api/client.js';
-import { deriveMasterKey, deriveMasterPasswordHash, stretchMasterKey } from '../../src/core/crypto/kdf.js';
+import { ApiClient, BITWARDEN_CLIENT_VERSION } from '../../src/core/api/client.js';
+import { deriveMasterKey, deriveMasterPasswordHash, parseKdfConfig, stretchMasterKey, type KdfConfig } from '../../src/core/crypto/kdf.js';
 import { symmetricKeyFromBytes, unwrapSymmetricKey, decryptPrivateKey, type SymmetricKey } from '../../src/core/crypto/keys.js';
 import { buildRegistration } from '../../src/core/crypto/registration.js';
 import { encryptToBytes, encryptToText, decryptToText } from '../../src/core/crypto/encstring.js';
 import { encryptCipher } from '../../src/core/vault/encrypt.js';
 import { decryptCipher } from '../../src/core/vault/decrypt.js';
 import { rotateCipher, rotateFolder } from '../../src/core/vault/rotate.js';
+import { validateRawSyncCipherCompatibility } from '../../src/core/vault/vault-sync-cipher-compat.js';
 import type { RotateKeyData } from '../../src/core/api/types.js';
 import type { KeyValueStore } from '../../src/platform/store.js';
 
-const SERVER = process.env.ROTATE_SERVER ?? 'http://localhost:18080';
+const SERVER = process.env.ROTATE_SERVER ?? '';
 
-const LIVE = Boolean(process.env.LIVE);
+const LIVE = process.env.LIVE === '1';
+const AUTHORIZED_TEST_ENV_TUNNELS = new Set([
+  'http://127.0.0.1:18082',
+  'http://127.0.0.1:18083',
+]);
+if (LIVE && !AUTHORIZED_TEST_ENV_TUNNELS.has(SERVER)) {
+  throw new Error('Live rotation tests require an authorized test-env SSH tunnel');
+}
 
 function memStore(): KeyValueStore {
   const m = new Map<string, unknown>();
@@ -34,28 +43,76 @@ function memStore(): KeyValueStore {
   } as KeyValueStore;
 }
 
+async function requestRegistrationToken(email: string): Promise<string | undefined> {
+  const response = await fetch(`${SERVER}/identity/accounts/register/send-verification-email`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'Bitwarden-Client-Version': BITWARDEN_CLIENT_VERSION,
+    },
+    body: JSON.stringify({ email, name: 'Rotate Test' }),
+  });
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(`registration start failed with status ${response.status}`);
+  const text = await response.text();
+  if (!text.trim()) return undefined;
+  let token: unknown;
+  try {
+    token = JSON.parse(text) as unknown;
+  } catch {
+    token = text.trim();
+  }
+  if (typeof token !== 'string' || token.length === 0 || token.length > 16_384) {
+    throw new Error('registration start returned an invalid token');
+  }
+  return token;
+}
+
 /** Register a throwaway account and log straight in, returning everything the rotation flow needs. */
 async function registerAndLogin(api: ApiClient, email: string, password: string) {
   const reg = await buildRegistration(email, password);
-  await api.register({
-    email, name: 'Rotate Test', masterPasswordHash: reg.masterPasswordHash,
-    key: reg.key, keys: reg.keys, kdf: reg.kdf, kdfIterations: reg.kdfIterations,
-  });
+  const emailVerificationToken = await requestRegistrationToken(email);
+  let registered = false;
+  try {
+    await api.register({
+      ...reg,
+      masterPasswordHint: '',
+      email,
+      name: 'Rotate Test',
+      ...(emailVerificationToken ? { emailVerificationToken } : {}),
+    });
+    registered = true;
 
-  const pre = await api.prelogin(email);
-  const masterKey = await deriveMasterKey(password, email, pre.kdfIterations);
-  const hash = await deriveMasterPasswordHash(masterKey, password);
-  const login = await api.passwordLogin({ email, masterPasswordHash: hash });
-  expect(login.kind, 'login after register').toBe('success');
-  if (login.kind !== 'success') throw new Error('unreachable: asserted above');
-  if (!login.data.PrivateKey) throw new Error('login response missing PrivateKey');
+    const kdf = parseKdfConfig(await api.prelogin(email));
+    const masterKey = await deriveMasterKey(password, email, kdf);
+    const hash = await deriveMasterPasswordHash(masterKey, password);
+    const login = await api.passwordLogin({ email, masterPasswordHash: hash });
+    expect(login.kind, 'login after register').toBe('success');
+    if (login.kind !== 'success') throw new Error('unreachable: asserted above');
+    if (!login.data.PrivateKey) throw new Error('login response missing PrivateKey');
 
-  const token = login.data.access_token;
-  const stretched = await stretchMasterKey(masterKey);
-  const userKey = await unwrapSymmetricKey(login.data.Key, stretched);
-  const pkcs8 = await decryptPrivateKey(login.data.PrivateKey, userKey);
+    const token = login.data.access_token;
+    const stretched = await stretchMasterKey(masterKey);
+    const userKey = await unwrapSymmetricKey(login.data.Key, stretched);
+    const pkcs8 = await decryptPrivateKey(login.data.PrivateKey, userKey);
 
-  return { reg, kdfIterations: pre.kdfIterations, hash, token, stretched, userKey, pkcs8 };
+    return { reg, kdf, hash, token, stretched, userKey, pkcs8 };
+  } catch (error) {
+    if (registered) {
+      try {
+        const cleanupLogin = await api.passwordLogin({
+          email,
+          masterPasswordHash: reg.masterPasswordHash,
+        });
+        if (cleanupLogin.kind === 'success') {
+          await deleteAccount(cleanupLogin.data.access_token, reg.masterPasswordHash);
+        }
+      } catch {
+        // Best-effort cleanup must not hide the setup failure.
+      }
+    }
+    throw error;
+  }
 }
 
 /**
@@ -66,7 +123,7 @@ async function registerAndLogin(api: ApiClient, email: string, password: string)
  */
 async function buildRotateBody(params: {
   hash: string;
-  kdfIterations: number;
+  kdf: KdfConfig;
   email: string;
   stretched: SymmetricKey;
   pkcs8: Uint8Array;
@@ -84,16 +141,18 @@ async function buildRotateBody(params: {
     oldMasterKeyAuthenticationHash: params.hash,
     accountUnlockData: {
       masterPasswordUnlockData: {
-        kdfType: 0,
-        kdfIterations: params.kdfIterations,
-        kdfParallelism: null,
-        kdfMemory: null,
+        kdfType: params.kdf.kdf,
+        kdfIterations: params.kdf.kdfIterations,
+        kdfParallelism: params.kdf.kdf === 1 ? params.kdf.kdfParallelism : null,
+        kdfMemory: params.kdf.kdf === 1 ? params.kdf.kdfMemory : null,
         email: params.email,
         masterKeyAuthenticationHash: params.hash,
         masterKeyEncryptedUserKey,
       },
       emergencyAccessUnlockData: [],
       organizationAccountRecoveryUnlockData: [],
+      passkeyUnlockData: [],
+      deviceKeyUnlockData: [],
     },
     accountKeys: { userKeyEncryptedAccountPrivateKey, accountPublicKey: params.publicKey },
     accountData: { ciphers, folders, sends: [] },
@@ -112,25 +171,57 @@ async function postRotate(token: string, body: RotateKeyData): Promise<void> {
 }
 
 /** Best-effort account cleanup; swallowed so a cleanup failure never masks the real test failure. */
-async function deleteAccount(token: string, masterPasswordHash: string): Promise<void> {
+async function deleteAccount(token: string, masterPasswordHash: string): Promise<boolean> {
   try {
-    await fetch(`${SERVER}/api/accounts`, {
+    const response = await fetch(`${SERVER}/api/accounts`, {
       method: 'DELETE',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
       body: JSON.stringify({ masterPasswordHash }),
     });
+    return response.ok;
   } catch {
-    // best-effort; nothing to assert on here
+    return false;
+  }
+}
+
+/** Re-login after a successful rotation if the original token was invalidated before cleanup. */
+async function cleanupAccount(api: ApiClient, email: string, token: string, masterPasswordHash: string): Promise<void> {
+  if (await deleteAccount(token, masterPasswordHash)) return;
+  try {
+    const login = await api.passwordLogin({ email, masterPasswordHash });
+    if (login.kind === 'success') await deleteAccount(login.data.access_token, masterPasswordHash);
+  } catch {
+    // Best-effort cleanup must not hide the test's primary assertion failure.
   }
 }
 
 (LIVE ? describe : describe.skip)('live account key rotation against the test server', () => {
+  it('authoritatively proves a new account has no passkey or trusted-device unlock records', async () => {
+    const api = new ApiClient({
+      serverUrlProvider: async () => SERVER,
+      fetchFn: fetch,
+      localStore: memStore(),
+    });
+    const email = `rotate-inventory-${Date.now()}@example.com`;
+    const password = 'Rotate-Inventory-Pass-1!';
+    const { hash, token } = await registerAndLogin(api, email, password);
+
+    try {
+      await expect(api.getKeyRotationUnlockRecordsStatus(token)).resolves.toEqual({
+        passkeyUnlockData: 'empty',
+        deviceKeyUnlockData: 'empty',
+      });
+    } finally {
+      await cleanupAccount(api, email, token, hash);
+    }
+  }, 60_000);
+
   it('rotates a keyless cipher + folder to a new UserKey; old UserKey stops working', async () => {
     const api = new ApiClient({ serverUrlProvider: async () => SERVER, fetchFn: fetch, localStore: memStore() });
     const email = `rotate-${Date.now()}@example.com`;
     const password = 'Rotate-Test-Pass-1!';
 
-    const { reg, kdfIterations, hash, token, stretched, userKey: oldUserKey, pkcs8 } =
+    const { reg, kdf, hash, token, stretched, userKey: oldUserKey, pkcs8 } =
       await registerAndLogin(api, email, password);
     let cleanupToken = token;
 
@@ -152,16 +243,34 @@ async function deleteAccount(token: string, masterPasswordHash: string): Promise
       const rawFolder = sync.folders?.find((f) => f.id === createdFolder.id);
       expect(rawCipher, 'seeded cipher present in sync').toBeTruthy();
       expect(rawFolder, 'seeded folder present in sync').toBeTruthy();
+      expect(typeof rawCipher?.data, '2026.8 sync returns canonical CipherResponse.data').toBe('string');
+      expect(validateRawSyncCipherCompatibility(rawCipher)).toEqual({
+        ok: true,
+        dataMode: 'redundant-plain-data',
+      });
+      const oldCiphertexts = [
+        rawCipher!.name,
+        rawCipher!.login?.username,
+        rawCipher!.login?.password,
+        rawCipher!.login?.uris?.[0]?.uri,
+      ].filter((value): value is string => typeof value === 'string');
 
       // Build the REAL rotation payload using the production re-encryption functions, both against
       // the SAME freshly generated new UserKey.
       const body = await buildRotateBody({
-        hash, kdfIterations, email, stretched, pkcs8, publicKey: reg.keys.publicKey,
+        hash, kdf, email, stretched, pkcs8, publicKey: reg.keys.publicKey,
         rotate: async (newUserKey) => ({
           ciphers: [await rotateCipher(rawCipher!, oldUserKey, newUserKey)],
           folders: [await rotateFolder(rawFolder!, oldUserKey, newUserKey)],
         }),
       });
+      const rotatedCipher = body.accountData.ciphers[0] as Record<string, unknown> & {
+        login?: Record<string, unknown>;
+      };
+      expect(rotatedCipher).not.toHaveProperty('data');
+      expect(rotatedCipher.login).not.toHaveProperty('uri');
+      const serializedBody = JSON.stringify(body);
+      for (const oldCiphertext of oldCiphertexts) expect(serializedBody).not.toContain(oldCiphertext);
 
       await postRotate(token, body);
 
@@ -179,6 +288,13 @@ async function deleteAccount(token: string, masterPasswordHash: string): Promise
       const rawFolder2 = sync2.folders?.find((f) => f.id === createdFolder.id);
       expect(rawCipher2, 'rotated cipher present after re-login').toBeTruthy();
       expect(rawFolder2, 'rotated folder present after re-login').toBeTruthy();
+      expect(typeof rawCipher2?.data, 'server rebuilt canonical CipherResponse.data').toBe('string');
+      expect(validateRawSyncCipherCompatibility(rawCipher2)).toEqual({
+        ok: true,
+        dataMode: 'redundant-plain-data',
+      });
+      expect(rawCipher2!.data).not.toBe(rawCipher!.data);
+      for (const oldCiphertext of oldCiphertexts) expect(rawCipher2!.data).not.toContain(oldCiphertext);
 
       // NEW UserKey decrypts everything correctly.
       const decrypted = await decryptCipher(rawCipher2!, reUserKey);
@@ -208,7 +324,7 @@ async function deleteAccount(token: string, masterPasswordHash: string): Promise
         expect((oldKeyResult as { name?: string } | undefined)?.name).toBe('(error)');
       }
     } finally {
-      await deleteAccount(cleanupToken, hash);
+      await cleanupAccount(api, email, cleanupToken, hash);
     }
   }, 60_000);
 
@@ -217,7 +333,7 @@ async function deleteAccount(token: string, masterPasswordHash: string): Promise
     const email = `rotate-trash-${Date.now()}@example.com`;
     const password = 'Rotate-Trash-Pass-1!';
 
-    const { reg, kdfIterations, hash, token, stretched, userKey: oldUserKey, pkcs8 } =
+    const { reg, kdf, hash, token, stretched, userKey: oldUserKey, pkcs8 } =
       await registerAndLogin(api, email, password);
     let cleanupToken = token;
 
@@ -237,7 +353,7 @@ async function deleteAccount(token: string, masterPasswordHash: string): Promise
       expect(rawTrashed?.deletedDate, 'cipher is soft-deleted before rotation').toBeTruthy();
 
       const body = await buildRotateBody({
-        hash, kdfIterations, email, stretched, pkcs8, publicKey: reg.keys.publicKey,
+        hash, kdf, email, stretched, pkcs8, publicKey: reg.keys.publicKey,
         rotate: async (newUserKey) => ({
           ciphers: [await rotateCipher(rawTrashed!, oldUserKey, newUserKey)],
           folders: [],
@@ -260,7 +376,7 @@ async function deleteAccount(token: string, masterPasswordHash: string): Promise
       const decrypted = await decryptCipher(rawTrashed2!, reUserKey);
       expect(decrypted).toMatchObject({ name: 'ToTrash', username: 'u2', password: 'p2' });
     } finally {
-      await deleteAccount(cleanupToken, hash);
+      await cleanupAccount(api, email, cleanupToken, hash);
     }
   }, 60_000);
 });

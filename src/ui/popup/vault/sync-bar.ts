@@ -8,7 +8,8 @@ import { LocalizeController, t } from '../../i18n/index.js';
 export class VwSyncBar extends LitElement {
   static override properties = {
     syncing: { type: Boolean },
-    lastSync: { type: Number },
+    lastSuccessfulSyncAt: { type: Number },
+    dirty: { attribute: false },
     generatorActive: { type: Boolean },
     totpActive: { type: Boolean },
     healthActive: { type: Boolean },
@@ -16,7 +17,8 @@ export class VwSyncBar extends LitElement {
   };
 
   declare syncing: boolean;
-  declare lastSync: number | undefined;
+  declare lastSuccessfulSyncAt: number | undefined;
+  declare dirty: boolean | undefined;
   declare generatorActive: boolean;
   declare totpActive: boolean;
   declare healthActive: boolean;
@@ -27,7 +29,8 @@ export class VwSyncBar extends LitElement {
   constructor() {
     super();
     this.syncing = false;
-    this.lastSync = undefined;
+    this.lastSuccessfulSyncAt = undefined;
+    this.dirty = undefined;
     this.generatorActive = false;
     this.totpActive = false;
     this.healthActive = false;
@@ -81,10 +84,26 @@ export class VwSyncBar extends LitElement {
     emit(this, type);
   }
 
+  private syncHint(): string {
+    if (this.syncing) return t('sync.syncing');
+    if (this.dirty === undefined) return t('sync.unknown');
+    if (this.dirty) return t('sync.pending');
+    const last = this.lastSuccessfulSyncAt;
+    if (last === undefined) return t('sync.never');
+    const elapsed = Math.max(0, Date.now() - last);
+    let relative: string;
+    if (elapsed < 60_000) relative = t('sync.justNow');
+    else if (elapsed < 3_600_000) relative = t('sync.minutesAgo', { count: Math.floor(elapsed / 60_000) });
+    else if (elapsed < 86_400_000) relative = t('sync.hoursAgo', { count: Math.floor(elapsed / 3_600_000) });
+    else relative = t('sync.daysAgo', { count: Math.floor(elapsed / 86_400_000) });
+    return t('sync.synced', { time: relative });
+  }
+
   protected override render() {
+    const hint = this.syncHint();
     return html`
       <div class="bar">
-        <span class="hint" title=${this.syncing ? t('sync.syncing') : t('sync.now')}>↑↓ · ↵ · ⌘L</span>
+        <span class="hint" title=${hint}>${hint}</span>
         <div class="actions">
           <button type="button" class=${this.generatorActive ? 'active' : ''} title=${t('popup.generator')} aria-label=${t('popup.generator')} aria-pressed=${this.generatorActive ? 'true' : 'false'} ?disabled=${this.disabled} @click=${() => this.fire('vw-generator-toggle')}>${uiIcon('wand')}</button>
           <button type="button" class=${this.totpActive ? 'active' : ''} title=${t('popup.authenticator')} aria-label=${t('popup.authenticator')} aria-pressed=${this.totpActive ? 'true' : 'false'} ?disabled=${this.disabled} @click=${() => this.fire('vw-open-totp')}>${uiIcon('clock')}</button>

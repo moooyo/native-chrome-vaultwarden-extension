@@ -14,14 +14,18 @@ import { setLocale } from '../../i18n/index.js';
 interface Props {
   accounts?: AccountInfo[];
   pinEnabled?: boolean;
+  pinAllowed?: boolean;
   deviceRemembered?: boolean;
+  deviceLoginApprovalCount?: number;
 }
 
 async function mount(props: Props = {}): Promise<VwAccountMenu> {
   const el = document.createElement('vw-account-menu') as VwAccountMenu;
   el.accounts = props.accounts ?? [{ email: 'me@example.com', active: true }];
   el.pinEnabled = props.pinEnabled ?? false;
+  el.pinAllowed = props.pinAllowed ?? true;
   el.deviceRemembered = props.deviceRemembered ?? false;
+  el.deviceLoginApprovalCount = props.deviceLoginApprovalCount ?? 0;
   document.body.append(el);
   await el.updateComplete;
   return el;
@@ -56,13 +60,14 @@ describe('vw-account-menu', () => {
   it('lists every approved account action', async () => {
     const menu = await open(await mount({ deviceRemembered: true }));
     const text = menu.shadowRoot?.textContent ?? '';
-    for (const label of ['Add account', 'PIN', 'Account security', 'Settings', 'Forget this device', 'Lock', 'Log out']) {
+    for (const label of ['Add account', 'PIN', 'Account security', 'Device login requests (0)', 'Settings', 'Require two-step login next time', 'Lock', 'Log out']) {
       expect(text).toContain(label);
     }
   });
 
   it.each([
     ['Account security', 'account-security'],
+    ['Device login requests (0)', 'device-login-approvals'],
     ['Settings', 'options'],
     ['Add account', 'add-account'],
     ['Lock', 'lock'],
@@ -91,6 +96,24 @@ describe('vw-account-menu', () => {
     expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ detail: { action: 'pin' } }));
   });
 
+  it('shows the current device-login approval count without placing request ids in the menu', async () => {
+    const menu = await open(await mount({ deviceLoginApprovalCount: 3 }));
+    expect(menu.shadowRoot?.textContent).toContain('Device login requests (3)');
+    expect(menu.shadowRoot?.innerHTML).not.toContain('requestId');
+  });
+
+  it('replaces the PIN action with disabled organization-managed status when denied', async () => {
+    const el = await mount({ pinEnabled: true, pinAllowed: false });
+    const emitted = vi.fn();
+    el.addEventListener('vw-account-action', emitted);
+    const menu = await open(el);
+    expect(menu.shadowRoot?.textContent).toContain('managed by your organization');
+    const managed = itemByText(menu, 'managed by your organization');
+    expect(managed.disabled).toBe(true);
+    managed.click();
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
   it('emits switch-account with the target email and does not expose unconfirmed removal', async () => {
     const el = await mount({ accounts: [{ email: 'me@x', active: true }, { email: 'other@x', active: false }] });
     const emitted = vi.fn();
@@ -104,9 +127,9 @@ describe('vw-account-menu', () => {
     expect(menu2.shadowRoot?.textContent).not.toContain('Remove');
   });
 
-  it('omits Forget this device unless the device is remembered', async () => {
+  it('omits the two-step-login reset action unless the device is remembered', async () => {
     const menu = await open(await mount({ deviceRemembered: false }));
-    expect(menu.shadowRoot?.textContent).not.toContain('Forget this device');
+    expect(menu.shadowRoot?.textContent).not.toContain('Require two-step login next time');
   });
 
   it('emits forget-device when remembered', async () => {
@@ -114,7 +137,7 @@ describe('vw-account-menu', () => {
     const emitted = vi.fn();
     el.addEventListener('vw-account-action', emitted);
     const menu = await open(el);
-    itemByText(menu, 'Forget this device').click();
+    itemByText(menu, 'Require two-step login next time').click();
     expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ detail: { action: 'forget-device' } }));
   });
 

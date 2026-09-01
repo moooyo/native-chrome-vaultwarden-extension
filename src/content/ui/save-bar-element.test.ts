@@ -22,7 +22,7 @@ afterEach(() => {
 function mount(state: Partial<SaveBarState>, handlers: SaveBarHandlers = {}): HTMLElement {
   container = document.createElement('div');
   document.body.append(container);
-  const full: SaveBarState = { message: '', actionLabel: '', ...state };
+  const full: SaveBarState = { view: 'prompt', message: '', actionLabel: '', statusMessage: '', ...state };
   render(renderSaveBar(full, handlers), container);
   return container;
 }
@@ -56,6 +56,27 @@ describe('save bar surface', () => {
     const message = root.querySelector('.msg');
     expect(message?.querySelector('img')).toBeNull();
     expect(message?.textContent).toContain('evil.test');
+  });
+
+  it('disables the action while saving and never claims success', () => {
+    const root = mount({ view: 'saving', message: 'Save?', actionLabel: 'Save', statusMessage: '正在保存到密屿…' });
+    expect(root.querySelector('.bar')!.getAttribute('aria-busy')).toBe('true');
+    expect(root.querySelector<HTMLButtonElement>('#vw-save-act')!.disabled).toBe(true);
+    expect(root.textContent).toContain('正在保存到密屿');
+    expect(root.textContent).not.toContain('已保存到密屿');
+  });
+
+  it('renders uncertain as a terminal alert without another action', () => {
+    const root = mount({ view: 'uncertain', statusMessage: '无法确认保存结果。请检查。' });
+    expect(root.querySelector('[role="alert"]')!.textContent).toContain('无法确认保存结果');
+    expect(root.querySelector('#vw-save-act')).toBeNull();
+    expect(root.querySelector('#vw-save-dismiss')!.textContent).toContain('关闭');
+  });
+
+  it('renders confirmed success without save or retry actions', () => {
+    const root = mount({ view: 'saved', statusMessage: '已保存到密屿' });
+    expect(root.textContent).toContain('已保存到密屿');
+    expect(root.querySelector('button')).toBeNull();
   });
 
   it('allows the message to wrap on narrow viewports', () => {

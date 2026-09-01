@@ -8,6 +8,7 @@ import {
   TOTP_PANEL_STYLES,
   renderTotpPanel,
   type TotpPanelHandlers,
+  type TotpPanelCandidate,
   type TotpPanelState,
 } from './ui/totp-panel-element.js';
 import { repositionSidePanel } from './ui/side-panel.js';
@@ -17,6 +18,12 @@ export interface TotpPanel {
   root: ShadowRoot;
   /** Refresh the item + live one-time code + remaining seconds. */
   update(data: { itemName: string; itemUser: string; code: string; remaining: number }): void;
+  showCandidates(data: {
+    candidates: readonly TotpPanelCandidate[];
+    overflowCount: number;
+    loadingKey?: string;
+    statusMessage?: string;
+  }): void;
   showFilled(): void;
   showStatus(message: string): void;
   remove(): void;
@@ -24,6 +31,8 @@ export interface TotpPanel {
 
 export interface TotpPanelOptions {
   anchor: HTMLElement;
+  onSelect(candidateKey: string): void;
+  onChooseOther(): void;
   onFill(): void;
   onCopy(): void;
   onUndo(): void;
@@ -31,14 +40,23 @@ export interface TotpPanelOptions {
 
 export function createTotpPanel(options: TotpPanelOptions): TotpPanel {
   const state: TotpPanelState = {
-    view: 'panel',
+    view: 'candidates',
+    candidates: [],
+    overflowCount: 0,
+    loadingKey: '',
     itemName: '',
     itemUser: '',
     code: '',
     remaining: 30,
     statusMessage: '',
   };
-  const handlers: TotpPanelHandlers = { onFill: options.onFill, onCopy: options.onCopy, onUndo: options.onUndo };
+  const handlers: TotpPanelHandlers = {
+    onSelect: options.onSelect,
+    onChooseOther: options.onChooseOther,
+    onFill: options.onFill,
+    onCopy: options.onCopy,
+    onUndo: options.onUndo,
+  };
   const surface = mountRenderSurface(TOTP_PANEL_STYLES);
   const host = surface.host;
   host.style.position = 'absolute';
@@ -55,7 +73,17 @@ export function createTotpPanel(options: TotpPanelOptions): TotpPanel {
   return {
     element: host,
     root: surface.root,
+    showCandidates(data) {
+      state.view = 'candidates';
+      state.candidates = [...data.candidates];
+      state.overflowCount = data.overflowCount;
+      state.loadingKey = data.loadingKey ?? '';
+      state.statusMessage = data.statusMessage ?? '';
+      state.code = '';
+      draw();
+    },
     update(data) {
+      state.view = 'panel';
       state.itemName = data.itemName;
       state.itemUser = data.itemUser;
       state.code = data.code;

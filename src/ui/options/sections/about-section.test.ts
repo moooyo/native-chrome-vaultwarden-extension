@@ -32,19 +32,11 @@ describe('vw-about-section', () => {
     expect(el.shadowRoot!.textContent).toContain('MiYu');
   });
 
-  it('emits check-update when the button is clicked', async () => {
+  it('shows an accurate relationship note without fake document links', async () => {
     const el = await mount();
-    const checked = vi.fn();
-    el.addEventListener('vw-check-update', checked);
-    q<HTMLButtonElement>(el, '[data-check-update]').click();
-    expect(checked).toHaveBeenCalledTimes(1);
+    expect(q(el, '[data-description]').textContent).toContain('Vaultwarden');
+    expect(el.shadowRoot!.querySelector('a')).toBeNull();
+    expect(el.shadowRoot!.textContent).not.toMatch(/白皮书|隐私政策|开源许可|whitepaper|privacy policy|licenses/i);
   });
 
-  it('shows the status message when the root supplies one', async () => {
-    const el = await mount();
-    expect(el.shadowRoot!.querySelector('[data-status]')).toBeNull();
-    el.status = { message: 'up to date', tone: 'info' };
-    await el.updateComplete;
-    expect(q(el, '[data-status]')).toBeTruthy();
-  });
 });
