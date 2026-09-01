@@ -6,12 +6,16 @@ import {
   isElementInteractable,
   isFillableInput,
   isNewPasswordField,
-  isVisibleInTree,
+  isSemanticSourceAvailableInTree,
   type ControlOwnerSnapshot,
 } from './form-detection.js';
 import { isAutofillIgnored } from './autofill-ignore.js';
 import { classifyCardField, classifyIdentityField, type CardRole, type IdentityRole, type FieldHints } from './field-map.js';
 import { collectFieldHints } from './semantic-hints.js';
+import {
+  createScopedAutofillDetectionContext,
+  type AutofillDetectionContext,
+} from './autofill-detection-context.js';
 
 export type FillFieldElement = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
 
@@ -34,52 +38,68 @@ interface FillIdentity {
 const cardFillIds = new WeakMap<HTMLElement, FillIdentity>();
 const identityFillIds = new WeakMap<HTMLElement, FillIdentity>();
 
-export function detectCardForms(root: ParentNode = document, exclude: Set<Element> = new Set()): DetectedFillForm[] {
-  return detectForms(root, exclude, 'card');
+export function detectCardForms(
+  root: ParentNode = document,
+  exclude: Set<Element> = new Set(),
+  context: AutofillDetectionContext = createScopedAutofillDetectionContext(root),
+  claimFormBudget = true,
+): DetectedFillForm[] {
+  return detectForms(root, exclude, 'card', context, claimFormBudget);
 }
 
-export function detectIdentityForms(root: ParentNode = document, exclude: Set<Element> = new Set()): DetectedFillForm[] {
-  return detectForms(root, exclude, 'identity');
+export function detectIdentityForms(
+  root: ParentNode = document,
+  exclude: Set<Element> = new Set(),
+  context: AutofillDetectionContext = createScopedAutofillDetectionContext(root),
+  claimFormBudget = true,
+): DetectedFillForm[] {
+  return detectForms(root, exclude, 'identity', context, claimFormBudget);
 }
 
-function detectForms(root: ParentNode, exclude: Set<Element>, kind: 'card' | 'identity'): DetectedFillForm[] {
+function detectForms(
+  root: ParentNode,
+  exclude: Set<Element>,
+  kind: 'card' | 'identity',
+  context: AutofillDetectionContext,
+  claimFormBudget: boolean,
+): DetectedFillForm[] {
+  if (!context.complete) return [];
   const classify = kind === 'card' ? classifyCardField : classifyIdentityField;
-  const fillable = Array.from(root.querySelectorAll<FillFieldElement>('input, select, textarea'))
-    .filter(isFillableField)
-    .filter((el) => !exclude.has(el));
+  const scopedFillable = context.controlsWithin(root).filter(isFillableField);
+  if (!claimCandidateGroups(scopedFillable, context)) return [];
+  const fillable = scopedFillable.filter((el) => !exclude.has(el));
 
   // Native form ownership is authoritative and includes external `form=id` controls. Form-less
   // controls are grouped only inside their own tree root; fields never cross a shadow boundary.
-  const groups: Array<{
+  type FieldGroup = {
     readonly scope: ParentNode;
     readonly fields: Map<CardRole | IdentityRole, FillFieldElement>;
     readonly formlessOwner?: ControlOwnerSnapshot;
-  }> = [];
+  };
+  const groups: FieldGroup[] = [];
+  const formlessGroupsByContainer = new Map<ParentNode, FieldGroup[]>();
   const nativeForms = new Set(fillable.map((el) => el.form).filter((form): form is HTMLFormElement => form !== null));
   for (const form of nativeForms) {
     const group = { scope: form, fields: new Map<CardRole | IdentityRole, FillFieldElement>() };
     groups.push(group);
     addGroup(
       group.fields,
-      Array.from(form.elements)
-        .filter((control): control is FillFieldElement => (
-          control instanceof HTMLInputElement
-          || control instanceof HTMLSelectElement
-          || control instanceof HTMLTextAreaElement
-        ))
-        .filter((control) => control.form === form && control.getRootNode() === form.getRootNode())
+      context.controlsForForm(form)
         .filter(isFillableField)
         .filter((control) => !exclude.has(control)),
     );
   }
   for (const el of fillable.filter((candidate) => candidate.form === null)) {
     const owner = captureControlOwner(el);
-    let group = groups.find((candidate) => (
+    const candidates = formlessGroupsByContainer.get(owner.composedContainer) ?? [];
+    let group = candidates.find((candidate) => (
       candidate.formlessOwner !== undefined && hasSameControlOwner(candidate.formlessOwner, owner)
     ));
     if (!group) {
       group = { scope: owner.composedContainer, fields: new Map(), formlessOwner: owner };
       groups.push(group);
+      candidates.push(group);
+      formlessGroupsByContainer.set(owner.composedContainer, candidates);
     }
     addGroup(group.fields, [el]);
   }
@@ -89,9 +109,9 @@ function detectForms(root: ParentNode, exclude: Set<Element>, kind: 'card' | 'id
     elements: readonly FillFieldElement[],
   ): void {
     for (const el of elements) {
-      if (el instanceof HTMLInputElement && hasConflictingSecurityCodeAutocomplete(el)) continue;
-      if (kind === 'identity' && el instanceof HTMLInputElement && isNewPasswordField(el)) continue;
-      const role = classify(hintsFor(el)) as CardRole | IdentityRole | undefined;
+      if (el instanceof HTMLInputElement && hasConflictingSecurityCodeAutocomplete(el, context)) continue;
+      if (kind === 'identity' && el instanceof HTMLInputElement && isNewPasswordField(el, context)) continue;
+      const role = classify(hintsFor(el, context)) as CardRole | IdentityRole | undefined;
       if (!role) continue;
       if (!fields.has(role)) fields.set(role, el);
     }
@@ -102,9 +122,43 @@ function detectForms(root: ParentNode, exclude: Set<Element>, kind: 'card' | 'id
     if (!meetsThreshold(kind, fields)) continue;
     const anchor = anchorFor(kind, fields);
     if (!anchor) continue;
+    if (claimFormBudget && !context.claimForms(1)) return [];
     forms.push({ kind, id: assignFillId(kind, anchor, scope, fields), fields, anchor });
   }
-  return forms;
+  return context.complete ? forms : [];
+}
+
+/**
+ * Charge ownership groups before allocating detected-form maps or ids. The identity source ignores
+ * the exclusion set, so raw card/identity evidence and the final exclusion pass reuse the same
+ * native form or first formless control without consuming the candidate budget again.
+ */
+function claimCandidateGroups(
+  controls: readonly FillFieldElement[],
+  context: AutofillDetectionContext,
+): boolean {
+  const nativeForms = new Set<HTMLFormElement>();
+  for (const control of controls) {
+    const form = control.form;
+    if (!form || nativeForms.has(form)) continue;
+    nativeForms.add(form);
+    if (!context.claimCandidateGroup(form)) return false;
+  }
+
+  const formlessGroupsByContainer = new Map<ParentNode, Array<{
+    readonly owner: ControlOwnerSnapshot;
+  }>>();
+  for (const control of controls) {
+    if (control.form) continue;
+    const owner = captureControlOwner(control);
+    const candidates = formlessGroupsByContainer.get(owner.composedContainer) ?? [];
+    const existing = candidates.find((candidate) => hasSameControlOwner(candidate.owner, owner));
+    if (existing) continue;
+    if (!context.claimCandidateGroup(control)) return false;
+    candidates.push({ owner });
+    formlessGroupsByContainer.set(owner.composedContainer, candidates);
+  }
+  return context.complete;
 }
 
 function meetsThreshold(kind: 'card' | 'identity', fields: Map<string, FillFieldElement>): boolean {
@@ -132,8 +186,10 @@ export function isFillableField(el: FillFieldElement): boolean {
     && isElementInteractable(el);
 }
 
-function hintsFor(el: FillFieldElement): FieldHints {
-  return collectFieldHints(el, isVisibleInTree);
+function hintsFor(el: FillFieldElement, context?: AutofillDetectionContext): FieldHints {
+  return context
+    ? context.fieldHints(el, (budget) => collectFieldHints(el, isSemanticSourceAvailableInTree, budget))
+    : collectFieldHints(el, isSemanticSourceAvailableInTree);
 }
 
 function assignFillId(

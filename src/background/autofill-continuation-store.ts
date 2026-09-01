@@ -11,6 +11,7 @@ const MAX_TTL_MS = 120_000;
 const MAX_TEXT = 4_096;
 const MAX_URL = 16_384;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CANONICAL_UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const storageLanes = new WeakMap<object, Promise<void>>();
 
 export interface AutofillContinuationAuthority {
@@ -29,10 +30,12 @@ export interface AutofillContinuationSource {
   readonly tabId: number;
   readonly windowId: number;
   readonly topDocumentId: string;
+  readonly topRuntimeIncarnation: string | null;
   readonly topOrigin: string;
   readonly topUrlDigest: string;
   readonly frameId: number;
   readonly frameDocumentId: string;
+  readonly frameRuntimeIncarnation: string | null;
   readonly frameOrigin: string;
   readonly frameUrlDigest: string;
 }
@@ -60,15 +63,21 @@ export type AutofillContinuationAction =
       readonly scope: 'form' | 'field';
       readonly fillKind: FillKind;
       readonly roles: readonly FillRole[];
+      readonly runtimeIncarnation: string;
     }
   | {
       readonly kind: 'keyboard_reprompt';
       readonly cipherId: string;
       readonly binding:
-        | { readonly purpose: 'login'; readonly customPlanDigest: string }
-        | { readonly purpose: 'totp' }
+        | {
+            readonly purpose: 'login';
+            readonly runtimeIncarnation: string;
+            readonly customPlanDigest: string;
+          }
+        | { readonly purpose: 'totp'; readonly runtimeIncarnation: string }
         | {
             readonly purpose: 'card' | 'identity';
+            readonly runtimeIncarnation: string;
             readonly formId: string;
             readonly generation: number;
             readonly roles: readonly FillRole[];
@@ -76,7 +85,7 @@ export type AutofillContinuationAction =
     };
 
 export interface AutofillContinuationEnvelope {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly continuationId: string;
   readonly source: AutofillContinuationSource;
   readonly authority: AutofillContinuationAuthority;
@@ -116,7 +125,7 @@ export class AutofillContinuationStore {
   }): AutofillContinuationEnvelope {
     const now = this.#time();
     return canonicalEnvelope({
-      schemaVersion: 1,
+      schemaVersion: 2,
       continuationId: crypto.randomUUID(),
       source: input.source,
       authority: input.authority,
@@ -164,6 +173,16 @@ export class AutofillContinuationStore {
 
   async clear(): Promise<void> {
     await this.#run(async () => this.#clearUnlocked());
+  }
+
+  async clearExact(continuationId: string): Promise<boolean> {
+    const expectedContinuationId = uuid(continuationId, 'continuationId');
+    return this.#run(async () => {
+      const envelope = await this.#readUnlocked();
+      if (!envelope || envelope.continuationId !== expectedContinuationId) return false;
+      await this.#clearUnlocked();
+      return true;
+    });
   }
 
   async clearForTab(tabId: number): Promise<void> {
@@ -258,7 +277,7 @@ export function autofillContinuationAuthority(
 function parseRecord(value: unknown, now: number, ttlMs: number): StoredRecord | 'foreign' | undefined {
   if (!record(value)) return undefined;
   if (value.state === 'pending' && record(value.envelope)
-      && typeof value.envelope.schemaVersion === 'number' && value.envelope.schemaVersion > 1) {
+      && typeof value.envelope.schemaVersion === 'number' && value.envelope.schemaVersion > 2) {
     return 'foreign';
   }
   if (value.state === 'consumed') {
@@ -283,18 +302,23 @@ function canonicalEnvelope(value: unknown, now: number, ttlMs: number): Autofill
   if (!keys(value, base) && !keys(value, [...base, 'popupDocumentId'])) {
     throw new TypeError('Autofill continuation fields are invalid');
   }
-  if (value.schemaVersion !== 1) throw new TypeError('Autofill continuation schema is invalid');
+  if (value.schemaVersion !== 2) throw new TypeError('Autofill continuation schema is invalid');
   const createdAt = number(value.createdAt, 'createdAt');
   const expiresAt = number(value.expiresAt, 'expiresAt');
   if (createdAt > now || expiresAt <= now || expiresAt <= createdAt || expiresAt - createdAt > ttlMs) {
     throw new TypeError('Autofill continuation deadline is invalid');
   }
+  const parsedSource = source(value.source);
+  const parsedAction = action(value.action);
+  if (!actionMatchesSource(parsedAction, parsedSource)) {
+    throw new TypeError('Autofill continuation action source is invalid');
+  }
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
     continuationId: uuid(value.continuationId, 'continuationId'),
-    source: source(value.source),
+    source: parsedSource,
     authority: authority(value.authority),
-    action: action(value.action),
+    action: parsedAction,
     createdAt,
     expiresAt,
     ...(value.popupDocumentId === undefined ? {} : { popupDocumentId: text(value.popupDocumentId, 'popupDocumentId') }),
@@ -303,21 +327,36 @@ function canonicalEnvelope(value: unknown, now: number, ttlMs: number): Autofill
 
 function source(value: unknown): AutofillContinuationSource {
   const wanted = [
-    'frameDocumentId', 'frameId', 'frameOrigin', 'frameUrlDigest', 'tabId',
-    'topDocumentId', 'topOrigin', 'topUrlDigest', 'windowId',
+    'frameDocumentId', 'frameId', 'frameOrigin', 'frameRuntimeIncarnation', 'frameUrlDigest', 'tabId',
+    'topDocumentId', 'topOrigin', 'topRuntimeIncarnation', 'topUrlDigest', 'windowId',
   ];
   if (!record(value) || !keys(value, wanted)) throw new TypeError('Autofill continuation source is invalid');
-  return Object.freeze({
+  const parsed = Object.freeze({
     tabId: nonNegativeInteger(value.tabId, 'tabId'),
     windowId: nonNegativeInteger(value.windowId, 'windowId'),
     topDocumentId: text(value.topDocumentId, 'topDocumentId'),
+    topRuntimeIncarnation: nullableRuntimeIncarnation(
+      value.topRuntimeIncarnation,
+      'topRuntimeIncarnation',
+    ),
     topOrigin: httpOrigin(value.topOrigin, 'topOrigin'),
     topUrlDigest: digest(value.topUrlDigest, 'topUrlDigest'),
     frameId: nonNegativeInteger(value.frameId, 'frameId'),
     frameDocumentId: text(value.frameDocumentId, 'frameDocumentId'),
+    frameRuntimeIncarnation: nullableRuntimeIncarnation(
+      value.frameRuntimeIncarnation,
+      'frameRuntimeIncarnation',
+    ),
     frameOrigin: httpOrigin(value.frameOrigin, 'frameOrigin'),
     frameUrlDigest: digest(value.frameUrlDigest, 'frameUrlDigest'),
   });
+  if (parsed.frameId === 0 && (
+    parsed.frameDocumentId !== parsed.topDocumentId
+    || parsed.frameRuntimeIncarnation !== parsed.topRuntimeIncarnation
+    || parsed.frameOrigin !== parsed.topOrigin
+    || parsed.frameUrlDigest !== parsed.topUrlDigest
+  )) throw new TypeError('Autofill continuation top-frame source is invalid');
+  return parsed;
 }
 
 function authority(value: unknown): AutofillContinuationAuthority {
@@ -383,7 +422,9 @@ function action(value: unknown): AutofillContinuationAction {
     });
   }
   if (value.kind === 'context_structured_reprompt') {
-    if (!keys(value, ['cipherId', 'fillKind', 'holdId', 'kind', 'roles', 'scope'])) throw new TypeError('Autofill continuation action fields are invalid');
+    if (!keys(value, [
+      'cipherId', 'fillKind', 'holdId', 'kind', 'roles', 'runtimeIncarnation', 'scope',
+    ])) throw new TypeError('Autofill continuation action fields are invalid');
     if ((value.fillKind !== 'card' && value.fillKind !== 'identity') || (value.scope !== 'form' && value.scope !== 'field')) {
       throw new TypeError('Autofill continuation structured action is invalid');
     }
@@ -396,6 +437,7 @@ function action(value: unknown): AutofillContinuationAction {
       scope: value.scope,
       fillKind: value.fillKind,
       roles: Object.freeze([...roles]),
+      runtimeIncarnation: runtimeIncarnation(value.runtimeIncarnation, 'runtimeIncarnation'),
     });
   }
   if (value.kind === 'keyboard_reprompt') {
@@ -426,16 +468,24 @@ function commandMatchesTarget(command: DirectFillCommand, target: TabSuggestionT
 
 function safeKeyboardBinding(value: unknown): Extract<AutofillContinuationAction, { kind: 'keyboard_reprompt' }>['binding'] {
   if (!record(value) || typeof value.purpose !== 'string') throw new TypeError('Keyboard action binding is invalid');
-  if (value.purpose === 'totp' && keys(value, ['purpose'])) return Object.freeze({ purpose: value.purpose });
-  if (value.purpose === 'login' && keys(value, ['customPlanDigest', 'purpose'])) {
-    return Object.freeze({ purpose: value.purpose, customPlanDigest: text(value.customPlanDigest, 'customPlanDigest') });
+  const incarnation = runtimeIncarnation(value.runtimeIncarnation, 'runtimeIncarnation');
+  if (value.purpose === 'totp' && keys(value, ['purpose', 'runtimeIncarnation'])) {
+    return Object.freeze({ purpose: value.purpose, runtimeIncarnation: incarnation });
+  }
+  if (value.purpose === 'login' && keys(value, ['customPlanDigest', 'purpose', 'runtimeIncarnation'])) {
+    return Object.freeze({
+      purpose: value.purpose,
+      runtimeIncarnation: incarnation,
+      customPlanDigest: text(value.customPlanDigest, 'customPlanDigest'),
+    });
   }
   if ((value.purpose === 'card' || value.purpose === 'identity')
-      && keys(value, ['formId', 'generation', 'purpose', 'roles'])) {
+      && keys(value, ['formId', 'generation', 'purpose', 'roles', 'runtimeIncarnation'])) {
     const roles = normalizeFillRoles(value.purpose, value.roles);
     if (!roles) throw new TypeError('Keyboard action roles are invalid');
     return Object.freeze({
       purpose: value.purpose,
+      runtimeIncarnation: incarnation,
       formId: text(value.formId, 'formId'),
       generation: nonNegativeInteger(value.generation, 'generation'),
       roles: Object.freeze([...roles]),
@@ -450,19 +500,46 @@ function tabTarget(value: unknown): TabSuggestionTarget {
     frameId: nonNegativeInteger(value.frameId, 'frameId'),
     formId: text(value.formId, 'formId'),
     documentId: text(value.documentId, 'documentId'),
+    runtimeIncarnation: runtimeIncarnation(value.runtimeIncarnation, 'runtimeIncarnation'),
     generation: nonNegativeInteger(value.generation, 'generation'),
   };
-  if (value.kind === 'login' && keys(value, ['customPlanDigest', 'documentId', 'formId', 'frameId', 'generation', 'kind'])) {
+  if (value.kind === 'login' && keys(value, [
+    'customPlanDigest', 'documentId', 'formId', 'frameId', 'generation', 'kind', 'runtimeIncarnation',
+  ])) {
     return Object.freeze({ ...common, kind: value.kind, customPlanDigest: text(value.customPlanDigest, 'customPlanDigest') });
   }
   if ((value.kind === 'card' || value.kind === 'identity')
-      && keys(value, ['documentId', 'formId', 'frameId', 'generation', 'kind', 'roles'])
+      && keys(value, ['documentId', 'formId', 'frameId', 'generation', 'kind', 'roles', 'runtimeIncarnation'])
       && Array.isArray(value.roles) && value.roles.every((role) => typeof role === 'string')) {
     const roles = normalizeFillRoles(value.kind, value.roles);
     if (!roles) throw new TypeError('Autofill target roles are invalid');
     return Object.freeze({ ...common, kind: value.kind, roles: Object.freeze([...roles]) }) as TabSuggestionTarget;
   }
   throw new TypeError('Autofill target is invalid');
+}
+
+function actionMatchesSource(action: AutofillContinuationAction, source: AutofillContinuationSource): boolean {
+  if (action.kind === 'locked_keyboard') {
+    return source.topRuntimeIncarnation === null
+      && source.frameRuntimeIncarnation === null
+      && source.frameId === 0
+      && source.frameDocumentId === source.topDocumentId
+      && source.frameOrigin === source.topOrigin
+      && source.frameUrlDigest === source.topUrlDigest;
+  }
+  if (source.topRuntimeIncarnation === null || source.frameRuntimeIncarnation === null) return false;
+  if (action.kind === 'context_login_reprompt' || action.kind === 'command_fill_reprompt') {
+    return action.target.frameId === source.frameId
+      && action.target.documentId === source.frameDocumentId
+      && action.target.runtimeIncarnation === source.frameRuntimeIncarnation;
+  }
+  if (action.kind === 'keyboard_reprompt') {
+    return action.binding.runtimeIncarnation === source.frameRuntimeIncarnation;
+  }
+  if (action.kind === 'context_structured_reprompt') {
+    return action.runtimeIncarnation === source.frameRuntimeIncarnation;
+  }
+  return true;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -480,6 +557,15 @@ function keys(value: Record<string, unknown>, expected: readonly string[]): bool
 function uuid(value: unknown, field: string): string {
   if (typeof value !== 'string' || !UUID_V4.test(value)) throw new TypeError(`${field} is invalid`);
   return value;
+}
+
+function runtimeIncarnation(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !CANONICAL_UUID_V4.test(value)) throw new TypeError(`${field} is invalid`);
+  return value;
+}
+
+function nullableRuntimeIncarnation(value: unknown, field: string): string | null {
+  return value === null ? null : runtimeIncarnation(value, field);
 }
 
 function text(value: unknown, field: string): string {

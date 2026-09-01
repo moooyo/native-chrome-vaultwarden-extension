@@ -1,11 +1,12 @@
 # Engineering Handoff
 
-Date: 2026-09-01
+Date: 2026-09-02
 
 ## Snapshot
 
 - Working branch: `main`
-- Starting commit: `5465a49` (`feat(ui): finish reachable flows and Send experience`)
+- Continuation base commit: `782dfdef7982571191ec53a849eb0644522c64ee`
+  (`feat: expand secure browser parity`)
 - Official comparison baseline: Bitwarden Browser `v2026.8.0`, commit
   `f60a4606b7581c338d18091a98640ee71392f015`
 - Primary backend target: self-hosted Vaultwarden
@@ -53,8 +54,8 @@ document, URL, policy, and target bindings are revalidated after asynchronous wo
 - Save/update capture is encrypted while unconfirmed and becomes claimable only after a narrowly
   correlated browser-owned `POST`/`PUT`/`PATCH` request succeeds. The journal stores no credentials,
   URL path/query, account identity, email, or server URL.
-- Open and extension-visible closed shadow roots are discovered without patching page APIs. See the
-  known interaction limitation below.
+- Open and extension-visible closed shadow roots are discovered and receive trusted capture-phase
+  interaction listeners without patching page APIs.
 - Toolbar state has neutral, locked, and unlocked icons; pending device approvals take badge
   priority over unlocked match counts.
 
@@ -94,76 +95,60 @@ model and adversarial tests.
 - Phishing-blocker and related-origin behavior remain feature/entitlement gated instead of being
   enabled against a self-hosted server without a trustworthy data source.
 
-## Confirmed Follow-up Work
+## Completed Follow-up Work
 
-The following findings were independently rechecked during final review. They were not rushed into
-the branch after the handoff/push request because each crosses a security or performance boundary.
+The security and performance findings from the previous handoff are now implemented and covered by
+adversarial tests.
 
-### P1: BFCache incarnation fencing
+### BFCache and runtime incarnation fencing
 
-Persisted page restore can reuse the browser `documentId`, frame form ids, and structural generation.
-An in-flight pre-restore login/structured commit can therefore collide with a fresh content runtime.
-The save-capture discard is also not an atomic barrier: an older router handler or delayed
-`webRequest` observation can land after cleanup, and cleanup failure currently restarts capture.
+- Every content runtime receives a canonical lowercase UUID v4 incarnation and activates against the
+  browser-authoritative frame document before any autofill work begins.
+- Runtime identity is bound through frame inspection, popup/keyboard/context-menu/manual targets,
+  intents, direct and continued commits, focus waits, save capture, and content commands.
+- Replaced runtimes are retired through bounded durable tombstones. Unconfirmed captures, username
+  stages, request/outcome metadata, and runtime-owned continuations are fenced or cleared without
+  deleting already confirmed captures.
+- Top-frame BFCache activation revokes stale child-frame content authority while ordinary navigation
+  preserves the network evidence required to confirm a legitimate cross-document form submission.
+- Login and structured staged fills re-run authoritative composed-tree discovery after every write,
+  verify runtime ownership, and reject a changed custom-plan digest before releasing credentials.
 
-Recommended design:
+### Save-capture completion and wake semantics
 
-1. Generate a high-entropy content-runtime incarnation on every start/resume.
-2. Bind it through frame inspection, targets, intents, commits, `awaitFocus`, capture, and discard.
-3. Persist a bounded retired-incarnation tombstone in the save coordinator; move
-   `putUnconfirmed()` inside the serialized fence check.
-4. Retire the old incarnation and clear its unconfirmed capture, username stage, request, and
-   outcome metadata atomically. Preserve already confirmed captures.
-5. Fence browser events that entered before `webNavigation.getFrame()` completed, or block that
-   document's evidence for the full network TTL.
-6. Resume capture only after an explicit successful cleanup response.
+- `onBeforeRequest` installs a synchronous, durable admission barrier before asynchronous
+  `webNavigation.getFrame()` resolution. In-flight capture staging also registers bounded frame
+  interest before its first await, so an early competing request cannot evade the barrier.
+- Confirmation fences are scoped to relevant capture windows and request ids, rechecked after every
+  asynchronous persistence step, and rolled back inside the pending-store queue if authority changes.
+- Method-preserving 307/308 redirect continuations are accepted exactly once; malformed reuse,
+  mismatched URL/method/document bindings, and terminal parse failures remain fail closed.
+- Save wakes claim the exact capture id and distinguish `displayed`, `not_displayed`, and `not_ready`.
+  Only a real current-runtime surface acknowledges display.
+- Pending encrypted captures have an independent durable expiry alarm. Username staging and tab/global
+  cleanup now share the coordinator lane, preventing cleared secret state from being written back by
+  an older queued operation.
 
-### P1: Save-capture correlation completion barrier
+### Closed shadow roots, accessibility, and bounded detection
 
-`onBeforeRequest` performs asynchronous `webNavigation.getFrame()` work in independent request
-lanes. A fast candidate request can be journaled and confirmed after the correlation window while a
-second in-window candidate is still waiting for frame resolution. Confirmation must wait until every
-browser event that entered the window has either resolved or expired; otherwise an ambiguous
-formless submission can be treated as unique.
+- Trusted `focusin`, `contextmenu`, and `pointerdown` listeners are bound to every discovered root in
+  the capture phase. Closed-root and document observations are identity-deduplicated while preserving
+  the deepest trusted target.
+- Accessibility-source visibility permits standard off-screen, clipped, and transparent screen-reader
+  labels while rejecting semantic-tree removal.
+- Composed-tree maintenance is incremental for added/removed subtrees. Late shadow attachment uses
+  bounded idle slices with backoff, canonical breadth-first ordering, root cleanup, and truncation
+  fences.
+- Login/card/identity/TOTP/generator/custom-field detection shares bounded control, element, form,
+  candidate-group, hint-byte, semantic-source, semantic-node, and custom-target budgets. Raw and final
+  structured-form passes reuse identity-deduplicated candidate accounting, and any overflow invalidates
+  the entire projection.
+- Ambiguous autocomplete and heuristic roles no longer use first-match classification; a field is
+  accepted only when exactly one normalized role remains.
 
-The same follow-up should cover two adjacent lifecycle cases:
-
-- Chrome may emit a second `onBeforeRequest` with the same request id after a method-preserving
-  307/308 redirect. Treat that as the known redirect continuation instead of request-id reuse.
-- A non-secret wake sent after the source document is replaced may receive `action: none`. Do not
-  acknowledge that as a displayed prompt or remove its journal-owned expiry alarm. Pending encrypted
-  credentials need an independent durable expiry/cleanup path even after a successful UI wake.
-
-### P1: Closed-shadow interaction listeners
-
-Discovery sees Chrome's extension-visible closed roots, but `focusin`, `contextmenu`, and
-`pointerdown` are currently handled only at `Document`. Outside a closed root, `composedPath()` hides
-the internal control, so inline focus/right-click can miss the field and click-away can misclassify
-the interaction. Bind listeners through `AutofillDocumentController.bindRoots()` and deduplicate
-events while preserving capture-phase resistance to page `stopPropagation()`.
-
-### P1: Accessible labels and DOM scan cost
-
-- Screen-reader-only labels use visually hidden CSS by design. Semantic-label validation currently
-  applies field interactability rules and may mark these labels unsafe, excluding otherwise valid
-  password/card/identity fields. Add a separate accessibility-source visibility rule that rejects
-  semantic-tree removal but permits standard off-screen/clipped label text.
-- Dynamic pages can trigger repeated full composed-tree scans, each visiting up to 100,000 elements
-  and probing the privileged closed-root API. Maintain known hosts/roots incrementally from added
-  nodes, then use an idle, bounded, backed-off sweep only for late shadow attachment.
-
-### P2: Classification and enumeration bounds
-
-- Non-semantic card/identity hints and multiple recognized autocomplete roles still select the first
-  pattern in some cases. Collect normalized candidate roles and fill only when exactly one remains.
-- The composed-tree element budget does not bound later `querySelectorAll()` field enumeration.
-  Share control/count/byte budgets with detection, and fail the entire projection closed when a
-  snapshot is truncated or any budget is exceeded.
-- `autofill.awaitFocus` must be owned and cancelled by its runtime incarnation as part of the BFCache
-  fix.
-- Temporary Receive-page host permissions are tracked and retried three times in the current page
-  lifecycle. A final repeated removal failure is not persisted across page destruction; add a small
-  durable cleanup journal if cross-lifecycle recovery is required.
+One previously documented optional item remains unchanged: Receive-page temporary host-permission
+cleanup retries are bounded within the page lifecycle but do not yet use a cross-lifecycle durable
+cleanup journal.
 
 ## Remaining Official-Client Capability Gaps
 
@@ -190,34 +175,46 @@ These are product/backend gaps rather than regressions in the implemented paths.
 
 ## Verification Status
 
-Focused suites for the individual changes passed during implementation, including save-capture,
-toolbar, security-stamp, organization permission, Send access, field detection, and BFCache teardown
-tests. The final local repository-wide verification completed successfully:
+All verification for this continuation ran on `test-env`; no local test, build, smoke, or runtime
+probe was used. A checksum-verified temporary Node `v22.23.2` runtime was used to match CI's Node 22
+major version.
 
 ```powershell
+npm ci
 npm run typecheck
 npm run lint
 npm test
 npm run build:prod
+dbus-run-session -- xvfb-run -a npm run verify:render
 git diff --check
 ```
 
+- Dependency install/audit: passed; 0 vulnerabilities
 - TypeScript: passed
 - ESLint: passed
-- Unit tests: 292 files, 7,149 tests passed
+- Unit tests: 294 files, 7,344 tests passed; 1 existing test skipped
 - Production build and `assert-build`: passed
-- Whitespace check: passed; Git emitted only the existing Windows LF/CRLF conversion warnings
+- Chrome for Testing `149.0.7827.55` MV3 render smoke: passed for popup, options, and receive pages;
+  zero page/console errors. An expected background warning was emitted because no device-login server
+  was configured.
+- Whitespace check: passed after normalizing the Windows working-copy line endings in the disposable
+  Linux verification clone.
 
-Live Vaultwarden and authenticated Chrome verification require the `test-env` backend. On
-2026-09-01, `ssh -o BatchMode=yes -o ConnectTimeout=10 test-env "echo test-env-ok"` timed out, so no
-final live/backend or authenticated-browser claim should be inferred from the local unit/build
-results. Do not substitute a local backend containing different data.
+Authenticated live Vaultwarden verification remains environmentally blocked. The service currently
+published at `test-env` `127.0.0.1:18082` is `ghcr.io/bitwarden/lite`, not Vaultwarden; the unrelated
+`/opt/vaultwarden/data` directory is not mounted by that container. No live test was run against this
+substitute and no Vaultwarden compatibility claim should be inferred. Restore a disposable
+Vaultwarden instance before running the repository's mutating live/API or authenticated browser gates.
+
+Store publishing was not performed.
 
 ## Recommended Next Order
 
-1. Implement and adversarially test the BFCache incarnation/fence design.
-2. Complete root-local closed-shadow event handling.
-3. Separate accessible-label visibility from field interactability.
-4. Make composed-tree discovery incremental and enforce a shared field budget.
-5. Restore `test-env`, seed disposable data, and run live plus real-Chrome verification.
-6. Address product gaps only after the security/performance follow-ups above are closed.
+1. Restore a real disposable Vaultwarden service on `test-env`, confirm its container/image and data
+   isolation, then run the authenticated live/API gates with cleanup enabled.
+2. Add dedicated CDP-driven real-Chrome scenarios for BFCache restore, 307/308 save correlation, and
+   closed-shadow interactions if those behaviors require a browser-level release gate beyond the
+   adversarial unit coverage.
+3. Add a durable Receive-page permission-cleanup journal only if cross-lifecycle retry is required.
+4. Address the remaining official-client product/backend gaps independently of this completed
+   hardening pass.

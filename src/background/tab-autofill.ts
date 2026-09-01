@@ -158,6 +158,7 @@ export interface RepromptAutofillAuthorization {
 const RECENT_FOCUS_WINDOW_MS = 30_000;
 const MAX_FORMS_PER_FRAME = 128;
 const MAX_OPAQUE_ID_LENGTH = 4_096;
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 interface FormRank {
   /** 0 when focused within the last 30 seconds, 1 otherwise. */
@@ -349,6 +350,7 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
           frameId: frame.frameId,
           formId: form.formId,
           documentId,
+          runtimeIncarnation: inspection.runtimeIncarnation,
           generation: inspection.generation,
         };
 
@@ -455,6 +457,7 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
           kind: 'login' as const,
           frameId: frame.frameId,
           documentId: frame.documentId,
+          runtimeIncarnation: inspection.runtimeIncarnation,
           formId: form.formId,
           generation: inspection.generation,
           customPlanDigest,
@@ -592,6 +595,7 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
           type: 'autofill.commitLoginFill',
           formId: target.formId,
           expectedFrameUrl: frame.url,
+          expectedRuntimeIncarnation: target.runtimeIncarnation,
           expectedGeneration: target.generation,
           login: projection.login,
           customPlan: inspectedForm.customPlan,
@@ -625,6 +629,7 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
           formId: target.formId,
           roles: [...target.roles],
           expectedFrameUrl: frame.url,
+          expectedRuntimeIncarnation: target.runtimeIncarnation,
           expectedGeneration: target.generation,
           data,
         };
@@ -655,6 +660,7 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
           formId: target.formId,
           roles: [...target.roles],
           expectedFrameUrl: frame.url,
+          expectedRuntimeIncarnation: target.runtimeIncarnation,
           expectedGeneration: target.generation,
           data,
         };
@@ -933,15 +939,16 @@ export function parseBrowserFrame(value: unknown): BrowserFrame | undefined {
 
 function parseTabSuggestionTarget(value: unknown): TabSuggestionTarget | undefined {
   if (!isRecord(value)) return undefined;
-  const { frameId, formId, documentId, generation, kind } = value;
+  const { frameId, formId, documentId, runtimeIncarnation, generation, kind } = value;
   if (
     !isNonNegativeSafeInteger(frameId)
     || !isOpaqueId(formId)
     || !isOpaqueId(documentId)
+    || !isRuntimeIncarnation(runtimeIncarnation)
     || !isNonNegativeSafeInteger(generation)
   ) return undefined;
 
-  const base = { frameId, formId, documentId, generation };
+  const base = { frameId, formId, documentId, runtimeIncarnation, generation };
   if (kind === 'login') {
     if ('roles' in value || !isLoginCustomPlanDigest(value.customPlanDigest)) return undefined;
     return { ...base, kind, customPlanDigest: value.customPlanDigest };
@@ -966,6 +973,7 @@ function tabSuggestionTargetKey(target: TabSuggestionTarget): string {
     target.frameId,
     target.formId,
     target.documentId,
+    target.runtimeIncarnation,
     target.generation,
     purposeBinding,
   ]);
@@ -973,9 +981,10 @@ function tabSuggestionTargetKey(target: TabSuggestionTarget): string {
 
 function parseFrameInspection(value: unknown): FrameInspection | undefined {
   if (!isRecord(value)) return undefined;
-  const { frameUrl, generation, forms } = value;
+  const { runtimeIncarnation, frameUrl, generation, forms } = value;
   if (
-    typeof frameUrl !== 'string'
+    !isRuntimeIncarnation(runtimeIncarnation)
+    || typeof frameUrl !== 'string'
     || !isNonNegativeSafeInteger(generation)
     || !Array.isArray(forms)
     || forms.length > MAX_FORMS_PER_FRAME
@@ -986,7 +995,7 @@ function parseFrameInspection(value: unknown): FrameInspection | undefined {
     if (!parsed) return undefined;
     parsedForms.push(parsed);
   }
-  return { frameUrl, generation, forms: parsedForms };
+  return { runtimeIncarnation, frameUrl, generation, forms: parsedForms };
 }
 
 function parseFrameForm(value: unknown): FrameAutofillForm | undefined {
@@ -1034,7 +1043,8 @@ function parseCanonicalRoles(kind: FillKind, value: unknown): FillRole[] | undef
 }
 
 async function inspectionMatchesTarget(inspection: FrameInspection, target: TabSuggestionTarget): Promise<boolean> {
-  if (inspection.generation !== target.generation) return false;
+  if (inspection.runtimeIncarnation !== target.runtimeIncarnation
+      || inspection.generation !== target.generation) return false;
   const matches = inspection.forms.filter((form) => form.formId === target.formId);
   if (matches.length !== 1) return false;
   const form = matches[0]!;
@@ -1130,6 +1140,10 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
 
 function isOpaqueId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= MAX_OPAQUE_ID_LENGTH;
+}
+
+function isRuntimeIncarnation(value: unknown): value is string {
+  return typeof value === 'string' && UUID_V4_PATTERN.test(value);
 }
 
 function fillOutcomeForErrorCode(code: AppErrorCode): TabFillOutcome['status'] {

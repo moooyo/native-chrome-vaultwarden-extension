@@ -19,6 +19,8 @@ import type { DetailExtras, SuggestionsViewState, TotpFetchResult } from '../typ
 import type { CipherSummary } from '../../../core/vault/models.js';
 import { EMPTY_LOGIN_CUSTOM_PLAN_DIGEST } from '../../../core/vault/login-custom-fields.js';
 
+const TARGET_RUNTIME_INCARNATION = 'a0b1c2d3-e4f5-4a6b-8c9d-0123456789ab';
+
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
@@ -309,7 +311,7 @@ describe('vw-vault-view', () => {
         status: 'ready',
         suggestions: [{
           kind: 'login', id: 'c1', name: 'Nebula', matchedUri: 'https://nebula.dev', matchType: 0, favorite: false,
-          target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', generation: 3, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
+          target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 3, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
         }],
       },
     });
@@ -321,7 +323,7 @@ describe('vw-vault-view', () => {
     expect(fired).toHaveBeenCalledWith(expect.objectContaining({
       detail: {
         cipherId: 'c1',
-        target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', generation: 3, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
+        target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 3, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
       },
     }));
   });
@@ -339,14 +341,16 @@ describe('vw-vault-view', () => {
           {
             kind: 'card', id: 'card-1', name: 'Travel Card', subtitle: 'Visa', favorite: false,
             target: {
-              kind: 'card', frameId: 0, formId: 'payment', documentId: 'doc-0', generation: 4,
+              kind: 'card', frameId: 0, formId: 'payment', documentId: 'doc-0',
+              runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 4,
               roles: ['cardholderName', 'number'],
             },
           },
           {
             kind: 'identity', id: 'identity-1', name: 'Personal', subtitle: 'Mina Chen', favorite: false,
             target: {
-              kind: 'identity', frameId: 0, formId: 'profile', documentId: 'doc-0', generation: 4,
+              kind: 'identity', frameId: 0, formId: 'profile', documentId: 'doc-0',
+              runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 4,
               roles: ['firstName', 'lastName'],
             },
           },
@@ -372,7 +376,8 @@ describe('vw-vault-view', () => {
       detail: {
         cipherId: 'card-1',
         target: {
-          kind: 'card', frameId: 0, formId: 'payment', documentId: 'doc-0', generation: 4,
+          kind: 'card', frameId: 0, formId: 'payment', documentId: 'doc-0',
+          runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 4,
           roles: ['cardholderName', 'number'],
         },
       },
@@ -665,7 +670,7 @@ describe('vw-vault-view', () => {
         status: 'ready',
         suggestions: [{
           kind: 'login', id: 'c1', name: 'Nebula', matchedUri: 'https://nebula.dev', matchType: 0, favorite: false, reprompt: true,
-          target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', generation: 1, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
+          target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 1, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
         }],
       },
     });

@@ -41,9 +41,16 @@ function createStages(
   });
 }
 
+const DOCUMENT_ID = 'document-A';
+const NEXT_DOCUMENT_ID = 'document-B';
+const RUNTIME_INCARNATION = 'a0b1c2d3-e4f5-4a6b-8c9d-0123456789ab';
+const NEXT_RUNTIME_INCARNATION = 'b1c2d3e4-f5a6-4b7c-9d0e-123456789abc';
+
 const STAGE: AutofillUsernameStageInput = {
   tabId: 7,
   frameId: 0,
+  documentId: DOCUMENT_ID,
+  runtimeIncarnation: RUNTIME_INCARNATION,
   origin: 'https://login.example.com',
   username: 'person@example.com',
   sessionGeneration: 3,
@@ -70,7 +77,7 @@ describe('AutofillUsernameStageStore', () => {
     const store = createMemoryStore();
     await createStages(store).stage(STAGE);
     await expect(store.get<{ schemaVersion: number }>(AUTOFILL_USERNAME_STAGE_KEY))
-      .resolves.toMatchObject({ schemaVersion: 3 });
+      .resolves.toMatchObject({ schemaVersion: 4 });
     const restarted = createStages(store);
 
     await expect(restarted.consume(context())).resolves.toBe(STAGE.username);
@@ -88,6 +95,89 @@ describe('AutofillUsernameStageStore', () => {
     await stages.stage(STAGE);
     await expect(stages.consume(context(overrides))).resolves.toBeUndefined();
     await expect(stages.consume(context())).resolves.toBe(STAGE.username);
+  });
+
+  it('carries a username across a normal same-origin document replacement', async () => {
+    const stages = createStages(createMemoryStore());
+    await stages.stage(STAGE);
+
+    await expect(stages.consume(context({
+      documentId: NEXT_DOCUMENT_ID,
+      runtimeIncarnation: NEXT_RUNTIME_INCARNATION,
+    }))).resolves.toBe(STAGE.username);
+  });
+
+  it('clears a retired BFCache runtime before its replacement can consume the stage', async () => {
+    const store = createMemoryStore();
+    const stages = createStages(store);
+    await stages.stage(STAGE);
+
+    await stages.clearRuntime(
+      STAGE.tabId,
+      STAGE.frameId,
+      STAGE.documentId,
+      STAGE.runtimeIncarnation,
+    );
+
+    const replacement = {
+      ...STAGE,
+      runtimeIncarnation: NEXT_RUNTIME_INCARNATION,
+      username: 'replacement@example.com',
+    };
+    await expect(stages.consume(context(replacement))).resolves.toBeUndefined();
+
+    await stages.stage(replacement);
+    await stages.clearRuntime(
+      STAGE.tabId,
+      STAGE.frameId,
+      STAGE.documentId,
+      STAGE.runtimeIncarnation,
+    );
+    await expect(stages.consume(context(replacement))).resolves.toBe(replacement.username);
+  });
+
+  it('clears only the exact document runtime and preserves unrelated stages', async () => {
+    const stages = createStages(createMemoryStore());
+    const otherTab = {
+      ...STAGE,
+      tabId: 8,
+      username: 'tab@example.com',
+    };
+    const otherFrame = {
+      ...STAGE,
+      frameId: 1,
+      username: 'frame@example.com',
+    };
+    const otherDocument = {
+      ...STAGE,
+      documentId: NEXT_DOCUMENT_ID,
+      origin: 'https://document.example.com',
+      username: 'document@example.com',
+    };
+    const otherRuntime = {
+      ...STAGE,
+      runtimeIncarnation: NEXT_RUNTIME_INCARNATION,
+      origin: 'https://runtime.example.com',
+      username: 'runtime@example.com',
+    };
+    await stages.stage(STAGE);
+    await stages.stage(otherTab);
+    await stages.stage(otherFrame);
+    await stages.stage(otherDocument);
+    await stages.stage(otherRuntime);
+
+    await stages.clearRuntime(
+      STAGE.tabId,
+      STAGE.frameId,
+      STAGE.documentId,
+      STAGE.runtimeIncarnation,
+    );
+
+    await expect(stages.consume(context())).resolves.toBeUndefined();
+    await expect(stages.consume(context(otherTab))).resolves.toBe(otherTab.username);
+    await expect(stages.consume(context(otherFrame))).resolves.toBe(otherFrame.username);
+    await expect(stages.consume(context(otherDocument))).resolves.toBe(otherDocument.username);
+    await expect(stages.consume(context(otherRuntime))).resolves.toBe(otherRuntime.username);
   });
 
   it.each([
@@ -129,7 +219,7 @@ describe('AutofillUsernameStageStore', () => {
     await expect(stages.consume(context())).resolves.toBeUndefined();
     await expect(store.get(AUTOFILL_USERNAME_STAGE_KEY)).resolves.toBeUndefined();
 
-    await store.set(AUTOFILL_USERNAME_STAGE_KEY, { schemaVersion: 2, revision: 1, entries: [] });
+    await store.set(AUTOFILL_USERNAME_STAGE_KEY, { schemaVersion: 3, revision: 1, entries: [] });
     await expect(stages.consume(context())).resolves.toBeUndefined();
     await expect(store.get(AUTOFILL_USERNAME_STAGE_KEY)).resolves.toBeUndefined();
   });
@@ -164,8 +254,23 @@ describe('AutofillUsernameStageStore', () => {
     await expect(stages.stage({ ...STAGE, origin: 'https://login.example.com/' })).rejects.toThrow('origin');
     await expect(stages.stage({ ...STAGE, serverUrl: 'https://vault.example.com' })).rejects.toThrow('canonical');
     await expect(stages.stage({ ...STAGE, enterprisePolicyRawGeneration: ' ' })).rejects.toThrow('enterprisePolicyRawGeneration');
+    await expect(stages.stage({ ...STAGE, documentId: ' ' })).rejects.toThrow('documentId');
+    await expect(stages.stage({
+      ...STAGE,
+      runtimeIncarnation: RUNTIME_INCARNATION.toUpperCase(),
+    })).rejects.toThrow('runtimeIncarnation');
+    await expect(stages.stage({
+      ...STAGE,
+      runtimeIncarnation: '11111111-1111-1111-8111-111111111111',
+    })).rejects.toThrow('runtimeIncarnation');
     await expect(stages.stage({ ...STAGE, username: ' ' })).rejects.toThrow('username');
     await expect(stages.clearTab(-1)).rejects.toThrow('tabId');
+    await expect(stages.clearRuntime(
+      STAGE.tabId,
+      STAGE.frameId,
+      STAGE.documentId,
+      RUNTIME_INCARNATION.toUpperCase(),
+    )).rejects.toThrow('runtimeIncarnation');
   });
 
   it('never persists the username in plaintext and zeroes the owned UserKey', async () => {
@@ -201,6 +306,22 @@ describe('AutofillUsernameStageStore', () => {
       loadUserKey: async () => undefined,
     });
     await expect(unavailable.consume(context())).resolves.toBeUndefined();
+    await expect(store.get(AUTOFILL_USERNAME_STAGE_KEY)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['document', { documentId: NEXT_DOCUMENT_ID }],
+    ['runtime', { runtimeIncarnation: NEXT_RUNTIME_INCARNATION }],
+  ])('authenticates stored %s metadata against tampering', async (_label, overrides) => {
+    const store = createMemoryStore();
+    const stages = createStages(store);
+    await stages.stage(STAGE);
+    const stored = await store.get<{ entries: Array<Record<string, unknown>> }>(AUTOFILL_USERNAME_STAGE_KEY);
+    expect(stored).toBeDefined();
+    Object.assign(stored!.entries[0]!, overrides);
+    await store.set(AUTOFILL_USERNAME_STAGE_KEY, stored);
+
+    await expect(stages.consume(context(overrides))).resolves.toBeUndefined();
     await expect(store.get(AUTOFILL_USERNAME_STAGE_KEY)).resolves.toBeUndefined();
   });
 });

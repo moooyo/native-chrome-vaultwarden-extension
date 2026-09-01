@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SymmetricKey } from '../core/crypto/keys.js';
 import type { KeyValueStore } from '../platform/store.js';
 import {
+  AUTOFILL_PENDING_SAVE_ALARM,
   AUTOFILL_PENDING_SAVE_STORAGE_KEY,
   AUTOFILL_PENDING_SAVE_ENVELOPE_MAX_UTF8_BYTES,
   AUTOFILL_PENDING_SAVE_SCHEMA_VERSION,
@@ -17,6 +18,10 @@ it('reserves no more than 1 MiB and 64 entries of shared storage.session', () =>
   expect(AUTOFILL_PENDING_SAVE_ENVELOPE_MAX_UTF8_BYTES).toBe(1024 * 1024);
   expect(DEFAULT_AUTOFILL_PENDING_SAVE_CAPACITY).toBe(32);
   expect(MAX_AUTOFILL_PENDING_SAVE_CAPACITY).toBe(64);
+});
+
+it('uses a dedicated pending-save expiry alarm', () => {
+  expect(AUTOFILL_PENDING_SAVE_ALARM).toBe('autofillPendingSaves.expiry');
 });
 
 interface InspectableStore extends Pick<KeyValueStore, 'get' | 'set'> {
@@ -52,10 +57,14 @@ const BINDING = {
   enterprisePolicyRawGeneration: 'enterprise-raw-generation-A',
 } as const;
 
+const RUNTIME_A = 'a0000000-0000-4000-8000-000000000001';
+const RUNTIME_B = 'b0000000-0000-4000-8000-000000000002';
+
 const INPUT: AutofillPendingSaveInput = {
   tabId: 7,
   frameId: 0,
   sourceDocumentId: 'source-document',
+  runtimeIncarnation: RUNTIME_A,
   sourceUrl: 'https://login.example.test/sign-in?flow=1',
   origin: 'https://login.example.test',
   ...BINDING,
@@ -65,6 +74,7 @@ const CONTEXT: AutofillPendingSaveDocumentContext = {
   tabId: 7,
   frameId: 0,
   documentId: 'destination-document',
+  runtimeIncarnation: RUNTIME_A,
   frameUrl: 'https://login.example.test/complete',
   origin: 'https://login.example.test',
   ...BINDING,
@@ -109,6 +119,10 @@ function fixture(overrides: {
   createId?: () => string;
   randomBytes?: (length: number) => Uint8Array;
   storageKey?: string;
+  scheduler?: {
+    schedule(when: number): void | Promise<void>;
+    cancel(): void | Promise<void>;
+  };
 } = {}) {
   const store = overrides.store ?? createMemoryStore();
   const storageKey = overrides.storageKey ?? `pending-save-test-${++storageSequence}`;
@@ -122,6 +136,7 @@ function fixture(overrides: {
     ...(overrides.claimLeaseMs === undefined ? {} : { claimLeaseMs: overrides.claimLeaseMs }),
     ...(overrides.maxEntries === undefined ? {} : { maxEntries: overrides.maxEntries }),
     ...(overrides.randomBytes ? { randomBytes: overrides.randomBytes } : {}),
+    ...(overrides.scheduler ? { scheduler: overrides.scheduler } : {}),
   });
   return { store, storageKey, make };
 }
@@ -165,6 +180,7 @@ describe('AutofillPendingSaveStore', () => {
       tabId: INPUT.tabId,
       frameId: INPUT.frameId,
       sourceDocumentId: INPUT.sourceDocumentId,
+      runtimeIncarnation: INPUT.runtimeIncarnation,
       sourceUrl: INPUT.sourceUrl,
     });
     expect(JSON.stringify(f.store.peek(f.storageKey))).not.toContain(CREDENTIALS.password);
@@ -217,6 +233,125 @@ describe('AutofillPendingSaveStore', () => {
     expectZeroed(key);
   });
 
+  it('checks the confirmation fence immediately before durable promotion', async () => {
+    const f = fixture();
+    const metadata = await f.make().putUnconfirmed(INPUT, CREDENTIALS, userKey());
+    const staleKey = userKey();
+    const fenceChanged = new Error('before-request admission entered');
+
+    await expect(f.make().confirmUnconfirmed(metadata, staleKey, () => {
+      expect(rawEnvelope(f.store, f.storageKey).entries[0]).toMatchObject({
+        state: 'unconfirmed',
+        confirmation: 'unconfirmed',
+      });
+      throw fenceChanged;
+    })).rejects.toBe(fenceChanged);
+    expectZeroed(staleKey);
+    await expect(f.make().captureState(metadata.captureId)).resolves.toBe('unconfirmed');
+
+    let checks = 0;
+    await expect(f.make().confirmUnconfirmed(metadata, userKey(), () => {
+      checks += 1;
+      expect(rawEnvelope(f.store, f.storageKey).entries[0]).toMatchObject({
+        state: checks === 1 ? 'unconfirmed' : 'pending',
+      });
+    })).resolves.toBe(true);
+    expect(checks).toBe(2);
+    await expect(f.make().captureState(metadata.captureId)).resolves.toBe('confirmed');
+  });
+
+  it('rolls back a promotion whose fence changes while storage is committing', async () => {
+    const baseStore = createMemoryStore();
+    let promotionWriteEntered!: () => void;
+    const promotionWrite = new Promise<void>((resolve) => { promotionWriteEntered = resolve; });
+    let releasePromotionWrite!: () => void;
+    const releasePromotion = new Promise<void>((resolve) => { releasePromotionWrite = resolve; });
+    let blockPromotion = true;
+    const store: InspectableStore = {
+      get: baseStore.get.bind(baseStore),
+      peek: baseStore.peek.bind(baseStore),
+      async set(key, value): Promise<void> {
+        await baseStore.set(key, value);
+        if (blockPromotion && JSON.stringify(value).includes('"confirmation":"confirmed"')) {
+          blockPromotion = false;
+          promotionWriteEntered();
+          await releasePromotion;
+        }
+      },
+    };
+    const f = fixture({ store });
+    const metadata = await f.make().putUnconfirmed(INPUT, CREDENTIALS, userKey());
+    const fenceChanged = new Error('before-request admission entered');
+    let fenceCurrent = true;
+    const confirmation = f.make().confirmUnconfirmed(metadata, userKey(), () => {
+      if (!fenceCurrent) throw fenceChanged;
+    });
+    await promotionWrite;
+    const competingClaim = claim(f.make());
+    fenceCurrent = false;
+    releasePromotionWrite();
+
+    await expect(confirmation).rejects.toBe(fenceChanged);
+    await expect(competingClaim).resolves.toEqual({ action: 'none' });
+    await expect(f.make().captureState(metadata.captureId)).resolves.toBe('unconfirmed');
+    expect(rawEnvelope(store, f.storageKey).entries[0]).toMatchObject({
+      state: 'unconfirmed',
+      confirmation: 'unconfirmed',
+    });
+  });
+
+  it('leaves every pending-save mutation unchanged when its commit fence changes', async () => {
+    const fenceChanged = new Error('runtime fence changed');
+    const rejectCommit = () => { throw fenceChanged; };
+
+    const putFixture = fixture();
+    const putKey = userKey();
+    await expect(putFixture.make().putUnconfirmed(
+      INPUT,
+      CREDENTIALS,
+      putKey,
+      rejectCommit,
+    )).rejects.toBe(fenceChanged);
+    expectZeroed(putKey);
+    expect(putFixture.store.peek(putFixture.storageKey)).toBeUndefined();
+
+    const f = fixture();
+    await put(f.make());
+    const claimKey = userKey();
+    await expect(f.make().claim(
+      CONTEXT,
+      claimKey,
+      async () => UPDATE,
+      undefined,
+      rejectCommit,
+    )).rejects.toBe(fenceChanged);
+    expectZeroed(claimKey);
+    expect(rawEnvelope(f.store, f.storageKey).entries[0]).toMatchObject({ state: 'pending' });
+
+    const prompt = await claim(f.make());
+    if (prompt.action !== 'update') throw new Error('expected update prompt');
+    const takeKey = userKey();
+    await expect(f.make().take(
+      prompt.promptId,
+      CONTEXT,
+      takeKey,
+      rejectCommit,
+    )).rejects.toBe(fenceChanged);
+    expectZeroed(takeKey);
+    expect(rawEnvelope(f.store, f.storageKey).entries[0]).toMatchObject({ state: 'claimed' });
+
+    await expect(f.make().dismiss(
+      prompt.promptId,
+      CONTEXT,
+      rejectCommit,
+    )).rejects.toBe(fenceChanged);
+    expect(rawEnvelope(f.store, f.storageKey).entries[0]).toMatchObject({ state: 'claimed' });
+    await expect(f.make().take(prompt.promptId, CONTEXT, userKey())).resolves.toMatchObject({
+      credentials: CREDENTIALS,
+      decision: UPDATE,
+    });
+  });
+
   it('discards an exact capture in any phase and never affects another slot', async () => {
     const f = fixture();
     const first = await f.make().putUnconfirmed(INPUT, CREDENTIALS, userKey());
@@ -255,6 +390,52 @@ describe('AutofillPendingSaveStore', () => {
       sourceUrl: INPUT.sourceUrl,
       decision: UPDATE,
     });
+  });
+
+  it('claims only the exact requested capture without letting another entry acknowledge it', async () => {
+    const f = fixture();
+    const firstInput = {
+      ...INPUT,
+      sourceDocumentId: 'source-document-A',
+      sourceUrl: 'https://login.example.test/sign-in?flow=A',
+    };
+    const secondInput = {
+      ...INPUT,
+      sourceDocumentId: 'source-document-B',
+      runtimeIncarnation: RUNTIME_B,
+      sourceUrl: 'https://login.example.test/sign-in?flow=B',
+    };
+    const first = await f.make().putUnconfirmed(firstInput, CREDENTIALS, userKey());
+    const second = await f.make().putUnconfirmed(secondInput, CREDENTIALS, userKey());
+    await expect(f.make().confirmUnconfirmed(first, userKey())).resolves.toBe(true);
+    await expect(f.make().confirmUnconfirmed(second, userKey())).resolves.toBe(true);
+
+    const evaluatedSources: string[] = [];
+    const prompt = await f.make().claim(CONTEXT, userKey(), async (_credentials, sourceUrl) => {
+      evaluatedSources.push(sourceUrl);
+      return UPDATE;
+    }, first.captureId);
+    expect(prompt).toMatchObject({ action: 'update' });
+    expect(evaluatedSources).toEqual([firstInput.sourceUrl]);
+
+    await expect(f.make().claim(
+      CONTEXT,
+      userKey(),
+      async () => { throw new Error('unknown capture must not be evaluated'); },
+      'f0000000-0000-4000-8000-000000000099',
+    )).resolves.toEqual({ action: 'none' });
+    await expect(f.make().captureState(second.captureId)).resolves.toBe('confirmed');
+
+    if (prompt.action !== 'update') throw new Error('expected update prompt');
+    await expect(f.make().take(prompt.promptId, CONTEXT, userKey())).resolves.toMatchObject({
+      sourceUrl: firstInput.sourceUrl,
+    });
+    await expect(f.make().claim(
+      CONTEXT,
+      userKey(),
+      async () => UPDATE,
+      second.captureId,
+    )).resolves.toMatchObject({ action: 'update' });
   });
 
   it('never persists credential plaintext or decision action, name, or cipher id', async () => {
@@ -300,6 +481,7 @@ describe('AutofillPendingSaveStore', () => {
 
   it.each([
     ['source document', (entry: Record<string, unknown>) => { entry.sourceDocumentId = 'tampered-source'; }, CONTEXT],
+    ['runtime incarnation', (entry: Record<string, unknown>) => { entry.runtimeIncarnation = RUNTIME_B; }, { ...CONTEXT, runtimeIncarnation: RUNTIME_B }],
     ['exact source URL', (entry: Record<string, unknown>) => { entry.sourceUrl = 'https://login.example.test/other'; }, CONTEXT],
     ['session binding', (entry: Record<string, unknown>) => { entry.sessionBindingId = 'session-binding-B'; }, { ...CONTEXT, sessionBindingId: 'session-binding-B' }],
     ['session generation', (entry: Record<string, unknown>) => { entry.sessionGeneration = 30; }, { ...CONTEXT, sessionGeneration: 30 }],
@@ -365,7 +547,8 @@ describe('AutofillPendingSaveStore', () => {
     true,
     {},
     { schemaVersion: 1, revision: 1, entries: [] },
-    { schemaVersion: 3, revision: 1, entries: [], extra: true },
+    { schemaVersion: 3, revision: 1, entries: [] },
+    { schemaVersion: 4, revision: 1, entries: [], extra: true },
     { schemaVersion: 2, revision: '1', entries: [] },
     { schemaVersion: 99, revision: 7, entries: [] },
     { schemaVersion: 2, revision: 8, entries: [{ password: 'plaintext-must-not-parse' }] },
@@ -479,6 +662,40 @@ describe('AutofillPendingSaveStore', () => {
       { ...CONTEXT, documentId: 'document-B' },
       userKey(),
     )).resolves.toMatchObject({ credentials: CREDENTIALS, decision: UPDATE });
+  });
+
+  it('fences a BFCache runtime from reusing a same-document claim', async () => {
+    let now = 1_000;
+    const f = fixture({ now: () => now, claimLeaseMs: 5 });
+    await put(f.make());
+    const runtimeAContext = {
+      ...CONTEXT,
+      documentId: 'shared-bfcache-document',
+      runtimeIncarnation: RUNTIME_A,
+    };
+    const runtimeBContext = {
+      ...runtimeAContext,
+      runtimeIncarnation: RUNTIME_B,
+    };
+    const first = await claim(f.make(), runtimeAContext);
+    if (first.action !== 'update') throw new Error('expected first prompt');
+
+    await expect(claim(f.make(), runtimeBContext)).resolves.toEqual({
+      action: 'retry',
+      retryAfterMs: 5,
+    });
+    await expect(f.make().take(first.promptId, runtimeBContext, userKey())).resolves.toBeUndefined();
+    await expect(f.make().dismiss(first.promptId, runtimeBContext)).resolves.toBe(false);
+
+    now += 5;
+    const reclaimed = await claim(f.make(), runtimeBContext);
+    if (reclaimed.action !== 'update') throw new Error('expected reclaimed prompt');
+    expect(reclaimed.promptId).not.toBe(first.promptId);
+    await expect(f.make().take(first.promptId, runtimeAContext, userKey())).resolves.toBeUndefined();
+    await expect(f.make().take(reclaimed.promptId, runtimeBContext, userKey())).resolves.toMatchObject({
+      credentials: CREDENTIALS,
+      decision: UPDATE,
+    });
   });
 
   it('lets the claimant act after the short lease when no newer document reclaimed it', async () => {
@@ -631,12 +848,68 @@ describe('AutofillPendingSaveStore', () => {
     expectZeroed(invalidKey);
   });
 
+  it('rejects non-canonical runtime incarnations in capture and claim contexts', async () => {
+    const f = fixture();
+    const captureKey = userKey();
+    await expect(f.make().put(
+      { ...INPUT, runtimeIncarnation: RUNTIME_A.toUpperCase() },
+      CREDENTIALS,
+      captureKey,
+    )).rejects.toMatchObject({ code: 'invalid_input' });
+    expectZeroed(captureKey);
+
+    const claimKey = userKey();
+    await expect(f.make().claim(
+      {
+        ...CONTEXT,
+        runtimeIncarnation: 'a0000000-0000-1000-8000-000000000001',
+      },
+      claimKey,
+      async () => UPDATE,
+    )).rejects.toMatchObject({ code: 'invalid_input' });
+    expectZeroed(claimKey);
+  });
+
   it('keeps the original pending entry when evaluation itself throws', async () => {
     const f = fixture();
     await put(f.make());
     const failure = new Error('vault snapshot unavailable');
     await expect(f.make().claim(CONTEXT, userKey(), async () => { throw failure; })).rejects.toBe(failure);
     await expect(claim(f.make())).resolves.toMatchObject({ action: 'update' });
+  });
+
+  it('owns an independent expiry scheduler without reclaiming a displayed prompt', async () => {
+    let now = 1_000;
+    const scheduled: number[] = [];
+    let cancellations = 0;
+    const f = fixture({
+      now: () => now,
+      ttlMs: 20,
+      claimLeaseMs: 5,
+      scheduler: {
+        schedule: (when) => { scheduled.push(when); },
+        cancel: () => { cancellations += 1; },
+      },
+    });
+    await put(f.make());
+    expect(scheduled.at(-1)).toBe(1_020);
+
+    const prompt = await claim(f.make());
+    if (prompt.action !== 'update') throw new Error('expected update prompt');
+    expect(scheduled.at(-1)).toBe(1_020);
+
+    now = 1_005;
+    await f.make().reconcile();
+    expect(rawEnvelope(f.store, f.storageKey).entries[0]).toMatchObject({
+      state: 'claimed',
+      promptId: prompt.promptId,
+    });
+    expect(scheduled.at(-1)).toBe(1_020);
+
+    now = 1_020;
+    await f.make().reconcile();
+    expect(rawEnvelope(f.store, f.storageKey).entries).toEqual([]);
+    expect(cancellations).toBeGreaterThan(0);
   });
 
   it('uses the exported default storage key', async () => {

@@ -87,6 +87,7 @@ import {
   type AutofillContinuationBrowserSource,
 } from './autofill-continuation-coordinator.js';
 import {
+  AUTOFILL_PENDING_SAVE_ALARM,
   AutofillPendingSaveStore,
   type AutofillUnconfirmedSaveMetadata,
 } from './autofill-pending-save-store.js';
@@ -448,7 +449,17 @@ const loadOwnedAutofillStorageUserKey = async () => {
     loaded.macKey.fill(0);
   }
 };
-const pendingSaves = new AutofillPendingSaveStore({ store: sessionStore });
+const pendingSaves = new AutofillPendingSaveStore({
+  store: sessionStore,
+  scheduler: {
+    schedule: (when) => browser.alarms.create(AUTOFILL_PENDING_SAVE_ALARM, { when }),
+    cancel: async () => { await browser.alarms.clear(AUTOFILL_PENDING_SAVE_ALARM); },
+  },
+});
+const usernameStages = new AutofillUsernameStageStore({
+  store: sessionStore,
+  loadUserKey: loadOwnedAutofillStorageUserKey,
+});
 function assertSaveCaptureCurrent(metadata: AutofillUnconfirmedSaveMetadata): void {
   const sessionLease = sessionGate.capture();
   const accountLease = accountGate.capture();
@@ -467,6 +478,7 @@ function assertSaveCaptureCurrent(metadata: AutofillUnconfirmedSaveMetadata): vo
 const saveCaptureCoordinator = new AutofillSaveCaptureCoordinator({
   store: sessionStore,
   captures: pendingSaves,
+  usernameStages,
   assertCurrent: assertSaveCaptureCurrent,
   loadUserKey: async (metadata) => {
     assertSaveCaptureCurrent(metadata);
@@ -476,14 +488,22 @@ const saveCaptureCoordinator = new AutofillSaveCaptureCoordinator({
     return loadOwnedAutofillStorageUserKey();
   },
   onConfirmed: async (metadata) => {
-    const response: unknown = await browser.tabs.sendMessage(metadata.tabId, {
-      type: 'autofill.saveCaptureConfirmed',
-    }, {
+    const rawFrame = await browser.webNavigation.getFrame({
+      tabId: metadata.tabId,
       frameId: metadata.frameId,
     });
+    const frame = rawFrame === null ? undefined : parseBrowserFrame(rawFrame);
+    if (!frame?.documentId) throw new Error('Save-capture target document is unavailable');
+    const response: unknown = await browser.tabs.sendMessage(metadata.tabId, {
+      type: 'autofill.saveCaptureConfirmed',
+      captureId: metadata.captureId,
+    }, {
+      frameId: metadata.frameId,
+      documentId: frame.documentId,
+    } as { frameId: number; documentId: string });
     if (typeof response !== 'object' || response === null
         || Reflect.ownKeys(response).length !== 1
-        || (response as { readonly status?: unknown }).status !== 'accepted') {
+        || (response as { readonly status?: unknown }).status !== 'displayed') {
       throw new Error('Save-capture content document is not ready');
     }
   },
@@ -491,10 +511,6 @@ const saveCaptureCoordinator = new AutofillSaveCaptureCoordinator({
     schedule: (when) => browser.alarms.create(AUTOFILL_SAVE_CAPTURE_ALARM, { when }),
     cancel: async () => { await browser.alarms.clear(AUTOFILL_SAVE_CAPTURE_ALARM); },
   },
-});
-const usernameStages = new AutofillUsernameStageStore({
-  store: sessionStore,
-  loadUserKey: loadOwnedAutofillStorageUserKey,
 });
 const pageLoadFillDeduper = new PageLoadFillDeduper({ store: sessionStore });
 
@@ -658,6 +674,12 @@ let revokeCommandCycles = (): void => {};
 let runContinuedCommand = async (
   _command: SecretExtensionCommand,
   _tab: { readonly id: number; readonly windowId: number },
+  _assertCurrent: () => void,
+  _expectedSource: {
+    readonly documentId: string;
+    readonly runtimeIncarnation: string;
+    readonly url: string;
+  },
 ): Promise<void> => {};
 let clearGeneratorHistoryForServerAfterRotation = async (_serverUrl: string): Promise<void> => {};
 let clearGeneratorHistoryForAccount = async (_identity: RotationPendingIdentity): Promise<void> => {};
@@ -1771,12 +1793,20 @@ const documentTabs = browser.tabs as unknown as {
 
 async function getKeyboardTopDocument(
   tabId: number,
-): Promise<{ documentId: string; url: string } | undefined> {
+): Promise<{ documentId: string; url: string; runtimeIncarnation?: string } | undefined> {
   const frame = await browser.webNavigation.getFrame({ tabId, frameId: 0 });
   const parsed = frame === null ? undefined : parseBrowserFrame(frame);
-  return parsed?.frameId === 0 && parsed.documentId
-    ? { documentId: parsed.documentId, url: parsed.url }
-    : undefined;
+  if (parsed?.frameId !== 0 || !parsed.documentId) return undefined;
+  const runtimeIncarnation = await saveCaptureCoordinator.getRuntimeIncarnation(
+    tabId,
+    0,
+    parsed.documentId,
+  );
+  return {
+    documentId: parsed.documentId,
+    url: parsed.url,
+    ...(runtimeIncarnation ? { runtimeIncarnation } : {}),
+  };
 }
 
 refreshAutofillClients = async (): Promise<void> => {
@@ -1903,6 +1933,9 @@ const contextMenu = createContextMenu({
     const frame = await browser.webNavigation.getFrame({ tabId, frameId });
     return frame === null ? undefined : parseBrowserFrame(frame);
   },
+  getRuntimeIncarnation: (tabId, frameId, documentId) => (
+    saveCaptureCoordinator.getRuntimeIncarnation(tabId, frameId, documentId)
+  ),
   continuation: {
     stageLockedContext: (source) => autofillContinuation.stageLockedContext(source),
     stageContextLoginReprompt: (source, cipherId, target) => (
@@ -2113,6 +2146,12 @@ const autofillContinuation = new AutofillContinuationCoordinator({
     const frame = await browser.webNavigation.getFrame({ tabId, frameId });
     return frame === null ? undefined : parseBrowserFrame(frame);
   },
+  isRuntimeCurrent: (tabId, frameId, documentId, runtimeIncarnation) => (
+    saveCaptureCoordinator.isRuntimeCurrent(tabId, frameId, documentId, runtimeIncarnation)
+  ),
+  getRuntimeIncarnation: (tabId, frameId, documentId) => (
+    saveCaptureCoordinator.getRuntimeIncarnation(tabId, frameId, documentId)
+  ),
   focusSource: async (windowId, tabId) => {
     await browser.windows.update(windowId, { focused: true });
     await browser.tabs.update(tabId, { active: true });
@@ -2146,7 +2185,9 @@ const autofillContinuation = new AutofillContinuationCoordinator({
   sendFocusedFill: (tabId, commandToken) => (
     browser.tabs.sendMessage(tabId, { type: 'autofill.focusedFill', commandToken })
   ),
-  runCommand: (command, tab) => runContinuedCommand(command, tab),
+  runCommand: (command, tab, assertCurrent, expectedSource) => (
+    runContinuedCommand(command, tab, assertCurrent, expectedSource)
+  ),
   keyboardGrants,
   tabAutofill,
   getFillData: async (
@@ -2209,32 +2250,54 @@ async function commandContinuationSource(
     readonly tabId: number;
     readonly windowId: number;
     readonly documentId: string;
+    readonly runtimeIncarnation: string;
     readonly url: string;
   },
-  target?: { readonly frameId: number; readonly documentId: string },
+  target?: {
+    readonly frameId: number;
+    readonly documentId: string;
+    readonly runtimeIncarnation: string;
+  },
 ) {
+  if (!(await saveCaptureCoordinator.isRuntimeCurrent(
+    source.tabId,
+    0,
+    source.documentId,
+    source.runtimeIncarnation,
+  ))) return undefined;
   if (!target || target.frameId === 0) {
-    if (target && target.documentId !== source.documentId) return undefined;
+    if (target && (target.documentId !== source.documentId
+        || target.runtimeIncarnation !== source.runtimeIncarnation)) return undefined;
     return Object.freeze({
       tabId: source.tabId,
       windowId: source.windowId,
       topDocumentId: source.documentId,
+      topRuntimeIncarnation: source.runtimeIncarnation,
       topUrl: source.url,
       frameId: 0,
       frameDocumentId: source.documentId,
+      frameRuntimeIncarnation: source.runtimeIncarnation,
       frameUrl: source.url,
     });
   }
   const rawFrame = await browser.webNavigation.getFrame({ tabId: source.tabId, frameId: target.frameId });
   const frame = rawFrame === null ? undefined : parseBrowserFrame(rawFrame);
   if (!frame?.documentId || frame.documentId !== target.documentId) return undefined;
+  if (!(await saveCaptureCoordinator.isRuntimeCurrent(
+    source.tabId,
+    frame.frameId,
+    frame.documentId,
+    target.runtimeIncarnation,
+  ))) return undefined;
   return Object.freeze({
     tabId: source.tabId,
     windowId: source.windowId,
     topDocumentId: source.documentId,
+    topRuntimeIncarnation: source.runtimeIncarnation,
     topUrl: source.url,
     frameId: frame.frameId,
     frameDocumentId: frame.documentId,
+    frameRuntimeIncarnation: target.runtimeIncarnation,
     frameUrl: frame.url,
   });
 }
@@ -2245,12 +2308,24 @@ async function contextMenuSourceCurrent(
 ): Promise<boolean> {
   try {
     assertCurrent();
-    const [tab, rawTop, rawFrame] = await Promise.all([
+    const [tab, rawTop, rawFrame, topRuntimeCurrent, frameRuntimeCurrent] = await Promise.all([
       browser.tabs.get(source.tabId),
       browser.webNavigation.getFrame({ tabId: source.tabId, frameId: 0 }),
       source.frameId === 0
         ? browser.webNavigation.getFrame({ tabId: source.tabId, frameId: 0 })
         : browser.webNavigation.getFrame({ tabId: source.tabId, frameId: source.frameId }),
+      saveCaptureCoordinator.isRuntimeCurrent(
+        source.tabId,
+        0,
+        source.topDocumentId,
+        source.topRuntimeIncarnation,
+      ),
+      saveCaptureCoordinator.isRuntimeCurrent(
+        source.tabId,
+        source.frameId,
+        source.frameDocumentId,
+        source.frameRuntimeIncarnation,
+      ),
     ]);
     assertCurrent();
     const top = rawTop === null ? undefined : parseBrowserFrame(rawTop);
@@ -2264,7 +2339,9 @@ async function contextMenuSourceCurrent(
       && top.url === source.topUrl
       && frame?.frameId === source.frameId
       && frame.documentId === source.frameDocumentId
-      && frame.url === source.frameUrl;
+      && frame.url === source.frameUrl
+      && topRuntimeCurrent
+      && frameRuntimeCurrent;
   } catch {
     return false;
   }
@@ -2288,6 +2365,7 @@ const commandCoordinator = new CommandCoordinator<SessionLease, AccountLease, Au
     return lease;
   },
   assertSessionLease: (lease) => sessionGate.assert(lease),
+  beginLocked: (input) => autofillContinuation.stageLockedKeyboard(input),
   captureAccountLease: () => accountGate.capture(),
   assertAccountLease: (lease) => accountGate.assert(lease),
   capturePolicyLease: () => captureAutofillAuthorizationPolicy(autofillAuthorizationPolicyGates),
@@ -2319,7 +2397,11 @@ const commandCoordinator = new CommandCoordinator<SessionLease, AccountLease, Au
     stageRepromptCommand: async (input) => {
       const continuationSource = await commandContinuationSource(input.source, input.target);
       if (!continuationSource) throw new AppError('denied', 'The command source is stale.');
-      await autofillContinuation.stageCommandFillReprompt(continuationSource, input);
+      await autofillContinuation.stageCommandFillReprompt(continuationSource, {
+        command: input.command,
+        cipherId: input.cipherId,
+        target: input.target,
+      });
     },
   },
   vaultReleaseGate,
@@ -2328,7 +2410,12 @@ const commandCoordinator = new CommandCoordinator<SessionLease, AccountLease, Au
     await vaultTimeout.recordActivity(lease);
   },
 });
-runContinuedCommand = (command, tab) => commandCoordinator.handle(command, tab);
+runContinuedCommand = (command, tab, assertCurrent, expectedSource) => commandCoordinator.handle(
+  command,
+  tab,
+  assertCurrent,
+  expectedSource,
+);
 revokeCommandCycles = () => commandCoordinator.revokeAll();
 
 const httpAuthBroker = new HttpAuthBroker({
@@ -2467,6 +2554,13 @@ const router = createRouter({
   loadPendingSaveUserKey: loadOwnedAutofillStorageUserKey,
   keyboardGrants,
   getKeyboardTopDocument,
+  getContentDocument: async (tabId, frameId) => {
+    const frame = await browser.webNavigation.getFrame({ tabId, frameId });
+    const parsed = frame === null ? undefined : parseBrowserFrame(frame);
+    return parsed?.documentId
+      ? { documentId: parsed.documentId, url: parsed.url }
+      : undefined;
+  },
   usernameStages,
   getSessionBindingId: async () => (await session.getActiveAuth())?.sessionBindingId,
   pageLoadFillDeduper,
@@ -2629,7 +2723,9 @@ const securityReady = (async (): Promise<SessionState> => {
 // Reconcile only after security initialization resolves. A confirmed capture wakes content, whose
 // claim request itself waits for securityReady; awaiting that wake inside initialization deadlocks.
 void securityReady
-  .then((state) => state === 'unlocked' ? saveCaptureCoordinator.reconcile() : undefined)
+  .then((state) => state === 'unlocked'
+    ? Promise.all([saveCaptureCoordinator.reconcile(), pendingSaves.reconcile()]).then(() => undefined)
+    : undefined)
   .catch(() => console.warn('autofill_save_capture_startup_reconcile_failed'));
 const httpAuthBrowserRegistered = registerHttpAuthBrowserListeners(
   (globalThis as unknown as { chrome?: HttpAuthChromeApi }).chrome,
@@ -2766,6 +2862,11 @@ browser.webNavigation.onCommitted.addListener((details) => {
 });
 browser.webNavigation.onCommitted.addListener((details) => {
   const documentId = (details as typeof details & { readonly documentId?: unknown }).documentId;
+  void saveCaptureCoordinator.noteDocumentNavigation(
+    details.tabId,
+    details.frameId,
+    typeof documentId === 'string' ? documentId : undefined,
+  ).catch(() => console.warn('autofill_runtime_navigation_fence_failed'));
   const navigation = {
     tabId: details.tabId,
     frameId: details.frameId,
@@ -3148,6 +3249,7 @@ browser.alarms.onAlarm.addListener((alarm) => {
     else if (alarm.name === CLIPBOARD_CLEAR_ALARM) await clipboard.handleClipboardAlarm(alarm.scheduledTime);
     else if (alarm.name === VAULT_SYNC_ALARM) await vaultSyncScheduler?.handleAlarm(alarm);
     else if (alarm.name === AUTOFILL_SAVE_CAPTURE_ALARM) await saveCaptureCoordinator.reconcile();
+    else if (alarm.name === AUTOFILL_PENDING_SAVE_ALARM) await pendingSaves.reconcile();
     else if (alarm.name === CLIENT_EVENT_UPLOAD_ALARM) {
       try {
         await clientEventRuntime.handleAlarm(alarm.name);

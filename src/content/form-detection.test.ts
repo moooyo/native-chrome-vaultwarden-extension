@@ -47,6 +47,26 @@ describe('form detection', () => {
     expect(forms[0]?.passwordInput?.type).toBe('password');
   });
 
+  it('uses clipped accessibility labels for login and new-password semantics', () => {
+    const screenReaderOnly = 'position:absolute;clip:rect(0 0 0 0);width:1px;height:1px;overflow:hidden';
+    document.body.innerHTML = `
+      <form id="login">
+        <label for="field-a" style="${screenReaderOnly}">Email address</label>
+        <input id="field-a" type="text">
+        <input id="field-b" type="password">
+      </form>
+      <form id="registration">
+        <label for="field-c" style="${screenReaderOnly}">New password</label>
+        <input id="field-c" type="password">
+      </form>`;
+
+    const forms = detectLoginForms();
+
+    expect(forms).toHaveLength(1);
+    expect(forms[0]?.usernameInput).toBe(document.getElementById('field-a'));
+    expect(forms[0]?.passwordInput).toBe(document.getElementById('field-b'));
+  });
+
   it('uses an unhinted text field immediately before a password in the same native form', () => {
     document.body.innerHTML = '<form><input type="text"><input type="password"></form>';
     const [identifier] = Array.from(document.querySelectorAll<HTMLInputElement>('input'));

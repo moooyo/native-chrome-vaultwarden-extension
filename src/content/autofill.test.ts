@@ -242,8 +242,9 @@ describe('FIDO2 fallback relay', () => {
 
 describe('autofill controller', () => {
   beforeEach(() => {
-    stopAutofill();
+    resetAutofillRuntimeForTest();
     runtimeStartedForTest = false;
+    lastRuntimeIncarnationForTest = undefined;
     extensionContextState.alive = true;
     document.querySelectorAll('[data-vw-popover-for]').forEach((node) => node.remove());
     document.body.innerHTML = '<form><input type="email"><input type="password"></form>';
@@ -691,7 +692,7 @@ describe('autofill controller', () => {
     </form>`;
     let resolveConfig!: (response: ResponseMessage) => void;
     const config = new Promise<ResponseMessage>((resolve) => { resolveConfig = resolve; });
-    vi.mocked(sendRequest).mockImplementation((request) => {
+    mockContentRequests((request) => {
       if (request.type === 'autofill.getClientConfig') return config;
       if (request.type === 'autofill.claimSavePrompt') {
         return Promise.resolve({ ok: true, data: { action: 'none' } });
@@ -699,10 +700,15 @@ describe('autofill controller', () => {
       if (request.type === 'autofill.captureSubmission') {
         return Promise.resolve({ ok: true, data: null });
       }
-      return Promise.resolve({ ok: false, error: { code: 'error', message: 'unexpected request' } });
+      return Promise.resolve({
+        ok: false,
+        error: { code: 'error', message: 'unexpected request' },
+      } as ResponseMessage);
     });
     startAutofill('https://example.com/login');
     runtimeStartedForTest = true;
+    await Promise.resolve();
+    expect(requestsOfType('autofill.getClientConfig')).toHaveLength(1);
 
     trustedPageEvent(
       document.getElementById('login')!,
@@ -731,12 +737,38 @@ describe('autofill controller', () => {
     });
   });
 
+  it('binds runtime requests to the activated incarnation with a non-enumerable descriptor', async () => {
+    let descriptor: PropertyDescriptor | undefined;
+    mockContentRequests((request) => {
+      if (request.type === 'autofill.getClientConfig') {
+        descriptor = Object.getOwnPropertyDescriptor(
+          request,
+          '__miyuAutofillRuntimeIncarnation',
+        );
+        return ENABLED_CLIENT_CONFIG;
+      }
+      if (request.type === 'autofill.claimSavePrompt') {
+        return { ok: true, data: { action: 'none' } } as ResponseMessage;
+      }
+      return { ok: false, error: { code: 'error', message: 'unexpected request' } } as ResponseMessage;
+    });
+
+    await startReady('https://example.com/login');
+
+    expect(descriptor).toEqual({
+      value: currentRuntimeIncarnation(),
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  });
+
   it('fills an exact custom login target after an inline user selection', async () => {
     const ackId = '10000000-0000-4000-8000-000000000001';
     const totpCopyAckId = '20000000-0000-4000-8000-000000000001';
     document.body.innerHTML = '<form><input name="username"><input type="password"><input name="department"></form>';
     let issuedPlan: Extract<Parameters<typeof sendRequest>[0], { type: 'autofill.issueIntent'; purpose: 'login' }>['customPlan'] | undefined;
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.getClientConfig') return ENABLED_CLIENT_CONFIG;
       if (request.type === 'autofill.findCandidates') return { ok: true, data: [{
         id: 'c1', name: 'Example', matchedUri: 'https://example.com', matchType: 0, favorite: false,
@@ -860,7 +892,7 @@ describe('autofill controller', () => {
 
   it('redeems a structured selection through a document-bound worker commit', async () => {
     document.body.innerHTML = '<form><input autocomplete="cc-number" id="num"><input autocomplete="cc-csc"></form>';
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.getClientConfig') return ENABLED_CLIENT_CONFIG;
       if (request.type === 'autofill.findStructuredCandidates') {
         return { ok: true, data: [{ id: 'card-1', name: 'Primary card', subtitle: 'Visa', favorite: true }] } as ResponseMessage;
@@ -891,7 +923,11 @@ describe('autofill controller', () => {
     expect(issue).toMatchObject({
       type: 'autofill.issueStructuredIntent',
       cipherId: 'card-1',
-      target: { kind: 'card', roles: ['number', 'code'] },
+      target: {
+        kind: 'card',
+        runtimeIncarnation: currentRuntimeIncarnation(),
+        roles: ['number', 'code'],
+      },
     });
     expect(redeem).toMatchObject({
       type: 'autofill.redeemStructuredIntent',
@@ -952,7 +988,7 @@ describe('autofill controller', () => {
         <input type="password" autocomplete="new-password" id="new-password">
       </form>`;
     let captured = false;
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.getClientConfig') return ENABLED_CLIENT_CONFIG;
       if (request.type === 'autofill.authorizeGeneratorUse') {
         return { ok: true, data: { trackToken: '40000000-0000-4000-8000-000000000001' } };
@@ -1018,7 +1054,7 @@ describe('autofill controller', () => {
       </form>`;
     const promptId = '00000000-0000-4000-8000-000000000002';
     let captured = false;
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.getClientConfig') return ENABLED_CLIENT_CONFIG;
       if (request.type === 'autofill.captureSubmission') {
         captured = true;
@@ -1139,7 +1175,7 @@ describe('autofill controller', () => {
   it('does not roll back an actual generator fill when encrypted history tracking fails', async () => {
     document.body.innerHTML = '<form><input type="password" autocomplete="new-password" id="new-password"></form>';
     mockRequests();
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.getClientConfig') return ENABLED_CLIENT_CONFIG;
       if (request.type === 'autofill.authorizeGeneratorUse') {
         return { ok: true, data: { trackToken: '40000000-0000-4000-8000-000000000001' } };
@@ -1208,7 +1244,7 @@ describe('autofill controller', () => {
     let resolveAuthorization!: (response: ResponseMessage) => void;
     const authorization = new Promise<ResponseMessage>((resolve) => { resolveAuthorization = resolve; });
     let configRevision = 1;
-    vi.mocked(sendRequest).mockImplementation((request) => {
+    mockContentRequests((request) => {
       if (request.type === 'autofill.getClientConfig') {
         return Promise.resolve({
           ok: true,
@@ -1250,7 +1286,7 @@ describe('autofill controller', () => {
       document.body.innerHTML = '<form><input type="password" autocomplete="new-password" id="new-password"></form>';
       let resolveAuthorization!: (response: ResponseMessage) => void;
       const authorization = new Promise<ResponseMessage>((resolve) => { resolveAuthorization = resolve; });
-      vi.mocked(sendRequest).mockImplementation((request) => {
+      mockContentRequests((request) => {
         if (request.type === 'autofill.getClientConfig') return Promise.resolve(ENABLED_CLIENT_CONFIG);
         if (request.type === 'autofill.authorizeGeneratorUse') return authorization;
         return Promise.resolve({ ok: false, error: { code: 'error', message: 'unexpected request' } });
@@ -1279,7 +1315,7 @@ describe('autofill controller', () => {
     }
   });
 
-  it('does not run periodic composed-tree scans when every client feature is disabled', async () => {
+  it('keeps incremental observation and bounded rediscovery active when every client feature is disabled', async () => {
     vi.useFakeTimers();
     const createTreeWalker = vi.spyOn(document, 'createTreeWalker');
     mockRequestsWithConfig({
@@ -1290,17 +1326,19 @@ describe('autofill controller', () => {
     });
     try {
       await startReady('https://example.com/login');
-      expect(createTreeWalker).not.toHaveBeenCalled();
+      const initialTraversals = createTreeWalker.mock.calls.length;
+      expect(initialTraversals).toBeGreaterThan(0);
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(createTreeWalker).not.toHaveBeenCalled();
+      expect(createTreeWalker.mock.calls.length).toBeGreaterThan(initialTraversals);
     } finally {
       stopAutofill();
       runtimeStartedForTest = false;
+      createTreeWalker.mockRestore();
       vi.useRealTimers();
     }
   });
 
-  it('discovers open roots on demand for frame inspection while live observation is disabled', async () => {
+  it('keeps dynamically connected open roots inspectable while client features are disabled', async () => {
     document.body.replaceChildren();
     mockRequestsWithConfig({
       inlineSuggestions: false,
@@ -1317,6 +1355,50 @@ describe('autofill controller', () => {
     const inspection = handleFrameAutofillMessage({ type: 'autofill.inspectFrame' });
 
     expect('forms' in inspection && inspection.forms).toHaveLength(1);
+  });
+
+  it('processes one trusted context-menu event only once across a closed root and document', async () => {
+    document.body.replaceChildren();
+    const roots = new Map<Element, ShadowRoot>();
+    vi.stubGlobal('chrome', {
+      dom: { openOrClosedShadowRoot: (element: Element) => roots.get(element) ?? null },
+    });
+    try {
+      const host = document.createElement('div');
+      const root = host.attachShadow({ mode: 'closed' });
+      const input = document.createElement('input');
+      input.autocomplete = 'cc-number';
+      root.append(input);
+      roots.set(host, root);
+      document.body.append(host);
+      mockRequestsWithConfig({
+        inlineSuggestions: false,
+        pageLoadFill: false,
+        saveAllowed: false,
+        updateAllowed: false,
+      });
+      await startReady();
+
+      const event = new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      });
+      const composedPath = mockClosedRootComposedPath(event, input, root, host);
+      trustedPageEvent(input, event);
+
+      expect(composedPath).toHaveBeenCalledTimes(2);
+
+      expect(reservePendingTarget('field', 'card').result).toEqual({
+        status: 'reserved',
+        runtimeIncarnation: currentRuntimeIncarnation(),
+        roles: ['number'],
+      });
+      await Promise.resolve();
+      expect(reservePendingTarget('field', 'card').result).toEqual({ status: 'no_target' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('discovers a dynamically connected nested open-shadow login and opens its panel', async () => {
@@ -1881,7 +1963,7 @@ describe('autofill controller', () => {
       const password = document.getElementById('bfcache-password') as HTMLInputElement;
       makePageLoadVisible(username);
       makePageLoadVisible(password);
-      vi.mocked(sendRequest).mockImplementation(async (request) => {
+      mockContentRequests(async (request) => {
         if (request.type === 'autofill.getClientConfig') {
           return { ok: true, data: { ...ENABLED_CLIENT_CONFIG.data, pageLoadFill: true } } as ResponseMessage;
         }
@@ -1956,6 +2038,7 @@ describe('autofill controller', () => {
     await startReady('https://example.com/checkout');
     const card = document.getElementById('bfcache-card') as HTMLInputElement;
     const oldReservationId = reserveTarget(card, 'field', 'card');
+    const oldRuntimeIncarnation = currentRuntimeIncarnation();
 
     dispatchPageTransition('pagehide', true);
     dispatchPageTransition('pageshow', true);
@@ -1967,6 +2050,17 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: oldRuntimeIncarnation,
+      data: { number: 'must-not-fill' },
+    })).toEqual({ status: 'target_changed' });
+    expect(handleContentCommand({
+      type: 'autofill.fill',
+      reservationId: oldReservationId,
+      scope: 'field',
+      kind: 'card',
+      roles: ['number'],
+      expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: currentRuntimeIncarnation(),
       data: { number: 'must-not-fill' },
     })).toEqual({ status: 'no_target' });
     expect(card.value).toBe('');
@@ -1984,40 +2078,118 @@ describe('autofill controller', () => {
     expect(requestsOfType('autofill.getClientConfig')).toHaveLength(4);
   });
 
-  it('clears the restored document unconfirmed capture before BFCache resume and then accepts confirmation', async () => {
-    let resolveDiscard!: (response: ResponseMessage) => void;
-    const discard = new Promise<ResponseMessage>((resolve) => { resolveDiscard = resolve; });
+  it('activates a BFCache replacement with compare-and-swap before initializing it', async () => {
+    const captureId = '00000000-0000-4000-8000-000000000801';
+    let resolveReplacementActivation!: (response: ResponseMessage) => void;
+    const replacementActivation = new Promise<ResponseMessage>((resolve) => {
+      resolveReplacementActivation = resolve;
+    });
+    const activations: Array<{
+      runtimeIncarnation: string;
+      previousRuntimeIncarnation?: string;
+    }> = [];
     let claims = 0;
     vi.mocked(sendRequest).mockImplementation((request) => {
+      if (request.type === 'autofill.activateRuntime') {
+        lastRuntimeIncarnationForTest = request.runtimeIncarnation;
+        activations.push(request);
+        return activations.length === 1
+          ? Promise.resolve(ACTIVE_RUNTIME_RESPONSE)
+          : replacementActivation;
+      }
       if (request.type === 'autofill.getClientConfig') return Promise.resolve(ENABLED_CLIENT_CONFIG);
       if (request.type === 'autofill.claimSavePrompt') {
         claims += 1;
         return Promise.resolve({ ok: true, data: { action: 'none' } } as ResponseMessage);
       }
-      if (request.type === 'autofill.discardBfcacheCapture') return discard;
-      return Promise.resolve({ ok: false, error: { code: 'error', message: 'unexpected request' } });
+      return Promise.resolve({
+        ok: false,
+        error: { code: 'error', message: 'unexpected request' },
+      } as ResponseMessage);
     });
     await startReady('https://example.com/login');
     const initialClaims = claims;
+    const initialRuntimeIncarnation = activations[0]!.runtimeIncarnation;
 
     dispatchPageTransition('pagehide', true);
     dispatchPageTransition('pageshow', true);
     await Promise.resolve();
 
-    expect(sendRequest).toHaveBeenCalledWith({ type: 'autofill.discardBfcacheCapture' });
+    expect(activations).toHaveLength(2);
+    expect(activations[1]).toMatchObject({
+      previousRuntimeIncarnation: initialRuntimeIncarnation,
+    });
+    expect(activations[1]!.runtimeIncarnation).not.toBe(initialRuntimeIncarnation);
     expect(requestsOfType('autofill.getClientConfig')).toHaveLength(1);
-    resolveDiscard({ ok: true, data: null });
+    expect(claims).toBe(initialClaims);
+    expect(handleFrameAutofillMessage({ type: 'autofill.inspectFrame' }))
+      .toEqual({ status: 'target_changed' });
+
+    resolveReplacementActivation(ACTIVE_RUNTIME_RESPONSE);
     await flushRuntimeStart();
     expect(requestsOfType('autofill.getClientConfig')).toHaveLength(2);
     expect(claims).toBeGreaterThan(initialClaims);
 
     const claimsBeforeConfirmation = claims;
-    await expect(handleContentCommand({ type: 'autofill.saveCaptureConfirmed' }))
-      .resolves.toEqual({ status: 'accepted' });
+    await expect(handleContentCommand({ type: 'autofill.saveCaptureConfirmed', captureId }))
+      .resolves.toEqual({ status: 'not_displayed' });
     expect(claims).toBe(claimsBeforeConfirmation + 1);
+    expect(requestsOfType('autofill.claimSavePrompt').at(-1)).toEqual({
+      type: 'autofill.claimSavePrompt',
+      captureId,
+    });
+  });
+
+  it.each([
+    ['transport rejection', () => Promise.reject(new Error('worker unavailable'))],
+    ['error response', () => Promise.resolve({
+      ok: false,
+      error: { code: 'error', message: 'activation rejected' },
+    } as ResponseMessage)],
+    ['malformed success', () => Promise.resolve(malformedOk({ status: 'active', extra: true }))],
+  ])('does not initialize a runtime after %s', async (_label, activationResult) => {
+    const activations: Array<{
+      runtimeIncarnation: string;
+      previousRuntimeIncarnation?: string;
+    }> = [];
+    let claims = 0;
+    vi.mocked(sendRequest).mockImplementation((request) => {
+      if (request.type === 'autofill.activateRuntime') {
+        lastRuntimeIncarnationForTest = request.runtimeIncarnation;
+        activations.push(request);
+        return activations.length === 1
+          ? Promise.resolve(ACTIVE_RUNTIME_RESPONSE)
+          : activationResult();
+      }
+      if (request.type === 'autofill.getClientConfig') return Promise.resolve(ENABLED_CLIENT_CONFIG);
+      if (request.type === 'autofill.claimSavePrompt') {
+        claims += 1;
+        return Promise.resolve({ ok: true, data: { action: 'none' } } as ResponseMessage);
+      }
+      return Promise.resolve({
+        ok: false,
+        error: { code: 'error', message: 'unexpected request' },
+      } as ResponseMessage);
+    });
+
+    await startReady('https://example.com/login');
+    const initializedClaims = claims;
+    dispatchPageTransition('pagehide', true);
+    dispatchPageTransition('pageshow', true);
+    await flushRuntimeStart();
+
+    expect(activations).toHaveLength(2);
+    expect(activations[1]).toMatchObject({
+      previousRuntimeIncarnation: activations[0]!.runtimeIncarnation,
+    });
+    expect(requestsOfType('autofill.getClientConfig')).toHaveLength(1);
+    expect(claims).toBe(initializedClaims);
+    expect(handleFrameAutofillMessage({ type: 'autofill.inspectFrame' }))
+      .toEqual({ status: 'target_changed' });
   });
 
   it('does not acknowledge a save-capture wake until the worker claim succeeds', async () => {
+    const captureId = '00000000-0000-4000-8000-000000000802';
     mockRequestsWithConfig({
       inlineSuggestions: false,
       pageLoadFill: false,
@@ -2025,18 +2197,98 @@ describe('autofill controller', () => {
       updateAllowed: true,
     });
     await startReady('https://example.com/login');
-    vi.mocked(sendRequest).mockImplementation((request) => {
+    mockContentRequests((request) => {
       if (request.type === 'autofill.claimSavePrompt') {
         return Promise.reject(new Error('worker unavailable'));
       }
       return Promise.resolve(ENABLED_CLIENT_CONFIG);
     });
 
-    await expect(handleContentCommand({ type: 'autofill.saveCaptureConfirmed' }))
+    await expect(handleContentCommand({ type: 'autofill.saveCaptureConfirmed', captureId }))
       .resolves.toEqual({ status: 'not_ready' });
+    expect(requestsOfType('autofill.claimSavePrompt').at(-1)).toEqual({
+      type: 'autofill.claimSavePrompt',
+      captureId,
+    });
     stopAutofill();
-    await expect(handleContentCommand({ type: 'autofill.saveCaptureConfirmed' }))
+    await expect(handleContentCommand({ type: 'autofill.saveCaptureConfirmed', captureId }))
       .resolves.toEqual({ status: 'not_ready' });
+  });
+
+  it('reports displayed only when a save-capture wake renders a real prompt', async () => {
+    const captureId = '00000000-0000-4000-8000-000000000803';
+    mockRequestsWithConfig({
+      inlineSuggestions: false,
+      pageLoadFill: false,
+      saveAllowed: true,
+      updateAllowed: true,
+    });
+    await startReady('https://example.com/login');
+    saveBarState.instances.length = 0;
+    mockContentRequests((request) => {
+      if (request.type === 'autofill.claimSavePrompt') {
+        return {
+          ok: true,
+          data: {
+            action: 'save',
+            promptId: '00000000-0000-4000-8000-000000000901',
+            suggestedName: 'example.com',
+          },
+        } as ResponseMessage;
+      }
+      return ENABLED_CLIENT_CONFIG;
+    });
+
+    await expect(handleContentCommand({ type: 'autofill.saveCaptureConfirmed', captureId }))
+      .resolves.toEqual({ status: 'displayed' });
+    expect(saveBarState.instances).toHaveLength(1);
+    expect(requestsOfType('autofill.claimSavePrompt').at(-1)).toEqual({
+      type: 'autofill.claimSavePrompt',
+      captureId,
+    });
+  });
+
+  it('re-renders an idempotent save prompt after policy temporarily removes its surface', async () => {
+    const captureId = '00000000-0000-4000-8000-000000000804';
+    const prompt = {
+      action: 'save' as const,
+      promptId: '00000000-0000-4000-8000-000000000902',
+      suggestedName: 'example.com',
+    };
+    mockRequestsWithConfig({
+      inlineSuggestions: false,
+      pageLoadFill: false,
+      saveAllowed: true,
+      updateAllowed: true,
+    });
+    await startReady('https://example.com/login');
+    saveBarState.instances.length = 0;
+    mockContentRequests((request) => request.type === 'autofill.claimSavePrompt'
+      ? { ok: true, data: prompt } as ResponseMessage
+      : ENABLED_CLIENT_CONFIG);
+    await expect(handleContentCommand({ type: 'autofill.saveCaptureConfirmed', captureId }))
+      .resolves.toEqual({ status: 'displayed' });
+    const first = saveBarState.instances[0]!;
+
+    mockRequestsWithConfig({
+      inlineSuggestions: false,
+      pageLoadFill: false,
+      saveAllowed: false,
+      updateAllowed: false,
+    });
+    handleContentCommand({ type: 'autofill.clientConfigChanged' });
+    await flushRuntimeStart();
+    expect(first.remove).toHaveBeenCalled();
+
+    mockContentRequests((request) => {
+      if (request.type === 'autofill.getClientConfig') return ENABLED_CLIENT_CONFIG;
+      if (request.type === 'autofill.claimSavePrompt') return { ok: true, data: prompt } as ResponseMessage;
+      return { ok: false, error: { code: 'error', message: 'unexpected request' } } as ResponseMessage;
+    });
+    handleContentCommand({ type: 'autofill.clientConfigChanged' });
+    await flushRuntimeStart();
+
+    expect(saveBarState.instances).toHaveLength(2);
   });
 
   it('lets explicit stop and start cancel a pending BFCache resume hook', async () => {
@@ -2076,7 +2328,7 @@ describe('autofill controller', () => {
     let resolveOldConfig!: (response: ResponseMessage) => void;
     const oldConfig = new Promise<ResponseMessage>((resolve) => { resolveOldConfig = resolve; });
     let configRequests = 0;
-    vi.mocked(sendRequest).mockImplementation((request) => {
+    mockContentRequests((request) => {
       if (request.type === 'autofill.getClientConfig') {
         configRequests += 1;
         return configRequests === 1 ? oldConfig : Promise.resolve(ENABLED_CLIENT_CONFIG);
@@ -2113,7 +2365,7 @@ describe('autofill controller', () => {
     const oldLogin = new Promise<ResponseMessage>((resolve) => { resolveOldLogin = resolve; });
     let claims = 0;
     let issues = 0;
-    vi.mocked(sendRequest).mockImplementation((request) => {
+    mockContentRequests((request) => {
       if (request.type === 'autofill.getClientConfig') {
         return Promise.resolve({ ok: true, data: {
           ...ENABLED_CLIENT_CONFIG.data,
@@ -2170,7 +2422,7 @@ describe('autofill controller', () => {
     vi.useFakeTimers();
     try {
       document.body.innerHTML = '<form><input autocomplete="cc-number" id="timer-target"></form>';
-      vi.mocked(sendRequest).mockImplementation(async (request) => {
+      mockContentRequests(async (request) => {
         if (request.type === 'autofill.getClientConfig') {
           return { ok: true, data: {
             ...ENABLED_CLIENT_CONFIG.data,
@@ -2385,7 +2637,7 @@ describe('autofill controller', () => {
       document.body.innerHTML = '<input id="bounded-password" type="password" autocomplete="current-password">';
       const password = document.getElementById('bounded-password') as HTMLInputElement;
       makePageLoadVisible(password);
-      vi.mocked(sendRequest).mockImplementation(async (request) => {
+      mockContentRequests(async (request) => {
         if (request.type === 'autofill.getClientConfig') {
           return {
             ok: true,
@@ -2566,6 +2818,20 @@ describe('autofill controller', () => {
     expect(document.querySelector<HTMLInputElement>('[name=department]')!.value).toBe('');
   });
 
+  describe('context target commands', () => {
+    let runtimeIncarnation: string;
+
+    beforeEach(async () => {
+      mockRequestsWithConfig({
+        inlineSuggestions: false,
+        pageLoadFill: false,
+        saveAllowed: false,
+        updateAllowed: false,
+      });
+      await startReady();
+      runtimeIncarnation = currentRuntimeIncarnation();
+    });
+
   it('fills only the right-clicked field on a field-scope command', async () => {
     document.body.innerHTML = `
       <form>
@@ -2574,12 +2840,12 @@ describe('autofill controller', () => {
       </form>`;
     const csc = document.getElementById('csc') as HTMLInputElement;
     const reservationId = reserveTarget(csc, 'field', 'card');
-    handleContentCommand({ type: 'autofill.fill', reservationId, scope: 'field', kind: 'card', roles: ['code'], expectedFrameUrl: window.location.href, data: { number: '4111', code: '123' } });
+    handleContentCommand({ type: 'autofill.fill', reservationId, scope: 'field', kind: 'card', roles: ['code'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '4111', code: '123' } });
     expect((document.getElementById('csc') as HTMLInputElement).value).toBe('123'); // only the CVC
     expect((document.getElementById('num') as HTMLInputElement).value).toBe('');   // number untouched
 
     csc.value = '';
-    handleContentCommand({ type: 'autofill.fill', reservationId, scope: 'field', kind: 'card', roles: ['code'], expectedFrameUrl: window.location.href, data: { code: '999' } });
+    handleContentCommand({ type: 'autofill.fill', reservationId, scope: 'field', kind: 'card', roles: ['code'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { code: '999' } });
     expect(csc.value).toBe(''); // the context target was consumed by the first command
   });
 
@@ -2599,24 +2865,28 @@ describe('autofill controller', () => {
     trustedContextMenu(document.getElementById('card-code')!);
     expect(reservePendingTarget('field', 'card').result).toEqual({
       status: 'reserved',
+      runtimeIncarnation,
       roles: ['code'],
     });
 
     trustedContextMenu(document.getElementById('card-number')!);
     expect(reservePendingTarget('form', 'card').result).toEqual({
       status: 'reserved',
+      runtimeIncarnation,
       roles: ['cardholderName', 'number', 'exp', 'code'],
     });
 
     trustedContextMenu(document.getElementById('full-name')!);
     expect(reservePendingTarget('field', 'identity').result).toEqual({
       status: 'reserved',
+      runtimeIncarnation,
       roles: ['fullName'],
     });
 
     trustedContextMenu(document.getElementById('address')!);
     expect(reservePendingTarget('form', 'identity').result).toEqual({
       status: 'reserved',
+      runtimeIncarnation,
       roles: ['fullName', 'address'],
     });
   });
@@ -2641,6 +2911,7 @@ describe('autofill controller', () => {
 
     expect(result).toMatchObject({
       status: 'claimed',
+      runtimeIncarnation,
       generation: expect.any(Number),
       customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
     });
@@ -2649,6 +2920,8 @@ describe('autofill controller', () => {
     const focused = inspection.forms.filter((form) => form.kind === 'login' && form.focusedAt !== undefined);
     expect(focused).toHaveLength(1);
     expect(focused[0]?.kind).toBe('login');
+    expect(result.status === 'claimed' ? result.runtimeIncarnation : undefined)
+      .toBe(inspection.runtimeIncarnation);
     expect(result.status === 'claimed' ? result.formId : undefined).toBe(focused[0]?.formId);
     await expect(handleContentCommand({
       type: 'autofill.claimContextLoginTarget',
@@ -2683,6 +2956,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: 'must-not-fill' },
     })).toEqual({ status: 'target_changed' });
     expect(target.value).toBe('');
@@ -2701,6 +2975,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: '4111' },
     });
 
@@ -2728,6 +3003,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['code'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { code: 'must-not-fill' },
     })).toEqual({ status: 'target_changed' });
     expect(target.value).toBe('');
@@ -2749,6 +3025,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: 'must-not-fill' },
     });
     expect(target.value).toBe('');
@@ -2769,6 +3046,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: '4111' },
     });
 
@@ -2792,8 +3070,8 @@ describe('autofill controller', () => {
     trustedContextMenu(number);
     csc.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
     const reservation = reservePendingTarget('field', 'card');
-    expect(reservation.result).toEqual({ status: 'reserved', roles: ['number'] });
-    handleContentCommand({ type: 'autofill.fill', reservationId: reservation.reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, data: { number: '4111', code: '123' } });
+    expect(reservation.result).toEqual({ status: 'reserved', runtimeIncarnation, roles: ['number'] });
+    handleContentCommand({ type: 'autofill.fill', reservationId: reservation.reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '4111', code: '123' } });
     expect(number.value).toBe('4111');
     expect(csc.value).toBe('');
   });
@@ -2819,6 +3097,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number', 'code'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: '4111', code: '123' },
     } as Parameters<typeof handleContentCommand>[0]);
     expect((document.getElementById('num') as HTMLInputElement).value).toBe('');
@@ -2837,6 +3116,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number', 'code'],
       expectedFrameUrl: 'https://attacker.example/checkout',
+      expectedRuntimeIncarnation: currentRuntimeIncarnation(),
       data: { number: '4111', code: '123' },
     } as Parameters<typeof handleContentCommand>[0]);
 
@@ -2850,6 +3130,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number', 'code'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: currentRuntimeIncarnation(),
       data: { number: '5555', code: '456' },
     } as Parameters<typeof handleContentCommand>[0]);
     expect((document.getElementById('num') as HTMLInputElement).value).toBe('');
@@ -2858,8 +3139,8 @@ describe('autofill controller', () => {
   it('shows a notice (no fill) on a fillError command', async () => {
     document.body.innerHTML = `<form><input autocomplete="cc-number" id="num"></form>`;
     const reservationId = reserveTarget(document.getElementById('num')!, 'field', 'card');
-    handleContentCommand({ type: 'autofill.fillError', reservationId, expectedFrameUrl: window.location.href, code: 'reprompt_required' });
-    handleContentCommand({ type: 'autofill.fill', reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, data: { number: '4111' } });
+    handleContentCommand({ type: 'autofill.fillError', reservationId, expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, code: 'reprompt_required' });
+    handleContentCommand({ type: 'autofill.fill', reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '4111' } });
     expect(document.querySelector('[data-vw-notice]')).toBeTruthy();
     expect((document.getElementById('num') as HTMLInputElement).value).toBe('');
   });
@@ -2876,6 +3157,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number', 'code'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: '4111', code: '123' },
     } as Parameters<typeof handleContentCommand>[0]);
     expect((document.getElementById('num2') as HTMLInputElement).value).toBe('4111'); // clicked form filled
@@ -2898,6 +3180,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number', 'code'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: '4111', code: 'must-not-fill' },
     });
 
@@ -2919,6 +3202,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number', 'code'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: '4111', code: 'must-not-fill' },
     });
 
@@ -2940,6 +3224,7 @@ describe('autofill controller', () => {
       kind: 'identity',
       roles: ['firstName', 'lastName'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { firstName: 'Ada', lastName: 'must-not-fill' },
     });
 
@@ -2965,6 +3250,7 @@ describe('autofill controller', () => {
       kind: 'identity',
       roles: ['firstName', 'lastName', 'address', 'postalCode'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { firstName: 'Ada', lastName: 'Lovelace', address1: '1 Analytical Way', postalCode: 'EC1' },
     } as Parameters<typeof handleContentCommand>[0]);
 
@@ -2986,6 +3272,7 @@ describe('autofill controller', () => {
       kind: 'identity',
       roles: ['address'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { address1: '1 Analytical Way', address2: 'Suite 2', address3: 'London' },
     });
 
@@ -3000,7 +3287,7 @@ describe('autofill controller', () => {
     const reservationId = reserveTarget(document.getElementById('old-num')!, 'form', 'card');
     original.remove();
 
-    handleContentCommand({ type: 'autofill.fill', reservationId, scope: 'form', kind: 'card', roles: ['number', 'code'], expectedFrameUrl: window.location.href, data: { number: '4111', code: '123' } });
+    handleContentCommand({ type: 'autofill.fill', reservationId, scope: 'form', kind: 'card', roles: ['number', 'code'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '4111', code: '123' } });
 
     expect((document.getElementById('new-num') as HTMLInputElement).value).toBe('');
     expect((document.getElementById('new-csc') as HTMLInputElement).value).toBe('');
@@ -3021,6 +3308,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number', 'code'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: '4111', code: '123' },
     });
 
@@ -3046,11 +3334,11 @@ describe('autofill controller', () => {
 
     const aReservation = reservePendingTarget('field', 'card', nextReservationId(), origin + 150);
     const bReservation = reservePendingTarget('field', 'card', nextReservationId(), origin + 250);
-    expect(aReservation.result).toEqual({ status: 'reserved', roles: ['number'] });
-    expect(bReservation.result).toEqual({ status: 'reserved', roles: ['number'] });
+    expect(aReservation.result).toEqual({ status: 'reserved', runtimeIncarnation, roles: ['number'] });
+    expect(bReservation.result).toEqual({ status: 'reserved', runtimeIncarnation, roles: ['number'] });
 
-    handleContentCommand({ type: 'autofill.fill', reservationId: bReservation.reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, data: { number: '2222' } });
-    handleContentCommand({ type: 'autofill.fill', reservationId: aReservation.reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, data: { number: '1111' } });
+    handleContentCommand({ type: 'autofill.fill', reservationId: bReservation.reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '2222' } });
+    handleContentCommand({ type: 'autofill.fill', reservationId: aReservation.reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '1111' } });
     expect(a.value).toBe('1111');
     expect(b.value).toBe('2222');
     clock.mockRestore();
@@ -3077,8 +3365,8 @@ describe('autofill controller', () => {
 
     trustedContextMenu(b);
     const retry = reservePendingTarget('field', 'card', nextReservationId(), origin + 350);
-    expect(retry.result).toEqual({ status: 'reserved', roles: ['number'] });
-    handleContentCommand({ type: 'autofill.fill', reservationId: retry.reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, data: { number: '2222' } });
+    expect(retry.result).toEqual({ status: 'reserved', runtimeIncarnation, roles: ['number'] });
+    handleContentCommand({ type: 'autofill.fill', reservationId: retry.reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '2222' } });
     expect(b.value).toBe('2222');
     clock.mockRestore();
   });
@@ -3094,7 +3382,7 @@ describe('autofill controller', () => {
 
       const reservationId = reserveTarget(number, 'field', 'card');
       vi.advanceTimersByTime(CONTEXT_TARGET_RESERVATION_TTL_MS + 1);
-      handleContentCommand({ type: 'autofill.fill', reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, data: { number: '4111' } });
+      handleContentCommand({ type: 'autofill.fill', reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '4111' } });
       expect(number.value).toBe('');
     } finally {
       vi.useRealTimers();
@@ -3112,6 +3400,7 @@ describe('autofill controller', () => {
       reservationId,
       holdId,
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
     })).toEqual({ status: 'held' });
     expect(handleContentCommand({
       type: 'autofill.resumeHeldFillTarget',
@@ -3120,6 +3409,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: '4111' },
     })).toEqual({ status: 'filled' });
     expect(number.value).toBe('4111');
@@ -3132,6 +3422,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: '9999' },
     })).toEqual({ status: 'no_target' });
     expect(number.value).toBe('');
@@ -3156,6 +3447,7 @@ describe('autofill controller', () => {
       reservationId,
       holdId,
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
     })).toEqual({ status: 'held' });
     Object.defineProperty(target, 'assignedSlot', { configurable: true, value: second });
 
@@ -3166,6 +3458,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: 'must-not-fill' },
     })).toEqual({ status: 'target_changed' });
     expect(target.value).toBe('');
@@ -3212,6 +3505,7 @@ describe('autofill controller', () => {
       kind: 'card',
       roles: ['number'],
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: runtimeIncarnation,
       data: { number: 'must-not-fill' },
     })).toEqual({ status: 'target_changed' });
     expect(target.value).toBe('');
@@ -3239,8 +3533,8 @@ describe('autofill controller', () => {
     trustedContextMenu(b);
     expect(reservePendingTarget('field', 'card', aReservation).result).toEqual({ status: 'no_target' });
     const bReservation = reservePendingTarget('field', 'card');
-    expect(bReservation.result).toEqual({ status: 'reserved', roles: ['number'] });
-    handleContentCommand({ type: 'autofill.fill', reservationId: bReservation.reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, data: { number: '2222' } });
+    expect(bReservation.result).toEqual({ status: 'reserved', runtimeIncarnation, roles: ['number'] });
+    handleContentCommand({ type: 'autofill.fill', reservationId: bReservation.reservationId, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '2222' } });
     expect((b as HTMLInputElement).value).toBe('2222');
   });
 
@@ -3256,11 +3550,11 @@ describe('autofill controller', () => {
     const bReservation = reserveTarget(b, 'field', 'card');
     const cReservation = reserveTarget(c, 'field', 'card');
 
-    handleContentCommand({ type: 'autofill.cancelFillTarget', reservationId: aReservation, expectedFrameUrl: window.location.href });
-    handleContentCommand({ type: 'autofill.cancelFillTarget', reservationId: aReservation, expectedFrameUrl: window.location.href });
-    handleContentCommand({ type: 'autofill.fill', reservationId: aReservation, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, data: { number: '1111' } });
-    handleContentCommand({ type: 'autofill.fill', reservationId: bReservation, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, data: { number: '2222' } });
-    handleContentCommand({ type: 'autofill.fill', reservationId: cReservation, scope: 'form', kind: 'card', roles: ['number', 'code'], expectedFrameUrl: window.location.href, data: { number: '3333', code: '123' } });
+    handleContentCommand({ type: 'autofill.cancelFillTarget', reservationId: aReservation, expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation });
+    handleContentCommand({ type: 'autofill.cancelFillTarget', reservationId: aReservation, expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation });
+    handleContentCommand({ type: 'autofill.fill', reservationId: aReservation, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '1111' } });
+    handleContentCommand({ type: 'autofill.fill', reservationId: bReservation, scope: 'field', kind: 'card', roles: ['number'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '2222' } });
+    handleContentCommand({ type: 'autofill.fill', reservationId: cReservation, scope: 'form', kind: 'card', roles: ['number', 'code'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '3333', code: '123' } });
 
     expect(a.value).toBe('');
     expect(b.value).toBe('2222');
@@ -3277,10 +3571,11 @@ describe('autofill controller', () => {
       </form>`;
     const reservationId = reserveTarget(document.getElementById('promo')!, 'form', 'card');
 
-    handleContentCommand({ type: 'autofill.fill', reservationId, scope: 'form', kind: 'card', roles: ['number', 'code'], expectedFrameUrl: window.location.href, data: { number: '4111', code: '123' } });
+    handleContentCommand({ type: 'autofill.fill', reservationId, scope: 'form', kind: 'card', roles: ['number', 'code'], expectedFrameUrl: window.location.href, expectedRuntimeIncarnation: runtimeIncarnation, data: { number: '4111', code: '123' } });
 
     expect((document.getElementById('number') as HTMLInputElement).value).toBe('4111');
     expect((document.getElementById('code') as HTMLInputElement).value).toBe('123');
+  });
   });
 });
 
@@ -3306,6 +3601,48 @@ const ENABLED_CLIENT_CONFIG = {
   },
 } as const satisfies ResponseMessage;
 
+const ACTIVE_RUNTIME_RESPONSE = {
+  ok: true,
+  data: { status: 'active' },
+} as const satisfies ResponseMessage;
+
+let lastRuntimeIncarnationForTest: string | undefined;
+
+function runtimeActivationResponse(
+  request: Parameters<typeof sendRequest>[0],
+): ResponseMessage | undefined {
+  if (request.type !== 'autofill.activateRuntime') return undefined;
+  lastRuntimeIncarnationForTest = request.runtimeIncarnation;
+  return ACTIVE_RUNTIME_RESPONSE;
+}
+
+function currentRuntimeIncarnation(): string {
+  if (!lastRuntimeIncarnationForTest) throw new Error('Expected an activated autofill runtime');
+  return lastRuntimeIncarnationForTest;
+}
+
+function resetAutofillRuntimeForTest(): void {
+  // The second stop clears the replaceable incarnation retained by the first teardown.
+  stopAutofill();
+  stopAutofill();
+}
+
+function mockContentRequests(
+  implementation: (
+    request: Parameters<typeof sendRequest>[0],
+  ) => ResponseMessage | Promise<ResponseMessage>,
+): void {
+  vi.mocked(sendRequest).mockImplementation((request) => {
+    const activation = runtimeActivationResponse(request);
+    if (activation) return Promise.resolve(activation);
+    try {
+      return Promise.resolve(implementation(request));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  });
+}
+
 function mockRequests(...responses: Array<ResponseMessage | Promise<ResponseMessage>>): void {
   mockRequestsWithConfig(ENABLED_CLIENT_CONFIG.data, ...responses);
 }
@@ -3322,6 +3659,8 @@ function mockRequestsWithConfig(
     ...config,
   };
   vi.mocked(sendRequest).mockImplementation((request) => {
+    const activation = runtimeActivationResponse(request);
+    if (activation) return Promise.resolve(activation);
     if (request.type === 'autofill.getClientConfig') return Promise.resolve({ ok: true, data: completeConfig });
     if (request.type === 'autofill.authorizeGeneratorUse') {
       return Promise.resolve({
@@ -3356,7 +3695,9 @@ function isTestRecord(value: unknown): value is Record<string, unknown> {
 function nonConfigRequests(): unknown[] {
   return vi.mocked(sendRequest).mock.calls
     .map(([request]) => request)
-    .filter((request) => request.type !== 'autofill.getClientConfig' && request.type !== 'autofill.claimSavePrompt')
+    .filter((request) => request.type !== 'autofill.activateRuntime'
+      && request.type !== 'autofill.getClientConfig'
+      && request.type !== 'autofill.claimSavePrompt')
     .map((request) => request.type === 'autofill.issueIntent' && request.purpose === 'login'
       ? { type: request.type, cipherId: request.cipherId, purpose: request.purpose }
       : request);
@@ -3395,10 +3736,7 @@ async function startReady(frameUrl: string | (() => string) = () => window.locat
 let runtimeStartedForTest = false;
 
 function trustedContextMenu(target: Element): void {
-  if (!runtimeStartedForTest) {
-    startAutofill(() => window.location.href);
-    runtimeStartedForTest = true;
-  }
+  if (!runtimeStartedForTest) throw new Error('Expected an activated autofill runtime');
   trustedPageEvent(target, new MouseEvent('contextmenu', {
     bubbles: true,
     cancelable: true,
@@ -3409,6 +3747,20 @@ function trustedContextMenu(target: Element): void {
 function trustedPageEvent(target: EventTarget, event: Event): void {
   Object.defineProperty(event, 'isTrusted', { value: true });
   target.dispatchEvent(event);
+}
+
+function mockClosedRootComposedPath(
+  event: Event,
+  target: Element,
+  root: ShadowRoot,
+  host: Element,
+): ReturnType<typeof vi.spyOn> {
+  const outerPath: EventTarget[] = [host, document.body, document.documentElement, document, window];
+  const fullPath: EventTarget[] = [target, root, ...outerPath];
+  // Happy DOM does not preserve currentTarget while the composedPath mock runs. Model the browser's
+  // capture observations explicitly: the document sees the retargeted host, then the root sees input.
+  const captureViews = [outerPath, fullPath];
+  return vi.spyOn(event, 'composedPath').mockImplementation(() => captureViews.shift() ?? []);
 }
 
 let reservationSequence = 0;
@@ -3444,21 +3796,33 @@ function reservePendingTarget(
 function reserveTarget(target: Element, scope: 'form' | 'field', kind: 'card' | 'identity'): string {
   trustedContextMenu(target);
   const reservation = reservePendingTarget(scope, kind);
-  expect(reservation.result?.status).toBe('reserved');
+  expect(reservation.result).toEqual(expect.objectContaining({
+    status: 'reserved',
+    runtimeIncarnation: currentRuntimeIncarnation(),
+  }));
   return reservation.reservationId;
 }
 
 describe('focused-fill command', () => {
   const commandToken = '00000000-0000-4000-8000-000000000101';
   const keyboardGrantId = '00000000-0000-4000-8000-000000000102';
-  beforeEach(() => {
-    stopAutofill();
+  beforeEach(async () => {
+    resetAutofillRuntimeForTest();
+    lastRuntimeIncarnationForTest = undefined;
     document.body.innerHTML = '<form><input type="email"><input type="password"></form>';
     popoverRegistry.clear();
     popoverState.instances.length = 0;
     vi.mocked(sendRequest).mockReset();
     vi.mocked(fillLoginForm).mockReset();
     vi.mocked(fillLoginForm).mockReturnValue(true);
+    mockRequestsWithConfig({
+      inlineSuggestions: false,
+      pageLoadFill: false,
+      saveAllowed: false,
+      updateAllowed: false,
+    });
+    await startReady();
+    vi.mocked(sendRequest).mockReset();
   });
 
   it('acknowledges focus only from the exact current document URL', async () => {
@@ -3466,12 +3830,21 @@ describe('focused-fill command', () => {
       type: 'autofill.awaitFocus',
       requestId: nextReservationId(),
       expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: currentRuntimeIncarnation(),
       expiresAt: Date.now() + 1_000,
     })).resolves.toEqual({ status: 'focused' });
     await expect(handleContentCommand({
       type: 'autofill.awaitFocus',
       requestId: nextReservationId(),
       expectedFrameUrl: 'https://other.example/',
+      expectedRuntimeIncarnation: currentRuntimeIncarnation(),
+      expiresAt: Date.now() + 1_000,
+    })).resolves.toEqual({ status: 'stale' });
+    await expect(handleContentCommand({
+      type: 'autofill.awaitFocus',
+      requestId: nextReservationId(),
+      expectedFrameUrl: window.location.href,
+      expectedRuntimeIncarnation: '00000000-0000-4000-8000-000000000999',
       expiresAt: Date.now() + 1_000,
     })).resolves.toEqual({ status: 'stale' });
   });
@@ -3551,10 +3924,9 @@ describe('focused-fill command', () => {
 
   it('fills custom login assignments through the focused-fill shortcut', async () => {
     document.body.innerHTML = '<form><input name="username"><input type="password"><input name="realm"></form>';
-    await startReady('https://ex.com');
     document.querySelector<HTMLInputElement>('input[type=password]')!.focus();
     let fieldId = '';
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.getClientConfig') return ENABLED_CLIENT_CONFIG;
       if (request.type === 'autofill.claimKeyboardGrant' && request.binding.purpose === 'login') {
         fieldId = request.binding.customPlan.targets[0]!.fieldId;
@@ -3584,7 +3956,7 @@ describe('focused-fill command', () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     document.querySelector<HTMLInputElement>('input[type="password"]')!.focus();
     const issuedCipherIds: string[] = [];
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.claimKeyboardGrant') {
         return { ok: true, data: { keyboardGrantId } } as ResponseMessage;
       }
@@ -3623,7 +3995,7 @@ describe('focused-fill command', () => {
     const firstRedeem = new Promise<ResponseMessage>((resolve) => { releaseFirstRedeem = resolve; });
     const issuedCipherIds: string[] = [];
     let redeemCount = 0;
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.claimKeyboardGrant') {
         return { ok: true, data: { keyboardGrantId } } as ResponseMessage;
       }
@@ -3663,7 +4035,7 @@ describe('focused-fill command', () => {
     document.querySelector<HTMLInputElement>('input[type="password"]')!.focus();
     let resolveCandidates: ((response: ResponseMessage) => void) | undefined;
     const candidates = new Promise<ResponseMessage>((resolve) => { resolveCandidates = resolve; });
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.claimKeyboardGrant') {
         return { ok: true, data: { keyboardGrantId } } as ResponseMessage;
       }
@@ -3731,7 +4103,7 @@ describe('focused-fill command', () => {
     const heldIntentId = '00000000-0000-4000-8000-000000000104';
     let resolveTotp!: (response: ResponseMessage) => void;
     const pendingTotp = new Promise<ResponseMessage>((resolve) => { resolveTotp = resolve; });
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.claimKeyboardGrant') {
         return { ok: true, data: { keyboardGrantId } } as ResponseMessage;
       }
@@ -3756,6 +4128,7 @@ describe('focused-fill command', () => {
       type: 'autofill.resumeKeyboardReprompt',
       continuationId,
       expectedFrameUrl: sourceUrl,
+      expectedRuntimeIncarnation: currentRuntimeIncarnation(),
     });
     await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledWith({
       type: 'autofill.keyboard.redeemTotpIntent',
@@ -3786,7 +4159,7 @@ describe('focused-fill command', () => {
     document.body.innerHTML = '<form><input autocomplete="one-time-code" id="otp"><button>Verify</button></form>';
     const input = document.getElementById('otp') as HTMLInputElement;
     input.focus();
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.claimKeyboardGrant') {
         return { ok: true, data: { keyboardGrantId } } as ResponseMessage;
       }
@@ -3817,6 +4190,7 @@ describe('focused-fill command', () => {
       type: 'autofill.resumeKeyboardReprompt',
       continuationId,
       expectedFrameUrl: sourceUrl,
+      expectedRuntimeIncarnation: currentRuntimeIncarnation(),
     });
     await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledWith({ type: 'clientEvent.ack', ackId }));
 
@@ -3829,7 +4203,7 @@ describe('focused-fill command', () => {
     const input = document.getElementById('otp') as HTMLInputElement;
     input.focus();
     const issuedCipherIds: string[] = [];
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.claimKeyboardGrant') {
         expect(request.binding.purpose).toBe('totp');
         return { ok: true, data: { keyboardGrantId } } as ResponseMessage;
@@ -3875,7 +4249,14 @@ describe('focused-fill command', () => {
     expect(claim).toMatchObject({
       type: 'autofill.claimKeyboardGrant',
       commandToken,
-      binding: { purpose: 'card', structuredTarget: { kind: 'card', roles: ['number', 'exp', 'code'] } },
+      binding: {
+        purpose: 'card',
+        structuredTarget: {
+          kind: 'card',
+          runtimeIncarnation: currentRuntimeIncarnation(),
+          roles: ['number', 'exp', 'code'],
+        },
+      },
     });
     expect(sendRequest).toHaveBeenNthCalledWith(2, { type: 'autofill.keyboard.findCandidates', keyboardGrantId });
     expect(sendRequest).toHaveBeenNthCalledWith(3, {
@@ -3908,6 +4289,7 @@ describe('focused-fill command', () => {
         purpose: 'identity',
         structuredTarget: expect.objectContaining({
           kind: 'identity',
+          runtimeIncarnation: currentRuntimeIncarnation(),
           roles: ['firstName', 'lastName', 'address', 'email'],
         }),
       }),
@@ -3921,7 +4303,7 @@ describe('focused-fill command', () => {
   it('keeps a one-shot structured picker usable when inline suggestions are disabled', async () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     document.body.innerHTML = '<form><input autocomplete="cc-number"><input autocomplete="cc-csc"></form>';
-    vi.mocked(sendRequest).mockImplementation(async (request) => {
+    mockContentRequests(async (request) => {
       if (request.type === 'autofill.getClientConfig') return { ok: true, data: {
         inlineSuggestions: false, pageLoadFill: false, saveAllowed: true, updateAllowed: true,
       } } as ResponseMessage;
@@ -3994,33 +4376,43 @@ describe('focused-fill command', () => {
 
 describe('frame inspect/commit messages', () => {
   beforeEach(() => {
+    resetAutofillRuntimeForTest();
+    lastRuntimeIncarnationForTest = undefined;
     document.body.innerHTML = '<form id="login"><input type="email"><input type="password"></form>';
     vi.mocked(sendRequest).mockReset();
     vi.mocked(fillLoginForm).mockReset();
+    mockRequestsWithConfig({
+      inlineSuggestions: false,
+      pageLoadFill: false,
+      saveAllowed: false,
+      updateAllowed: false,
+    });
   });
 
-  it('inspectFrame reports the frame URL and detected login-form metadata only', () => {
-    startAutofill('https://example.com/login');
+  it('inspectFrame reports the runtime, frame URL, and detected login-form metadata only', async () => {
+    await startReady('https://example.com/login');
     const result = handleFrameAutofillMessage({ type: 'autofill.inspectFrame' });
     if (!('forms' in result)) throw new Error('expected a frame inspection');
+    expect(result.runtimeIncarnation).toBe(currentRuntimeIncarnation());
     expect(result.frameUrl).toBe('https://example.com/login');
     expect(result.forms.length).toBeGreaterThan(0);
     // Metadata only: the inspection never carries field values or credentials.
     expect(JSON.stringify(result)).not.toContain('password');
   });
 
-  it('commitLoginFill fills the matching form and reports filled', () => {
-    startAutofill('https://example.com/login');
+  it('commitLoginFill fills the matching runtime-bound form and reports filled', async () => {
+    await startReady('https://example.com/login');
     vi.mocked(fillLoginForm).mockReturnValue(true);
     const inspection = handleFrameAutofillMessage({ type: 'autofill.inspectFrame' });
     if (!('forms' in inspection)) throw new Error('expected a frame inspection');
     const formId = inspection.forms[0]!.formId;
     const loginForm = inspection.forms.find((form) => form.kind === 'login');
     if (!loginForm || loginForm.kind !== 'login') throw new Error('expected a login form');
-    const outcome = handleFrameAutofillMessage({
+    const outcome = await handleFrameAutofillMessage({
       type: 'autofill.commitLoginFill',
       formId,
       expectedFrameUrl: 'https://example.com/login',
+      expectedRuntimeIncarnation: inspection.runtimeIncarnation,
       expectedGeneration: inspection.generation,
       login: { username: 'u', password: 'p' },
       customPlan: loginForm.customPlan,
@@ -4031,20 +4423,67 @@ describe('frame inspect/commit messages', () => {
     expect(vi.mocked(fillLoginForm)).toHaveBeenCalledTimes(1);
   });
 
-  it('commitStructuredFill fills only the freshly inspected card target', () => {
+  it('commitLoginFill rejects a custom plan that does not match its wire digest', async () => {
+    await startReady('https://example.com/login');
+    vi.mocked(fillLoginForm).mockReturnValue(true);
+    const inspection = handleFrameAutofillMessage({ type: 'autofill.inspectFrame' });
+    if (!('forms' in inspection)) throw new Error('expected a frame inspection');
+    const loginForm = inspection.forms.find((form) => form.kind === 'login');
+    if (!loginForm || loginForm.kind !== 'login') throw new Error('expected a login form');
+
+    const outcome = await handleFrameAutofillMessage({
+      type: 'autofill.commitLoginFill',
+      formId: loginForm.formId,
+      expectedFrameUrl: inspection.frameUrl,
+      expectedRuntimeIncarnation: inspection.runtimeIncarnation,
+      expectedGeneration: inspection.generation,
+      login: { username: 'must-not-fill', password: 'must-not-fill' },
+      customPlan: loginForm.customPlan,
+      customPlanDigest: '0'.repeat(64),
+      customAssignments: [],
+    });
+
+    expect(outcome).toEqual({ status: 'target_changed' });
+    expect(vi.mocked(fillLoginForm)).not.toHaveBeenCalled();
+  });
+
+  it('commitLoginFill rejects a form inspected by a replaced runtime', async () => {
+    await startReady('https://example.com/login');
+    const inspection = handleFrameAutofillMessage({ type: 'autofill.inspectFrame' });
+    if (!('forms' in inspection)) throw new Error('expected a frame inspection');
+    await startReady('https://example.com/login');
+
+    const outcome = await handleFrameAutofillMessage({
+      type: 'autofill.commitLoginFill',
+      formId: inspection.forms[0]!.formId,
+      expectedFrameUrl: inspection.frameUrl,
+      expectedRuntimeIncarnation: inspection.runtimeIncarnation,
+      expectedGeneration: inspection.generation,
+      login: { username: 'u', password: 'p' },
+      customPlan: EMPTY_LOGIN_CUSTOM_PLAN,
+      customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
+      customAssignments: [],
+    });
+
+    expect(outcome).toEqual({ status: 'target_changed' });
+    expect(vi.mocked(fillLoginForm)).not.toHaveBeenCalled();
+  });
+
+  it('commitStructuredFill fills only the freshly inspected runtime-bound card target', async () => {
     document.body.innerHTML = '<form><input autocomplete="cc-number" id="number"><input autocomplete="cc-csc" id="code"></form>';
-    startAutofill('https://example.com/checkout');
+    await startReady('https://example.com/checkout');
     const inspection = handleFrameAutofillMessage({ type: 'autofill.inspectFrame' });
     if (!('forms' in inspection)) throw new Error('expected a frame inspection');
     const card = inspection.forms.find((form) => form.kind === 'card');
     if (!card || card.kind !== 'card') throw new Error('expected a card form');
 
-    const outcome = handleFrameAutofillMessage({
+    const outcome = await handleFrameAutofillMessage({
       type: 'autofill.commitStructuredFill',
       kind: 'card',
       formId: card.formId,
       roles: card.roles,
       expectedFrameUrl: inspection.frameUrl,
+      expectedRuntimeIncarnation: inspection.runtimeIncarnation,
       expectedGeneration: inspection.generation,
       data: { number: '4111', code: '123' },
     });
@@ -4054,12 +4493,13 @@ describe('frame inspect/commit messages', () => {
     expect((document.getElementById('code') as HTMLInputElement).value).toBe('123');
   });
 
-  it('commitLoginFill reports target_changed and fills nothing when the frame URL no longer matches', () => {
-    startAutofill('https://example.com/login');
-    const outcome = handleFrameAutofillMessage({
+  it('commitLoginFill reports target_changed and fills nothing when the frame URL no longer matches', async () => {
+    await startReady('https://example.com/login');
+    const outcome = await handleFrameAutofillMessage({
       type: 'autofill.commitLoginFill',
       formId: 'login',
       expectedFrameUrl: 'https://different.example/login',
+      expectedRuntimeIncarnation: currentRuntimeIncarnation(),
       expectedGeneration: 1,
       login: { username: 'u', password: 'p' },
       customPlan: EMPTY_LOGIN_CUSTOM_PLAN,

@@ -34,11 +34,14 @@ const ACCOUNT: AccountLease = Object.freeze({
   accountIdentity: 'user@example.com',
 });
 const POLICY: PolicyLease = Object.freeze({ generation: 9 });
+const RUNTIME_INCARNATION = 'a0b1c2d3-e4f5-4a6b-8c9d-0123456789ab';
+const OTHER_RUNTIME_INCARNATION = 'b0c1d2e3-f4a5-4b6c-9d8e-1234567890ab';
 
 const ISSUE: AutofillIntentIssue<SessionLease, AccountLease, PolicyLease> = {
   tabId: 11,
   frameId: 3,
   documentId: 'doc-abc',
+  runtimeIncarnation: RUNTIME_INCARNATION,
   frameUrl: 'https://example.com/login?step=2',
   cipherId: 'cipher-123',
   purpose: 'login',
@@ -54,6 +57,7 @@ const REDEMPTION: AutofillIntentRedemption = {
   tabId: ISSUE.tabId,
   frameId: ISSUE.frameId,
   documentId: ISSUE.documentId,
+  runtimeIncarnation: ISSUE.runtimeIncarnation,
   frameUrl: ISSUE.frameUrl,
   purpose: ISSUE.purpose,
   channel: ISSUE.channel,
@@ -157,6 +161,7 @@ describe('AutofillIntentRegistry', () => {
       tabId: ISSUE.tabId,
       frameId: ISSUE.frameId,
       documentId: ISSUE.documentId,
+      runtimeIncarnation: ISSUE.runtimeIncarnation,
       canonicalFrameUrl: 'https://example.com/login?step=2#form',
       cipherId: ISSUE.cipherId,
       purpose,
@@ -173,6 +178,7 @@ describe('AutofillIntentRegistry', () => {
     const { registry } = makeHarness();
     const structuredTarget = Object.freeze({
       kind: 'card' as const,
+      runtimeIncarnation: RUNTIME_INCARNATION,
       formId: 'frame-form-7',
       generation: 12,
       roles: ['number', 'exp', 'code'] as const,
@@ -183,6 +189,7 @@ describe('AutofillIntentRegistry', () => {
       tabId: ISSUE.tabId,
       frameId: ISSUE.frameId,
       documentId: ISSUE.documentId,
+      runtimeIncarnation: ISSUE.runtimeIncarnation,
       canonicalFrameUrl: ISSUE.frameUrl,
       cipherId: ISSUE.cipherId,
       purpose: 'card',
@@ -198,10 +205,12 @@ describe('AutofillIntentRegistry', () => {
     ['form id', { formId: 'other-form' }],
     ['generation', { generation: 13 }],
     ['roles', { roles: ['number'] as const }],
+    ['runtime incarnation', { runtimeIncarnation: OTHER_RUNTIME_INCARNATION }],
   ])('consumes a structured intent on a mismatched %s', (_label, change) => {
     const { registry } = makeHarness();
     const structuredTarget = {
       kind: 'card' as const,
+      runtimeIncarnation: RUNTIME_INCARNATION,
       formId: 'frame-form-7',
       generation: 12,
       roles: ['number', 'exp', 'code'] as const,
@@ -220,11 +229,33 @@ describe('AutofillIntentRegistry', () => {
     );
     expect(() => registry.issue(issue({
       purpose: 'identity',
-      structuredTarget: { kind: 'card', formId: 'form', generation: 1, roles: ['number'] },
+      structuredTarget: {
+        kind: 'card',
+        runtimeIncarnation: RUNTIME_INCARNATION,
+        formId: 'form',
+        generation: 1,
+        roles: ['number'],
+      },
     }))).toThrowError(expect.objectContaining({ code: 'invalid_intent' }));
     expect(() => registry.issue(issue({
       purpose: 'card',
-      structuredTarget: { kind: 'card', formId: 'form', generation: 1, roles: ['code', 'number'] },
+      structuredTarget: {
+        kind: 'card',
+        runtimeIncarnation: RUNTIME_INCARNATION,
+        formId: 'form',
+        generation: 1,
+        roles: ['code', 'number'],
+      },
+    }))).toThrowError(expect.objectContaining({ code: 'invalid_intent' }));
+    expect(() => registry.issue(issue({
+      purpose: 'card',
+      structuredTarget: {
+        kind: 'card',
+        runtimeIncarnation: OTHER_RUNTIME_INCARNATION,
+        formId: 'form',
+        generation: 1,
+        roles: ['number'],
+      },
     }))).toThrowError(expect.objectContaining({ code: 'invalid_intent' }));
   });
 
@@ -237,6 +268,7 @@ describe('AutofillIntentRegistry', () => {
       tabId: ISSUE.tabId,
       frameId: ISSUE.frameId,
       documentId: ISSUE.documentId,
+      runtimeIncarnation: ISSUE.runtimeIncarnation,
       canonicalFrameUrl: ISSUE.frameUrl,
       cipherId: ISSUE.cipherId,
       purpose: 'login',
@@ -253,6 +285,7 @@ describe('AutofillIntentRegistry', () => {
     ['tab', { tabId: 12 }],
     ['frame', { frameId: 4 }],
     ['document', { documentId: 'doc-other' }],
+    ['runtime incarnation', { runtimeIncarnation: OTHER_RUNTIME_INCARNATION }],
     ['URL', { frameUrl: 'https://example.com/other' }],
     ['URL fragment', { frameUrl: 'https://example.com/login?step=2#other-route' }],
     ['purpose', { purpose: 'totp' as const }],
@@ -262,6 +295,16 @@ describe('AutofillIntentRegistry', () => {
     const token = registry.issue(ISSUE);
 
     expect(registry.redeem(token, redemption(mismatch))).toBeUndefined();
+    expect(registry.redeem(token, REDEMPTION)).toBeUndefined();
+  });
+
+  it('consumes an intent when redemption supplies a noncanonical runtime incarnation', () => {
+    const { registry } = makeHarness();
+    const token = registry.issue(ISSUE);
+
+    expect(registry.redeem(token, redemption({
+      runtimeIncarnation: RUNTIME_INCARNATION.toUpperCase(),
+    }))).toBeUndefined();
     expect(registry.redeem(token, REDEMPTION)).toBeUndefined();
   });
 
@@ -327,6 +370,7 @@ describe('AutofillIntentRegistry', () => {
       tabId: ISSUE.tabId,
       frameId: ISSUE.frameId,
       documentId: ISSUE.documentId,
+      runtimeIncarnation: ISSUE.runtimeIncarnation,
       canonicalFrameUrl: ISSUE.frameUrl,
       cipherId: 'cipher-new',
       purpose: 'login',
@@ -380,6 +424,8 @@ describe('AutofillIntentRegistry', () => {
     ['non-HTTP URL', { frameUrl: 'file:///tmp/login.html' }],
     ['credentialed URL', { frameUrl: 'https://user:pass@example.com/login' }],
     ['empty document', { documentId: '' }],
+    ['uppercase runtime incarnation', { runtimeIncarnation: RUNTIME_INCARNATION.toUpperCase() }],
+    ['non-v4 runtime incarnation', { runtimeIncarnation: 'a0b1c2d3-e4f5-5a6b-8c9d-0123456789ab' }],
     ['negative tab', { tabId: -1 }],
     ['invalid purpose', { purpose: 'card' as 'login' }],
     ['invalid channel', { channel: 'background' as 'interactive' }],
@@ -405,7 +451,7 @@ describe('AutofillIntentRegistry', () => {
     })).toThrowError(expect.objectContaining({ code: 'invalid_configuration' }));
   });
 
-  it('rejects a non-UUID token generator and exposes no enumeration surface', () => {
+  it('rejects a non-UUID token generator', () => {
     const registry = new AutofillIntentRegistry<SessionLease, AccountLease, PolicyLease>({
       isSessionLeaseCurrent: () => true,
       isAccountLeaseCurrent: () => true,
@@ -415,6 +461,11 @@ describe('AutofillIntentRegistry', () => {
     });
 
     expect(() => registry.issue(ISSUE)).toThrowError(expect.objectContaining({ code: 'token_generation' }));
+  });
+
+  it('exposes no capability enumeration surface', () => {
+    const { registry } = makeHarness();
+
     expect(Object.keys(registry)).toEqual([]);
     expect(Object.getOwnPropertyNames(Object.getPrototypeOf(registry)).sort())
       .toEqual(['constructor', 'issue', 'redeem']);

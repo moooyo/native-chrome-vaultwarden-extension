@@ -15,6 +15,9 @@ import { isContentTotpClipboardCode, sendRequest, isExtensionContextAlive } from
 import { MAX_PIN_UTF16_CODE_UNITS } from '../core/session/pin-constraints.js';
 
 const REQ = { type: 'vault.sync' } as unknown as RequestMessage;
+const RUNTIME_INCARNATION = 'a0b1c2d3-e4f5-4a6b-8c9d-0123456789ab';
+const PREVIOUS_RUNTIME_INCARNATION = 'b1c2d3e4-f5a6-4b7c-8d9e-1234567890ab';
+const AUTOFILL_RUNTIME_BINDING_PROPERTY = '__miyuAutofillRuntimeIncarnation';
 
 afterEach(() => { runtimeRef.current = undefined; });
 
@@ -43,6 +46,74 @@ describe('sendRequest — orphaned-context resilience', () => {
     runtimeRef.current = { id: 'abc', sendMessage };
     await expect(sendRequest(REQ)).resolves.toEqual(ok);
     expect(sendMessage).toHaveBeenCalledWith(REQ);
+  });
+
+  it('sends an exact runtime activation command with canonical incarnation identifiers', async () => {
+    const response = { ok: true, data: { status: 'active' } };
+    const sendMessage = vi.fn().mockResolvedValue(response);
+    runtimeRef.current = { id: 'abc', sendMessage };
+    const request = {
+      type: 'autofill.activateRuntime',
+      runtimeIncarnation: RUNTIME_INCARNATION,
+      previousRuntimeIncarnation: PREVIOUS_RUNTIME_INCARNATION,
+    } satisfies RequestMessage;
+
+    await expect(sendRequest(request)).resolves.toEqual(response);
+
+    expect(sendMessage).toHaveBeenCalledWith(request);
+    expect(Reflect.ownKeys(request)).toEqual([
+      'type',
+      'runtimeIncarnation',
+      'previousRuntimeIncarnation',
+    ]);
+  });
+
+  it('materializes a non-enumerable runtime binding as an enumerable wire field', async () => {
+    const request = { type: 'autofill.getClientConfig' } satisfies RequestMessage;
+    Object.defineProperty(request, AUTOFILL_RUNTIME_BINDING_PROPERTY, {
+      value: RUNTIME_INCARNATION,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+    const sendMessage = vi.fn().mockResolvedValue({ ok: true, data: null });
+    runtimeRef.current = { id: 'abc', sendMessage };
+
+    await expect(sendRequest(request)).resolves.toEqual({ ok: true, data: null });
+
+    expect(Object.keys(request)).toEqual(['type']);
+    expect(Object.hasOwn(request, 'runtimeIncarnation')).toBe(false);
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'autofill.getClientConfig',
+      runtimeIncarnation: RUNTIME_INCARNATION,
+    });
+    const wireRequest = sendMessage.mock.calls[0]![0] as Record<string, unknown>;
+    expect(Object.getOwnPropertyDescriptor(wireRequest, 'runtimeIncarnation')).toMatchObject({
+      value: RUNTIME_INCARNATION,
+      enumerable: true,
+    });
+    expect(Object.hasOwn(wireRequest, AUTOFILL_RUNTIME_BINDING_PROPERTY)).toBe(false);
+  });
+
+  it.each([
+    ['uppercase', RUNTIME_INCARNATION.toUpperCase()],
+    ['invalid', 'a0b1c2d3-e4f5-5a6b-8c9d-0123456789ab'],
+  ])('rejects a %s hidden runtime incarnation before transport', async (_label, runtimeIncarnation) => {
+    const request = { type: 'autofill.getClientConfig' } satisfies RequestMessage;
+    Object.defineProperty(request, AUTOFILL_RUNTIME_BINDING_PROPERTY, {
+      value: runtimeIncarnation,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+    const sendMessage = vi.fn();
+    runtimeRef.current = { id: 'abc', sendMessage };
+
+    await expect(sendRequest(request)).resolves.toEqual({
+      ok: false,
+      error: { code: 'error', message: 'Autofill runtime incarnation is invalid' },
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it('carries the copied value needed for an in-memory clipboard ownership claim', async () => {

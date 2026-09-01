@@ -10,6 +10,7 @@ import {
 import { flashFill, flashFillCheck } from './fill-highlight.js';
 import { setElementValue } from './native-set-value.js';
 import { createStagedFillCommit, type StagedFillCommit } from './staged-fill.js';
+import type { AutofillDetectionContext } from './autofill-detection-context.js';
 
 interface TotpFillBinding {
   readonly code: string;
@@ -68,11 +69,12 @@ export function fillTotpCode(
   input: HTMLInputElement,
   code: string,
   revalidate: () => boolean = () => true,
+  context?: AutofillDetectionContext,
 ): boolean {
   totpFillReceipts.delete(input);
   const characters = Array.from(code);
   if (characters.length === 0) return false;
-  const inputs = resolveTotpInputs(input);
+  const inputs = resolveTotpInputs(input, context);
   if (!inputs) return false;
   const binding = captureTotpFillBinding(input, inputs, code);
   const staged = createStagedFillCommit(() => (

@@ -85,6 +85,38 @@ const CONTENT_CONTEXT = {
   origin: 'https://sender.example',
 } satisfies RequestContext;
 
+const TEST_RUNTIME_INCARNATION = '10000000-0000-4000-8000-000000000001';
+const PREVIOUS_RUNTIME_INCARNATION = '10000000-0000-4000-8000-000000000002';
+const NEXT_RUNTIME_INCARNATION = '10000000-0000-4000-8000-000000000003';
+const TEST_CAPTURE_ID = 'a0000000-0000-4000-8000-000000000004';
+const TEST_PROMPT_ID = 'b0000000-0000-4000-8000-000000000005';
+
+const RUNTIME_BOUND_AUTOFILL_REQUESTS = new Set<RequestMessage['type']>([
+  'autofill.findCandidates',
+  'autofill.findStructuredCandidates',
+  'autofill.claimKeyboardGrant',
+  'autofill.keyboard.findCandidates',
+  'autofill.keyboard.issueIntent',
+  'autofill.continuation.redeemKeyboardReprompt',
+  'autofill.keyboard.redeemLoginIntent',
+  'autofill.keyboard.redeemTotpIntent',
+  'autofill.keyboard.redeemStructuredIntent',
+  'autofill.issueIntent',
+  'autofill.issueStructuredIntent',
+  'autofill.redeemLoginIntent',
+  'autofill.redeemTotpIntent',
+  'autofill.redeemStructuredIntent',
+  'autofill.getClientConfig',
+  'autofill.authorizeGeneratorUse',
+  'autofill.trackGeneratedValue',
+  'autofill.issuePageLoadIntent',
+  'autofill.redeemPageLoadIntent',
+  'autofill.captureSubmission',
+  'autofill.claimSavePrompt',
+  'autofill.commitSavePrompt',
+  'autofill.dismissSavePrompt',
+]);
+
 const PASSWORD_FIDO_OWNER = Object.freeze({
   flow: 'password',
   generation: 8,
@@ -118,6 +150,7 @@ function loginIntentRequest(cipherId = '1') {
 
 const STRUCTURED_TARGET = Object.freeze({
   kind: 'card' as const,
+  runtimeIncarnation: TEST_RUNTIME_INCARNATION,
   formId: 'frame-form-1',
   generation: 4,
   roles: ['number', 'exp', 'code'] as const,
@@ -129,6 +162,7 @@ function loginTabTarget() {
     frameId: 0,
     formId: 'form-1',
     documentId: 'doc-0',
+    runtimeIncarnation: TEST_RUNTIME_INCARNATION,
     generation: 1,
     customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
   };
@@ -276,6 +310,7 @@ type TestRouterDeps = Omit<RouterDeps,
   | 'enterprisePolicyGate'
   | 'autofillIntents'
   | 'keyboardGrants'
+  | 'saveCaptureCoordinator'
   | 'getKeyboardTopDocument'
   | 'pageLoadFillDeduper'>
   & Partial<Pick<RouterDeps,
@@ -286,7 +321,10 @@ type TestRouterDeps = Omit<RouterDeps,
     | 'autofillIntents'
     | 'getKeyboardTopDocument'
     | 'pageLoadFillDeduper'>>
-  & { keyboardGrants?: AutofillKeyboardGrantRegistry<SessionLease, AccountLease, AutofillAuthorizationPolicyLease> };
+  & {
+    keyboardGrants?: AutofillKeyboardGrantRegistry<SessionLease, AccountLease, AutofillAuthorizationPolicyLease>;
+    saveCaptureCoordinator?: Partial<NonNullable<RouterDeps['saveCaptureCoordinator']>>;
+  };
 
 const ACTIVE_SESSION_GATE: RouterDeps['sessionGate'] = {
   capture: () => ({ generation: 0 }),
@@ -348,7 +386,18 @@ function createRouter(deps: TestRouterDeps) {
     macKey: new Uint8Array(32).fill(29),
   }));
   const pendingSaves = deps.pendingSaves ?? new AutofillPendingSaveStore({ store: pendingStore });
-  const saveCaptureCoordinator = deps.saveCaptureCoordinator ?? {
+  const usernameStages = deps.usernameStages ?? new AutofillUsernameStageStore({
+    store: pendingStore,
+    loadUserKey,
+  });
+  const saveCaptureCoordinator: NonNullable<RouterDeps['saveCaptureCoordinator']> = {
+    activateRuntime: vi.fn(async () => true),
+    isRuntimeCurrent: vi.fn(async (
+      _tabId: number,
+      _frameId: number,
+      _documentId: string,
+      runtimeIncarnation: string,
+    ) => runtimeIncarnation === TEST_RUNTIME_INCARNATION),
     stage: async (
       input: Parameters<NonNullable<RouterDeps['saveCaptureCoordinator']>['stage']>[0],
       credentials: Parameters<NonNullable<RouterDeps['saveCaptureCoordinator']>['stage']>[1],
@@ -357,12 +406,17 @@ function createRouter(deps: TestRouterDeps) {
       await pendingSaves.put(input, credentials, ownedUserKey);
       return undefined as never;
     },
-    discardUnconfirmedDocument: vi.fn(async () => {}),
+    stageUsername: async (input) => usernameStages.stage(input),
+    consumeUsername: async (context) => usernameStages.consume(context),
+    claimPendingSave: async (context, ownedUserKey, evaluate, captureId) => (
+      pendingSaves.claim(context, ownedUserKey, evaluate, captureId)
+    ),
+    takePendingSave: async (promptId, context, ownedUserKey) => (
+      pendingSaves.take(promptId, context, ownedUserKey)
+    ),
+    dismissPendingSave: async (promptId, context) => pendingSaves.dismiss(promptId, context),
+    ...deps.saveCaptureCoordinator,
   };
-  const usernameStages = deps.usernameStages ?? new AutofillUsernameStageStore({
-    store: pendingStore,
-    loadUserKey,
-  });
   const getSessionBindingId = deps.getSessionBindingId ?? (async () => 'session-binding');
   const keyboardGrants = deps.keyboardGrants ?? new AutofillKeyboardGrantRegistry<SessionLease, AccountLease, AutofillAuthorizationPolicyLease>({
     isSessionLeaseCurrent,
@@ -370,6 +424,10 @@ function createRouter(deps: TestRouterDeps) {
     isPolicyLeaseCurrent,
   });
   const getKeyboardTopDocument = deps.getKeyboardTopDocument ?? (async () => ({
+    documentId: CONTENT_CONTEXT.documentId,
+    url: CONTENT_CONTEXT.url,
+  }));
+  const getContentDocument = deps.getContentDocument ?? (async () => ({
     documentId: CONTENT_CONTEXT.documentId,
     url: CONTENT_CONTEXT.url,
   }));
@@ -467,6 +525,7 @@ function createRouter(deps: TestRouterDeps) {
     getSessionBindingId,
     keyboardGrants,
     getKeyboardTopDocument,
+    getContentDocument,
     pageLoadFillDeduper,
     repromptAutofillGrants,
   });
@@ -477,9 +536,26 @@ function createRouter(deps: TestRouterDeps) {
     repromptAutofillGrants,
     capturePolicyLease: () => captureAutofillAuthorizationPolicy(authorizationPolicyGates),
     handle(request: RequestMessage, context: RequestContext = EXTENSION_PAGE_CONTEXT) {
-      return router.handle(request, context);
+      return router.handle(bindTestRuntime(request, context), context);
     },
   };
+}
+
+function bindTestRuntime(request: RequestMessage, context: RequestContext): RequestMessage {
+  if (context.kind !== 'content'
+      || !RUNTIME_BOUND_AUTOFILL_REQUESTS.has(request.type)
+      || Object.hasOwn(request, 'runtimeIncarnation')) return request;
+  const bound = Object.create(
+    Object.getPrototypeOf(request),
+    Object.getOwnPropertyDescriptors(request),
+  ) as RequestMessage;
+  Object.defineProperty(bound, 'runtimeIncarnation', {
+    configurable: true,
+    enumerable: true,
+    value: TEST_RUNTIME_INCARNATION,
+    writable: true,
+  });
+  return bound;
 }
 
 function intentSettings(strategy: UriMatchStrategySetting = 0): RouterDeps['settings'] {
@@ -4094,6 +4170,7 @@ describe('router', () => {
         ? STRUCTURED_TARGET
         : {
             kind: 'identity' as const,
+            runtimeIncarnation: TEST_RUNTIME_INCARNATION,
             formId: 'identity-form',
             generation: 8,
             roles: ['firstName', 'lastName', 'email'] as const,
@@ -4179,6 +4256,35 @@ describe('router', () => {
       type: 'autofill.keyboard.findCandidates', keyboardGrantId: grant,
     }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
     top = { documentId: CONTENT_CONTEXT.documentId, url: CONTENT_CONTEXT.url };
+    await expect(router.handle({
+      type: 'autofill.keyboard.findCandidates', keyboardGrantId: grant,
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
+  });
+
+  it('consumes a keyboard grant when another runtime presents it', async () => {
+    const router = createRouter({
+      auth: {},
+      vault: { findAutofillCandidates: vi.fn(async () => []) },
+      settings: intentSettings(),
+      saveCaptureCoordinator: { isRuntimeCurrent: vi.fn(async () => true) },
+    });
+    const commandToken = router.keyboardGrants.issueCommand({
+      tabId: CONTENT_CONTEXT.tabId,
+      topDocumentId: CONTENT_CONTEXT.documentId,
+      topFrameUrl: CONTENT_CONTEXT.url,
+      sessionLease: router.captureSessionLease(),
+    });
+    const grant = keyboardGrantId(await router.handle({
+      type: 'autofill.claimKeyboardGrant',
+      commandToken,
+      binding: { purpose: 'totp' },
+    }, CONTENT_CONTEXT));
+
+    await expect(router.handle({
+      type: 'autofill.keyboard.findCandidates',
+      keyboardGrantId: grant,
+      runtimeIncarnation: NEXT_RUNTIME_INCARNATION,
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
     await expect(router.handle({
       type: 'autofill.keyboard.findCandidates', keyboardGrantId: grant,
     }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
@@ -4314,6 +4420,32 @@ describe('router', () => {
       .resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
     await expect(router.handle({ type: 'autofill.redeemLoginIntent', intentId: token }, CONTENT_CONTEXT))
       .resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
+    expect(getAutofillLoginData).not.toHaveBeenCalled();
+  });
+
+  it('consumes an intent on a cross-runtime redemption', async () => {
+    const getAutofillLoginData = vi.fn(async () => ({ password: 'secret' }));
+    const router = createRouter({
+      auth: {},
+      vault: {
+        findAutofillCandidates: vi.fn(async () => [{
+          id: '1', name: 'Example', matchedUri: CONTENT_CONTEXT.url, matchType: 0 as const, favorite: false,
+        }]),
+        getAutofillLoginData,
+      },
+      settings: intentSettings(),
+      saveCaptureCoordinator: { isRuntimeCurrent: vi.fn(async () => true) },
+    });
+    const token = intentId(await router.handle(loginIntentRequest(), CONTENT_CONTEXT));
+
+    await expect(router.handle({
+      type: 'autofill.redeemLoginIntent',
+      intentId: token,
+      runtimeIncarnation: NEXT_RUNTIME_INCARNATION,
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
+    await expect(router.handle({
+      type: 'autofill.redeemLoginIntent', intentId: token,
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
     expect(getAutofillLoginData).not.toHaveBeenCalled();
   });
 
@@ -4824,7 +4956,36 @@ describe('router', () => {
       .resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
   });
 
+  it('consumes a page-load intent when another runtime presents it', async () => {
+    const settings = intentSettings();
+    settings.getAutofillSettings = vi.fn(async () => ({ ...DEFAULT_AUTOFILL_SETTINGS, pageLoadFill: true }));
+    const getAutofillLoginData = vi.fn(async () => ({ password: 'secret' }));
+    const router = createRouter({
+      auth: {},
+      vault: {
+        findAutofillCandidates: vi.fn(async () => [{
+          id: 'login-1', name: 'Example', matchedUri: CONTENT_CONTEXT.url, matchType: 0 as const, favorite: false,
+        }]),
+        getAutofillLoginData,
+      },
+      settings,
+      saveCaptureCoordinator: { isRuntimeCurrent: vi.fn(async () => true) },
+    });
+    const token = intentId(await router.handle({ type: 'autofill.issuePageLoadIntent' }, CONTENT_CONTEXT));
+
+    await expect(router.handle({
+      type: 'autofill.redeemPageLoadIntent',
+      intentId: token,
+      runtimeIncarnation: NEXT_RUNTIME_INCARNATION,
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
+    await expect(router.handle({
+      type: 'autofill.redeemPageLoadIntent', intentId: token,
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
+    expect(getAutofillLoginData).not.toHaveBeenCalled();
+  });
+
   it('stages password captures with an exact browser-correlation submission hint', async () => {
+    const isRuntimeCurrent = vi.fn(async () => true);
     const stage = vi.fn(async (
       _input: Parameters<NonNullable<RouterDeps['saveCaptureCoordinator']>['stage']>[0],
       _credentials: Parameters<NonNullable<RouterDeps['saveCaptureCoordinator']>['stage']>[1],
@@ -4839,8 +5000,8 @@ describe('router', () => {
       vault: {},
       settings: intentSettings(),
       saveCaptureCoordinator: {
+        isRuntimeCurrent,
         stage,
-        discardUnconfirmedDocument: vi.fn(async () => {}),
       },
     });
 
@@ -4855,11 +5016,18 @@ describe('router', () => {
       },
     }, CONTENT_CONTEXT)).resolves.toEqual({ ok: true, data: null });
 
+    expect(isRuntimeCurrent).toHaveBeenCalledWith(
+      CONTENT_CONTEXT.tabId,
+      CONTENT_CONTEXT.frameId,
+      CONTENT_CONTEXT.documentId,
+      TEST_RUNTIME_INCARNATION,
+    );
     expect(stage).toHaveBeenCalledWith(
       expect.objectContaining({
         tabId: CONTENT_CONTEXT.tabId,
         frameId: CONTENT_CONTEXT.frameId,
         sourceDocumentId: CONTENT_CONTEXT.documentId,
+        runtimeIncarnation: TEST_RUNTIME_INCARNATION,
         sourceUrl: CONTENT_CONTEXT.url,
       }),
       { username: 'user', password: 'password' },
@@ -4868,36 +5036,252 @@ describe('router', () => {
     );
   });
 
-  it('routes BFCache cleanup to the exact content document and rejects extra fields', async () => {
-    const discardUnconfirmedDocument = vi.fn(async () => {});
+  it('routes exact runtime activation, preserves CAS ownership, and rejects stale or extra fields', async () => {
+    const activateRuntime = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const getContentDocument = vi.fn(async () => ({
+      documentId: CONTENT_CONTEXT.documentId,
+      url: CONTENT_CONTEXT.url,
+    }));
     const router = createRouter({
       auth: {},
       vault: {},
       settings: intentSettings(),
-      saveCaptureCoordinator: {
-        stage: vi.fn(async () => undefined as never),
-        discardUnconfirmedDocument,
-      },
+      saveCaptureCoordinator: { activateRuntime },
+      getContentDocument,
     });
 
     await expect(router.handle(
-      { type: 'autofill.discardBfcacheCapture' },
+      { type: 'autofill.activateRuntime', runtimeIncarnation: TEST_RUNTIME_INCARNATION },
       CONTENT_CONTEXT,
-    )).resolves.toEqual({ ok: true, data: null });
-    expect(discardUnconfirmedDocument).toHaveBeenCalledWith(
-      CONTENT_CONTEXT.tabId,
-      CONTENT_CONTEXT.frameId,
-      CONTENT_CONTEXT.documentId,
-    );
+    )).resolves.toEqual({ ok: true, data: { status: 'active' } });
+    expect(activateRuntime).toHaveBeenNthCalledWith(1, {
+      tabId: CONTENT_CONTEXT.tabId,
+      frameId: CONTENT_CONTEXT.frameId,
+      documentId: CONTENT_CONTEXT.documentId,
+      frameUrl: CONTENT_CONTEXT.url,
+      runtimeIncarnation: TEST_RUNTIME_INCARNATION,
+    });
 
     await expect(router.handle({
-      type: 'autofill.discardBfcacheCapture',
+      type: 'autofill.activateRuntime',
+      runtimeIncarnation: NEXT_RUNTIME_INCARNATION,
+      previousRuntimeIncarnation: TEST_RUNTIME_INCARNATION,
+    }, CONTENT_CONTEXT)).resolves.toEqual({ ok: true, data: { status: 'active' } });
+    expect(activateRuntime).toHaveBeenNthCalledWith(2, {
+      tabId: CONTENT_CONTEXT.tabId,
+      frameId: CONTENT_CONTEXT.frameId,
+      documentId: CONTENT_CONTEXT.documentId,
+      frameUrl: CONTENT_CONTEXT.url,
+      runtimeIncarnation: NEXT_RUNTIME_INCARNATION,
+      previousRuntimeIncarnation: TEST_RUNTIME_INCARNATION,
+    });
+
+    await expect(router.handle({
+      type: 'autofill.activateRuntime',
+      runtimeIncarnation: TEST_RUNTIME_INCARNATION,
+      previousRuntimeIncarnation: PREVIOUS_RUNTIME_INCARNATION,
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
+    expect(activateRuntime).toHaveBeenNthCalledWith(3, {
+      tabId: CONTENT_CONTEXT.tabId,
+      frameId: CONTENT_CONTEXT.frameId,
+      documentId: CONTENT_CONTEXT.documentId,
+      frameUrl: CONTENT_CONTEXT.url,
+      runtimeIncarnation: TEST_RUNTIME_INCARNATION,
+      previousRuntimeIncarnation: PREVIOUS_RUNTIME_INCARNATION,
+    });
+
+    await expect(router.handle({
+      type: 'autofill.activateRuntime',
+      runtimeIncarnation: TEST_RUNTIME_INCARNATION,
       extra: true,
     } as unknown as RequestMessage, CONTENT_CONTEXT)).resolves.toMatchObject({
       ok: false,
       error: { code: 'denied' },
     });
-    expect(discardUnconfirmedDocument).toHaveBeenCalledOnce();
+    expect(activateRuntime).toHaveBeenCalledTimes(3);
+    expect(getContentDocument).toHaveBeenCalledTimes(3);
+    expect(getContentDocument).toHaveBeenCalledWith(CONTENT_CONTEXT.tabId, CONTENT_CONTEXT.frameId);
+  });
+
+  it.each([
+    {
+      label: 'document identity',
+      current: { documentId: 'replacement-document', url: CONTENT_CONTEXT.url },
+    },
+    {
+      label: 'document URL',
+      current: { documentId: CONTENT_CONTEXT.documentId, url: 'https://sender.example/replaced' },
+    },
+  ])('rejects runtime activation when the browser-owned $label changed', async ({ current }) => {
+    const activateRuntime = vi.fn(async () => true);
+    const router = createRouter({
+      auth: {},
+      vault: {},
+      settings: intentSettings(),
+      saveCaptureCoordinator: { activateRuntime },
+      getContentDocument: vi.fn(async () => current),
+    });
+
+    await expect(router.handle({
+      type: 'autofill.activateRuntime',
+      runtimeIncarnation: TEST_RUNTIME_INCARNATION,
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
+    expect(activateRuntime).not.toHaveBeenCalled();
+  });
+
+  it('passes an exact wake capture id to the runtime-fenced prompt claim', async () => {
+    const claimPendingSave = vi.fn(async (
+      _context: Parameters<NonNullable<RouterDeps['saveCaptureCoordinator']>['claimPendingSave']>[0],
+      ownedUserKey: Parameters<NonNullable<RouterDeps['saveCaptureCoordinator']>['claimPendingSave']>[1],
+      _evaluate: Parameters<NonNullable<RouterDeps['saveCaptureCoordinator']>['claimPendingSave']>[2],
+      _captureId: Parameters<NonNullable<RouterDeps['saveCaptureCoordinator']>['claimPendingSave']>[3],
+    ) => {
+      ownedUserKey.encKey.fill(0);
+      ownedUserKey.macKey.fill(0);
+      return { action: 'none' as const };
+    });
+    const router = createRouter({
+      auth: {},
+      vault: {},
+      settings: intentSettings(),
+      saveCaptureCoordinator: { claimPendingSave },
+    });
+
+    await expect(router.handle({
+      type: 'autofill.claimSavePrompt',
+      captureId: TEST_CAPTURE_ID,
+    }, CONTENT_CONTEXT)).resolves.toEqual({ ok: true, data: { action: 'none' } });
+    expect(claimPendingSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tabId: CONTENT_CONTEXT.tabId,
+        frameId: CONTENT_CONTEXT.frameId,
+        documentId: CONTENT_CONTEXT.documentId,
+        runtimeIncarnation: TEST_RUNTIME_INCARNATION,
+        frameUrl: CONTENT_CONTEXT.url,
+      }),
+      expect.objectContaining({ encKey: expect.any(Uint8Array), macKey: expect.any(Uint8Array) }),
+      expect.any(Function),
+      TEST_CAPTURE_ID,
+    );
+
+    await expect(router.handle({
+      type: 'autofill.claimSavePrompt',
+      captureId: TEST_CAPTURE_ID.toUpperCase(),
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
+    await expect(router.handle({
+      type: 'autofill.claimSavePrompt',
+      captureId: TEST_CAPTURE_ID,
+      extra: true,
+    } as unknown as RequestMessage, CONTENT_CONTEXT)).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'denied' },
+    });
+    expect(claimPendingSave).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      label: 'claim',
+      method: 'claimPendingSave' as const,
+      request: { type: 'autofill.claimSavePrompt', captureId: TEST_CAPTURE_ID } as RequestMessage,
+    },
+    {
+      label: 'take',
+      method: 'takePendingSave' as const,
+      request: { type: 'autofill.commitSavePrompt', promptId: TEST_PROMPT_ID } as RequestMessage,
+    },
+    {
+      label: 'dismiss',
+      method: 'dismissPendingSave' as const,
+      request: { type: 'autofill.dismissSavePrompt', promptId: TEST_PROMPT_ID } as RequestMessage,
+    },
+  ])('fails closed when A to B activation crosses a pending prompt $label', async ({ method, request }) => {
+    type PendingSaveContext = Parameters<
+      NonNullable<RouterDeps['saveCaptureCoordinator']>['claimPendingSave']
+    >[0];
+    let currentRuntimeIncarnation = TEST_RUNTIME_INCARNATION;
+    let runtimeFence: object = {};
+    let releaseOperation!: () => void;
+    const pendingOperation = new Promise<void>((resolve) => { releaseOperation = resolve; });
+    const storeMutation = vi.fn();
+    const commitCapturedLogin = vi.fn();
+    const crossFence = async (
+      context: PendingSaveContext,
+      ownedUserKey?: SymmetricKey,
+    ): Promise<void> => {
+      const admittedFence = runtimeFence;
+      await pendingOperation;
+      if (admittedFence !== runtimeFence
+          || context.runtimeIncarnation !== currentRuntimeIncarnation) {
+        ownedUserKey?.encKey.fill(0);
+        ownedUserKey?.macKey.fill(0);
+        throw new Error('Pending-save runtime fence changed');
+      }
+      storeMutation();
+    };
+    const claimPendingSave = vi.fn(async (context: PendingSaveContext, ownedUserKey: SymmetricKey) => {
+      await crossFence(context, ownedUserKey);
+      return { action: 'none' as const };
+    });
+    const takePendingSave = vi.fn(async (
+      _promptId: string,
+      context: PendingSaveContext,
+      ownedUserKey: SymmetricKey,
+    ) => {
+      await crossFence(context, ownedUserKey);
+      return {
+        credentials: { password: 'password' },
+        sourceUrl: CONTENT_CONTEXT.url,
+        decision: { action: 'save' as const, suggestedName: 'Example' },
+      };
+    });
+    const dismissPendingSave = vi.fn(async (_promptId: string, context: PendingSaveContext) => {
+      await crossFence(context);
+      return true;
+    });
+    const activateRuntime = vi.fn(async (
+      activation: Parameters<NonNullable<RouterDeps['saveCaptureCoordinator']>['activateRuntime']>[0],
+    ) => {
+      if (activation.previousRuntimeIncarnation !== currentRuntimeIncarnation) return false;
+      runtimeFence = {};
+      currentRuntimeIncarnation = activation.runtimeIncarnation;
+      return true;
+    });
+    const isRuntimeCurrent = vi.fn(async (
+      _tabId: number,
+      _frameId: number,
+      _documentId: string,
+      runtimeIncarnation: string,
+    ) => runtimeIncarnation === currentRuntimeIncarnation);
+    const router = createRouter({
+      auth: {},
+      vault: { commitCapturedLogin },
+      settings: intentSettings(),
+      saveCaptureCoordinator: {
+        activateRuntime,
+        isRuntimeCurrent,
+        claimPendingSave,
+        takePendingSave,
+        dismissPendingSave,
+      },
+    });
+    const pendingResponse = router.handle(request, CONTENT_CONTEXT);
+    const pendingMethod = { claimPendingSave, takePendingSave, dismissPendingSave }[method];
+    await vi.waitFor(() => expect(pendingMethod).toHaveBeenCalledOnce());
+
+    await expect(router.handle({
+      type: 'autofill.activateRuntime',
+      runtimeIncarnation: NEXT_RUNTIME_INCARNATION,
+      previousRuntimeIncarnation: TEST_RUNTIME_INCARNATION,
+    }, CONTENT_CONTEXT)).resolves.toEqual({ ok: true, data: { status: 'active' } });
+    releaseOperation();
+
+    await expect(pendingResponse).resolves.toMatchObject({ ok: false });
+    expect(storeMutation).not.toHaveBeenCalled();
+    expect(commitCapturedLogin).not.toHaveBeenCalled();
   });
 
   it('rejects malformed native correlation hints without invoking accessors or staging', async () => {
@@ -4908,7 +5292,6 @@ describe('router', () => {
       settings: intentSettings(),
       saveCaptureCoordinator: {
         stage,
-        discardUnconfirmedDocument: vi.fn(async () => {}),
       },
     });
     const readAction = vi.fn(() => 'https://sender.example/session');
@@ -5048,7 +5431,7 @@ describe('router', () => {
     expect(addLoginUri).not.toHaveBeenCalled();
   });
 
-  it('does not let another document consume a live prompt', async () => {
+  it('does not let another document or runtime consume a live prompt', async () => {
     const updateLoginPassword = vi.fn(async () => ({ items: [], folders: [], collections: [], orgPermissions: [] }));
     const router = createRouter({
       auth: {},
@@ -5057,11 +5440,17 @@ describe('router', () => {
         updateLoginPassword,
       },
       settings: intentSettings(),
+      saveCaptureCoordinator: { isRuntimeCurrent: vi.fn(async () => true) },
     });
     const claimant = { ...CONTENT_CONTEXT, documentId: 'doc-2', url: 'https://sender.example/home' };
     await router.handle({ type: 'autofill.captureSubmission', password: 'new-password' }, CONTENT_CONTEXT);
     const token = promptId(await router.handle({ type: 'autofill.claimSavePrompt' }, claimant));
 
+    await expect(router.handle({
+      type: 'autofill.commitSavePrompt',
+      promptId: token,
+      runtimeIncarnation: NEXT_RUNTIME_INCARNATION,
+    }, claimant)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
     await expect(router.handle(
       { type: 'autofill.commitSavePrompt', promptId: token },
       { ...claimant, documentId: 'doc-3' },
@@ -5124,7 +5513,12 @@ describe('router', () => {
     }, CONTENT_CONTEXT);
     await router.handle({ type: 'autofill.claimSavePrompt' }, CONTENT_CONTEXT);
 
-    expect(consume).toHaveBeenCalledOnce();
+    expect(consume).toHaveBeenCalledWith(expect.objectContaining({
+      tabId: CONTENT_CONTEXT.tabId,
+      frameId: CONTENT_CONTEXT.frameId,
+      documentId: CONTENT_CONTEXT.documentId,
+      runtimeIncarnation: TEST_RUNTIME_INCARNATION,
+    }));
     expect(checkSaveLogin).toHaveBeenCalledWith(
       CONTENT_CONTEXT.url,
       { username: 'current@example.com', password: 'password' },
@@ -5482,15 +5876,18 @@ describe('router', () => {
       continuation.redeemKeyboardReprompt.mockReset()
         .mockResolvedValueOnce({
           cipherId: 'protected',
+          runtimeIncarnation: TEST_RUNTIME_INCARNATION,
           binding,
           source: {
             tabId: CONTENT_CONTEXT.tabId,
             windowId: 3,
             topDocumentId: CONTENT_CONTEXT.documentId,
+            topRuntimeIncarnation: TEST_RUNTIME_INCARNATION,
             topOrigin: CONTENT_CONTEXT.origin,
             topUrlDigest: 'a'.repeat(64),
             frameId: CONTENT_CONTEXT.frameId,
             frameDocumentId: CONTENT_CONTEXT.documentId,
+            frameRuntimeIncarnation: TEST_RUNTIME_INCARNATION,
             frameOrigin: CONTENT_CONTEXT.origin,
             frameUrlDigest: 'b'.repeat(64),
           },
@@ -5504,6 +5901,13 @@ describe('router', () => {
       const issued = await router.handle({
         type: 'autofill.continuation.redeemKeyboardReprompt', continuationId,
       }, CONTENT_CONTEXT);
+      expect(continuation.redeemKeyboardReprompt).toHaveBeenNthCalledWith(1, continuationId, {
+        tabId: CONTENT_CONTEXT.tabId,
+        frameId: CONTENT_CONTEXT.frameId,
+        documentId: CONTENT_CONTEXT.documentId,
+        runtimeIncarnation: TEST_RUNTIME_INCARNATION,
+        url: CONTENT_CONTEXT.url,
+      });
       const token = intentId(issued);
       const redeemed = purpose === 'login'
         ? await router.handle({ type: 'autofill.keyboard.redeemLoginIntent', intentId: token }, CONTENT_CONTEXT)
@@ -5635,6 +6039,7 @@ describe('router', () => {
       frameId: 2,
       formId: 'card-form',
       documentId: 'card-doc',
+      runtimeIncarnation: TEST_RUNTIME_INCARNATION,
       generation: 4,
       roles: ['number', 'exp'] as const,
     };
@@ -5674,6 +6079,7 @@ describe('router', () => {
       frameId: 1,
       formId: 'identity-form',
       documentId: 'identity-doc',
+      runtimeIncarnation: TEST_RUNTIME_INCARNATION,
       generation: 6,
       roles: ['fullName', 'email'] as const,
     };

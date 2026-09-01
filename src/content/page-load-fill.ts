@@ -1,5 +1,4 @@
 import {
-  detectLoginForms,
   captureControlOwner,
   composedParentElement,
   hasCurrentPasswordAutocomplete,
@@ -10,6 +9,12 @@ import {
   type DetectedLoginForm,
   type ControlOwnerSnapshot,
 } from './form-detection.js';
+import {
+  createAutofillDetectionContext,
+  createScopedAutofillDetectionContext,
+  type AutofillDetectionContext,
+} from './autofill-detection-context.js';
+import { computeFillProjection } from './focused-fill.js';
 
 export interface PageLoadLoginTarget {
   readonly form: DetectedLoginForm;
@@ -21,7 +26,7 @@ export interface PageLoadLoginTarget {
   readonly usernameOwner?: ControlOwnerSnapshot;
 }
 
-export type PageLoadRoots = ParentNode | readonly ParentNode[];
+export type PageLoadRoots = ParentNode | readonly ParentNode[] | PageLoadRootSnapshot;
 
 export interface PageLoadRootSnapshot {
   readonly roots: readonly ParentNode[];
@@ -33,25 +38,32 @@ export function selectPageLoadLoginTargetFromSnapshot(
   snapshot: PageLoadRootSnapshot,
   ownerDocument: Document = document,
 ): PageLoadLoginTarget | undefined {
-  return snapshot.truncated ? undefined : selectPageLoadLoginTarget(snapshot.roots, ownerDocument);
+  const context = createAutofillDetectionContext(snapshot);
+  return context.complete
+    ? selectPageLoadLoginTarget(snapshot, ownerDocument, context)
+    : undefined;
 }
 
 /** Return the sole safe automatic-fill target, or undefined on any ambiguity. */
 export function selectPageLoadLoginTarget(
   root: PageLoadRoots = document,
   ownerDocument: Document = document,
+  suppliedContext?: AutofillDetectionContext,
 ): PageLoadLoginTarget | undefined {
   if (ownerDocument.visibilityState !== 'visible') return undefined;
   const roots = normalizeRoots(root);
-  const documentPasswords = fillablePasswords(roots);
-  const matches = roots.flatMap((candidateRoot) => detectLoginForms(candidateRoot)).flatMap((form) => {
+  const context = suppliedContext ?? contextFor(root, roots);
+  const projection = computeFillProjection(roots, context);
+  if (!projection.complete) return undefined;
+  const documentPasswords = fillablePasswords(roots, context);
+  const matches = projection.loginForms.flatMap((form) => {
     const passwordInput = form.passwordInput;
     if (
       !passwordInput
-      || !hasCurrentPasswordAutocomplete(passwordInput)
+      || !hasCurrentPasswordAutocomplete(passwordInput, context)
       || passwordInput.value
       || (form.form
-        ? !hasSingleFillablePassword(form.form)
+        ? !hasSingleFillablePassword(form.form, context)
         : documentPasswords.length !== 1 || documentPasswords[0] !== passwordInput)
       || !isStrictlyVisible(passwordInput, ownerDocument)
     ) return [];
@@ -89,16 +101,19 @@ export function isPageLoadLoginTargetCurrent(
     || !hasSameControlOwner(target.usernameOwner, captureControlOwner(target.usernameInput))
   )) return false;
   const roots = normalizeRoots(root);
-  const documentPasswords = fillablePasswords(roots);
-  const current = roots.flatMap((candidateRoot) => detectLoginForms(candidateRoot)).filter((form) => (
+  const context = contextFor(root, roots);
+  const projection = computeFillProjection(roots, context);
+  if (!projection.complete) return false;
+  const documentPasswords = fillablePasswords(roots, context);
+  const current = projection.loginForms.filter((form) => (
     form.form === target.form.form
     && form.id === target.formId
     && form.anchor.getRootNode() === target.root
     && form.passwordInput === target.passwordInput
     && form.usernameInput === target.usernameInput
-    && hasCurrentPasswordAutocomplete(target.passwordInput)
+    && hasCurrentPasswordAutocomplete(target.passwordInput, context)
     && (form.form
-      ? hasSingleFillablePassword(form.form)
+      ? hasSingleFillablePassword(form.form, context)
       : documentPasswords.length === 1 && documentPasswords[0] === target.passwordInput)
     && isStrictlyVisible(target.passwordInput, ownerDocument)
     && (!target.usernameInput || isStrictlyVisible(target.usernameInput, ownerDocument))
@@ -106,18 +121,22 @@ export function isPageLoadLoginTargetCurrent(
   return current.length === 1;
 }
 
-function fillablePasswords(roots: readonly ParentNode[]): readonly HTMLInputElement[] {
+function fillablePasswords(
+  roots: readonly ParentNode[],
+  context: AutofillDetectionContext,
+): readonly HTMLInputElement[] {
   const passwords = new Set<HTMLInputElement>();
   for (const root of roots) {
-    for (const input of root.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+    for (const input of context.inputsWithin(root)) {
+      if (input.type !== 'password') continue;
       if (isFillableInput(input)) passwords.add(input);
     }
   }
   return [...passwords];
 }
 
-function hasSingleFillablePassword(form: HTMLFormElement): boolean {
-  return inputControlsInScope(form)
+function hasSingleFillablePassword(form: HTMLFormElement, context: AutofillDetectionContext): boolean {
+  return inputControlsInScope(form, context)
     .filter((input) => input.type === 'password' && isFillableInput(input)).length === 1;
 }
 
@@ -143,5 +162,18 @@ function isStrictlyVisible(input: HTMLInputElement, ownerDocument: Document): bo
 }
 
 function normalizeRoots(roots: PageLoadRoots): readonly ParentNode[] {
+  if (isPageLoadRootSnapshot(roots)) return roots.roots;
   return Array.isArray(roots) ? roots : [roots as ParentNode];
+}
+
+function contextFor(root: PageLoadRoots, roots: readonly ParentNode[]): AutofillDetectionContext {
+  return isPageLoadRootSnapshot(root)
+    ? createAutofillDetectionContext(root)
+    : createScopedAutofillDetectionContext(roots);
+}
+
+function isPageLoadRootSnapshot(value: PageLoadRoots): value is PageLoadRootSnapshot {
+  if (Array.isArray(value) || value instanceof Node) return false;
+  const candidate = value as PageLoadRootSnapshot;
+  return Array.isArray(candidate.roots) && typeof candidate.truncated === 'boolean';
 }

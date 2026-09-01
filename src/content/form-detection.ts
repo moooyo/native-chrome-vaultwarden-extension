@@ -6,6 +6,10 @@ import {
   type FieldHints,
 } from './field-map.js';
 import { associatedLabelsFor, collectFieldHints } from './semantic-hints.js';
+import {
+  createScopedAutofillDetectionContext,
+  type AutofillDetectionContext,
+} from './autofill-detection-context.js';
 
 export interface DetectedLoginForm {
   id: string;
@@ -64,17 +68,28 @@ const HIDDEN_CLIP_PATHS = new Set([
   'polygon(0px 0px, 0px 0px, 0px 0px, 0px 0px)',
 ]);
 
-export function detectLoginForms(root: ParentNode = document): DetectedLoginForm[] {
+export function detectLoginForms(
+  root: ParentNode = document,
+  context: AutofillDetectionContext = createScopedAutofillDetectionContext(root),
+): DetectedLoginForm[] {
+  if (!context.complete) return [];
   const forms: DetectedLoginForm[] = [];
+  const addForm = (form: DetectedLoginForm): boolean => {
+    if (!context.claimForms(1)) return false;
+    forms.push(form);
+    return true;
+  };
   const consumedUsernames = new Set<HTMLInputElement>();
   const consumedTotps = new Set<HTMLInputElement>();
+  const rootInputs = context.inputsWithin(root);
 
   // 1) Password-based forms. Passwords inside the same <form> collapse to ONE form (change-password
   //    blocks); formless passwords stay one-per-field so distinct logins under a shared ancestor are
   //    not coalesced. A group with only new-password fields emits no fillable password form.
-  const passwords = Array.from(root.querySelectorAll<HTMLInputElement>('input[type="password"]'))
+  const passwords = rootInputs
+    .filter((input) => input.type === 'password')
     .filter(isFillableInput)
-    .filter(isLoginPasswordCandidate);
+    .filter((input) => isLoginPasswordCandidate(input, context));
   const seenForms = new Set<HTMLFormElement>();
   const handled = new Set<HTMLInputElement>();
   for (const pw of passwords) {
@@ -83,20 +98,20 @@ export function detectLoginForms(root: ParentNode = document): DetectedLoginForm
     if (pw.form) {
       if (seenForms.has(pw.form)) continue;
       seenForms.add(pw.form);
-      group = inputControlsInScope(pw.form)
+      group = inputControlsInScope(pw.form, context)
         .filter((input) => input.type === 'password')
         .filter(isFillableInput)
-        .filter(isLoginPasswordCandidate);
+        .filter((input) => isLoginPasswordCandidate(input, context));
     } else {
       group = [pw];
     }
     group.forEach((p) => handled.add(p));
-    const current = selectCurrentPassword(group);
+    const current = selectCurrentPassword(group, context);
     if (!current) continue; // every field is a new-password field → nothing safe to fill
     const scope = current.form ?? nearestContainer(current);
-    const usernameInput = findUsernameInput(scope, current);
-    const totpInput = findTotpInput(scope, current, usernameInput);
-    const totpInputs = totpInput ? detectedTotpInputs(totpInput) : [];
+    const usernameInput = findUsernameInput(scope, current, context);
+    const totpInput = findTotpInput(scope, current, usernameInput, context);
+    const totpInputs = totpInput ? detectedTotpInputs(totpInput, context) : [];
     const entry: DetectedLoginForm = {
       id: assignFormId(current, scope, usernameInput, current, totpInput, totpInputs),
       form: current.form,
@@ -107,65 +122,69 @@ export function detectLoginForms(root: ParentNode = document): DetectedLoginForm
     };
     if (usernameInput) consumedUsernames.add(usernameInput);
     totpInputs.forEach((input) => consumedTotps.add(input));
-    forms.push(entry);
+    if (!addForm(entry)) return [];
   }
 
   // 2) Username-only steps: a visible username/email field whose container has no fillable
   //    password yet (two-step logins). Requires a submit affordance to avoid false positives.
-  const candidates = Array.from(root.querySelectorAll<HTMLInputElement>('input')).filter(isFillableInput).filter(isUsernameCandidate);
+  const candidates = rootInputs
+    .filter(isFillableInput)
+    .filter((input) => isUsernameCandidate(input, context));
   const seenUserOwners: HTMLInputElement[] = [];
   for (const u of candidates) {
     if (consumedUsernames.has(u)) continue;
     const container = u.form ?? nearestContainer(u);
     if (seenUserOwners.some((seen) => sameDetectionOwner(seen, u))) continue;
-    const containerHasPassword = inputControlsInScope(container)
+    const containerHasPassword = inputControlsInScope(container, context)
       .some((input) => (
         sameDetectionOwner(u, input)
         && input.type === 'password'
         && isFillableInput(input)
-        && isLoginPasswordCandidate(input)
+        && isLoginPasswordCandidate(input, context)
       ));
     if (containerHasPassword) continue;
-    if (!hasSubmitAffordance(container, u)) continue;
+    if (!hasSubmitAffordance(container, u, context)) continue;
     seenUserOwners.push(u);
-    forms.push({
+    if (!addForm({
       id: assignFormId(u, container, u, undefined, undefined, []),
       form: u.form,
       usernameInput: u,
       anchor: u,
-    });
+    })) return [];
   }
 
   // 3) Standalone verification-code steps: a one-time-code field whose container has no fillable
   //    password (the second step of a 2FA flow). Requires a submit affordance, like the username step.
-  const totpCandidates = Array.from(root.querySelectorAll<HTMLInputElement>('input')).filter(isFillableInput).filter(isTotpCandidate);
+  const totpCandidates = rootInputs
+    .filter(isFillableInput)
+    .filter((input) => isTotpCandidate(input, context));
   const seenTotpOwners: HTMLInputElement[] = [];
   for (const t of totpCandidates) {
     if (consumedTotps.has(t)) continue;
     const container = t.form ?? nearestContainer(t);
     if (seenTotpOwners.some((seen) => sameDetectionOwner(seen, t))) continue;
-    const containerHasPassword = inputControlsInScope(container)
+    const containerHasPassword = inputControlsInScope(container, context)
       .some((input) => (
         sameDetectionOwner(t, input)
         && input.type === 'password'
         && isFillableInput(input)
-        && isLoginPasswordCandidate(input)
+        && isLoginPasswordCandidate(input, context)
       ));
     if (containerHasPassword) continue;
-    if (!hasSubmitAffordance(container, t)) continue;
-    const totpInputs = detectedTotpInputs(t);
+    if (!hasSubmitAffordance(container, t, context)) continue;
+    const totpInputs = detectedTotpInputs(t, context);
     seenTotpOwners.push(t);
-    forms.push({
+    if (!addForm({
       id: assignFormId(t, container, undefined, undefined, t, totpInputs),
       form: t.form,
       totpInput: t,
       totpInputs,
       anchor: t,
-    });
+    })) return [];
     totpInputs.forEach((input) => consumedTotps.add(input));
   }
 
-  return forms;
+  return context.complete ? forms : [];
 }
 
 export function isFillableInput(input: HTMLInputElement): boolean {
@@ -179,16 +198,19 @@ export function isFillableInput(input: HTMLInputElement): boolean {
 }
 
 /** Pick the current-password field from a group, or undefined when every field is a new-password field. */
-function selectCurrentPassword(passwords: HTMLInputElement[]): HTMLInputElement | undefined {
-  const byAutocomplete = passwords.find(hasCurrentPasswordAutocomplete);
+function selectCurrentPassword(
+  passwords: HTMLInputElement[],
+  context?: AutofillDetectionContext,
+): HTMLInputElement | undefined {
+  const byAutocomplete = passwords.find((input) => hasCurrentPasswordAutocomplete(input, context));
   if (byAutocomplete) return byAutocomplete;
-  return passwords.find((p) => !isNewPasswordField(p));
+  return passwords.find((input) => !isNewPasswordField(input, context));
 }
 
-export function isNewPasswordField(input: HTMLInputElement): boolean {
-  if (hasCanonicalPasswordAutocomplete(input, 'new-password')) return true;
-  if (hasCanonicalPasswordAutocomplete(input, 'current-password')) return false;
-  const hints = semanticHintsFor(input);
+export function isNewPasswordField(input: HTMLInputElement, context?: AutofillDetectionContext): boolean {
+  if (hasCanonicalPasswordAutocomplete(input, 'new-password', context)) return true;
+  if (hasCanonicalPasswordAutocomplete(input, 'current-password', context)) return false;
+  const hints = semanticHintsFor(input, context);
   const text = fieldHintText(hints);
   return hints.semanticLabelsUnsafe !== true
     && !hasCardFieldEvidence(hints)
@@ -198,15 +220,16 @@ export function isNewPasswordField(input: HTMLInputElement): boolean {
 
 /** Match a password autocomplete field token only when its optional prefixes and webauthn suffix
  * follow the HTML token-list grammar. */
-export function hasCurrentPasswordAutocomplete(input: HTMLInputElement): boolean {
-  return hasCanonicalPasswordAutocomplete(input, 'current-password');
+export function hasCurrentPasswordAutocomplete(input: HTMLInputElement, context?: AutofillDetectionContext): boolean {
+  return hasCanonicalPasswordAutocomplete(input, 'current-password', context);
 }
 
 function hasCanonicalPasswordAutocomplete(
   input: HTMLInputElement,
   field: 'current-password' | 'new-password',
+  context?: AutofillDetectionContext,
 ): boolean {
-  return hasCanonicalPasswordAutocompleteValue(semanticHintsFor(input).autocomplete, field);
+  return hasCanonicalPasswordAutocompleteValue(semanticHintsFor(input, context).autocomplete, field);
 }
 
 function hasCanonicalPasswordAutocompleteValue(
@@ -225,9 +248,9 @@ function hasCanonicalPasswordAutocompleteValue(
   return tokens.length === 0;
 }
 
-function isUsernameCandidate(input: HTMLInputElement): boolean {
+function isUsernameCandidate(input: HTMLInputElement, context?: AutofillDetectionContext): boolean {
   if (!USERNAME_TYPES.includes(input.type)) return false;
-  const hints = semanticHintsFor(input);
+  const hints = semanticHintsFor(input, context);
   const tokens = autocompleteTokens(hints.autocomplete);
   if (hasCardFieldEvidence(hints) || tokens.has('one-time-code') || tokens.has('cc-csc')) return false;
   if (hasUsernameAutocomplete(hints)) return true;
@@ -238,9 +261,12 @@ function isUsernameCandidate(input: HTMLInputElement): boolean {
 }
 
 /** A one-time-code / TOTP field: an `autocomplete="one-time-code"` field or a code-named text field. */
-export function isTotpCandidate(input: HTMLInputElement): boolean {
+export function isTotpCandidate(input: HTMLInputElement, context?: AutofillDetectionContext): boolean {
+  const detection = context ?? detectionContextForElement(input);
+  if (!detection.complete) return false;
   if (isAutofillIgnored(input)) return false;
-  const hints = semanticHintsFor(input);
+  const hints = semanticHintsFor(input, detection);
+  if (!detection.complete) return false;
   const tokens = autocompleteTokens(hints.autocomplete);
   const oneTimeCode = tokens.has('one-time-code');
   const cardCode = tokens.has('cc-csc');
@@ -249,12 +275,13 @@ export function isTotpCandidate(input: HTMLInputElement): boolean {
   if (oneTimeCode) return true;
   if (cardCode) return false;
   if (hints.semanticLabelsUnsafe || hasStrongCardCodeHint(hints)) return false;
-  if (isCardSecurityCodeInContext(input, hints)) return false;
+  if (isCardSecurityCodeInContext(input, hints, detection)) return false;
+  if (!detection.complete) return false;
   return TOTP_HINT.test(fieldHintText(hints));
 }
 
-export function isLoginPasswordCandidate(input: HTMLInputElement): boolean {
-  const hints = semanticHintsFor(input);
+export function isLoginPasswordCandidate(input: HTMLInputElement, context?: AutofillDetectionContext): boolean {
+  const hints = semanticHintsFor(input, context);
   const tokens = autocompleteTokens(hints.autocomplete);
   if (tokens.has('one-time-code') || tokens.has('cc-csc')) return false;
   if (
@@ -265,15 +292,22 @@ export function isLoginPasswordCandidate(input: HTMLInputElement): boolean {
   return !TOTP_HINT.test(fieldHintText(hints));
 }
 
-export function hasConflictingSecurityCodeAutocomplete(input: HTMLInputElement): boolean {
-  return hasOneTimeCodeAutocomplete(input) && hasCardCodeAutocomplete(input);
+export function hasConflictingSecurityCodeAutocomplete(
+  input: HTMLInputElement,
+  context?: AutofillDetectionContext,
+): boolean {
+  return hasOneTimeCodeAutocomplete(input, context) && hasCardCodeAutocomplete(input, context);
 }
 
 /** A textual "security code" is a CVC when its own form/owner also contains a card number. */
-function isCardSecurityCodeInContext(input: HTMLInputElement, hints = semanticHintsFor(input)): boolean {
+function isCardSecurityCodeInContext(
+  input: HTMLInputElement,
+  hints = semanticHintsFor(input),
+  context?: AutofillDetectionContext,
+): boolean {
   if (classifyCardField(hints) !== 'code') return false;
   const scope = input.form ?? nearestContainer(input);
-  return inputControlsInScope(scope).some((candidate) => (
+  return inputControlsInScope(scope, context).some((candidate) => (
     candidate !== input
     && sameDetectionOwner(input, candidate)
     && !isAutofillIgnored(candidate)
@@ -281,15 +315,17 @@ function isCardSecurityCodeInContext(input: HTMLInputElement, hints = semanticHi
     && !candidate.hidden
     && isVisibleInTree(candidate)
     && (() => {
-      const candidateHints = semanticHintsFor(candidate);
+      const candidateHints = semanticHintsFor(candidate, context);
       return candidateHints.semanticLabelsUnsafe
         || hasCardNumberEvidence(candidateHints);
     })()
   ));
 }
 
-function semanticHintsFor(input: HTMLInputElement): FieldHints {
-  return collectFieldHints(input, isVisibleInTree);
+function semanticHintsFor(input: HTMLInputElement, context?: AutofillDetectionContext): FieldHints {
+  return context
+    ? context.fieldHints(input, (budget) => collectFieldHints(input, isSemanticSourceAvailableInTree, budget))
+    : collectFieldHints(input, isSemanticSourceAvailableInTree);
 }
 
 function hasStrongCardCodeHint(hints: FieldHints): boolean {
@@ -308,15 +344,23 @@ function hasStrongCardCodeHint(hints: FieldHints): boolean {
  * inputs, and every member must remain in the same form/root, be editable, and have stable DOM
  * order. Undefined means the page exposed an ambiguous or unsafe cluster.
  */
-export function resolveTotpInputs(input: HTMLInputElement): readonly HTMLInputElement[] | undefined {
-  if (!isTotpCompatibleInput(input) || !isFillableInput(input)) return undefined;
+export function resolveTotpInputs(
+  input: HTMLInputElement,
+  context?: AutofillDetectionContext,
+): readonly HTMLInputElement[] | undefined {
+  const detection = context ?? detectionContextForElement(input);
+  if (!detection.complete || !isTotpCompatibleInput(input, detection) || !isFillableInput(input)) return undefined;
   const boundary = input.form ?? nearestContainer(input);
-  const cluster = nearestTotpCluster(input, boundary);
-  if (!cluster) return isTotpCandidate(input) ? [input] : undefined;
+  const cluster = nearestTotpCluster(input, boundary, detection);
+  if (!cluster) {
+    const result = isTotpCandidate(input, detection) ? [input] : undefined;
+    return detection.complete ? result : undefined;
+  }
   if (
     cluster.length > MAX_TOTP_INPUT_GROUP_SIZE
-    || !cluster.some(isTotpCandidate)
-    || (!cluster.every(isSingleCharacterInput) && !cluster.every(hasOneTimeCodeAutocomplete))
+    || !cluster.some((candidate) => isTotpCandidate(candidate, detection))
+    || (!cluster.every(isSingleCharacterInput)
+      && !cluster.every((candidate) => hasOneTimeCodeAutocomplete(candidate, detection)))
     || cluster.some((candidate) => (
       candidate.form !== input.form
       || candidate.getRootNode() !== input.getRootNode()
@@ -325,7 +369,7 @@ export function resolveTotpInputs(input: HTMLInputElement): readonly HTMLInputEl
     ))
     || !hasStableDomOrder(cluster)
   ) return undefined;
-  return cluster;
+  return detection.complete ? cluster : undefined;
 }
 
 export function totpInputsForForm(form: DetectedLoginForm): readonly HTMLInputElement[] {
@@ -346,21 +390,29 @@ export function hasLoginCredentialTarget(form: DetectedLoginForm): boolean {
  * includes unsafe and secondary groups so custom-field filling cannot claim them, while leaving
  * unrelated single-character controls alone. Actual TOTP writes continue to use resolveTotpInputs().
  */
-export function reservedTotpInputs(scope: ParentNode): ReadonlySet<HTMLInputElement> {
-  const controls = inputControlsInScope(scope);
+export function reservedTotpInputs(
+  scope: ParentNode,
+  context: AutofillDetectionContext = detectionContextForScope(scope),
+): ReadonlySet<HTMLInputElement> {
+  if (!context.complete) return new Set<HTMLInputElement>();
+  const controls = inputControlsInScope(scope, context);
   const scoped = new Set(controls);
   const reserved = new Set<HTMLInputElement>();
-  for (const anchor of controls.filter(isTotpCandidate)) {
-    for (const candidate of rawLocalTotpCluster(anchor, scope)) {
+  for (const anchor of controls.filter((input) => isTotpCandidate(input, context))) {
+    for (const candidate of rawLocalTotpCluster(anchor, scope, context)) {
       if (scoped.has(candidate)) reserved.add(candidate);
     }
   }
   return reserved;
 }
 
-function hasSubmitAffordance(container: ParentNode, usernameInput: HTMLInputElement): boolean {
+function hasSubmitAffordance(
+  container: ParentNode,
+  usernameInput: HTMLInputElement,
+  context: AutofillDetectionContext,
+): boolean {
   if (usernameInput.form) return true; // a wrapping <form> submits on Enter
-  return container.querySelector('button:not([type="button"]), input[type="submit"], input[type="image"], [role="button"]') !== null;
+  return context.hasSubmitAffordance(container);
 }
 
 function fieldHintText(hints: FieldHints): string {
@@ -421,21 +473,25 @@ function nearestContainer(input: HTMLInputElement): ParentNode {
   return input.closest('form, section, main, article') ?? treeRoot(input);
 }
 
-function findUsernameInput(container: ParentNode, passwordInput: HTMLInputElement): HTMLInputElement | undefined {
-  const candidates = inputControlsInScope(container)
+function findUsernameInput(
+  container: ParentNode,
+  passwordInput: HTMLInputElement,
+  context: AutofillDetectionContext,
+): HTMLInputElement | undefined {
+  const candidates = inputControlsInScope(container, context)
     .filter((input) => input !== passwordInput && inputPrecedes(input, passwordInput))
     .filter((input) => sameDetectionOwner(passwordInput, input))
     .filter(isFillableInput)
-    .filter((input) => !isTotpCandidate(input))
+    .filter((input) => !isTotpCandidate(input, context))
     .filter((input) => {
-      const hints = semanticHintsFor(input);
+      const hints = semanticHintsFor(input, context);
       return (!hints.semanticLabelsUnsafe || hasUsernameAutocomplete(hints))
         && !hasCardFieldEvidence(hints);
     });
-  const hinted = candidates.filter(isUsernameCandidate);
+  const hinted = candidates.filter((input) => isUsernameCandidate(input, context));
   if (hinted.length > 0) return nearestInput(hinted);
   if (!passwordInput.form || container !== passwordInput.form) return undefined;
-  return nearestInput(candidates.filter(isUsernameFallbackCandidate));
+  return nearestInput(candidates.filter((input) => isUsernameFallbackCandidate(input, context)));
 }
 
 function inputPrecedes(input: HTMLInputElement, reference: HTMLInputElement): boolean {
@@ -448,14 +504,14 @@ function nearestInput(inputs: readonly HTMLInputElement[]): HTMLInputElement | u
   ), undefined);
 }
 
-function isUsernameFallbackCandidate(input: HTMLInputElement): boolean {
+function isUsernameFallbackCandidate(input: HTMLInputElement, context?: AutofillDetectionContext): boolean {
   return input.type !== 'search'
     && USERNAME_FALLBACK_TYPES.includes(input.type)
-    && !hasExplicitSearchHint(input);
+    && !hasExplicitSearchHint(input, context);
 }
 
-function hasExplicitSearchHint(input: HTMLInputElement): boolean {
-  const hints = semanticHintsFor(input);
+function hasExplicitSearchHint(input: HTMLInputElement, context?: AutofillDetectionContext): boolean {
+  const hints = semanticHintsFor(input, context);
   if (hints.semanticLabelsUnsafe) return true;
   const tokens = fieldHintText(hints)
     .replace(/([a-z])([A-Z])/g, '$1 $2')
@@ -475,33 +531,38 @@ function findTotpInput(
   container: ParentNode,
   passwordInput: HTMLInputElement,
   usernameInput: HTMLInputElement | undefined,
+  context: AutofillDetectionContext,
 ): HTMLInputElement | undefined {
-  return inputControlsInScope(container)
+  return inputControlsInScope(container, context)
     .filter((input) => input !== passwordInput && input !== usernameInput)
     .filter((input) => sameDetectionOwner(passwordInput, input))
     .filter(isFillableInput)
-    .filter(isTotpCandidate)
+    .filter((input) => isTotpCandidate(input, context))
     .at(0);
 }
 
-function detectedTotpInputs(input: HTMLInputElement): readonly HTMLInputElement[] {
-  return resolveTotpInputs(input) ?? [];
+function detectedTotpInputs(
+  input: HTMLInputElement,
+  context: AutofillDetectionContext,
+): readonly HTMLInputElement[] {
+  return resolveTotpInputs(input, context) ?? [];
 }
 
 function nearestTotpCluster(
   input: HTMLInputElement,
   boundary: ParentNode,
+  context: AutofillDetectionContext,
 ): HTMLInputElement[] | undefined {
   for (const container of totpAncestorContainers(input, boundary)) {
-    const allInputs = Array.from(container.querySelectorAll<HTMLInputElement>('input'));
-    const rawCandidates = allInputs.filter(isPotentialTotpGroupInput);
+    const allInputs = [...context.inputsWithin(container)];
+    const rawCandidates = allInputs.filter((candidate) => isPotentialTotpGroupInput(candidate, context));
     if (rawCandidates.includes(input) && rawCandidates.some((candidate) => (
       candidate.form === input.form
       && candidate.getRootNode() === input.getRootNode()
       && !hasSameComposedSlotPath(candidate, input)
     ))) return [];
     const candidates = allInputs.filter((candidate) => (
-      isPotentialTotpGroupInput(candidate)
+      isPotentialTotpGroupInput(candidate, context)
       && candidate.form === input.form
       && candidate.getRootNode() === input.getRootNode()
       && hasSameComposedSlotPath(candidate, input)
@@ -513,11 +574,15 @@ function nearestTotpCluster(
   return undefined;
 }
 
-function rawLocalTotpCluster(input: HTMLInputElement, boundary: ParentNode): readonly HTMLInputElement[] {
+function rawLocalTotpCluster(
+  input: HTMLInputElement,
+  boundary: ParentNode,
+  context: AutofillDetectionContext,
+): readonly HTMLInputElement[] {
   const localBoundary = boundary instanceof Element && !boundary.contains(input) ? treeRoot(input) : boundary;
   for (const container of totpAncestorContainers(input, localBoundary)) {
-    const candidates = Array.from(container.querySelectorAll<HTMLInputElement>('input')).filter((candidate) => (
-      isPotentialTotpGroupInput(candidate)
+    const candidates = context.inputsWithin(container).filter((candidate) => (
+      isPotentialTotpGroupInput(candidate, context)
       && candidate.form === input.form
       && candidate.getRootNode() === input.getRootNode()
       && hasSameComposedSlotPath(candidate, input)
@@ -540,13 +605,15 @@ function totpAncestorContainers(input: HTMLInputElement, boundary: ParentNode): 
   return containers;
 }
 
-function isPotentialTotpGroupInput(input: HTMLInputElement): boolean {
-  return isTotpCompatibleInput(input) && (isSingleCharacterInput(input) || isTotpCandidate(input));
+function isPotentialTotpGroupInput(input: HTMLInputElement, context?: AutofillDetectionContext): boolean {
+  return isTotpCompatibleInput(input, context)
+    && (isSingleCharacterInput(input) || isTotpCandidate(input, context));
 }
 
-function isTotpCompatibleInput(input: HTMLInputElement): boolean {
+function isTotpCompatibleInput(input: HTMLInputElement, context?: AutofillDetectionContext): boolean {
   return TOTP_TYPES.includes(input.type)
-    || (input.type === 'password' && (hasOneTimeCodeAutocomplete(input) || isSingleCharacterInput(input)));
+    || (input.type === 'password'
+      && (hasOneTimeCodeAutocomplete(input, context) || isSingleCharacterInput(input)));
 }
 
 function inputsAreConsecutive(
@@ -633,7 +700,9 @@ function composedContainerFor(element: Element, fallbackRoot: Node): ParentNode 
 }
 
 function isParentNode(node: Node): node is ParentNode {
-  return 'querySelectorAll' in node;
+  return node.nodeType === Node.ELEMENT_NODE
+    || node.nodeType === Node.DOCUMENT_NODE
+    || node.nodeType === Node.DOCUMENT_FRAGMENT_NODE;
 }
 
 function sameFieldOwners(
@@ -655,30 +724,46 @@ function autocompleteTokens(value: string): Set<string> {
   return new Set(value.toLowerCase().trim().split(/\s+/).filter(Boolean));
 }
 
-function hasOneTimeCodeAutocomplete(input: HTMLInputElement): boolean {
-  return autocompleteTokens(semanticHintsFor(input).autocomplete).has('one-time-code');
+function hasOneTimeCodeAutocomplete(input: HTMLInputElement, context?: AutofillDetectionContext): boolean {
+  return autocompleteTokens(semanticHintsFor(input, context).autocomplete).has('one-time-code');
 }
 
-function hasCardCodeAutocomplete(input: HTMLInputElement): boolean {
-  return autocompleteTokens(semanticHintsFor(input).autocomplete).has('cc-csc');
+function hasCardCodeAutocomplete(input: HTMLInputElement, context?: AutofillDetectionContext): boolean {
+  return autocompleteTokens(semanticHintsFor(input, context).autocomplete).has('cc-csc');
+}
+
+/**
+ * Return whether an accessibility text source remains in the semantic tree. Visual-only hiding
+ * techniques such as clipping, off-screen positioning, opacity, and transforms are intentionally
+ * allowed because screen-reader-only labels commonly depend on them.
+ */
+export function isSemanticSourceAvailableInTree(element: HTMLElement): boolean {
+  return isAvailableInTree(element, false);
 }
 
 export function isVisibleInTree(element: HTMLElement): boolean {
+  return isAvailableInTree(element, true);
+}
+
+function isAvailableInTree(element: HTMLElement, requireVisualVisibility: boolean): boolean {
   if (!element.isConnected) return false;
   const view = element.ownerDocument.defaultView;
   if (!view) return false;
   for (let node: Element | null = element; node; node = composedParentElement(node)) {
     const style = view.getComputedStyle(node);
-    const opacity = Number.parseFloat(style.opacity);
     if (
       (node instanceof HTMLElement && node.hidden)
       || node.hasAttribute('inert')
-      || node.getAttribute('aria-hidden') === 'true'
+      || node.getAttribute('aria-hidden')?.trim().toLowerCase() === 'true'
       || style.display === 'none'
       || style.visibility === 'hidden'
       || style.visibility === 'collapse'
       || style.contentVisibility === 'hidden'
-      || (Number.isFinite(opacity) && opacity < 0.1)
+    ) return false;
+    if (!requireVisualVisibility) continue;
+    const opacity = Number.parseFloat(style.opacity);
+    if (
+      (Number.isFinite(opacity) && opacity < 0.1)
       || isFullyClipped(style)
       || hasCollapsingTransform(style.transform)
     ) return false;
@@ -799,13 +884,27 @@ function labelsFor(element: HTMLElement): readonly HTMLLabelElement[] {
 }
 
 /** Native forms own external `form=id` controls; non-form scopes remain confined to one tree root. */
-export function inputControlsInScope(scope: ParentNode): HTMLInputElement[] {
+export function inputControlsInScope(
+  scope: ParentNode,
+  context: AutofillDetectionContext = detectionContextForScope(scope),
+): HTMLInputElement[] {
+  if (!context.complete) return [];
   if (scope instanceof HTMLFormElement) {
-    return Array.from(scope.elements)
-      .filter((control): control is HTMLInputElement => control instanceof HTMLInputElement)
-      .filter((input) => input.form === scope && input.getRootNode() === scope.getRootNode());
+    return context.controlsForForm(scope)
+      .filter((control): control is HTMLInputElement => control instanceof HTMLInputElement);
   }
-  return Array.from(scope.querySelectorAll<HTMLInputElement>('input'));
+  return [...context.inputsWithin(scope)];
+}
+
+function detectionContextForElement(element: Element): AutofillDetectionContext {
+  const root = element.getRootNode();
+  return createScopedAutofillDetectionContext(isParentNode(root) ? root : element.ownerDocument);
+}
+
+function detectionContextForScope(scope: ParentNode): AutofillDetectionContext {
+  if (!(scope instanceof HTMLFormElement)) return createScopedAutofillDetectionContext(scope);
+  const root = scope.getRootNode();
+  return createScopedAutofillDetectionContext(isParentNode(root) ? root : scope.ownerDocument);
 }
 
 export function composedParentElement(element: Element): Element | null {

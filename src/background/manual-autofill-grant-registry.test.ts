@@ -21,6 +21,7 @@ const ACCOUNT = Object.freeze({ generation: 2 });
 const AUTOFILL_POLICY = Object.freeze({ generation: 3 });
 const ENTERPRISE_POLICY = Object.freeze({ generation: 4 });
 const VAULT_AUTHORITY = Object.freeze({ generation: 5 });
+const RUNTIME_INCARNATION = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
 const BINDING: ManualAutofillGrantBinding = Object.freeze({
   popupDocumentId: 'popup-document-1',
@@ -30,6 +31,7 @@ const BINDING: ManualAutofillGrantBinding = Object.freeze({
   frameUrl: 'https://accounts.example.com/frame?step=2',
   frameId: 3,
   targetDocumentId: 'target-document-1',
+  runtimeIncarnation: RUNTIME_INCARNATION,
   formId: 'login-form-1',
   generation: 9,
   customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
@@ -308,6 +310,7 @@ describe('ManualAutofillGrantRegistry', () => {
     ['empty Popup document', { popupDocumentId: '' }],
     ['negative zero tab', { tabId: -0 }],
     ['negative frame', { frameId: -1 }],
+    ['invalid runtime incarnation', { runtimeIncarnation: RUNTIME_INCARNATION.toUpperCase() }],
     ['fractional generation', { generation: 1.5 }],
     ['invalid custom plan digest', { customPlanDigest: 'ABC' }],
     ['invalid URI digest', { uriDigest: 'A'.repeat(64) }],

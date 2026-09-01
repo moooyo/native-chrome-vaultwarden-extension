@@ -71,37 +71,48 @@ function hintsWithinBounds(hints: FieldHints): boolean {
   return true;
 }
 
-interface SemanticRole<Role extends string> {
-  readonly role: Role | undefined;
-  readonly matched: boolean;
-  readonly conflicted: boolean;
-}
-
-function firstPatternRole<Role extends string>(
+function patternRoles<Role extends string>(
   value: string,
   patterns: readonly (readonly [RegExp, Role])[],
-): Role | undefined {
+): Set<Role> {
+  const roles = new Set<Role>();
   const text = value.toLowerCase();
-  return patterns.find(([pattern]) => pattern.test(text))?.[1];
+  for (const [pattern, role] of patterns) {
+    if (pattern.test(text)) roles.add(role);
+  }
+  return roles;
 }
 
-function semanticRole<Role extends string>(
+function semanticRoles<Role extends string>(
   hints: FieldHints,
   patterns: readonly (readonly [RegExp, Role])[],
-): SemanticRole<Role> {
+): Set<Role> {
   const roles = new Set<Role>();
   for (const value of [hints.ariaLabel, ...(hints.semanticLabels ?? [])]) {
     if (!value) continue;
-    const text = value.toLowerCase();
-    for (const [pattern, role] of patterns) {
-      if (pattern.test(text)) roles.add(role);
-    }
+    for (const role of patternRoles(value, patterns)) roles.add(role);
   }
-  return {
-    role: roles.size === 1 ? roles.values().next().value : undefined,
-    matched: roles.size > 0,
-    conflicted: roles.size > 1,
-  };
+  return roles;
+}
+
+function autocompleteRoles<Role extends string>(
+  tokens: readonly string[],
+  rolesByToken: Readonly<Record<string, Role>>,
+): Set<Role> {
+  const roles = new Set<Role>();
+  for (const token of tokens) {
+    const role = rolesByToken[token];
+    if (role) roles.add(role);
+  }
+  return roles;
+}
+
+function addRoles<Role extends string>(target: Set<Role>, source: ReadonlySet<Role>): void {
+  for (const role of source) target.add(role);
+}
+
+function singleRole<Role extends string>(roles: ReadonlySet<Role>): Role | undefined {
+  return roles.size === 1 ? roles.values().next().value : undefined;
 }
 
 function hasStrongOtpHint(hints: FieldHints): boolean {
@@ -150,18 +161,13 @@ export function classifyCardField(hints: FieldHints): CardRole | undefined {
   if (!hintsWithinBounds(hints)) return undefined;
   const tokens = autocompleteTokens(hints);
   if (tokens.includes('one-time-code')) return undefined;
-  for (const token of tokens) {
-    const role = CARD_AUTOCOMPLETE[token];
-    if (role) return role;
-  }
+  const autocomplete = autocompleteRoles(tokens, CARD_AUTOCOMPLETE);
+  if (autocomplete.size > 0) return singleRole(autocomplete);
   if (hasStrongOtpHint(hints)) return undefined;
   if (hints.semanticLabelsUnsafe) return undefined;
-  const attributeRole = firstPatternRole(hintText(hints), CARD_HINTS);
-  const semantic = semanticRole(hints, CARD_SEMANTIC_HINTS);
-  if (semantic.conflicted || (attributeRole && semantic.role && attributeRole !== semantic.role)) {
-    return undefined;
-  }
-  return attributeRole ?? semantic.role;
+  const candidates = patternRoles(hintText(hints), CARD_HINTS);
+  addRoles(candidates, semanticRoles(hints, CARD_SEMANTIC_HINTS));
+  return singleRole(candidates);
 }
 
 /** Card-like evidence remains an exclusion even when conflicting semantics prevent classification. */
@@ -169,17 +175,15 @@ export function hasCardFieldEvidence(hints: FieldHints): boolean {
   if (!hintsWithinBounds(hints)) return true;
   const tokens = autocompleteTokens(hints);
   if (tokens.some((token) => token.startsWith('cc-'))) return true;
-  if (firstPatternRole(hintText(hints), CARD_HINTS)) return true;
-  return semanticRole(hints, CARD_SEMANTIC_HINTS).matched;
+  if (patternRoles(hintText(hints), CARD_HINTS).size > 0) return true;
+  return semanticRoles(hints, CARD_SEMANTIC_HINTS).size > 0;
 }
 
 export function hasCardNumberEvidence(hints: FieldHints): boolean {
   if (!hintsWithinBounds(hints)) return false;
-  if (autocompleteTokens(hints).some((token) => CARD_AUTOCOMPLETE[token] === 'number')) return true;
-  if (CARD_HINTS.some(([pattern, role]) => role === 'number' && pattern.test(hintText(hints)))) return true;
-  return [hints.ariaLabel, ...(hints.semanticLabels ?? [])].some((value) => CARD_SEMANTIC_HINTS.some(
-    ([pattern, role]) => role === 'number' && pattern.test(value.toLowerCase()),
-  ));
+  if (autocompleteRoles(autocompleteTokens(hints), CARD_AUTOCOMPLETE).has('number')) return true;
+  if (patternRoles(hintText(hints), CARD_HINTS).has('number')) return true;
+  return semanticRoles(hints, CARD_SEMANTIC_HINTS).has('number');
 }
 
 const IDENTITY_AUTOCOMPLETE: Record<string, IdentityRole> = {
@@ -204,9 +208,8 @@ const IDENTITY_AUTOCOMPLETE: Record<string, IdentityRole> = {
   'username': 'username',
 };
 
-// Specific roles before the generic \bname\b fullName fallback so "company name"
-// resolves to company, not fullName. Username before "name" so "username" doesn't
-// match the fullName \bname\b pattern.
+// Keep the generic full-name fallback exact so compound hints such as "company name" remain
+// uniquely classifiable instead of producing an artificial company/fullName conflict.
 const IDENTITY_HINTS: Array<[RegExp, IdentityRole]> = [
   [/first.?name|given.?name|forename|fname/, 'firstName'],
   [/middle.?name|additional.?name|mname/, 'middleName'],
@@ -224,7 +227,7 @@ const IDENTITY_HINTS: Array<[RegExp, IdentityRole]> = [
   [/phone|mobile|\btel\b/, 'phone'],
   [/prefix|salutation|honorific/, 'title'],
   [/\busername\b/, 'username'],
-  [/full.?name|your.?name|\bname\b/, 'fullName'],
+  [/full.?name|your.?name|^name$/, 'fullName'],
 ];
 
 const IDENTITY_SEMANTIC_HINTS: Array<[RegExp, IdentityRole]> = [
@@ -253,18 +256,13 @@ export function classifyIdentityField(hints: FieldHints): IdentityRole | undefin
   if (tokens.includes('one-time-code') || tokens.some((token) => token.startsWith('cc-'))) {
     return undefined;
   }
-  for (const token of tokens) {
-    const role = IDENTITY_AUTOCOMPLETE[token];
-    if (role) return role;
-  }
+  const autocomplete = autocompleteRoles(tokens, IDENTITY_AUTOCOMPLETE);
+  if (autocomplete.size > 0) return singleRole(autocomplete);
   if (hasStrongOtpHint(hints)) return undefined;
   if (hints.semanticLabelsUnsafe) return undefined;
-  const attributeRole = firstPatternRole(hintText(hints), IDENTITY_HINTS);
-  const semantic = semanticRole(hints, IDENTITY_SEMANTIC_HINTS);
-  if (semantic.conflicted || (attributeRole && semantic.role && attributeRole !== semantic.role)) {
-    return undefined;
-  }
-  return attributeRole ?? semantic.role;
+  const candidates = patternRoles(hintText(hints), IDENTITY_HINTS);
+  addRoles(candidates, semanticRoles(hints, IDENTITY_SEMANTIC_HINTS));
+  return singleRole(candidates);
 }
 
 function utf8ByteLength(value: string): number {

@@ -15,6 +15,7 @@ export const MAX_AUTOFILL_INTENT_TTL_MS = 60_000;
 export const MAX_AUTOFILL_INTENT_CAPACITY = 4_096;
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const RUNTIME_INCARNATION_UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const MAX_OPAQUE_ID_LENGTH = 4_096;
 const MAX_FRAME_URL_LENGTH = 16_384;
 
@@ -28,6 +29,7 @@ export interface AutofillIntentIssue<SessionLease, AccountLease, PolicyLease> {
   readonly tabId: number;
   readonly frameId: number;
   readonly documentId: string;
+  readonly runtimeIncarnation: string;
   readonly frameUrl: string;
   readonly cipherId: string;
   readonly purpose: AutofillSecretPurpose;
@@ -45,6 +47,7 @@ export interface AutofillIntentRedemption {
   readonly tabId: number;
   readonly frameId: number;
   readonly documentId: string;
+  readonly runtimeIncarnation: string;
   readonly frameUrl: string;
   readonly purpose: AutofillSecretPurpose;
   readonly channel: AutofillIntentChannel;
@@ -55,6 +58,7 @@ export interface RedeemedAutofillIntent<SessionLease, AccountLease, PolicyLease>
   readonly tabId: number;
   readonly frameId: number;
   readonly documentId: string;
+  readonly runtimeIncarnation: string;
   readonly canonicalFrameUrl: string;
   readonly cipherId: string;
   readonly purpose: AutofillSecretPurpose;
@@ -99,6 +103,7 @@ interface StoredAutofillIntent<SessionLease, AccountLease, PolicyLease> {
   readonly tabId: number;
   readonly frameId: number;
   readonly documentId: string;
+  readonly runtimeIncarnation: string;
   readonly frameUrl: string;
   readonly cipherId: string;
   readonly purpose: AutofillSecretPurpose;
@@ -117,6 +122,7 @@ interface CanonicalRedemption {
   readonly tabId: number;
   readonly frameId: number;
   readonly documentId: string;
+  readonly runtimeIncarnation: string;
   readonly frameUrl: string;
   readonly purpose: AutofillSecretPurpose;
   readonly channel: AutofillIntentChannel;
@@ -216,11 +222,12 @@ export class AutofillIntentRegistry<SessionLease, AccountLease, PolicyLease> {
     const sameTab = issued.tabId === canonical.tabId;
     const sameFrame = issued.frameId === canonical.frameId;
     const sameDocument = issued.documentId === canonical.documentId;
+    const sameRuntime = issued.runtimeIncarnation === canonical.runtimeIncarnation;
     const sameUrl = issued.frameUrl === canonical.frameUrl;
     const samePurpose = issued.purpose === canonical.purpose;
     const sameChannel = issued.channel === canonical.channel;
     const sameStructuredTarget = equalStructuredTarget(issued.structuredTarget, canonical.structuredTarget);
-    const contextMatches = sameTab && sameFrame && sameDocument && sameUrl
+    const contextMatches = sameTab && sameFrame && sameDocument && sameRuntime && sameUrl
       && samePurpose && sameChannel && sameStructuredTarget;
     const leasesCurrent = this.#leasesAreCurrent(issued.sessionLease, issued.accountLease, issued.policyLease);
     if (!contextMatches || !leasesCurrent) return undefined;
@@ -228,6 +235,7 @@ export class AutofillIntentRegistry<SessionLease, AccountLease, PolicyLease> {
       tabId: issued.tabId,
       frameId: issued.frameId,
       documentId: issued.documentId,
+      runtimeIncarnation: issued.runtimeIncarnation,
       canonicalFrameUrl: issued.frameUrl,
       cipherId: issued.cipherId,
       purpose: issued.purpose,
@@ -317,6 +325,7 @@ function canonicalizeIssue<SessionLease, AccountLease, PolicyLease>(
     intent.customPlan,
     intent.customPlanDigest,
     intent.structuredTarget,
+    intent.runtimeIncarnation,
   );
   const repromptAuthorization = canonicalizeRepromptAuthorization(
     intent.channel,
@@ -326,6 +335,7 @@ function canonicalizeIssue<SessionLease, AccountLease, PolicyLease>(
     tabId: intent.tabId,
     frameId: intent.frameId,
     documentId: intent.documentId,
+    runtimeIncarnation: intent.runtimeIncarnation,
     frameUrl: canonicalFrameUrl(intent.frameUrl),
     cipherId: intent.cipherId,
     purpose: intent.purpose,
@@ -361,6 +371,7 @@ function canonicalizePurposeBinding(
   unsafePlan: LoginCustomTargetPlan | undefined,
   digest: string | undefined,
   unsafeStructuredTarget: ContentStructuredAutofillTarget | undefined,
+  runtimeIncarnation: string,
 ): Readonly<{
   customPlan: LoginCustomTargetPlan;
   customPlanDigest: string;
@@ -382,7 +393,11 @@ function canonicalizePurposeBinding(
   if (purpose === 'card' || purpose === 'identity') {
     if (unsafePlan !== undefined || digest !== undefined) invalidIntent('customPlan');
     const structuredTarget = canonicalizeStructuredTarget(unsafeStructuredTarget);
-    if (!structuredTarget || structuredTarget.kind !== purpose) invalidIntent('structuredTarget');
+    if (
+      !structuredTarget
+      || structuredTarget.kind !== purpose
+      || structuredTarget.runtimeIncarnation !== runtimeIncarnation
+    ) invalidIntent('structuredTarget');
     return Object.freeze({ structuredTarget });
   }
   if (unsafePlan !== undefined || digest !== undefined || unsafeStructuredTarget !== undefined) {
@@ -400,7 +415,10 @@ function canonicalizeRedemption(
   const structuredTarget = redemption.purpose === 'card' || redemption.purpose === 'identity'
     ? canonicalizeStructuredTarget(redemption.structuredTarget)
     : undefined;
-  if ((redemption.purpose === 'card' || redemption.purpose === 'identity') && !structuredTarget) {
+  if (
+    (redemption.purpose === 'card' || redemption.purpose === 'identity')
+    && (!structuredTarget || structuredTarget.runtimeIncarnation !== redemption.runtimeIncarnation)
+  ) {
     invalidIntent('structuredTarget');
   }
   if (redemption.purpose !== 'card' && redemption.purpose !== 'identity'
@@ -409,6 +427,7 @@ function canonicalizeRedemption(
     tabId: redemption.tabId,
     frameId: redemption.frameId,
     documentId: redemption.documentId,
+    runtimeIncarnation: redemption.runtimeIncarnation,
     frameUrl: canonicalFrameUrl(redemption.frameUrl),
     purpose: redemption.purpose,
     channel: redemption.channel,
@@ -420,6 +439,7 @@ function canonicalizeStructuredTarget(
   value: ContentStructuredAutofillTarget | undefined,
 ): ContentStructuredAutofillTarget | undefined {
   if (!value || (value.kind !== 'card' && value.kind !== 'identity')) return undefined;
+  assertRuntimeIncarnation(value.runtimeIncarnation);
   assertOpaqueId(value.formId, 'formId');
   if (!Number.isSafeInteger(value.generation) || value.generation < 0) invalidIntent('generation');
   if (value.kind === 'card') {
@@ -428,6 +448,7 @@ function canonicalizeStructuredTarget(
         || roles.some((role, index) => role !== value.roles[index])) return undefined;
     return Object.freeze({
       kind: value.kind,
+      runtimeIncarnation: value.runtimeIncarnation,
       formId: value.formId,
       generation: value.generation,
       roles: Object.freeze([...roles]),
@@ -438,6 +459,7 @@ function canonicalizeStructuredTarget(
       || roles.some((role, index) => role !== value.roles[index])) return undefined;
   return Object.freeze({
     kind: value.kind,
+    runtimeIncarnation: value.runtimeIncarnation,
     formId: value.formId,
     generation: value.generation,
     roles: Object.freeze([...roles]),
@@ -450,6 +472,7 @@ function equalStructuredTarget(
 ): boolean {
   if (first === undefined || second === undefined) return first === second;
   return first.kind === second.kind
+    && first.runtimeIncarnation === second.runtimeIncarnation
     && first.formId === second.formId
     && first.generation === second.generation
     && first.roles.length === second.roles.length
@@ -460,11 +483,19 @@ function assertBrowserContext(value: {
   readonly tabId: number;
   readonly frameId: number;
   readonly documentId: string;
+  readonly runtimeIncarnation: string;
   readonly frameUrl: string;
 }): void {
   if (!Number.isSafeInteger(value.tabId) || value.tabId < 0) invalidIntent('tabId');
   if (!Number.isSafeInteger(value.frameId) || value.frameId < 0) invalidIntent('frameId');
   assertOpaqueId(value.documentId, 'documentId');
+  assertRuntimeIncarnation(value.runtimeIncarnation);
+}
+
+function assertRuntimeIncarnation(value: string): void {
+  if (typeof value !== 'string' || !RUNTIME_INCARNATION_UUID_V4.test(value)) {
+    invalidIntent('runtimeIncarnation');
+  }
 }
 
 function assertOpaqueId(value: string, field: string): void {

@@ -31,6 +31,7 @@ import type {
   FillCommand,
   FillRole,
   FillTargetReservationResult,
+  HoldFillTargetResult,
 } from '../messaging/protocol.js';
 import { equalFillRoles, fillDataKeysForRoles, normalizeFillRoles } from '../core/vault/fill-roles.js';
 import type { FrameAutofillMessage, FrameInspection } from '../messaging/protocol.js';
@@ -48,15 +49,16 @@ import {
   inputControlsInScope,
   isFillableInput,
   isLoginPasswordCandidate,
+  isSemanticSourceAvailableInTree,
   resolveTotpInputs,
   type ControlOwnerSnapshot,
   type DetectedLoginForm,
 } from './form-detection.js';
-import { detectCardForms, detectIdentityForms, isFillableField, type DetectedFillForm } from './field-detection.js';
+import { isFillableField, type DetectedFillForm } from './field-detection.js';
 import type { FillFieldElement } from './field-detection.js';
 import { classifyCardField, classifyIdentityField, type CardRole, type IdentityRole } from './field-map.js';
 import {
-  computeFillExclusion,
+  computeFillProjection,
   FocusedFillCycle,
   NOTICE_FOCUS,
   resolveFocusedFill,
@@ -64,6 +66,7 @@ import {
   type FocusedFillDeps,
   type FocusedFillCycleSelection,
   type FocusedTarget,
+  type FillProjection,
 } from './focused-fill.js';
 import { createAutofillPopover } from './popover.js';
 import {
@@ -79,7 +82,6 @@ import { createTotpPanel, type TotpPanel } from './totp-fill.js';
 import { copyTotpCodeWithOwnedClear } from './totp-clipboard.js';
 import { createGeneratePanel, type GeneratePanel } from './generate-fill.js';
 import {
-  detectRegistrationFields,
   matchRegistrationField,
   findConfirmPasswordFields,
   type DetectedRegistrationField,
@@ -99,14 +101,15 @@ import { isPageLoadLoginTargetCurrent, selectPageLoadLoginTargetFromSnapshot } f
 import {
   createAutofillDocumentController,
   rootForElement,
-  trustedComposedTarget,
   type AutofillDocumentController,
 } from './autofill-document-controller.js';
 import {
   commitLoginCustomAssignments,
-  planLoginCustomTargets,
 } from './login-custom-fields.js';
 import { createStagedFillCommit, type FillTargetRevalidator } from './staged-fill.js';
+import { bindTrustedRootCaptureEvent } from './root-event-dispatch.js';
+import { collectFieldHints } from './semantic-hints.js';
+import type { AutofillDetectionContext } from './autofill-detection-context.js';
 
 type FrameUrlProvider = () => string;
 
@@ -126,6 +129,7 @@ const DISABLED_CLIENT_CONFIG: Readonly<AutofillClientConfig> = Object.freeze({
 });
 
 interface AutofillRuntime {
+  readonly incarnation: string;
   readonly getFrameUrl: FrameUrlProvider;
   pageLoadUrl: string;
   pageLoadOpportunityGeneration: number;
@@ -140,12 +144,17 @@ interface AutofillRuntime {
   scanTimer: number | undefined;
   contextHealthTimer: number | undefined;
   readonly surfaceTimers: Set<number>;
-  saveClaimPromise: Promise<boolean> | undefined;
+  saveClaimPromise: Promise<AutofillSaveCaptureWakeResult['status']> | undefined;
   saveClaimRequested: boolean;
   saveClaimTimer: number | undefined;
   pageLoadDeadlineTimer: number | undefined;
   pageLoadDeadlineAt: number;
   pageLoadSpent: boolean;
+  previousRuntimeIncarnation: string | undefined;
+  activationComplete: boolean;
+  activationInFlight: Promise<void> | undefined;
+  initializationStarted: boolean;
+  readonly focusWaiters: Set<() => void>;
 }
 
 let activeRuntime: AutofillRuntime | undefined;
@@ -160,10 +169,12 @@ let restoredAutofillFocusTargets = new WeakSet<HTMLElement>();
 interface PendingBfcacheResume {
   readonly view: Window;
   readonly getFrameUrl: FrameUrlProvider;
+  readonly retiredRuntimeIncarnation: string;
   readonly onPageShow: (event: PageTransitionEvent) => void;
 }
 
 let pendingBfcacheResume: PendingBfcacheResume | undefined;
+let replaceableRuntimeIncarnation: string | undefined;
 
 interface PendingInteractiveLoginPlan {
   readonly form: DetectedLoginForm;
@@ -206,8 +217,16 @@ const pendingKeyboardReprompts = new Map<string, PendingKeyboardReprompt>();
  *  module-level provider so it always reflects the latest same-document navigation. */
 function ensureFrameController(): FrameAutofillController {
   if (!frameController) {
+    const ownerRuntime = activeRuntime;
     frameController = createFrameAutofillController({
-      roots: () => activeRuntime?.documentController.roots() ?? [document],
+      refresh: () => ownerRuntime?.documentController.refresh() ?? {
+        roots: [document],
+        visitedElements: 0,
+        truncated: false,
+      },
+      isCurrent: () => ownerRuntime !== undefined
+        && activeRuntime === ownerRuntime
+        && ownerRuntime.activationComplete,
       frameUrl: () => frameUrlProvider(),
       now: () => Date.now(),
     });
@@ -216,6 +235,17 @@ function ensureFrameController(): FrameAutofillController {
 }
 
 export function startAutofill(frameUrlOrProvider: string | FrameUrlProvider = () => window.location.href): void {
+  const previousRuntimeIncarnation = activeRuntime?.incarnation
+    ?? pendingBfcacheResume?.retiredRuntimeIncarnation
+    ?? replaceableRuntimeIncarnation;
+  replaceableRuntimeIncarnation = undefined;
+  startAutofillRuntime(frameUrlOrProvider, previousRuntimeIncarnation);
+}
+
+function startAutofillRuntime(
+  frameUrlOrProvider: string | FrameUrlProvider,
+  previousRuntimeIncarnation?: string,
+): void {
   cancelPendingBfcacheResume();
   teardownRuntime();
   const getFrameUrl = typeof frameUrlOrProvider === 'function' ? frameUrlOrProvider : () => frameUrlOrProvider;
@@ -239,6 +269,7 @@ export function startAutofill(frameUrlOrProvider: string | FrameUrlProvider = ()
     },
   });
   const runtime: AutofillRuntime = {
+    incarnation: createRuntimeIncarnation(),
     getFrameUrl,
     pageLoadUrl: initialUrl,
     pageLoadOpportunityGeneration: 0,
@@ -259,11 +290,17 @@ export function startAutofill(frameUrlOrProvider: string | FrameUrlProvider = ()
     pageLoadDeadlineTimer: undefined,
     pageLoadDeadlineAt: Date.now() + PAGE_LOAD_OPPORTUNITY_MS,
     pageLoadSpent: !isBoundedPageLoadUrl(initialUrl),
+    previousRuntimeIncarnation,
+    activationComplete: false,
+    activationInFlight: undefined,
+    initializationStarted: false,
+    focusWaiters: new Set(),
   };
   runtimeRef.current = runtime;
   activeRuntime = runtime;
   frameController = createFrameAutofillController({
-    roots: () => runtime.documentController.roots(),
+    refresh: () => runtime.documentController.refresh(),
+    isCurrent: () => activeRuntime === runtime && runtime.activationComplete,
     frameUrl: () => runtime.getFrameUrl(),
     now: () => Date.now(),
   });
@@ -271,13 +308,15 @@ export function startAutofill(frameUrlOrProvider: string | FrameUrlProvider = ()
   runtime.contextHealthTimer = window.setInterval(() => {
     if (activeRuntime !== runtime) return;
     if (!isExtensionContextAlive()) { teardownRuntime(); return; }
+    if (!runtime.activationComplete) ensureRuntimeActivation(runtime);
     refreshRuntimeForUrlChange(runtime);
   }, 1_000);
-  void claimPendingSavePrompt(runtime);
-  void refreshClientConfig(runtime);
+  ensureRuntimeActivation(runtime);
 }
 
 export function stopAutofill(): void {
+  replaceableRuntimeIncarnation = activeRuntime?.incarnation
+    ?? pendingBfcacheResume?.retiredRuntimeIncarnation;
   cancelPendingBfcacheResume();
   teardownRuntime();
 }
@@ -288,11 +327,16 @@ function cancelPendingBfcacheResume(): void {
   pending?.view.removeEventListener('pageshow', pending.onPageShow, false);
 }
 
-function armBfcacheResume(view: Window, getFrameUrl: FrameUrlProvider): void {
+function armBfcacheResume(
+  view: Window,
+  getFrameUrl: FrameUrlProvider,
+  retiredRuntimeIncarnation: string,
+): void {
   cancelPendingBfcacheResume();
   const pending: PendingBfcacheResume = {
     view,
     getFrameUrl,
+    retiredRuntimeIncarnation,
     onPageShow: (event) => {
       if (pendingBfcacheResume !== pending) return;
       view.removeEventListener('pageshow', pending.onPageShow, false);
@@ -300,13 +344,10 @@ function armBfcacheResume(view: Window, getFrameUrl: FrameUrlProvider): void {
         pendingBfcacheResume = undefined;
         return;
       }
-      void sendRequest({ type: 'autofill.discardBfcacheCapture' })
-        .catch(() => undefined)
-        .finally(() => {
-          if (pendingBfcacheResume !== pending) return;
-          pendingBfcacheResume = undefined;
-          if (isExtensionContextAlive()) startAutofill(getFrameUrl);
-        });
+      pendingBfcacheResume = undefined;
+      if (isExtensionContextAlive()) {
+        startAutofillRuntime(getFrameUrl, pending.retiredRuntimeIncarnation);
+      }
     },
   };
   pendingBfcacheResume = pending;
@@ -317,6 +358,8 @@ function teardownRuntime(): void {
   const runtime = activeRuntime;
   if (runtime) {
     runtime.epoch = ++nextRuntimeEpoch;
+    for (const settle of runtime.focusWaiters) settle();
+    runtime.focusWaiters.clear();
     runtime.stopCapture?.();
     runtime.stopPageListeners?.();
     runtime.documentController.disconnect();
@@ -339,6 +382,64 @@ function teardownRuntime(): void {
   resetFocusedFillState();
 }
 
+function ensureRuntimeActivation(runtime: AutofillRuntime): void {
+  if (activeRuntime !== runtime || runtime.activationComplete || runtime.activationInFlight) return;
+  const request = {
+    type: 'autofill.activateRuntime' as const,
+    runtimeIncarnation: runtime.incarnation,
+    ...(runtime.previousRuntimeIncarnation
+      ? { previousRuntimeIncarnation: runtime.previousRuntimeIncarnation }
+      : {}),
+  };
+  const operation = Promise.resolve(sendRequest(request)).then((response) => {
+    if (activeRuntime !== runtime || !isActiveRuntimeResponse(response)) return;
+    runtime.activationComplete = true;
+    runtime.previousRuntimeIncarnation = undefined;
+    initializeActivatedRuntime(runtime);
+  }).catch(() => undefined).finally(() => {
+    if (runtime.activationInFlight === operation) runtime.activationInFlight = undefined;
+  });
+  runtime.activationInFlight = operation;
+}
+
+function initializeActivatedRuntime(runtime: AutofillRuntime): void {
+  if (activeRuntime !== runtime || !runtime.activationComplete || runtime.initializationStarted) return;
+  runtime.initializationStarted = true;
+  // Security event bindings must cover every currently accessible root before policy/config awaits.
+  runtime.documentController.resumeObservation();
+  void claimPendingSavePrompt(runtime);
+  void refreshClientConfig(runtime);
+}
+
+function isActiveRuntimeResponse(response: unknown): boolean {
+  if (!isRecord(response) || response.ok !== true) return false;
+  const data: unknown = response.data;
+  return isRecord(data)
+    && hasOnlyKeys(data, ['status'])
+    && data.status === 'active';
+}
+
+function createRuntimeIncarnation(): string {
+  const value = crypto.randomUUID();
+  if (!isRuntimeIncarnation(value)) throw new Error('Could not create an autofill runtime incarnation');
+  return value;
+}
+
+const AUTOFILL_RUNTIME_BINDING_PROPERTY = '__miyuAutofillRuntimeIncarnation';
+
+function runtimeRequest<Request extends Parameters<typeof sendRequest>[0]>(
+  runtime: AutofillRuntime,
+  request: Request,
+): Request {
+  Object.defineProperty(request, AUTOFILL_RUNTIME_BINDING_PROPERTY, {
+    value: runtime.incarnation,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return request;
+}
+
 function resetFocusedFillState(): void {
   focusedFillCycle.reset();
   pendingInteractiveLoginPlans.clear();
@@ -355,9 +456,14 @@ async function refreshClientConfig(runtime: AutofillRuntime): Promise<Readonly<A
   const requestedUrl = runtime.getFrameUrl();
   let response: Awaited<ReturnType<typeof sendRequest>> | undefined;
   try {
-    response = await sendRequest({ type: 'autofill.getClientConfig' });
+    response = await sendRequest(runtimeRequest(runtime, { type: 'autofill.getClientConfig' }));
   } catch {
     // Treat transport loss exactly like an explicit disabled response.
+  }
+  if (activeRuntime === runtime && response && !response.ok && response.error.code === 'denied') {
+    runtime.activationComplete = false;
+    runtime.initializationStarted = false;
+    ensureRuntimeActivation(runtime);
   }
   if (activeRuntime !== runtime || sequence !== runtime.configSequence || runtime.getFrameUrl() !== requestedUrl) {
     return DISABLED_CLIENT_CONFIG;
@@ -372,12 +478,9 @@ async function refreshClientConfig(runtime: AutofillRuntime): Promise<Readonly<A
 function applyClientConfig(runtime: AutofillRuntime): void {
   if (activeRuntime !== runtime) return;
   reconcileSaveCapture(runtime);
-  const needsLiveObservation = runtime.config.inlineSuggestions
-    || runtime.config.pageLoadFill
-    || runtime.config.saveAllowed
-    || runtime.config.updateAllowed
-    || runtime.config.generatorAllowed;
-  if (needsLiveObservation) runtime.documentController.resumeObservation();
+  // Context-menu targets and focused-form ranking remain available even when inline UI and save
+  // capture are disabled, so every accessible root needs the controller's incremental inventory.
+  runtime.documentController.resumeObservation();
   if (!runtime.config.inlineSuggestions) teardownInlineSurfaces();
   if (!runtime.config.generatorAllowed) teardownGeneratorSurfaces();
   if (!runtime.config.saveAllowed && !runtime.config.updateAllowed) teardownSavePromptSurfaces();
@@ -389,11 +492,11 @@ function applyClientConfig(runtime: AutofillRuntime): void {
     const focused = runtime.documentController.deepActiveElement();
     if (focused instanceof HTMLInputElement) maybeAttachGeneratePanel(focused);
   }
-  if (!needsLiveObservation) runtime.documentController.pauseObservation();
 }
 
 function reconcileSaveCapture(runtime: AutofillRuntime): void {
-  const enabled = runtime.config.saveAllowed || runtime.config.updateAllowed;
+  const enabled = runtime.activationComplete
+    && (runtime.config.saveAllowed || runtime.config.updateAllowed);
   if (!enabled) {
     runtime.stopCapture?.();
     runtime.stopCapture = undefined;
@@ -430,15 +533,27 @@ function scheduleRuntimeTimeout(runtime: AutofillRuntime, callback: () => void, 
 
 function installRuntimePageListeners(runtime: AutofillRuntime): () => void {
   const ownerDocument = runtime.documentController.ownerDocument;
-  const onContextMenu = (event: Event): void => {
-    if (activeRuntime === runtime) handleTrustedContextMenu(event);
-  };
-  const onFocus = (event: Event): void => {
-    if (activeRuntime === runtime) handleTrustedFocus(event);
-  };
-  const onPointerDown = (event: Event): void => {
-    if (activeRuntime === runtime) handleTrustedPointerDown(event);
-  };
+  const stopContextMenu = bindTrustedRootCaptureEvent(
+    runtime.documentController,
+    'contextmenu',
+    (target) => {
+      if (activeRuntime === runtime && runtime.activationComplete) handleTrustedContextMenu(target);
+    },
+  );
+  const stopFocus = bindTrustedRootCaptureEvent(
+    runtime.documentController,
+    'focusin',
+    (target) => {
+      if (activeRuntime === runtime && runtime.activationComplete) handleTrustedFocus(target);
+    },
+  );
+  const stopPointerDown = bindTrustedRootCaptureEvent(
+    runtime.documentController,
+    'pointerdown',
+    (target) => {
+      if (activeRuntime === runtime && runtime.activationComplete) handleTrustedPointerDown(target);
+    },
+  );
   const onWindowMessage = (event: MessageEvent): void => {
     if (activeRuntime === runtime) relayFido2FallbackMessage(event);
   };
@@ -446,24 +561,24 @@ function installRuntimePageListeners(runtime: AutofillRuntime): () => void {
     if (activeRuntime !== runtime) return;
     const shouldResume = event.persisted;
     const resumeGetFrameUrl = runtime.getFrameUrl;
+    const retiredRuntimeIncarnation = runtime.incarnation;
     teardownRuntime();
-    if (shouldResume && view) armBfcacheResume(view, resumeGetFrameUrl);
+    if (shouldResume && view) {
+      armBfcacheResume(view, resumeGetFrameUrl, retiredRuntimeIncarnation);
+    }
   };
   const onSameDocumentNavigation = (): void => {
     if (activeRuntime === runtime) refreshRuntimeForUrlChange(runtime);
   };
   const view = ownerDocument.defaultView;
-  ownerDocument.addEventListener('contextmenu', onContextMenu, true);
-  ownerDocument.addEventListener('focusin', onFocus, true);
-  ownerDocument.addEventListener('pointerdown', onPointerDown, true);
   view?.addEventListener('message', onWindowMessage, false);
   view?.addEventListener('pagehide', onPageHide, { once: true });
   view?.addEventListener('popstate', onSameDocumentNavigation, false);
   view?.addEventListener('hashchange', onSameDocumentNavigation, false);
   return () => {
-    ownerDocument.removeEventListener('contextmenu', onContextMenu, true);
-    ownerDocument.removeEventListener('focusin', onFocus, true);
-    ownerDocument.removeEventListener('pointerdown', onPointerDown, true);
+    stopContextMenu();
+    stopFocus();
+    stopPointerDown();
     view?.removeEventListener('message', onWindowMessage, false);
     view?.removeEventListener('pagehide', onPageHide, false);
     view?.removeEventListener('popstate', onSameDocumentNavigation, false);
@@ -474,7 +589,10 @@ function installRuntimePageListeners(runtime: AutofillRuntime): () => void {
 function invalidateClientRuntime(): void {
   const runtime = activeRuntime;
   if (!runtime) return;
+  runtime.activationComplete = false;
+  runtime.initializationStarted = false;
   invalidateRuntime(runtime);
+  ensureRuntimeActivation(runtime);
 }
 
 function invalidateRuntime(runtime: AutofillRuntime): void {
@@ -489,7 +607,7 @@ function invalidateRuntime(runtime: AutofillRuntime): void {
   teardownInlineSurfaces();
   teardownSaveSurfaces();
   clearCapturedCredentialState();
-  void refreshClientConfig(runtime);
+  if (runtime.activationComplete) void refreshClientConfig(runtime);
 }
 
 function refreshRuntimeForUrlChange(runtime: AutofillRuntime): boolean {
@@ -516,7 +634,10 @@ function refreshRuntimeForUrlChange(runtime: AutofillRuntime): boolean {
     runtime.pageLoadSpent = false;
     runtime.pageLoadDeadlineAt = Date.now() + PAGE_LOAD_OPPORTUNITY_MS;
   }
+  runtime.activationComplete = false;
+  runtime.initializationStarted = false;
   invalidateRuntime(runtime);
+  ensureRuntimeActivation(runtime);
   return true;
 }
 
@@ -598,12 +719,15 @@ async function attemptPageLoadFill(runtime: AutofillRuntime): Promise<void> {
   const opportunityGeneration = runtime.pageLoadOpportunityGeneration;
   const frameUrl = runtime.pageLoadUrl;
   spendPageLoadOpportunity(runtime);
-  const issued = await sendRequest({ type: 'autofill.issuePageLoadIntent' });
+  const issued = await sendRequest(runtimeRequest(runtime, { type: 'autofill.issuePageLoadIntent' }));
   if (refreshRuntimeForUrlChange(runtime)) return;
   if (runtime.epoch !== epoch || runtime.pageLoadOpportunityGeneration !== opportunityGeneration) return;
   const issueData: unknown = issued.ok ? issued.data : undefined;
   if (!isRecord(issueData) || !hasOnlyKeys(issueData, ['intentId']) || typeof issueData.intentId !== 'string') return;
-  const redeemed = await sendRequest({ type: 'autofill.redeemPageLoadIntent', intentId: issueData.intentId });
+  const redeemed = await sendRequest(runtimeRequest(runtime, {
+    type: 'autofill.redeemPageLoadIntent',
+    intentId: issueData.intentId,
+  }));
   if (refreshRuntimeForUrlChange(runtime)) return;
   const responseData: unknown = redeemed.ok ? redeemed.data : undefined;
   if (
@@ -620,8 +744,7 @@ async function attemptPageLoadFill(runtime: AutofillRuntime): Promise<void> {
     || runtime.pageLoadUrl !== frameUrl
     || !runtime.config.pageLoadFill
     || runtime.getFrameUrl() !== frameUrl
-    || runtime.documentController.refresh().truncated
-    || !isPageLoadLoginTargetCurrent(target, runtime.documentController.roots(), document)
+    || !isPageLoadLoginTargetCurrent(target, runtime.documentController.refresh(), document)
   ) return;
 
   const login = responseData.login;
@@ -636,8 +759,7 @@ async function attemptPageLoadFill(runtime: AutofillRuntime): Promise<void> {
     && runtime.pageLoadUrl === frameUrl
     && runtime.config.pageLoadFill
     && runtime.getFrameUrl() === frameUrl
-    && !runtime.documentController.refresh().truncated
-    && isPageLoadLoginTargetCurrent(target, runtime.documentController.roots(), document, {
+    && isPageLoadLoginTargetCurrent(target, runtime.documentController.refresh(), document, {
       allowUsernameValue: usernameWritten,
       allowPasswordValue: passwordWritten,
     })
@@ -676,6 +798,7 @@ function captureSubmission(
   submission?: AutofillSaveCaptureSubmission,
 ): void {
   if (activeRuntime !== runtime
+      || !runtime.activationComplete
       || (!runtime.config.saveAllowed && !runtime.config.updateAllowed)
       || !isHttpUrl(runtime.getFrameUrl())) return;
   // This call intentionally starts inside the trusted event stack. The worker re-authorizes every
@@ -688,13 +811,15 @@ function captureSubmission(
         ...(submission ? { submission } : {}),
       }
     : { type: 'autofill.captureSubmission' as const, username: submitted.username };
-  void sendRequest(request).then(() => {
+  void sendRequest(runtimeRequest(runtime, request)).then(() => {
     if (activeRuntime === runtime) void claimPendingSavePrompt(runtime);
   }).catch(() => undefined);
 }
 
-function claimPendingSavePrompt(runtime: AutofillRuntime): Promise<boolean> {
-  if (activeRuntime !== runtime || !isHttpUrl(runtime.getFrameUrl())) return Promise.resolve(false);
+function claimPendingSavePrompt(runtime: AutofillRuntime): Promise<AutofillSaveCaptureWakeResult['status']> {
+  if (activeRuntime !== runtime || !runtime.activationComplete || !isHttpUrl(runtime.getFrameUrl())) {
+    return Promise.resolve('not_ready');
+  }
   runtime.saveClaimRequested = true;
   if (runtime.saveClaimPromise) return runtime.saveClaimPromise;
   const operation = drainPendingSaveClaims(runtime).finally(() => {
@@ -707,27 +832,36 @@ function claimPendingSavePrompt(runtime: AutofillRuntime): Promise<boolean> {
   return operation;
 }
 
-async function drainPendingSaveClaims(runtime: AutofillRuntime): Promise<boolean> {
-  let receivedAuthoritativeResponse = false;
+async function drainPendingSaveClaims(
+  runtime: AutofillRuntime,
+): Promise<AutofillSaveCaptureWakeResult['status']> {
+  let result: AutofillSaveCaptureWakeResult['status'] = 'not_ready';
   while (activeRuntime === runtime && runtime.saveClaimRequested) {
     runtime.saveClaimRequested = false;
-    receivedAuthoritativeResponse = await claimPendingSavePromptOnce(runtime)
-      || receivedAuthoritativeResponse;
+    const current = await claimPendingSavePromptOnce(runtime);
+    if (current === 'displayed') result = 'displayed';
+    else if (current === 'not_displayed' && result === 'not_ready') result = 'not_displayed';
   }
-  return receivedAuthoritativeResponse;
+  return result;
 }
 
-async function claimPendingSavePromptOnce(runtime: AutofillRuntime): Promise<boolean> {
-  if (activeRuntime !== runtime || !isHttpUrl(runtime.getFrameUrl())) return false;
+async function claimPendingSavePromptOnce(
+  runtime: AutofillRuntime,
+  captureId?: string,
+): Promise<AutofillSaveCaptureWakeResult['status']> {
+  if (activeRuntime !== runtime || !isHttpUrl(runtime.getFrameUrl())) return 'not_ready';
   const requestedOrigin = httpOrigin(runtime.getFrameUrl());
-  const response = await sendRequest({ type: 'autofill.claimSavePrompt' });
+  const response = await sendRequest(runtimeRequest(runtime, {
+    type: 'autofill.claimSavePrompt',
+    ...(captureId ? { captureId } : {}),
+  }));
   if (
     activeRuntime !== runtime
     || requestedOrigin === undefined
     || httpOrigin(runtime.getFrameUrl()) !== requestedOrigin
     || !response?.ok
     || !isSaveLoginPrompt(response.data)
-  ) return false;
+  ) return 'not_ready';
   const prompt = response.data;
   if (prompt.action === 'none') {
     if (prompt.retryAfterMs !== undefined && runtime.saveClaimTimer === undefined) {
@@ -736,24 +870,30 @@ async function claimPendingSavePromptOnce(runtime: AutofillRuntime): Promise<boo
         if (activeRuntime === runtime) void claimPendingSavePrompt(runtime);
       }, prompt.retryAfterMs);
     }
-    return true;
+    return 'not_displayed';
   }
-  showSaveBar(prompt);
-  return true;
+  return showSaveBar(runtime, prompt) ? 'displayed' : 'not_ready';
 }
 
-function showSaveBar(prompt: Exclude<AutofillSavePrompt, { action: 'none' }>): void {
-  if (activeSavePromptIds.has(prompt.promptId)) return;
+function showSaveBar(
+  runtime: AutofillRuntime,
+  prompt: Exclude<AutofillSavePrompt, { action: 'none' }>,
+): boolean {
+  if (activeRuntime !== runtime) return false;
+  if (activeSavePromptIds.has(prompt.promptId)) return true;
   activeSavePromptIds.add(prompt.promptId);
   const onDismiss = (): void => {
     activeSavePromptIds.delete(prompt.promptId);
-    void sendRequest({ type: 'autofill.dismissSavePrompt', promptId: prompt.promptId });
+    void sendRequest(runtimeRequest(runtime, {
+      type: 'autofill.dismissSavePrompt',
+      promptId: prompt.promptId,
+    }));
   };
   const commit = async (): Promise<boolean> => {
-    const response = await sendRequest({
+    const response = await sendRequest(runtimeRequest(runtime, {
       type: 'autofill.commitSavePrompt',
       promptId: prompt.promptId,
-    });
+    }));
     if (response.ok) activeSavePromptIds.delete(prompt.promptId);
     return response.ok;
   };
@@ -781,6 +921,7 @@ function showSaveBar(prompt: Exclude<AutofillSavePrompt, { action: 'none' }>): v
       onDismiss,
     }));
   }
+  return true;
 }
 
 function isSaveLoginPrompt(data: unknown): data is AutofillSavePrompt {
@@ -816,24 +957,27 @@ function isUuidV4(value: unknown): value is string {
     && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function isRuntimeIncarnation(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+}
+
 function attachPopovers(getFrameUrl: FrameUrlProvider): void {
   const runtime = activeRuntime;
   if (!runtime?.config.inlineSuggestions) return;
   if (!isExtensionContextAlive()) return; // orphaned after an extension reload — stay dormant
   if (!isHttpUrl(getFrameUrl())) return;
-  const roots = runtime.documentController.roots();
-  const { loginForms, exclude } = computeFillExclusion(roots);
-  for (const form of loginForms) {
+  const projection = computeFillProjection(runtime.documentController.snapshot());
+  if (!projection.complete) return;
+  for (const form of projection.loginForms) {
     if (!hasLoginCredentialTarget(form)) continue;
     attachIfNew(form.id, () => attachPopover(getFrameUrl, form));
   }
-  for (const root of roots) {
-    for (const form of detectCardForms(root, exclude)) {
-      attachIfNew(form.id, () => attachStructuredPopover(getFrameUrl, form));
-    }
-    for (const form of detectIdentityForms(root, exclude)) {
-      attachIfNew(form.id, () => attachStructuredPopover(getFrameUrl, form));
-    }
+  for (const form of projection.cardForms) {
+    attachIfNew(form.id, () => attachStructuredPopover(getFrameUrl, form));
+  }
+  for (const form of projection.identityForms) {
+    attachIfNew(form.id, () => attachStructuredPopover(getFrameUrl, form));
   }
 }
 
@@ -898,7 +1042,10 @@ async function loadCandidates(
     return;
   }
   const epoch = runtime.epoch;
-  const response = await sendRequest({ type: 'autofill.findCandidates', purpose: 'login' });
+  const response = await sendRequest(runtimeRequest(runtime, {
+    type: 'autofill.findCandidates',
+    purpose: 'login',
+  }));
   if (activeRuntime !== runtime || runtime.epoch !== epoch || !runtime.config.inlineSuggestions || !popover.element.isConnected) return;
   if (!response.ok) {
     popover.showStatus(messageForError(response.error.code, response.error.message));
@@ -931,7 +1078,7 @@ async function fillSelected(
     return;
   }
   const frameUrl = getFrameUrl();
-  const login = await requestLoginData(cipherId, form);
+  const login = await requestLoginData(runtime, cipherId, form);
   if (
     activeRuntime !== runtime
     || runtime.epoch !== epoch
@@ -982,7 +1129,10 @@ async function loadStructuredCandidates(
     return;
   }
   const epoch = runtime.epoch;
-  const response = await sendRequest({ type: 'autofill.findStructuredCandidates', kind });
+  const response = await sendRequest(runtimeRequest(runtime, {
+    type: 'autofill.findStructuredCandidates',
+    kind,
+  }));
   if (activeRuntime !== runtime || runtime.epoch !== epoch || !runtime.config.inlineSuggestions || !popover.element.isConnected) return;
   if (!response.ok) {
     popover.showStatus(messageForError(response.error.code, response.error.message));
@@ -1017,7 +1167,7 @@ async function fillStructuredSelected(
     popover.showStatus('Form is no longer available');
     return;
   }
-  const outcome = await requestStructuredFill(cipherId, form);
+  const outcome = await requestStructuredFill(runtime, cipherId, form);
   if (
     activeRuntime !== runtime
     || runtime.epoch !== epoch
@@ -1073,9 +1223,13 @@ type IntentOutcome<T> =
   | { ok: true; data: T }
   | { ok: false; message: string; repromptContinuationId?: string };
 
-function keyboardClaimBinding(target: FocusedTarget): KeyboardAutofillClaimBinding | undefined {
+function keyboardClaimBinding(
+  runtime: AutofillRuntime,
+  target: FocusedTarget,
+): KeyboardAutofillClaimBinding | undefined {
   if (target.kind === 'login') {
-    return { purpose: target.kind, customPlan: planLoginCustomTargets(target.form) };
+    const current = boundedLoginCustomPlan(runtime, target.form);
+    return current ? { purpose: target.kind, customPlan: current.plan } : undefined;
   }
   if (target.kind === 'totp') return { purpose: target.kind };
   if (target.kind === 'card' || target.kind === 'identity') {
@@ -1086,12 +1240,17 @@ function keyboardClaimBinding(target: FocusedTarget): KeyboardAutofillClaimBindi
 }
 
 async function claimKeyboardGrant(
+  runtime: AutofillRuntime,
   commandToken: string,
   target: FocusedTarget,
 ): Promise<IntentOutcome<ClaimedKeyboardGrant>> {
-  const binding = keyboardClaimBinding(target);
+  const binding = keyboardClaimBinding(runtime, target);
   if (!binding) return { ok: false, message: 'Autofill target changed' };
-  const response = await sendRequest({ type: 'autofill.claimKeyboardGrant', commandToken, binding });
+  const response = await sendRequest(runtimeRequest(runtime, {
+    type: 'autofill.claimKeyboardGrant',
+    commandToken,
+    binding,
+  }));
   if (!response.ok) return { ok: false, message: messageForError(response.error.code, response.error.message) };
   const data: unknown = response.data;
   if (
@@ -1103,6 +1262,7 @@ async function claimKeyboardGrant(
 }
 
 async function issueIntent(
+  runtime: AutofillRuntime,
   cipherId: string,
   purpose: AutofillIntentPurpose,
   form?: DetectedLoginForm,
@@ -1116,9 +1276,9 @@ async function issueIntent(
           if (!form || !hasLoginCredentialTarget(form) || keyboard.binding.purpose !== 'login') {
             return undefined;
           }
-          const customPlan = planLoginCustomTargets(form);
-          if (JSON.stringify(customPlan) !== JSON.stringify(keyboard.binding.customPlan)) return undefined;
-          binding = { form, plan: customPlan };
+          const current = boundedLoginCustomPlan(runtime, form);
+          if (!current || JSON.stringify(current.plan) !== JSON.stringify(keyboard.binding.customPlan)) return undefined;
+          binding = current;
         }
         return {
           type: 'autofill.keyboard.issueIntent' as const,
@@ -1129,18 +1289,19 @@ async function issueIntent(
     : purpose === 'login'
     ? (() => {
         if (!form || !hasLoginCredentialTarget(form)) return undefined;
-        const customPlan = planLoginCustomTargets(form);
-        binding = { form, plan: customPlan };
+        const current = boundedLoginCustomPlan(runtime, form);
+        if (!current) return undefined;
+        binding = current;
         return {
           type: 'autofill.issueIntent' as const,
           cipherId,
           purpose,
-          customPlan,
+          customPlan: current.plan,
         };
       })()
     : { type: 'autofill.issueIntent' as const, cipherId, purpose };
   if (!request) return { ok: false, message: 'Autofill target changed' };
-  const response = await sendRequest(request);
+  const response = await sendRequest(runtimeRequest(runtime, request));
   if (!response.ok) return { ok: false, message: messageForError(response.error.code, response.error.message) };
   const data: unknown = response.data;
   if (isRecord(data)
@@ -1159,19 +1320,27 @@ async function issueIntent(
   return { ok: true, data: data.intentId };
 }
 
-async function requestLoginData(cipherId: string, form: DetectedLoginForm): Promise<IntentOutcome<AutofillLoginData>> {
-  const intent = await issueIntent(cipherId, 'login', form);
+async function requestLoginData(
+  runtime: AutofillRuntime,
+  cipherId: string,
+  form: DetectedLoginForm,
+): Promise<IntentOutcome<AutofillLoginData>> {
+  const intent = await issueIntent(runtime, cipherId, 'login', form);
   if (!intent.ok) return intent;
-  return redeemLoginIntent(intent.data);
+  return redeemLoginIntent(runtime, intent.data);
 }
 
-async function redeemLoginIntent(intentId: string, keyboard = false): Promise<IntentOutcome<AutofillLoginData>> {
+async function redeemLoginIntent(
+  runtime: AutofillRuntime,
+  intentId: string,
+  keyboard = false,
+): Promise<IntentOutcome<AutofillLoginData>> {
   const binding = pendingInteractiveLoginPlans.get(intentId);
   pendingInteractiveLoginPlans.delete(intentId);
   if (!binding) return { ok: false, message: 'Autofill target changed' };
-  const response = await sendRequest(keyboard
+  const response = await sendRequest(runtimeRequest(runtime, keyboard
     ? { type: 'autofill.keyboard.redeemLoginIntent', intentId }
-    : { type: 'autofill.redeemLoginIntent', intentId });
+    : { type: 'autofill.redeemLoginIntent', intentId }));
   if (!response.ok) return { ok: false, message: messageForError(response.error.code, response.error.message) };
   const data: unknown = response.data;
   const assignments = isRecord(data)
@@ -1233,6 +1402,10 @@ function fillTotpWithAuthority(
   code: string,
   authorityCurrent: FillTargetRevalidator,
 ): boolean {
+  const runtime = activeRuntime;
+  if (!runtime) return false;
+  const projection = computeFillProjection(runtime.documentController.refresh());
+  if (!projection.complete || !resolveTotpInputs(input, projection.context)?.includes(input)) return false;
   let owner: ControlOwnerSnapshot;
   try {
     owner = captureControlOwner(input);
@@ -1242,28 +1415,38 @@ function fillTotpWithAuthority(
   return fillTotpCode(input, code, () => {
     if (!authorityCurrent()) return false;
     try {
-      return hasSameControlOwner(owner, captureControlOwner(input));
+      const current = computeFillProjection(runtime.documentController.snapshot());
+      return current.complete
+        && resolveTotpInputs(input, current.context)?.includes(input) === true
+        && current.context.complete
+        && hasSameControlOwner(owner, captureControlOwner(input));
     } catch {
       return false;
     }
-  });
+  }, projection.context);
 }
 
 async function requestTotpData(
   cipherId: string,
   isCurrent: () => boolean = () => true,
 ): Promise<IntentOutcome<AutofillTotpData>> {
+  const runtime = activeRuntime;
+  if (!runtime) return { ok: false, message: 'Autofill target changed' };
   if (!isCurrent()) return { ok: false, message: 'Autofill target changed' };
-  const intent = await issueIntent(cipherId, 'totp');
+  const intent = await issueIntent(runtime, cipherId, 'totp');
   if (!intent.ok) return intent;
   if (!isCurrent()) return { ok: false, message: 'Autofill target changed' };
-  return redeemTotpIntent(intent.data);
+  return redeemTotpIntent(runtime, intent.data);
 }
 
-async function redeemTotpIntent(intentId: string, keyboard = false): Promise<IntentOutcome<AutofillTotpData>> {
-  const response = await sendRequest(keyboard
+async function redeemTotpIntent(
+  runtime: AutofillRuntime,
+  intentId: string,
+  keyboard = false,
+): Promise<IntentOutcome<AutofillTotpData>> {
+  const response = await sendRequest(runtimeRequest(runtime, keyboard
     ? { type: 'autofill.keyboard.redeemTotpIntent', intentId }
-    : { type: 'autofill.redeemTotpIntent', intentId });
+    : { type: 'autofill.redeemTotpIntent', intentId }));
   if (!response.ok) return { ok: false, message: messageForError(response.error.code, response.error.message) };
   const data: unknown = response.data;
   if (
@@ -1304,6 +1487,7 @@ function isOptionalClientEventAckId(value: unknown): value is string | undefined
 }
 
 async function requestStructuredFill(
+  runtime: AutofillRuntime,
   cipherId: string,
   form: DetectedFillForm,
   keyboard?: ClaimedKeyboardGrant,
@@ -1317,9 +1501,9 @@ async function requestStructuredFill(
       || !equalStructuredTarget(target, keyboard.binding.structuredTarget)
     )
   ) return { ok: false, message: 'Autofill target changed' };
-  const issued = await sendRequest(keyboard
+  const issued = await sendRequest(runtimeRequest(runtime, keyboard
     ? { type: 'autofill.keyboard.issueIntent', keyboardGrantId: keyboard.id, cipherId }
-    : { type: 'autofill.issueStructuredIntent', cipherId, target });
+    : { type: 'autofill.issueStructuredIntent', cipherId, target }));
   if (!issued.ok) return { ok: false, message: messageForError(issued.error.code, issued.error.message) };
   const issueData: unknown = issued.data;
   if (isRecord(issueData)
@@ -1334,11 +1518,11 @@ async function requestStructuredFill(
   if (!isRecord(issueData) || !hasOnlyKeys(issueData, ['intentId']) || typeof issueData.intentId !== 'string') {
     return { ok: false, message: 'Unexpected autofill response' };
   }
-  const redeemed = await sendRequest({
+  const redeemed = await sendRequest(runtimeRequest(runtime, {
     type: keyboard ? 'autofill.keyboard.redeemStructuredIntent' : 'autofill.redeemStructuredIntent',
     intentId: issueData.intentId,
     target,
-  });
+  }));
   if (!redeemed.ok) return { ok: false, message: messageForError(redeemed.error.code, redeemed.error.message) };
   const result: unknown = redeemed.data;
   if (!isRecord(result) || !hasOnlyKeys(result, ['outcome']) || !isTabFillOutcome(result.outcome)) {
@@ -1354,6 +1538,7 @@ function equalStructuredTarget(
   second: ContentStructuredAutofillTarget,
 ): boolean {
   return first.kind === second.kind
+    && first.runtimeIncarnation === second.runtimeIncarnation
     && first.formId === second.formId
     && first.generation === second.generation
     && first.roles.length === second.roles.length
@@ -1362,7 +1547,7 @@ function equalStructuredTarget(
 
 function captureStructuredTarget(form: DetectedFillForm): ContentStructuredAutofillTarget | undefined {
   const runtime = activeRuntime;
-  if (runtime?.documentController.refresh().truncated) return undefined;
+  if (!runtime || runtime.documentController.refresh().truncated) return undefined;
   if (!isCurrentStructuredForm(runtime, form)) return undefined;
   if (!(form.anchor instanceof HTMLInputElement
       || form.anchor instanceof HTMLSelectElement
@@ -1379,6 +1564,7 @@ function captureStructuredTarget(form: DetectedFillForm): ContentStructuredAutof
   if (matched.kind === 'card') {
     return Object.freeze({
       kind: matched.kind,
+      runtimeIncarnation: runtime.incarnation,
       formId: matched.formId,
       generation: inspection.generation,
       roles: Object.freeze([...matched.roles]),
@@ -1386,6 +1572,7 @@ function captureStructuredTarget(form: DetectedFillForm): ContentStructuredAutof
   }
   return Object.freeze({
     kind: matched.kind,
+    runtimeIncarnation: runtime.incarnation,
     formId: matched.formId,
     generation: inspection.generation,
     roles: Object.freeze([...matched.roles]),
@@ -1530,8 +1717,7 @@ let pendingContextCleanupTimer: number | undefined;
 const reservedContextTargets = new Map<string, ReservedContextTarget>();
 const heldContextTargets = new Map<string, ReservedContextTarget>();
 
-function handleTrustedContextMenu(event: Event): void {
-  const target = trustedComposedTarget(event);
+function handleTrustedContextMenu(target: EventTarget): void {
   if (!(target instanceof Element)) return;
   activeRuntime?.documentController.refresh();
   const now = contextClockNow();
@@ -1552,7 +1738,13 @@ function captureTrustedContextField(target: Element): TrustedContextFieldBinding
       || target instanceof HTMLSelectElement
       || target instanceof HTMLTextAreaElement)
       || !isFillableField(target)) return undefined;
-  const hints = contextFieldHints(target);
+  const runtime = activeRuntime;
+  const projection = runtime
+    ? computeFillProjection(runtime.documentController.snapshot())
+    : computeFillProjection(rootForElement(target) ?? document);
+  if (!projection.complete) return undefined;
+  const hints = contextFieldHints(target, projection.context);
+  if (!projection.context.complete) return undefined;
   const cardRole = classifyCardField(hints);
   const identityRole = classifyIdentityField(hints);
   if (!cardRole && !identityRole) return undefined;
@@ -1565,7 +1757,13 @@ function captureTrustedContextField(target: Element): TrustedContextFieldBinding
   });
 }
 
-function contextFieldHints(target: FillFieldElement) {
+function contextFieldHints(target: FillFieldElement, context?: AutofillDetectionContext) {
+  if (context) {
+    return context.fieldHints(
+      target,
+      (budget) => collectFieldHints(target, isSemanticSourceAvailableInTree, budget),
+    );
+  }
   return {
     autocomplete: target.getAttribute('autocomplete') ?? '',
     name: target.getAttribute('name') ?? '',
@@ -1604,9 +1802,16 @@ function contextFieldAuthorityCurrent(
   } catch {
     return false;
   }
+  const runtime = activeRuntime;
+  const projection = runtime
+    ? computeFillProjection(runtime.documentController.refresh())
+    : computeFillProjection(rootForElement(target) ?? document);
+  if (!projection.complete) return false;
+  const hints = contextFieldHints(target, projection.context);
+  if (!projection.context.complete) return false;
   const currentRole = kind === 'card'
-    ? classifyCardField(contextFieldHints(target))
-    : classifyIdentityField(contextFieldHints(target));
+    ? classifyCardField(hints)
+    : classifyIdentityField(hints);
   return currentRole === role;
 }
 
@@ -1725,7 +1930,17 @@ function reserveContextTarget(command: Extract<ContentCommand, { type: 'autofill
     }
   }, CONTEXT_TARGET_RESERVATION_TTL_MS);
   reservedContextTargets.set(command.reservationId, reservation);
-  return { status: 'reserved', roles: [...binding.roles] };
+  const runtime = activeRuntime;
+  if (!runtime?.activationComplete) {
+    reservedContextTargets.delete(command.reservationId);
+    window.clearTimeout(reservation.timer);
+    return { status: 'no_target' };
+  }
+  return {
+    status: 'reserved',
+    runtimeIncarnation: runtime.incarnation,
+    roles: [...binding.roles],
+  };
 }
 
 async function claimContextLoginTarget(
@@ -1742,9 +1957,9 @@ async function claimContextLoginTarget(
   ) return { status: 'no_target' };
 
   const runtime = activeRuntime;
-  if (!runtime) return { status: 'no_target' };
-  runtime.documentController.refresh();
-  if (resolveFocusedFill(target, runtime.documentController.roots()).kind !== 'login') {
+  if (!runtime?.activationComplete) return { status: 'no_target' };
+  const snapshot = runtime.documentController.refresh();
+  if (resolveFocusedFill(target, snapshot).kind !== 'login') {
     return { status: 'no_target' };
   }
   const controller = ensureFrameController();
@@ -1757,7 +1972,9 @@ async function claimContextLoginTarget(
   if (focusedLoginForms.length !== 1) return { status: 'no_target' };
   const form = focusedLoginForms[0]!;
   const customPlanDigest = await digestLoginCustomTargetPlan(form.customPlan);
-  if (command.expectedFrameUrl !== window.location.href
+  if (activeRuntime !== runtime
+      || !runtime.activationComplete
+      || command.expectedFrameUrl !== window.location.href
       || !target.isConnected
       || target.ownerDocument !== document) return { status: 'page_changed' };
   const current = controller.inspect();
@@ -1767,7 +1984,13 @@ async function claimContextLoginTarget(
       || await digestLoginCustomTargetPlan(exact.customPlan) !== customPlanDigest) {
     return { status: 'no_target' };
   }
-  return { status: 'claimed', formId: form.formId, generation: inspection.generation, customPlanDigest };
+  return {
+    status: 'claimed',
+    runtimeIncarnation: runtime.incarnation,
+    formId: form.formId,
+    generation: inspection.generation,
+    customPlanDigest,
+  };
 }
 
 function resolveFillTargetBinding(
@@ -1783,7 +2006,13 @@ function resolveFillTargetBinding(
   const targetRoot = rootForElement(target);
   if (!targetRoot) return undefined;
   if (command.scope === 'form') {
-    const forms = command.kind === 'card' ? detectCardForms(targetRoot) : detectIdentityForms(targetRoot);
+    const runtime = activeRuntime;
+    const projection = runtime
+      ? computeFillProjection(runtime.documentController.refresh())
+      : computeFillProjection(targetRoot);
+    if (!projection.complete) return undefined;
+    const forms = (command.kind === 'card' ? projection.cardForms : projection.identityForms)
+      .filter((candidate) => candidate.anchor.getRootNode() === targetRoot);
     const form = forms.find((candidate) => containsField(candidate, target));
     return form
       ? { root: targetRoot, formId: form.id, roles: [...form.fields.keys()] }
@@ -1822,8 +2051,7 @@ function takeReservedContextTarget(
 
 // Record which login form was most recently focused so the background's frame inspection can rank
 // the recently-used form first. Metadata only — the controller never reads or retains field values.
-function handleTrustedFocus(event: Event): void {
-  const target = trustedComposedTarget(event);
+function handleTrustedFocus(target: EventTarget): void {
   focusedFillCycle.noteFocusedElement(target instanceof Element ? target : undefined);
   if (!(target instanceof HTMLInputElement
       || target instanceof HTMLSelectElement
@@ -1842,13 +2070,15 @@ function registerAutofillFocusRestore(target: HTMLElement): () => void {
 }
 
 async function handleAutofillFocus(runtime: AutofillRuntime, field: FillFieldElement): Promise<void> {
-  const focused = resolveFocusedFill(field, runtime.documentController.roots());
+  const snapshot = runtime.documentController.snapshot();
+  const projection = computeFillProjection(snapshot);
+  if (!projection.complete) return;
+  const focused = resolveFocusedFill(field, snapshot, projection);
   const input = field instanceof HTMLInputElement ? field : undefined;
   const loginField = focused.kind === 'login';
-  const totpField = input ? isStandaloneTotpField(input) : false;
-  const inputRoot = input ? rootForElement(input) : undefined;
-  const registrationField = input && inputRoot
-    ? detectRegistrationFields(inputRoot).some((candidate) => candidate.input === input)
+  const totpField = input ? isStandaloneTotpField(input, projection.context) : false;
+  const registrationField = input
+    ? matchRegistrationField(input, projection.context) !== undefined
     : false;
   if (focused.kind === 'none' && !totpField && !registrationField) return;
   const config = await refreshClientConfig(runtime);
@@ -1870,8 +2100,11 @@ async function handleAutofillFocus(runtime: AutofillRuntime, field: FillFieldEle
 function maybeOpenLoginPanel(input: HTMLInputElement): boolean {
   const runtime = activeRuntime;
   if (!runtime) return false;
-  const { loginForms } = computeFillExclusion(runtime.documentController.roots());
-  const form = loginForms.find((f) => f.usernameInput === input || f.passwordInput === input);
+  const projection = computeFillProjection(runtime.documentController.snapshot());
+  if (!projection.complete) return false;
+  const form = projection.loginForms.find((candidate) => (
+    candidate.usernameInput === input || candidate.passwordInput === input
+  ));
   if (!form) return false;
   let pop = popoverRegistry.get(form.id);
   if (!pop || !pop.element.isConnected) {
@@ -1967,8 +2200,7 @@ function unregisterDismissable(host: HTMLElement): void {
  *  so it never lingers over the form. Shared 1s delay for login / 2FA / generator. */
 const FILLED_DISMISS_MS = 1000;
 
-function handleTrustedPointerDown(event: Event): void {
-  const target = trustedComposedTarget(event);
+function handleTrustedPointerDown(target: EventTarget): void {
   if (!(target instanceof Node)) return;
   for (const [host, { keep, dismiss }] of [...dismissables]) {
     if (!host.isConnected) { dismissables.delete(host); continue; }
@@ -1983,28 +2215,44 @@ function handleTrustedPointerDown(event: Event): void {
 function isCurrentLoginForm(runtime: AutofillRuntime | undefined, expected: DetectedLoginForm): boolean {
   const root = rootForElement(expected.anchor);
   if (!root) return false;
-  const roots = runtime?.documentController.roots() ?? [root];
-  if (!roots.includes(root)) return false;
-  return computeFillExclusion(roots).loginForms.some((current) => (
-    current.id === expected.id
-    && current.form === expected.form
-    && current.anchor === expected.anchor
-    && current.usernameInput === expected.usernameInput
-    && current.passwordInput === expected.passwordInput
-    && current.totpInput === expected.totpInput
-    && hasSameTotpInputs(current, expected)
-  ));
+  const projection = runtime
+    ? computeFillProjection(runtime.documentController.refresh())
+    : computeFillProjection(root);
+  if (!projection.complete || !projection.context.roots.includes(root)) return false;
+  return projection.loginForms.some((current) => sameDetectedLoginForm(expected, current));
+}
+
+function boundedLoginCustomPlan(
+  runtime: AutofillRuntime,
+  expected: DetectedLoginForm,
+): PendingInteractiveLoginPlan | undefined {
+  const projection = computeFillProjection(runtime.documentController.refresh());
+  if (!projection.complete) return undefined;
+  const form = projection.loginForms.find((current) => sameDetectedLoginForm(expected, current));
+  if (!form) return undefined;
+  const plan = projection.customPlans.get(form);
+  return projection.context.complete && plan ? { form: expected, plan } : undefined;
+}
+
+function sameDetectedLoginForm(first: DetectedLoginForm, second: DetectedLoginForm): boolean {
+  return first.id === second.id
+    && first.form === second.form
+    && first.anchor === second.anchor
+    && first.usernameInput === second.usernameInput
+    && first.passwordInput === second.passwordInput
+    && first.totpInput === second.totpInput
+    && hasSameTotpInputs(first, second);
 }
 
 function isCurrentStructuredForm(runtime: AutofillRuntime | undefined, expected: DetectedFillForm): boolean {
   if (!expected.anchor.isConnected) return false;
   const root = rootForElement(expected.anchor);
   if (!root) return false;
-  if (runtime && !runtime.documentController.roots().includes(root)) return false;
-  const { exclude } = computeFillExclusion(root);
-  const forms = expected.kind === 'card'
-    ? detectCardForms(root, exclude)
-    : detectIdentityForms(root, exclude);
+  const projection = runtime
+    ? computeFillProjection(runtime.documentController.refresh())
+    : computeFillProjection(root);
+  if (!projection.complete || !projection.context.roots.includes(root)) return false;
+  const forms = expected.kind === 'card' ? projection.cardForms : projection.identityForms;
   return forms.some((current) => (
     current.id === expected.id
     && current.kind === expected.kind
@@ -2043,24 +2291,28 @@ const totpIds = new WeakMap<HTMLInputElement, {
   readonly id: string;
 }>();
 
-function isStandaloneTotpField(input: HTMLInputElement): boolean {
-  if (!resolveTotpInputs(input)?.includes(input)) return false;
+function isStandaloneTotpField(
+  input: HTMLInputElement,
+  context: AutofillDetectionContext,
+): boolean {
+  if (!context.complete || !resolveTotpInputs(input, context)?.includes(input)) return false;
   const root = rootForElement(input);
   if (!root) return false;
   const container = input.form ?? input.closest('section, main, article') ?? root;
-  return !inputControlsInScope(container)
+  const standalone = !inputControlsInScope(container, context)
     .some((candidate) => (
       candidate.type === 'password'
       && isFillableInput(candidate)
-      && isLoginPasswordCandidate(candidate)
+      && isLoginPasswordCandidate(candidate, context)
     ));
+  return context.complete && standalone;
 }
 
-function totpFieldId(input: HTMLInputElement): string {
+function totpFieldId(input: HTMLInputElement, context: AutofillDetectionContext): string {
   const root = rootForElement(input);
   if (!root) return `vw-form-totp-${totpSeq++}`;
   const scope = input.form ?? input.closest('section, main, article') ?? root;
-  const inputs = resolveTotpInputs(input);
+  const inputs = resolveTotpInputs(input, context);
   if (!inputs) return `vw-form-totp-${totpSeq++}`;
   const slotPath = composedSlotPath(input);
   const composedPath = composedElementPath(input);
@@ -2089,14 +2341,25 @@ function composedElementPath(element: Element): readonly Element[] {
 }
 
 function maybeAttachTotpPanel(input: HTMLInputElement): void {
-  if (!isStandaloneTotpField(input)) return;
-  const id = totpFieldId(input);
+  const runtime = activeRuntime;
+  const projection = runtime ? computeFillProjection(runtime.documentController.snapshot()) : undefined;
+  if (!projection?.complete || !isStandaloneTotpField(input, projection.context)) return;
+  const id = totpFieldId(input, projection.context);
   if (totpPanels.has(id) || pendingTotp.has(id)) return;
   void attachTotpPanel(id, input);
 }
 
-function isCurrentTotpTarget(id: string, input: HTMLInputElement): boolean {
-  return isStandaloneTotpField(input) && totpFieldId(input) === id;
+function isCurrentTotpTarget(
+  id: string,
+  input: HTMLInputElement,
+  suppliedProjection?: FillProjection,
+): boolean {
+  const runtime = activeRuntime;
+  const projection = suppliedProjection
+    ?? (runtime ? computeFillProjection(runtime.documentController.refresh()) : undefined);
+  return Boolean(projection?.complete
+    && isStandaloneTotpField(input, projection.context)
+    && totpFieldId(input, projection.context) === id);
 }
 
 async function attachTotpPanel(id: string, totpInput: HTMLInputElement): Promise<void> {
@@ -2122,7 +2385,10 @@ async function attachTotpPanel(id: string, totpInput: HTMLInputElement): Promise
         return false;
       }
     };
-    const candResp = await sendRequest({ type: 'autofill.findCandidates', purpose: 'totp' });
+    const candResp = await sendRequest(runtimeRequest(runtime, {
+      type: 'autofill.findCandidates',
+      purpose: 'totp',
+    }));
     if (
       !targetAuthorityCurrent()
       || !candResp.ok
@@ -2392,15 +2658,28 @@ function teardownGeneratorSurfaces(): void {
 function teardownSavePromptSurfaces(): void {
   for (const bar of saveBars) bar.remove();
   saveBars.clear();
+  activeSavePromptIds.clear();
   for (const [host] of [...dismissables]) {
     if (!host.isConnected) dismissables.delete(host);
   }
 }
 
 function maybeAttachGeneratePanel(input: HTMLInputElement): void {
-  const target = matchRegistrationField(input);
+  const runtime = activeRuntime;
+  const target = runtime ? currentRegistrationTarget(runtime, input)?.target : undefined;
   if (!target || genPanels.has(target.id) || generatedSaveAttempts.has(target.id)) return;
   attachGeneratePanel(target);
+}
+
+function currentRegistrationTarget(
+  runtime: AutofillRuntime,
+  input: HTMLInputElement,
+): { readonly target: DetectedRegistrationField; readonly projection: FillProjection } | undefined {
+  if (activeRuntime !== runtime || !input.isConnected) return undefined;
+  const projection = computeFillProjection(runtime.documentController.refresh());
+  if (!projection.complete) return undefined;
+  const target = matchRegistrationField(input, projection.context);
+  return target && projection.context.complete ? { target, projection } : undefined;
 }
 
 function attachGeneratePanel(target: DetectedRegistrationField): void {
@@ -2441,8 +2720,9 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
         || runtime.config.generator.revision !== generatorPolicy.revision
         || (requirePanel && panel?.element.isConnected !== true)) return false;
     try {
+      const current = currentRegistrationTarget(runtime, target.input);
       return hasSameControlOwner(targetOwner, captureControlOwner(target.input))
-        && matchRegistrationField(target.input)?.id === target.id;
+        && current?.target.id === target.id;
     } catch {
       return false;
     }
@@ -2592,12 +2872,20 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
     const generatedValue = state.password;
     const authorizedOptions = evaluation.options;
     const username = state.username.trim() || undefined;
-    const confirmBindings = findConfirmPasswordFields(target.input).map((input) => ({
+    const registration = currentRegistrationTarget(owningRuntime, target.input);
+    if (!registration || registration.target.id !== target.id) return;
+    const confirmBindings = findConfirmPasswordFields(
+      target.input,
+      registration.projection.context,
+    ).map((input) => ({
       input,
       owner: captureControlOwner(input),
     }));
-    const usernameBinding = target.usernameInput
-      ? { input: target.usernameInput, owner: captureControlOwner(target.usernameInput) }
+    const usernameBinding = registration.target.usernameInput
+      ? {
+          input: registration.target.usernameInput,
+          owner: captureControlOwner(registration.target.usernameInput),
+        }
       : undefined;
     const targetsCurrent = (): boolean => {
       const currentEvaluation = applyGeneratorPolicySnapshot(generatorOptions(), generatorPolicy);
@@ -2606,7 +2894,12 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
           || (state.username.trim() || undefined) !== username
           || !currentEvaluation.allowed
           || !sameGeneratorOptions(currentEvaluation.options, authorizedOptions)) return false;
-      const currentConfirms = findConfirmPasswordFields(target.input);
+      const currentRegistration = currentRegistrationTarget(owningRuntime, target.input);
+      if (!currentRegistration || currentRegistration.target.id !== target.id) return false;
+      const currentConfirms = findConfirmPasswordFields(
+        target.input,
+        currentRegistration.projection.context,
+      );
       if (currentConfirms.length !== confirmBindings.length) return false;
       try {
         if (!confirmBindings.every((binding, index) => (
@@ -2614,7 +2907,7 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
           && hasSameControlOwner(binding.owner, captureControlOwner(binding.input))
         ))) return false;
         return usernameBinding === undefined || (
-          target.usernameInput === usernameBinding.input
+          currentRegistration.target.usernameInput === usernameBinding.input
           && hasSameControlOwner(usernameBinding.owner, captureControlOwner(usernameBinding.input))
         );
       } catch {
@@ -2625,11 +2918,11 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
     authorizingUse = true;
     let authorization: Awaited<ReturnType<typeof sendRequest>>;
     try {
-      authorization = await sendRequest({
+      authorization = await sendRequest(runtimeRequest(owningRuntime, {
         type: 'autofill.authorizeGeneratorUse',
         revision: generatorPolicy.revision,
         options: authorizedOptions,
-      });
+      }));
     } catch {
       authorizingUse = false;
       return;
@@ -2673,11 +2966,11 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
     }
     if (staged.stale || !staged.isCurrent()) return;
     panel.showFilled({ user: username ?? '' });
-    void sendRequest({
+    void sendRequest(runtimeRequest(owningRuntime, {
       type: 'autofill.trackGeneratedValue',
       token: authorizationData.trackToken,
       value: generatedValue,
-    }).catch(() => undefined);
+    })).catch(() => undefined);
     // Show the filled confirmation briefly, then leave the page to perform its normal submission.
     scheduleRuntimeTimeout(owningRuntime, () => {
       panel.remove();
@@ -2710,11 +3003,32 @@ function sameGeneratorOptions(
 
 function pruneDetachedSurfaces(): void {
   const runtime = activeRuntime;
-  const roots = runtime && popoverRegistry.size > 0 ? runtime.documentController.roots() : [];
-  const exclusion = computeFillExclusion(roots);
-  const liveLoginForms = exclusion.loginForms;
-  const liveCardForms = roots.flatMap((root) => detectCardForms(root, exclusion.exclude));
-  const liveIdentityForms = roots.flatMap((root) => detectIdentityForms(root, exclusion.exclude));
+  const needsProjection = popoverRegistry.size > 0 || totpPanels.size > 0 || genPanels.size > 0;
+  const projection = runtime && needsProjection
+    ? computeFillProjection(runtime.documentController.snapshot())
+    : undefined;
+  let complete = projection?.complete === true;
+  const liveTotpIds = new Set<string>();
+  const liveGeneratorIds = new Set<string>();
+  if (complete && projection) {
+    for (const [id, active] of totpPanels) {
+      if (isCurrentTotpTarget(id, active.input, projection)) liveTotpIds.add(id);
+      if (!projection.context.complete) break;
+    }
+    for (const [id, active] of genPanels) {
+      if (!projection.context.complete) break;
+      const target = matchRegistrationField(active.input, projection.context);
+      if (projection.context.complete && target?.id === id) liveGeneratorIds.add(id);
+    }
+    complete = projection.context.complete;
+  }
+  if (!complete) {
+    liveTotpIds.clear();
+    liveGeneratorIds.clear();
+  }
+  const liveLoginForms = complete && projection ? projection.loginForms : [];
+  const liveCardForms = complete && projection ? projection.cardForms : [];
+  const liveIdentityForms = complete && projection ? projection.identityForms : [];
   for (const [id, popover] of [...popoverRegistry]) {
     const anchor = popoverAnchors.get(id);
     const kind = popoverKinds.get(id);
@@ -2729,11 +3043,11 @@ function pruneDetachedSurfaces(): void {
     popoverAnchors.delete(id);
     popoverKinds.delete(id);
   }
-  for (const [id, active] of [...totpPanels]) {
-    if (!isCurrentTotpTarget(id, active.input)) removeTotp(id);
+  for (const [id] of [...totpPanels]) {
+    if (!liveTotpIds.has(id)) removeTotp(id);
   }
   for (const [id, active] of [...genPanels]) {
-    if (matchRegistrationField(active.input)?.id === id) continue;
+    if (liveGeneratorIds.has(id)) continue;
     unregisterDismissable(active.panel.element);
     active.panel.remove();
     genPanels.delete(id);
@@ -2749,7 +3063,8 @@ function strengthLabel(len: number): string {
 
 browser.runtime.onMessage.addListener((message: unknown): Promise<
   FrameInspection | TabFillOutcome | FillTargetReservationResult | ContextLoginTargetClaimResult
-  | ContextFillResult | AutofillSaveCaptureWakeResult | { readonly status: 'focused' | 'stale' }
+  | ContextFillResult | HoldFillTargetResult | AutofillSaveCaptureWakeResult
+  | { readonly status: 'focused' | 'stale' }
 > | undefined => {
   // Frame inspect/commit and target reservation return typed values that the background awaits. A
   // Promise return tells the polyfill to keep the response channel open; terminal content commands
@@ -2774,10 +3089,34 @@ browser.runtime.onMessage.addListener((message: unknown): Promise<
 
 /** Answer a background current-tab-fill message: report this frame's login-form metadata, or commit
  *  a fill after the controller re-validates the frame URL and form identity (TOCTOU guard). */
-export function handleFrameAutofillMessage(message: FrameAutofillMessage): FrameInspection | TabFillOutcome {
-  activeRuntime?.documentController.refresh();
+export function handleFrameAutofillMessage(
+  message: Extract<FrameAutofillMessage, { type: 'autofill.inspectFrame' }>,
+): FrameInspection | TabFillOutcome;
+export function handleFrameAutofillMessage(
+  message: Extract<FrameAutofillMessage, { type: 'autofill.commitLoginFill' }>,
+): Promise<TabFillOutcome>;
+export function handleFrameAutofillMessage(
+  message: Extract<FrameAutofillMessage, { type: 'autofill.commitStructuredFill' }>,
+): TabFillOutcome;
+export function handleFrameAutofillMessage(
+  message: FrameAutofillMessage,
+): FrameInspection | TabFillOutcome | Promise<TabFillOutcome>;
+export function handleFrameAutofillMessage(
+  message: FrameAutofillMessage,
+): FrameInspection | TabFillOutcome | Promise<TabFillOutcome> {
+  const runtime = activeRuntime;
+  if (!runtime?.activationComplete) {
+    const outcome = { status: 'target_changed' } as const;
+    return message.type === 'autofill.commitLoginFill' ? Promise.resolve(outcome) : outcome;
+  }
   const controller = ensureFrameController();
-  if (message.type === 'autofill.inspectFrame') return controller.inspect();
+  if (message.type === 'autofill.inspectFrame') {
+    return { ...controller.inspect(), runtimeIncarnation: runtime.incarnation };
+  }
+  if (message.expectedRuntimeIncarnation !== runtime.incarnation) {
+    const outcome = { status: 'target_changed' } as const;
+    return message.type === 'autofill.commitLoginFill' ? Promise.resolve(outcome) : outcome;
+  }
   if (message.type === 'autofill.commitLoginFill') {
     return controller.commitLogin({
       formId: message.formId,
@@ -2785,6 +3124,7 @@ export function handleFrameAutofillMessage(message: FrameAutofillMessage): Frame
       expectedGeneration: message.expectedGeneration,
       login: message.login,
       customPlan: message.customPlan,
+      customPlanDigest: message.customPlanDigest,
       customAssignments: message.customAssignments,
     });
   }
@@ -2818,32 +3158,44 @@ export function handleContentCommand(
   command: Extract<ContentCommand, { type: 'autofill.saveCaptureConfirmed' }>,
 ): Promise<AutofillSaveCaptureWakeResult>;
 export function handleContentCommand(
+  command: Extract<ContentCommand, { type: 'autofill.holdFillTarget' }>,
+): HoldFillTargetResult;
+export function handleContentCommand(
   command: Exclude<ContentCommand, {
     type: 'autofill.awaitFocus' | 'autofill.claimContextLoginTarget' | 'autofill.saveCaptureConfirmed';
   }>,
-): FillTargetReservationResult | ContextLoginTargetClaimResult | ContextFillResult
+): FillTargetReservationResult | ContextLoginTargetClaimResult | ContextFillResult | HoldFillTargetResult
   | void;
 export function handleContentCommand(
   command: ContentCommand,
 ): FillTargetReservationResult | ContextLoginTargetClaimResult | ContextFillResult
-  | AutofillSaveCaptureWakeResult
+  | HoldFillTargetResult | AutofillSaveCaptureWakeResult
   | Promise<
       { readonly status: 'focused' | 'stale' }
       | ContextLoginTargetClaimResult
       | AutofillSaveCaptureWakeResult
     > | void {
   if (command.type === 'autofill.clientConfigChanged') { invalidateClientRuntime(); return; }
+  if ('expectedRuntimeIncarnation' in command
+      && (!activeRuntime?.activationComplete
+        || command.expectedRuntimeIncarnation !== activeRuntime.incarnation)) {
+    if (command.type === 'autofill.awaitFocus') return Promise.resolve({ status: 'stale' });
+    if (command.type === 'autofill.fill' || command.type === 'autofill.resumeHeldFillTarget') {
+      return { status: 'target_changed' };
+    }
+    if (command.type === 'autofill.holdFillTarget') return { status: 'no_target' };
+    return;
+  }
   if (command.type === 'autofill.saveCaptureConfirmed') {
     const runtime = activeRuntime;
-    if (!runtime) return Promise.resolve({ status: 'not_ready' });
-    return claimPendingSavePrompt(runtime).then(
-      (claimed) => claimed && activeRuntime === runtime
-        ? { status: 'accepted' as const }
-        : { status: 'not_ready' as const },
+    if (!runtime?.activationComplete) return Promise.resolve({ status: 'not_ready' });
+    return claimPendingSavePromptOnce(runtime, command.captureId).then(
+      (status) => activeRuntime === runtime ? { status } : { status: 'not_ready' as const },
       () => ({ status: 'not_ready' as const }),
     );
   }
   if (command.type === 'autofill.focusedFill') {
+    if (!activeRuntime?.activationComplete) return;
     void handleFocusedFill(frameUrlProvider, command.commandToken).catch(() => undefined);
     return;
   }
@@ -2856,7 +3208,7 @@ export function handleContentCommand(
   if (command.type === 'autofill.holdFillTarget') {
     if (command.expectedFrameUrl !== window.location.href) return { status: 'page_changed' };
     return holdReservedContextTarget(command.reservationId, command.holdId)
-      ? { status: 'held' } as never
+      ? { status: 'held' }
       : { status: 'no_target' };
   }
   if (command.type === 'autofill.cancelHeldFillTarget') {
@@ -2930,7 +3282,13 @@ export function openPickerFor(getFrameUrl: FrameUrlProvider, formId: string): vo
 function awaitAutofillFocus(
   command: Extract<ContentCommand, { type: 'autofill.awaitFocus' }>,
 ): Promise<{ readonly status: 'focused' | 'stale' }> {
-  const current = () => command.expectedFrameUrl === window.location.href
+  const runtime = activeRuntime;
+  if (!runtime?.activationComplete || runtime.incarnation !== command.expectedRuntimeIncarnation) {
+    return Promise.resolve({ status: 'stale' });
+  }
+  const current = () => activeRuntime === runtime
+    && runtime.incarnation === command.expectedRuntimeIncarnation
+    && command.expectedFrameUrl === window.location.href
     && Date.now() < command.expiresAt;
   if (!current()) return Promise.resolve({ status: 'stale' });
   if (document.hasFocus() && document.visibilityState !== 'hidden') {
@@ -2944,6 +3302,7 @@ function awaitAutofillFocus(
       window.removeEventListener('focus', check, true);
       document.removeEventListener('visibilitychange', check, true);
       window.clearTimeout(timer);
+      runtime.focusWaiters.delete(cancel);
       resolve({ status });
     };
     const check = () => {
@@ -2951,6 +3310,8 @@ function awaitAutofillFocus(
       else if (document.hasFocus() && document.visibilityState !== 'hidden') finish('focused');
     };
     const timer = window.setTimeout(() => finish('stale'), Math.max(0, command.expiresAt - Date.now()));
+    const cancel = () => finish('stale');
+    runtime.focusWaiters.add(cancel);
     window.addEventListener('focus', check, true);
     document.addEventListener('visibilitychange', check, true);
     check();
@@ -2995,7 +3356,7 @@ function openKeyboardStructuredPicker(
     onSelect: (cipherId) => {
       if (spent) return;
       spent = true;
-      void requestStructuredFill(cipherId, form, keyboard).then((outcome) => {
+      void requestStructuredFill(runtime, cipherId, form, keyboard).then((outcome) => {
         if (!popover.element.isConnected) return;
         if (!outcome.ok) {
           popover.showStatus(outcome.message);
@@ -3050,28 +3411,38 @@ function focusedFillDeps(
     cycle: focusedFillCycle,
     loginCandidates: async (purpose) => {
       if (keyboard.binding.purpose !== purpose) return { ok: false, message: 'Autofill target changed' };
-      const r = await sendRequest({
+      if (!runtime) return { ok: false, message: 'Autofill target changed' };
+      const r = await sendRequest(runtimeRequest(runtime, {
         type: 'autofill.keyboard.findCandidates',
         keyboardGrantId: keyboard.id,
-      });
+      }));
       if (!r.ok) return { ok: false, message: messageForError(r.error.code, r.error.message) };
       return Array.isArray(r.data) && isAutofillCandidates(r.data) ? { ok: true, data: r.data } : { ok: false, message: 'Unexpected autofill response' };
     },
-    issueIntent: (cipherId, purpose, form) => issueIntent(cipherId, purpose, form, keyboard),
-    redeemLoginIntent: (intentId) => redeemLoginIntent(intentId, true),
-    redeemTotpIntent: (intentId) => redeemTotpIntent(intentId, true),
+    issueIntent: (cipherId, purpose, form) => runtime
+      ? issueIntent(runtime, cipherId, purpose, form, keyboard)
+      : Promise.resolve({ ok: false, message: 'Autofill target changed' }),
+    redeemLoginIntent: (intentId) => runtime
+      ? redeemLoginIntent(runtime, intentId, true)
+      : Promise.resolve({ ok: false, message: 'Autofill target changed' }),
+    redeemTotpIntent: (intentId) => runtime
+      ? redeemTotpIntent(runtime, intentId, true)
+      : Promise.resolve({ ok: false, message: 'Autofill target changed' }),
     fillItems: async (kind) => {
       if (keyboard.binding.purpose !== kind) return { ok: false, message: 'Autofill target changed' };
-      const response = await sendRequest({
+      if (!runtime) return { ok: false, message: 'Autofill target changed' };
+      const response = await sendRequest(runtimeRequest(runtime, {
         type: 'autofill.keyboard.findCandidates',
         keyboardGrantId: keyboard.id,
-      });
+      }));
       if (!response.ok) return { ok: false, message: messageForError(response.error.code, response.error.message) };
       return Array.isArray(response.data) && isFillItemCandidates(response.data)
         ? { ok: true, data: response.data }
         : { ok: false, message: 'Unexpected autofill response' };
     },
-    fillStructured: (cipherId, form) => requestStructuredFill(cipherId, form, keyboard),
+    fillStructured: (cipherId, form) => runtime
+      ? requestStructuredFill(runtime, cipherId, form, keyboard)
+      : Promise.resolve({ ok: false, message: 'Autofill target changed' }),
     deferReprompt: (continuationId, target, selection) => {
       rememberKeyboardReprompt(continuationId, target, runtime, queueGeneration, getFrameUrl(), selection);
     },
@@ -3094,7 +3465,7 @@ function focusedFillDeps(
       runtime?.documentController.refresh();
       const expectedTarget = resolveFocusedFill(
         input,
-        runtime?.documentController.roots() ?? document,
+        runtime?.documentController.snapshot() ?? document,
       );
       const filled = expectedTarget.kind === 'totp' && expectedTarget.input === input
         ? fillTotpWithAuthority(input, data.code, () => (
@@ -3167,18 +3538,21 @@ async function resumeKeyboardReprompt(continuationId: string, expectedFrameUrl: 
   window.clearTimeout(pending.timer);
   const { target } = pending;
   if (!keyboardRepromptCurrent(pending, expectedFrameUrl)) return;
-  const response = await sendRequest({
+  const runtime = pending.runtime;
+  if (!runtime) return;
+  const response = await sendRequest(runtimeRequest(runtime, {
     type: 'autofill.continuation.redeemKeyboardReprompt',
     continuationId,
-  });
+  }));
   if (!response.ok || !keyboardRepromptCurrent(pending, expectedFrameUrl)) return;
   const data: unknown = response.data;
   if (!isRecord(data) || !hasOnlyKeys(data, ['intentId']) || !isReservationId(data.intentId)) return;
 
   if (target.kind === 'login') {
-    const plan = planLoginCustomTargets(target.form);
-    rememberPendingInteractivePlan(data.intentId, { form: target.form, plan });
-    const login = await redeemLoginIntent(data.intentId, true);
+    const current = boundedLoginCustomPlan(runtime, target.form);
+    if (!current) return;
+    rememberPendingInteractivePlan(data.intentId, current);
+    const login = await redeemLoginIntent(runtime, data.intentId, true);
     if (!login.ok || !keyboardRepromptCurrent(pending, expectedFrameUrl)) return;
     const filled = fillInteractiveLogin(target.form, login.data, () => (
       keyboardRepromptCurrent(pending, expectedFrameUrl)
@@ -3188,7 +3562,7 @@ async function resumeKeyboardReprompt(continuationId: string, expectedFrameUrl: 
     return;
   }
   if (target.kind === 'totp') {
-    const totp = await redeemTotpIntent(data.intentId, true);
+    const totp = await redeemTotpIntent(runtime, data.intentId, true);
     if (!totp.ok || !keyboardRepromptCurrent(pending, expectedFrameUrl)) return;
     if (!keyboardRepromptCurrent(pending, expectedFrameUrl)) return;
     const filled = fillTotpWithAuthority(target.input, totp.data.code, () => (
@@ -3200,11 +3574,11 @@ async function resumeKeyboardReprompt(continuationId: string, expectedFrameUrl: 
   }
   const structuredTarget = captureStructuredTarget(target.form);
   if (!structuredTarget) return;
-  const redeemed = await sendRequest({
+  const redeemed = await sendRequest(runtimeRequest(runtime, {
     type: 'autofill.keyboard.redeemStructuredIntent',
     intentId: data.intentId,
     target: structuredTarget,
-  });
+  }));
   if (!redeemed.ok || !keyboardRepromptCurrent(pending, expectedFrameUrl)) return;
   const outcome: unknown = redeemed.data;
   if (!isRecord(outcome) || !hasOnlyKeys(outcome, ['outcome']) || !isTabFillOutcome(outcome.outcome)) return;
@@ -3240,13 +3614,14 @@ async function executeFocusedFill(
   // Ancestor frame — focus is in a child. HTMLFrameElement is obsolete (no <frameset> in modern
   // pages) and isn't defined in every DOM implementation (e.g. happy-dom in tests), so guard it.
   if (el instanceof HTMLIFrameElement || (typeof HTMLFrameElement !== 'undefined' && el instanceof HTMLFrameElement)) return;
-  const target = resolveFocusedFill(el, runtime?.documentController.roots() ?? document);
+  const target = resolveFocusedFill(el, runtime?.documentController.snapshot() ?? document);
   if (target.kind === 'none') {
     focusedFillCycle.reset();
     showNotice(NOTICE_FOCUS);
     return;
   }
-  const keyboard = await claimKeyboardGrant(commandToken, target);
+  if (!runtime) return;
+  const keyboard = await claimKeyboardGrant(runtime, commandToken, target);
   if (!keyboard.ok) {
     showNotice(keyboard.message);
     return;
@@ -3261,7 +3636,7 @@ function isFocusedTargetCurrent(expected: FocusedTarget, runtime: AutofillRuntim
   const activeElement = runtime?.documentController.deepActiveElement() ?? document.activeElement;
   if (activeElement instanceof HTMLIFrameElement
       || (typeof HTMLFrameElement !== 'undefined' && activeElement instanceof HTMLFrameElement)) return false;
-  const current = resolveFocusedFill(activeElement, runtime?.documentController.roots() ?? document);
+  const current = resolveFocusedFill(activeElement, runtime?.documentController.snapshot() ?? document);
   if (expected.kind === 'login' && current.kind === 'login') {
     return expected.input === current.input
       && expected.form.id === current.form.id
@@ -3325,7 +3700,13 @@ function fillWholeForm(
   const targetRoot = reservation.root;
   const expectedFormId = reservation.formId;
   if (!expectedFormId || rootForElement(contextTarget) !== targetRoot) return false;
-  const forms = command.kind === 'card' ? detectCardForms(targetRoot) : detectIdentityForms(targetRoot);
+  const runtime = activeRuntime;
+  const projection = runtime
+    ? computeFillProjection(runtime.documentController.refresh())
+    : computeFillProjection(targetRoot);
+  if (!projection.complete) return false;
+  const forms = (command.kind === 'card' ? projection.cardForms : projection.identityForms)
+    .filter((candidate) => candidate.anchor.getRootNode() === targetRoot);
   const form = forms.find((candidate) => candidate.id === expectedFormId && containsField(candidate, contextTarget));
   if (!form || !equalFillRoles(command.kind, [...form.fields.keys()], command.roles)) return false;
   const staged = createStagedFillCommit(() => {
@@ -3336,9 +3717,14 @@ function fillWholeForm(
       || rootForElement(contextTarget) !== targetRoot
       || form.anchor.getRootNode() !== targetRoot
     ) return false;
-    const currentForms = command.kind === 'card'
-      ? detectCardForms(targetRoot)
-      : detectIdentityForms(targetRoot);
+    const currentProjection = runtime
+      ? computeFillProjection(runtime.documentController.refresh())
+      : computeFillProjection(targetRoot);
+    if (!currentProjection.complete) return false;
+    const currentForms = (command.kind === 'card'
+      ? currentProjection.cardForms
+      : currentProjection.identityForms)
+      .filter((candidate) => candidate.anchor.getRootNode() === targetRoot);
     const current = currentForms.find((candidate) => (
       candidate.id === expectedFormId && containsField(candidate, contextTarget)
     ));
@@ -3405,7 +3791,9 @@ function isContentCommand(value: unknown): value is ContentCommand {
   if (!isRecord(value)) return false;
   if (value.type === 'autofill.focusedFill') return isReservationId(value.commandToken);
   if (value.type === 'autofill.clientConfigChanged') return true;
-  if (value.type === 'autofill.saveCaptureConfirmed') return hasOnlyKeys(value, ['type']);
+  if (value.type === 'autofill.saveCaptureConfirmed') {
+    return hasOnlyKeys(value, ['type', 'captureId']) && isReservationId(value.captureId);
+  }
   if (value.type === 'autofill.claimContextLoginTarget') {
     return typeof value.expectedFrameUrl === 'string'
       && typeof value.contextMenuClickTime === 'number'
@@ -3414,6 +3802,8 @@ function isContentCommand(value: unknown): value is ContentCommand {
   if (value.type === 'autofill.reserveFillTarget' || value.type === 'autofill.cancelFillTarget') {
     return isReservationId(value.reservationId)
       && typeof value.expectedFrameUrl === 'string'
+      && (value.type === 'autofill.reserveFillTarget'
+        || isRuntimeIncarnation(value.expectedRuntimeIncarnation))
       && (value.type !== 'autofill.reserveFillTarget'
         || ((value.scope === 'form' || value.scope === 'field')
           && (value.kind === 'card' || value.kind === 'identity')
@@ -3423,22 +3813,29 @@ function isContentCommand(value: unknown): value is ContentCommand {
   if (value.type === 'autofill.fillError') {
     return value.code === 'reprompt_required'
       && isReservationId(value.reservationId)
-      && typeof value.expectedFrameUrl === 'string';
+      && typeof value.expectedFrameUrl === 'string'
+      && isRuntimeIncarnation(value.expectedRuntimeIncarnation);
   }
   if (value.type === 'autofill.holdFillTarget') {
     return isReservationId(value.reservationId)
       && isReservationId(value.holdId)
-      && typeof value.expectedFrameUrl === 'string';
+      && typeof value.expectedFrameUrl === 'string'
+      && isRuntimeIncarnation(value.expectedRuntimeIncarnation);
   }
   if (value.type === 'autofill.cancelHeldFillTarget') {
-    return isReservationId(value.holdId) && typeof value.expectedFrameUrl === 'string';
+    return isReservationId(value.holdId)
+      && typeof value.expectedFrameUrl === 'string'
+      && isRuntimeIncarnation(value.expectedRuntimeIncarnation);
   }
   if (value.type === 'autofill.resumeKeyboardReprompt') {
-    return isReservationId(value.continuationId) && typeof value.expectedFrameUrl === 'string';
+    return isReservationId(value.continuationId)
+      && typeof value.expectedFrameUrl === 'string'
+      && isRuntimeIncarnation(value.expectedRuntimeIncarnation);
   }
   if (value.type === 'autofill.awaitFocus') {
     return isReservationId(value.requestId)
       && typeof value.expectedFrameUrl === 'string'
+      && isRuntimeIncarnation(value.expectedRuntimeIncarnation)
       && Number.isSafeInteger(value.expiresAt)
       && (value.expiresAt as number) > Date.now()
       && (value.expiresAt as number) - Date.now() <= KEYBOARD_REPROMPT_TTL_MS;
@@ -3449,6 +3846,7 @@ function isContentCommand(value: unknown): value is ContentCommand {
       && (value.kind === 'card' || value.kind === 'identity')
       && isCanonicalCommandRoles(value.kind, value.scope, value.roles)
       && typeof value.expectedFrameUrl === 'string'
+      && isRuntimeIncarnation(value.expectedRuntimeIncarnation)
       && isMinimalFillData(value.kind, value.roles, value.data);
   }
   return value.type === 'autofill.fill'
@@ -3457,6 +3855,7 @@ function isContentCommand(value: unknown): value is ContentCommand {
     && (value.kind === 'card' || value.kind === 'identity')
     && isCanonicalCommandRoles(value.kind, value.scope, value.roles)
     && typeof value.expectedFrameUrl === 'string'
+    && isRuntimeIncarnation(value.expectedRuntimeIncarnation)
     && isMinimalFillData(value.kind, value.roles, value.data);
 }
 
@@ -3495,6 +3894,7 @@ function isFrameAutofillMessage(value: unknown): value is FrameAutofillMessage {
   if (value.type === 'autofill.inspectFrame') return true;
   const common = typeof value.formId === 'string'
     && typeof value.expectedFrameUrl === 'string'
+    && isRuntimeIncarnation(value.expectedRuntimeIncarnation)
     && typeof value.expectedGeneration === 'number'
     && Number.isSafeInteger(value.expectedGeneration)
     && value.expectedGeneration > 0;

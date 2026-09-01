@@ -34,6 +34,7 @@ import type {
   DetailPresentationMetadata,
   PopupRequest,
   PopupBrowser,
+  SuggestionFillDetail,
   SuggestionsViewState,
   ToolActionDetail,
 } from './types.js';
@@ -51,6 +52,8 @@ type Res = Awaited<ReturnType<PopupRequest>>;
 type ReqHandler<K extends Req['type']> = (req: Extract<Req, { type: K }>) => Res | Promise<Res>;
 const SSO_ATTEMPT_ID = '11111111-1111-4111-8111-111111111111';
 const SSO_ATTEMPT_GENERATION = 1;
+const TARGET_RUNTIME_INCARNATION = 'a0b1c2d3-e4f5-4a6b-8c9d-0123456789ab';
+const NEXT_TARGET_RUNTIME_INCARNATION = 'b1c2d3e4-f5a6-4b7c-8d9e-1234567890ab';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -3810,6 +3813,7 @@ describe('vw-popup-app vault interactions', () => {
       frameId: 0,
       formId: 'login-form',
       documentId: 'target-doc-1',
+      runtimeIncarnation: TARGET_RUNTIME_INCARNATION,
       generation: 3,
       customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
     };
@@ -3876,6 +3880,91 @@ describe('vw-popup-app vault interactions', () => {
     expect(authorize).toHaveBeenCalledTimes(1);
   });
 
+  it('does not reuse a reprompt authorization across runtime incarnations with the same structural target', async () => {
+    const protectedItem = login({ reprompt: true });
+    const previousTarget = {
+      kind: 'login' as const,
+      frameId: 0,
+      formId: 'login-form',
+      documentId: 'target-doc-1',
+      runtimeIncarnation: TARGET_RUNTIME_INCARNATION,
+      generation: 3,
+      customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
+    };
+    const currentTarget = {
+      ...previousTarget,
+      runtimeIncarnation: NEXT_TARGET_RUNTIME_INCARNATION,
+    };
+    const authorize = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        verified: true,
+        authorization: {
+          authorizationId: '11111111-1111-4111-8111-111111111111',
+          expiresAt: Date.now() + 30_000,
+        },
+      },
+    }));
+    const fill = vi.fn(async () => ({
+      ok: true as const,
+      data: { outcome: { status: 'filled' as const } },
+    }));
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'vault.listItems': async () => ({
+        ok: true,
+        data: { items: [protectedItem], folders: [], collections: [], orgPermissions: [] },
+      }),
+      'vault.getCipherDetail': async () => ({ ok: true, data: { cipher: protectedItem } }),
+      'autofill.getTabSuggestions': async () => ({
+        ok: true,
+        data: { outcome: { status: 'ready', suggestions: [{
+          kind: 'login', id: protectedItem.id, name: protectedItem.name,
+          matchedUri: protectedItem.uris[0]!, matchType: 0, favorite: false,
+          reprompt: true, target: previousTarget,
+        }] } },
+      }),
+      'autofill.authorizeRepromptFill': authorize,
+      'autofill.fillTabSuggestion': fill,
+    }), fakeBrowser());
+
+    view(app, 'vw-vault-view').dispatchEvent(new CustomEvent('vw-suggestion-fill', {
+      detail: { cipherId: protectedItem.id, target: previousTarget },
+      bubbles: true,
+      composed: true,
+    }));
+    await settle(app);
+
+    const internal = app as unknown as {
+      handleSuggestionFill(detail: SuggestionFillDetail): Promise<void>;
+      repromptAutofillAuthorization: { targetKey: string } | null;
+      repromptFillContinuation: unknown;
+    };
+    const handleSuggestionFill = internal.handleSuggestionFill.bind(app);
+    internal.handleSuggestionFill = vi.fn(async () => {});
+    view(app, 'vw-reprompt-gate').dispatchEvent(new CustomEvent('vw-reprompt-submit', {
+      detail: { password: 'master-secret' }, bubbles: true, composed: true,
+    }));
+    await settle(app);
+
+    expect(authorize).toHaveBeenCalledWith(expect.objectContaining({ target: previousTarget }));
+    expect(internal.repromptAutofillAuthorization?.targetKey)
+      .toContain(TARGET_RUNTIME_INCARNATION);
+
+    internal.handleSuggestionFill = handleSuggestionFill;
+    await handleSuggestionFill({ cipherId: protectedItem.id, target: currentTarget });
+    await app.updateComplete;
+
+    expect(fill).not.toHaveBeenCalled();
+    expect(internal.repromptFillContinuation).toEqual({
+      kind: 'matched',
+      cipherId: protectedItem.id,
+      tabId: 7,
+      target: currentTarget,
+    });
+    expect(internal.repromptAutofillAuthorization).toBeNull();
+  });
+
   it('does not treat verification without an authorization as permission to fill', async () => {
     const protectedItem = login({ reprompt: true });
     const target = {
@@ -3883,6 +3972,7 @@ describe('vw-popup-app vault interactions', () => {
       frameId: 0,
       formId: 'login-form',
       documentId: 'target-doc-1',
+      runtimeIncarnation: TARGET_RUNTIME_INCARNATION,
       generation: 3,
       customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
     };
@@ -4663,7 +4753,7 @@ describe('vw-popup-app vault interactions', () => {
             status: 'ready',
             suggestions: [{
               kind: 'login', id: 'c1', name: 'Nebula', matchedUri: 'https://nebula.dev', matchType: 0, favorite: false,
-              target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', generation: 2, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
+              target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 2, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
             }],
           },
         },
@@ -4673,7 +4763,7 @@ describe('vw-popup-app vault interactions', () => {
     view(app, 'vw-vault-view').dispatchEvent(new CustomEvent('vw-suggestion-fill', {
       detail: {
         cipherId: 'c1',
-        target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', generation: 2, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
+        target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 2, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
       },
       bubbles: true,
       composed: true,
@@ -4683,7 +4773,7 @@ describe('vw-popup-app vault interactions', () => {
       type: 'autofill.fillTabSuggestion',
       tabId: 7,
       cipherId: 'c1',
-      target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', generation: 2, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
+      target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 2, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
     });
     expect(app.toastMessage).not.toBe('');
   });
@@ -4699,7 +4789,8 @@ describe('vw-popup-app vault interactions', () => {
       password: 'must-not-enter-popup-state',
       data: { number: '4111111111111111', code: '123' },
       target: {
-        kind: 'card', frameId: 0, formId: 'payment', documentId: 'doc-0', generation: 8,
+        kind: 'card', frameId: 0, formId: 'payment', documentId: 'doc-0',
+        runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 8,
         roles: ['number', 'expMonth'],
         code: 'must-not-enter-popup-state',
       },
@@ -4722,7 +4813,8 @@ describe('vw-popup-app vault interactions', () => {
         subtitle: 'Visa',
         favorite: true,
         target: {
-          kind: 'card', frameId: 0, formId: 'payment', documentId: 'doc-0', generation: 8,
+          kind: 'card', frameId: 0, formId: 'payment', documentId: 'doc-0',
+          runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 8,
           roles: ['number', 'expMonth'],
         },
       }],
@@ -4733,7 +4825,8 @@ describe('vw-popup-app vault interactions', () => {
       detail: {
         cipherId: 'card-1',
         target: {
-          kind: 'card', frameId: 0, formId: 'payment', documentId: 'doc-0', generation: 8,
+          kind: 'card', frameId: 0, formId: 'payment', documentId: 'doc-0',
+          runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 8,
           roles: ['number', 'expMonth'],
         },
       },
@@ -4746,7 +4839,8 @@ describe('vw-popup-app vault interactions', () => {
       tabId: 7,
       cipherId: 'card-1',
       target: {
-        kind: 'card', frameId: 0, formId: 'payment', documentId: 'doc-0', generation: 8,
+        kind: 'card', frameId: 0, formId: 'payment', documentId: 'doc-0',
+        runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 8,
         roles: ['number', 'expMonth'],
       },
     });
@@ -4757,14 +4851,14 @@ describe('vw-popup-app vault interactions', () => {
       ...UNLOCKED,
       'autofill.getTabSuggestions': async () => ({ ok: true, data: { outcome: { status: 'ready', suggestions: [{
         kind: 'login', id: 'c1', name: 'Nebula', matchedUri: 'https://nebula.dev', matchType: 0, favorite: false,
-        target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', generation: 1, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
+        target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 1, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
       }] } } }),
       'autofill.fillTabSuggestion': async () => ({ ok: true, data: { outcome: { status: 'target_changed' } } }),
     }), fakeBrowser());
     view(app, 'vw-vault-view').dispatchEvent(new CustomEvent('vw-suggestion-fill', {
       detail: {
         cipherId: 'c1',
-        target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', generation: 1, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
+        target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-0', runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 1, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
       },
       bubbles: true,
       composed: true,
@@ -5831,11 +5925,11 @@ describe('vw-popup-app suggestions race', () => {
     const pending = (app as unknown as {
       handleSuggestionFill(detail: {
         cipherId: string;
-        target: { kind: 'login'; frameId: number; formId: string; documentId: string; generation: number; customPlanDigest: string };
+        target: { kind: 'login'; frameId: number; formId: string; documentId: string; runtimeIncarnation: string; generation: number; customPlanDigest: string };
       }): Promise<void>;
     }).handleSuggestionFill({
       cipherId: 'c1',
-      target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-1', generation: 1, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
+      target: { kind: 'login', frameId: 0, formId: 'f1', documentId: 'doc-1', runtimeIncarnation: TARGET_RUNTIME_INCARNATION, generation: 1, customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST },
     });
     await flushAsync();
     (app as unknown as { resetVaultState(): void }).resetVaultState();

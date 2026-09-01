@@ -156,6 +156,8 @@ export interface ClaimContextLoginTargetCommand {
 export type ContextLoginTargetClaimResult =
   | {
       status: 'claimed';
+      /** High-entropy content runtime that owned the trusted target. */
+      runtimeIncarnation: string;
       /** Exact content-owned form snapshot selected by the trusted context-menu field. */
       formId: string;
       generation: number;
@@ -395,7 +397,7 @@ export type AutofillSaveCaptureSubmission =
   | { readonly kind: 'formless' };
 
 export type FillTargetReservationResult =
-  | { status: 'reserved'; roles: readonly FillRole[] }
+  | { status: 'reserved'; runtimeIncarnation: string; roles: readonly FillRole[] }
   | { status: 'no_target' | 'page_changed' };
 
 /** Background → content: silently release a reservation when credential retrieval cannot finish. */
@@ -403,6 +405,7 @@ export interface CancelFillTargetCommand {
   type: 'autofill.cancelFillTarget';
   reservationId: string;
   expectedFrameUrl: string;
+  expectedRuntimeIncarnation: string;
 }
 
 /** Background → content: fill a detected form (scope 'form') or only the reserved field
@@ -416,6 +419,7 @@ export interface FillCommand {
   roles: readonly FillRole[];
   /** Browser-authoritative frame URL captured when the user selected the context-menu item. */
   expectedFrameUrl: string;
+  expectedRuntimeIncarnation: string;
   data: CardFillData | IdentityFillData;
 }
 
@@ -423,11 +427,16 @@ export type ContextFillResult =
   | { status: 'filled' }
   | { status: 'no_target' | 'page_changed' | 'target_changed' };
 
+export type HoldFillTargetResult =
+  | { status: 'held' }
+  | { status: 'no_target' | 'page_changed' };
+
 /** Background → content: the chosen item could not be released inline (reprompt-protected). */
 export interface FillErrorCommand {
   type: 'autofill.fillError';
   reservationId: string;
   expectedFrameUrl: string;
+  expectedRuntimeIncarnation: string;
   code: 'reprompt_required';
 }
 
@@ -437,6 +446,7 @@ export interface HoldFillTargetCommand {
   reservationId: string;
   holdId: string;
   expectedFrameUrl: string;
+  expectedRuntimeIncarnation: string;
 }
 
 /** Complete a held context-menu fill after Popup-owned master-password verification. */
@@ -447,6 +457,7 @@ export interface ResumeHeldFillTargetCommand {
   kind: FillKind;
   roles: readonly FillRole[];
   expectedFrameUrl: string;
+  expectedRuntimeIncarnation: string;
   data: CardFillData | IdentityFillData;
 }
 
@@ -454,6 +465,7 @@ export interface CancelHeldFillTargetCommand {
   type: 'autofill.cancelHeldFillTarget';
   holdId: string;
   expectedFrameUrl: string;
+  expectedRuntimeIncarnation: string;
 }
 
 /** Ask the exact content document to redeem a previously held keyboard reprompt. */
@@ -461,6 +473,7 @@ export interface ResumeKeyboardRepromptCommand {
   type: 'autofill.resumeKeyboardReprompt';
   continuationId: string;
   expectedFrameUrl: string;
+  expectedRuntimeIncarnation: string;
 }
 
 /** Resolve only after the exact source document has regained real browser focus. */
@@ -468,6 +481,7 @@ export interface AwaitAutofillFocusCommand {
   type: 'autofill.awaitFocus';
   requestId: string;
   expectedFrameUrl: string;
+  expectedRuntimeIncarnation: string;
   expiresAt: number;
 }
 
@@ -485,10 +499,12 @@ export interface AutofillClientConfigChangedCommand {
 
 export interface AutofillSaveCaptureConfirmedCommand {
   type: 'autofill.saveCaptureConfirmed';
+  captureId: string;
 }
 
 export type AutofillSaveCaptureWakeResult =
-  | { readonly status: 'accepted' }
+  | { readonly status: 'displayed' }
+  | { readonly status: 'not_displayed' }
   | { readonly status: 'not_ready' };
 
 /** Background → extension pages: revoke cached policy UI immediately, then refresh after settlement. */
@@ -538,12 +554,15 @@ export type FrameAutofillForm = FrameLoginForm | FrameCardForm | FrameIdentityFo
 
 /** Metadata-only snapshot of live fill targets. `generation` changes with their structural shape. */
 export interface FrameInspection {
+  /** Changes on every content runtime start, including a persisted BFCache restore. */
+  runtimeIncarnation: string;
   frameUrl: string;
   generation: number;
   forms: FrameAutofillForm[];
 }
 
 interface ContentStructuredAutofillTargetBase {
+  runtimeIncarnation: string;
   formId: string;
   /** Structural generation returned by the frame controller for this exact browser document. */
   generation: number;
@@ -578,6 +597,8 @@ interface TabSuggestionTargetBase {
   formId: string;
   /** Chrome document identity used for both inspection and final credential delivery. */
   documentId: string;
+  /** Content runtime that produced the inspected structural target. */
+  runtimeIncarnation: string;
   /** Content structural snapshot that must still match before and after secret retrieval. */
   generation: number;
 }
@@ -727,6 +748,7 @@ export type FrameAutofillMessage =
       type: 'autofill.commitLoginFill';
       formId: string;
       expectedFrameUrl: string;
+      expectedRuntimeIncarnation: string;
       expectedGeneration: number;
       login: AutofillLoginData;
       customPlan: LoginCustomTargetPlan;
@@ -739,6 +761,7 @@ export type FrameAutofillMessage =
       formId: string;
       roles: readonly CardFillRole[];
       expectedFrameUrl: string;
+      expectedRuntimeIncarnation: string;
       expectedGeneration: number;
       data: CardFillData;
     }
@@ -748,11 +771,12 @@ export type FrameAutofillMessage =
       formId: string;
       roles: readonly IdentityFillRole[];
       expectedFrameUrl: string;
+      expectedRuntimeIncarnation: string;
       expectedGeneration: number;
       data: IdentityFillData;
     };
 
-export type RequestMessage =
+type RequestMessageBody =
   | { type: 'generator.history.list' }
   | { type: 'generator.history.track'; entry: GeneratorHistoryTrackRequestData }
   | { type: 'generator.history.clear' }
@@ -949,6 +973,11 @@ export type RequestMessage =
   | { type: 'autofill.trackGeneratedValue'; token: string; value: string }
   | { type: 'autofill.issuePageLoadIntent' }
   | { type: 'autofill.redeemPageLoadIntent'; intentId: string }
+  | {
+      type: 'autofill.activateRuntime';
+      runtimeIncarnation: string;
+      previousRuntimeIncarnation?: string;
+    }
   | { type: 'sends.list' }
   | { type: 'sends.createText'; input: SendInput }
   | { type: 'sends.createFile'; input: SendInput; dataB64: string; fileName: string }
@@ -966,8 +995,7 @@ export type RequestMessage =
       password: string;
       submission?: AutofillSaveCaptureSubmission;
     }
-  | { type: 'autofill.discardBfcacheCapture' }
-  | { type: 'autofill.claimSavePrompt' }
+  | { type: 'autofill.claimSavePrompt'; captureId?: string }
   | { type: 'autofill.commitSavePrompt'; promptId: string }
   | { type: 'autofill.dismissSavePrompt'; promptId: string }
   | { type: 'autofill.getTabSuggestions'; tabId: number }
@@ -1001,6 +1029,12 @@ export type RequestMessage =
       action: ManualAutofillAction;
       masterPassword?: string;
     };
+
+/**
+ * Content autofill requests carry this field only on the wire. It is optional in the public request
+ * shape so callers can attach it through the non-enumerable binding consumed by `sendRequest`.
+ */
+export type RequestMessage = RequestMessageBody & { readonly runtimeIncarnation?: string };
 
 export type ResponseMessage =
   | {
@@ -1054,6 +1088,7 @@ export type ResponseMessage =
   | { ok: true; data: FillItemCandidate[] }
   | { ok: true; data: { intentId: string } }
   | { ok: true; data: { keyboardGrantId: string } }
+  | { ok: true; data: { status: 'active' } }
   | { ok: true; data: { repromptContinuationId: string } }
   | { ok: true; data: { login: AutofillLoginData; clientEventAckId?: string; totpCopyAckId?: string } }
   | { ok: true; data: AutofillInteractiveLoginData }
@@ -1076,6 +1111,9 @@ export type ResponseMessage =
   | { ok: false; error: { code: AppErrorCode; message: string } };
 
 export type ClientRequestMessage = RequestMessage;
+
+const AUTOFILL_RUNTIME_BINDING_PROPERTY = '__miyuAutofillRuntimeIncarnation';
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export async function sendRequest(request: ClientRequestMessage): Promise<ResponseMessage> {
   if (request.type === 'vault.setCipherFavorite' && !isExactCipherFavoriteRequest(request)) {
@@ -1118,10 +1156,22 @@ export async function sendRequest(request: ClientRequestMessage): Promise<Respon
     return { ok: false, error: { code: 'error', message: 'Extension context invalidated' } };
   }
   try {
-    return (await runtime.sendMessage(request)) as ResponseMessage;
+    return (await runtime.sendMessage(runtimeBoundWireRequest(request))) as ResponseMessage;
   } catch (cause) {
     return { ok: false, error: { code: 'error', message: cause instanceof Error ? cause.message : String(cause) } };
   }
+}
+
+function runtimeBoundWireRequest(request: ClientRequestMessage): ClientRequestMessage {
+  const descriptor = Object.getOwnPropertyDescriptor(request, AUTOFILL_RUNTIME_BINDING_PROPERTY);
+  if (!descriptor) return request;
+  if (descriptor.enumerable || !('value' in descriptor)) {
+    throw new TypeError('Autofill runtime binding is invalid');
+  }
+  if (typeof descriptor.value !== 'string' || !UUID_V4.test(descriptor.value)) {
+    throw new TypeError('Autofill runtime incarnation is invalid');
+  }
+  return { ...request, runtimeIncarnation: descriptor.value };
 }
 
 function isExactSsoRequest(input: unknown): boolean {

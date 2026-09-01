@@ -14,6 +14,10 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+async function flushMutations(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe('autofill document controller', () => {
   it('discovers nested closed roots and follows their known deep focus chain', () => {
     const outerHost = document.createElement('div');
@@ -116,6 +120,17 @@ describe('autofill document controller', () => {
     controller.disconnect();
   });
 
+  it('keeps refresh as an immediate authoritative scan while observation is active', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const controller = createAutofillDocumentController(document);
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    expect(controller.roots()).toEqual([document]);
+    expect(controller.refresh().roots).toEqual([document, shadow]);
+    controller.disconnect();
+  });
+
   it('exposes nested open roots and resolves the deepest focused control', () => {
     const outerHost = document.createElement('div');
     const outer = outerHost.attachShadow({ mode: 'open' });
@@ -161,6 +176,32 @@ describe('autofill document controller', () => {
     expect(detached).toEqual([shadow]);
     controller.disconnect();
     expect(detached).toEqual([shadow, document]);
+  });
+
+  it('reorders roots after a host move without rebinding existing resources', async () => {
+    const firstHost = document.createElement('div');
+    const firstRoot = firstHost.attachShadow({ mode: 'open' });
+    const secondHost = document.createElement('div');
+    const secondRoot = secondHost.attachShadow({ mode: 'open' });
+    document.body.append(firstHost, secondHost);
+    const attached: Array<Document | ShadowRoot> = [];
+    const detached: Array<Document | ShadowRoot> = [];
+    const controller = createAutofillDocumentController(document);
+    controller.bindRoots((root) => {
+      attached.push(root);
+      return () => detached.push(root);
+    });
+    expect(controller.roots()).toEqual([document, firstRoot, secondRoot]);
+
+    document.body.prepend(secondHost);
+    await flushMutations();
+
+    expect(controller.roots()).toEqual([document, secondRoot, firstRoot]);
+    expect(attached).toEqual([document, firstRoot, secondRoot]);
+    expect(detached).toEqual([]);
+    controller.disconnect();
+    expect(detached).toEqual(expect.arrayContaining([document, firstRoot, secondRoot]));
+    expect(detached).toHaveLength(3);
   });
 
   it('returns the original open-shadow target only for trusted composed events', () => {

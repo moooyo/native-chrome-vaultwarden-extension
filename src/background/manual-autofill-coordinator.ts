@@ -331,6 +331,7 @@ function grantBinding(
     frameUrl: target.frameUrl,
     frameId: target.frameId,
     targetDocumentId: target.targetDocumentId,
+    runtimeIncarnation: target.target.runtimeIncarnation,
     formId: target.target.formId,
     generation: target.target.generation,
     customPlanDigest: target.target.customPlanDigest,
@@ -385,6 +386,7 @@ function sameResolvedTarget(
     && first.frameUrl === second.frameUrl
     && first.frameId === second.frameId
     && first.targetDocumentId === second.targetDocumentId
+    && first.target.runtimeIncarnation === second.target.runtimeIncarnation
     && first.targetKey === second.targetKey
     && first.defaultStrategy === second.defaultStrategy;
 }
@@ -398,6 +400,7 @@ function bindingMatchesTarget(
     && binding.frameUrl === canonicalHttpUrl(target.frameUrl)
     && binding.frameId === target.frameId
     && binding.targetDocumentId === target.targetDocumentId
+    && binding.runtimeIncarnation === target.target.runtimeIncarnation
     && binding.formId === target.target.formId
     && binding.generation === target.target.generation
     && binding.customPlanDigest === target.target.customPlanDigest;

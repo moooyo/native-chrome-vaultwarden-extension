@@ -7,12 +7,13 @@ export const DEFAULT_MANUAL_AUTOFILL_GRANT_CAPACITY = 32;
 export const MAX_MANUAL_AUTOFILL_GRANT_CAPACITY = 256;
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const RUNTIME_INCARNATION = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const MAX_ID_LENGTH = 4_096;
 const MAX_URL_LENGTH = 16_384;
 const BINDING_KEYS = [
   'popupDocumentId', 'cipherId', 'tabId', 'topUrl', 'frameUrl', 'frameId',
-  'targetDocumentId', 'formId', 'generation', 'customPlanDigest', 'cipherRevision',
+  'targetDocumentId', 'runtimeIncarnation', 'formId', 'generation', 'customPlanDigest', 'cipherRevision',
   'uriDigest', 'risk', 'requiresReprompt',
 ] as const;
 const ISSUE_KEYS = [
@@ -36,6 +37,7 @@ export interface ManualAutofillGrantBinding {
   readonly frameUrl: string;
   readonly frameId: number;
   readonly targetDocumentId: string;
+  readonly runtimeIncarnation: string;
   readonly formId: string;
   readonly generation: number;
   readonly customPlanDigest: string;
@@ -373,6 +375,7 @@ function canonicalBindingRecord(record: Record<string, unknown>): ManualAutofill
   const frameUrl = httpUrl(dataValue(record, 'frameUrl'), 'frameUrl');
   const frameId = nonNegativeInteger(dataValue(record, 'frameId'), 'frameId');
   const targetDocumentId = opaqueId(dataValue(record, 'targetDocumentId'), 'targetDocumentId');
+  const runtimeIncarnation = canonicalRuntimeIncarnation(dataValue(record, 'runtimeIncarnation'));
   const formId = opaqueId(dataValue(record, 'formId'), 'formId');
   const generation = nonNegativeInteger(dataValue(record, 'generation'), 'generation');
   const customPlanDigest = dataValue(record, 'customPlanDigest');
@@ -386,8 +389,16 @@ function canonicalBindingRecord(record: Record<string, unknown>): ManualAutofill
   if (typeof requiresReprompt !== 'boolean') invalid('requiresReprompt');
   return Object.freeze({
     popupDocumentId, cipherId, tabId, topUrl, frameUrl, frameId, targetDocumentId,
+    runtimeIncarnation,
     formId, generation, customPlanDigest, cipherRevision, uriDigest, risk, requiresReprompt,
   });
+}
+
+function canonicalRuntimeIncarnation(value: unknown): string {
+  if (typeof value !== 'string' || !RUNTIME_INCARNATION.test(value)) {
+    invalid('runtimeIncarnation');
+  }
+  return value;
 }
 
 function allowedActions(value: unknown): ManualAutofillAllowedActions {

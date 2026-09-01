@@ -15,6 +15,8 @@ interface PolicyLease { generation: number }
 const SESSION: SessionLease = Object.freeze({ generation: 1 });
 const ACCOUNT: AccountLease = Object.freeze({ serverGeneration: 2, accountGeneration: 3 });
 const POLICY: PolicyLease = Object.freeze({ generation: 4 });
+const FRAME_RUNTIME_INCARNATION = 'b0c1d2e3-f4a5-4b6c-9d8e-1234567890ab';
+const OTHER_RUNTIME_INCARNATION = 'c0d1e2f3-a4b5-4c6d-ad8e-2345678901ab';
 const COMMAND = Object.freeze({
   tabId: 7,
   topDocumentId: 'top-doc',
@@ -25,6 +27,7 @@ const CONTEXT = Object.freeze({
   tabId: 7,
   frameId: 2,
   documentId: 'child-doc',
+  runtimeIncarnation: FRAME_RUNTIME_INCARNATION,
   frameUrl: 'https://example.com/login',
 });
 
@@ -84,6 +87,7 @@ describe('AutofillKeyboardGrantRegistry', () => {
     const mismatched = registry.issueCommand(COMMAND);
     expect(registry.takeCommand(mismatched, { ...COMMAND, topDocumentId: 'new-top' })).toBeUndefined();
     expect(registry.takeCommand(mismatched, COMMAND)).toBeUndefined();
+
   });
 
   it('expires a command at its deadline', () => {
@@ -126,6 +130,7 @@ describe('AutofillKeyboardGrantRegistry', () => {
     ['tab', { tabId: 8 }],
     ['frame', { frameId: 3 }],
     ['document', { documentId: 'other-doc' }],
+    ['runtime incarnation', { runtimeIncarnation: OTHER_RUNTIME_INCARNATION }],
     ['URL', { frameUrl: 'https://example.com/other' }],
   ])('fails closed and consumes a grant on a mismatched %s', (_label, mismatch) => {
     const { registry } = harness();
@@ -133,6 +138,30 @@ describe('AutofillKeyboardGrantRegistry', () => {
 
     expect(registry.authorizeGrant(token, { ...CONTEXT, ...mismatch })).toBeUndefined();
     expect(registry.consumeGrant(token, CONTEXT)).toBeUndefined();
+  });
+
+  it.each([
+    ['uppercase', FRAME_RUNTIME_INCARNATION.toUpperCase()],
+    ['non-v4', 'b0c1d2e3-f4a5-5b6c-9d8e-1234567890ab'],
+  ])('rejects a %s runtime incarnation at grant issue', (_label, runtimeIncarnation) => {
+    const { registry } = harness();
+
+    expect(() => registry.issueGrant(loginGrant({ runtimeIncarnation }))).toThrow('runtimeIncarnation');
+  });
+
+  it('requires one exact browser context when the grant targets the top frame', () => {
+    const { registry } = harness();
+    const topFrameGrant = loginGrant({
+      frameId: 0,
+      documentId: COMMAND.topDocumentId,
+      runtimeIncarnation: FRAME_RUNTIME_INCARNATION,
+      frameUrl: COMMAND.topFrameUrl,
+    });
+    expect(() => registry.issueGrant({
+      ...topFrameGrant,
+      documentId: 'other-top-document',
+    })).toThrow('top-frame');
+    expect(() => registry.issueGrant(topFrameGrant)).not.toThrow();
   });
 
   it.each(['session', 'account', 'policy'] as const)(
@@ -165,6 +194,7 @@ describe('AutofillKeyboardGrantRegistry', () => {
       purpose: 'card' as const,
       structuredTarget: {
         kind: 'card' as const,
+        runtimeIncarnation: FRAME_RUNTIME_INCARNATION,
         formId: 'form-1',
         generation: 5,
         roles: ['number', 'exp', 'code'] as const,
@@ -185,6 +215,15 @@ describe('AutofillKeyboardGrantRegistry', () => {
         structuredTarget: binding.structuredTarget,
       },
     }))).toThrow('binding');
+    expect(() => registry.issueGrant(loginGrant({
+      binding: {
+        ...binding,
+        structuredTarget: {
+          ...binding.structuredTarget,
+          runtimeIncarnation: OTHER_RUNTIME_INCARNATION,
+        },
+      },
+    }))).toThrow('runtime');
   });
 
   it('treats lease-validator exceptions as a consumed failure', () => {

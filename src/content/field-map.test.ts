@@ -20,11 +20,22 @@ describe('card field classification', () => {
     expect(classifyCardField(hints({ autocomplete: 'cc-type' }))).toBe('brand');
   });
 
+  it('accepts one normalized card autocomplete role and rejects distinct role conflicts', () => {
+    expect(classifyCardField(hints({ autocomplete: 'cc-name cc-given-name' }))).toBe('cardholderName');
+    expect(classifyCardField(hints({ autocomplete: 'cc-number cc-csc' }))).toBeUndefined();
+    expect(classifyCardField(hints({ autocomplete: 'cc-csc cc-number' }))).toBeUndefined();
+  });
+
   it('falls back to name/id hints', () => {
     expect(classifyCardField(hints({ name: 'cardNumber' }))).toBe('number');
     expect(classifyCardField(hints({ id: 'cvv' }))).toBe('code');
     expect(classifyCardField(hints({ name: 'cardholder-name' }))).toBe('cardholderName');
     expect(classifyCardField(hints({ name: 'payment-card-brand' }))).toBe('brand');
+  });
+
+  it('requires non-semantic card hints to resolve to one normalized role', () => {
+    expect(classifyCardField(hints({ name: 'cardNumber', id: 'ccnumber' }))).toBe('number');
+    expect(classifyCardField(hints({ name: 'cardNumber', placeholder: 'Security code' }))).toBeUndefined();
   });
 
   it('returns undefined for unrelated fields', () => {
@@ -33,6 +44,8 @@ describe('card field classification', () => {
 
   it('classifies semantic labels only when their card role is unambiguous', () => {
     expect(classifyCardField(hints({ semanticLabels: ['Card number'] }))).toBe('number');
+    expect(classifyCardField(hints({ semanticLabels: ['Card number', 'CC number'] }))).toBe('number');
+    expect(classifyCardField(hints({ name: 'cardNumber', semanticLabels: ['Card number'] }))).toBe('number');
     expect(classifyCardField(hints({ semanticLabels: ['Card number', 'Card CVC'] }))).toBeUndefined();
     expect(classifyCardField(hints({ semanticLabels: ['Card number / security code'] }))).toBeUndefined();
     expect(classifyCardField(hints({ ariaLabel: 'Card number / CVC' }))).toBeUndefined();
@@ -81,17 +94,30 @@ describe('identity field classification', () => {
     expect(classifyIdentityField(hints({ name: 'mailing-address', type: 'textarea' }))).toBe('address');
   });
 
+  it('accepts one normalized identity autocomplete role and rejects distinct role conflicts', () => {
+    expect(classifyIdentityField(hints({ autocomplete: 'country country-name' }))).toBe('country');
+    expect(classifyIdentityField(hints({ autocomplete: 'given-name family-name' }))).toBeUndefined();
+    expect(classifyIdentityField(hints({ autocomplete: 'family-name given-name' }))).toBeUndefined();
+  });
+
+  it('requires non-semantic identity hints to resolve to one normalized role', () => {
+    expect(classifyIdentityField(hints({ name: 'first-name', placeholder: 'Given name' }))).toBe('firstName');
+    expect(classifyIdentityField(hints({ name: 'first-name', placeholder: 'Last name' }))).toBeUndefined();
+  });
+
   it('does not misclassify "company name" as a full name', () => {
     expect(classifyIdentityField(hints({ name: 'company name' }))).toBe('company');
   });
 
   it('does not treat a username field as an identity name field', () => {
-    // \bname\b must not match inside "username"
+    // The specific username role must remain distinct from the exact full-name fallback.
     expect(classifyIdentityField(hints({ name: 'username' }))).toBe('username');
   });
 
   it('classifies semantic identity labels and rejects conflicting roles', () => {
     expect(classifyIdentityField(hints({ semanticLabels: ['First name'] }))).toBe('firstName');
+    expect(classifyIdentityField(hints({ semanticLabels: ['First name', 'Given name'] }))).toBe('firstName');
+    expect(classifyIdentityField(hints({ name: 'first-name', semanticLabels: ['Given name'] }))).toBe('firstName');
     expect(classifyIdentityField(hints({ semanticLabels: ['First name', 'Last name'] }))).toBeUndefined();
     expect(classifyIdentityField(hints({ semanticLabels: ['First name / Last name'] }))).toBeUndefined();
     expect(classifyIdentityField(hints({ ariaLabel: 'First name / Last name' }))).toBeUndefined();

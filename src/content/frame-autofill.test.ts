@@ -1,7 +1,18 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { FrameCardForm, FrameIdentityForm, FrameLoginForm } from '../messaging/protocol.js';
-import { createFrameAutofillController } from './frame-autofill.js';
+import type {
+  FrameCardForm,
+  FrameIdentityForm,
+  FrameLoginForm,
+  TabFillOutcome,
+} from '../messaging/protocol.js';
+import { digestLoginCustomTargetPlan } from '../core/vault/login-custom-fields.js';
+import { scanOpenComposedRoots } from './composed-tree.js';
+import {
+  createFrameAutofillController,
+  type FrameAutofillController,
+  type FrameLoginCommitRequest,
+} from './frame-autofill.js';
 
 const FRAME_URL = 'https://login.example.com/';
 
@@ -94,7 +105,7 @@ describe('frame autofill controller', () => {
     expect(findCard(controller.inspect().forms).focusedAt).toBe(3000);
   });
 
-  it('fails a login commit closed when the URL changes', () => {
+  it('fails a login commit closed when the URL changes', async () => {
     let url = 'https://example.com/login';
     const controller = createFrameAutofillController({
       root: document,
@@ -105,7 +116,7 @@ describe('frame autofill controller', () => {
     const target = findLogin(inspection.forms);
     url = 'https://evil.example/';
 
-    expect(controller.commitLogin({
+    expect(await commitLogin(controller, {
       formId: target.formId,
       expectedFrameUrl: 'https://example.com/login',
       expectedGeneration: inspection.generation,
@@ -115,12 +126,12 @@ describe('frame autofill controller', () => {
     })).toEqual({ status: 'target_changed' });
   });
 
-  it('fills a login only at the inspected generation', () => {
+  it('fills a login only at the inspected generation', async () => {
     const controller = createController();
     const inspection = controller.inspect();
     const target = findLogin(inspection.forms);
 
-    expect(controller.commitLogin({
+    expect(await commitLogin(controller, {
       formId: target.formId,
       expectedFrameUrl: inspection.frameUrl,
       expectedGeneration: inspection.generation,
@@ -132,7 +143,55 @@ describe('frame autofill controller', () => {
     expect(document.querySelector<HTMLInputElement>('input[type=password]')!.value).toBe('secret');
   });
 
-  it('fills an unhinted native-form identifier through the inspected login target', () => {
+  it('rejects a login commit when the wire digest does not bind its custom plan', async () => {
+    const controller = createController();
+    const inspection = controller.inspect();
+    const target = findLogin(inspection.forms);
+
+    expect(await controller.commitLogin({
+      formId: target.formId,
+      expectedFrameUrl: inspection.frameUrl,
+      expectedGeneration: inspection.generation,
+      login: { username: 'must-not-fill', password: 'must-not-fill' },
+      customPlan: target.customPlan,
+      customPlanDigest: '0'.repeat(64),
+      customAssignments: [],
+    })).toEqual({ status: 'target_changed' });
+    expect(document.querySelector<HTMLInputElement>('input[type=email]')!.value).toBe('');
+    expect(document.querySelector<HTMLInputElement>('input[type=password]')!.value).toBe('');
+  });
+
+  it('authoritatively refreshes roots after each staged login write', async () => {
+    document.body.innerHTML = `
+      <form><input type="email"><input type="password"></form>
+      <div id="late-shadow-host"></div>`;
+    const controller = createFrameAutofillController({
+      snapshot: () => ({ roots: [document], truncated: false }),
+      refresh: () => scanOpenComposedRoots(document),
+      frameUrl: () => FRAME_URL,
+      now: () => 0,
+    });
+    const inspection = controller.inspect();
+    const target = findLogin(inspection.forms);
+    const username = document.querySelector<HTMLInputElement>('input[type=email]')!;
+    const password = document.querySelector<HTMLInputElement>('input[type=password]')!;
+    username.addEventListener('input', () => {
+      document.getElementById('late-shadow-host')!.attachShadow({ mode: 'open' });
+    }, { once: true });
+
+    expect(await commitLogin(controller, {
+      formId: target.formId,
+      expectedFrameUrl: inspection.frameUrl,
+      expectedGeneration: inspection.generation,
+      login: { username: 'user', password: 'must-not-fill' },
+      customPlan: target.customPlan,
+      customAssignments: [],
+    })).toEqual({ status: 'target_changed' });
+    expect(username.value).toBe('user');
+    expect(password.value).toBe('');
+  });
+
+  it('fills an unhinted native-form identifier through the inspected login target', async () => {
     document.body.innerHTML = '<form><input id="identifier" type="text"><input id="password" type="password"></form>';
     const identifier = document.getElementById('identifier') as HTMLInputElement;
     const password = document.getElementById('password') as HTMLInputElement;
@@ -140,7 +199,7 @@ describe('frame autofill controller', () => {
     const inspection = controller.inspect();
     const target = findLogin(inspection.forms);
 
-    expect(controller.commitLogin({
+    expect(await commitLogin(controller, {
       formId: target.formId,
       expectedFrameUrl: inspection.frameUrl,
       expectedGeneration: inspection.generation,
@@ -161,7 +220,7 @@ describe('frame autofill controller', () => {
     ['retypes', (password: HTMLInputElement) => { password.type = 'text'; }],
     ['replaces', (password: HTMLInputElement) => { password.replaceWith(password.cloneNode()); }],
     ['ignores', (password: HTMLInputElement) => { password.setAttribute('data-bwignore', ''); }],
-  ])('stops before password when the username input event %s the password target', (_name, mutate) => {
+  ])('stops before password when the username input event %s the password target', async (_name, mutate) => {
     const controller = createController();
     const inspection = controller.inspect();
     const target = findLogin(inspection.forms);
@@ -169,7 +228,7 @@ describe('frame autofill controller', () => {
     const password = document.querySelector<HTMLInputElement>('input[type=password]')!;
     username.addEventListener('input', () => mutate(password), { once: true });
 
-    expect(controller.commitLogin({
+    expect(await commitLogin(controller, {
       formId: target.formId,
       expectedFrameUrl: inspection.frameUrl,
       expectedGeneration: inspection.generation,
@@ -181,7 +240,7 @@ describe('frame autofill controller', () => {
     expect(password.value).toBe('');
   });
 
-  it('keeps username/password but rejects the whole custom portion after a target hint changes', () => {
+  it('keeps username/password but rejects the whole custom portion after a target hint changes', async () => {
     document.body.innerHTML = '<form><input name="username"><input type="password"><input name="department"><input name="realm"></form>';
     const controller = createController();
     const inspection = controller.inspect();
@@ -194,7 +253,7 @@ describe('frame autofill controller', () => {
     }));
     realm.name = 'changed-realm';
 
-    expect(controller.commitLogin({
+    expect(await commitLogin(controller, {
       formId: target.formId,
       expectedFrameUrl: inspection.frameUrl,
       expectedGeneration: inspection.generation,
@@ -208,7 +267,7 @@ describe('frame autofill controller', () => {
     expect(realm.value).toBe('');
   });
 
-  it('changes generation and rejects when the login form scope changes', () => {
+  it('changes generation and rejects when the login form scope changes', async () => {
     const controller = createController();
     const inspection = controller.inspect();
     const original = findLogin(inspection.forms);
@@ -217,7 +276,7 @@ describe('frame autofill controller', () => {
     document.body.append(replacementForm);
     replacementForm.append(password);
 
-    expect(controller.commitLogin({
+    expect(await commitLogin(controller, {
       formId: original.formId,
       expectedFrameUrl: inspection.frameUrl,
       expectedGeneration: inspection.generation,
@@ -229,14 +288,14 @@ describe('frame autofill controller', () => {
     expect(password.value).toBe('');
   });
 
-  it('changes generation and rejects when a login member is replaced', () => {
+  it('changes generation and rejects when a login member is replaced', async () => {
     const controller = createController();
     const inspection = controller.inspect();
     const original = findLogin(inspection.forms);
     const email = document.querySelector<HTMLInputElement>('input[type="email"]')!;
     email.replaceWith(email.cloneNode());
 
-    expect(controller.commitLogin({
+    expect(await commitLogin(controller, {
       formId: original.formId,
       expectedFrameUrl: inspection.frameUrl,
       expectedGeneration: inspection.generation,
@@ -246,7 +305,7 @@ describe('frame autofill controller', () => {
     })).toEqual({ status: 'target_changed' });
   });
 
-  it('discovers and commits a login in nested open shadow roots by default', () => {
+  it('discovers and commits a login in nested open shadow roots by default', async () => {
     document.body.replaceChildren();
     const outerHost = document.createElement('div');
     const outer = outerHost.attachShadow({ mode: 'open' });
@@ -259,7 +318,7 @@ describe('frame autofill controller', () => {
     const inspection = controller.inspect();
     const login = findLogin(inspection.forms);
 
-    expect(controller.commitLogin({
+    expect(await commitLogin(controller, {
       formId: login.formId,
       expectedFrameUrl: inspection.frameUrl,
       expectedGeneration: inspection.generation,
@@ -310,6 +369,33 @@ describe('frame autofill controller', () => {
     const number = document.querySelector<HTMLInputElement>('[autocomplete="cc-number"]')!;
     const code = document.querySelector<HTMLInputElement>('[autocomplete="cc-csc"]')!;
     number.addEventListener('input', () => document.getElementById('other')!.append(code), { once: true });
+
+    expect(controller.commitStructured({
+      kind: 'card',
+      formId: card.formId,
+      roles: card.roles,
+      expectedFrameUrl: inspection.frameUrl,
+      expectedGeneration: inspection.generation,
+      data: { number: '4111', code: 'must-not-fill' },
+    })).toEqual({ status: 'target_changed' });
+    expect(number.value).toBe('4111');
+    expect(code.value).toBe('');
+  });
+
+  it('stops a structured commit when the first field event retires its runtime', () => {
+    document.body.innerHTML = '<form><input autocomplete="cc-number"><input autocomplete="cc-csc"></form>';
+    let current = true;
+    const controller = createFrameAutofillController({
+      root: document,
+      isCurrent: () => current,
+      frameUrl: () => FRAME_URL,
+      now: () => 0,
+    });
+    const inspection = controller.inspect();
+    const card = findCard(inspection.forms);
+    const number = document.querySelector<HTMLInputElement>('[autocomplete="cc-number"]')!;
+    const code = document.querySelector<HTMLInputElement>('[autocomplete="cc-csc"]')!;
+    number.addEventListener('input', () => { current = false; }, { once: true });
 
     expect(controller.commitStructured({
       kind: 'card',
@@ -420,7 +506,7 @@ describe('frame autofill controller', () => {
     expect(inspection.forms.some((form) => form.kind === 'login')).toBe(false);
   });
 
-  it('changes target identity when the same form moves to another open root', () => {
+  it('changes target identity when the same form moves to another open root', async () => {
     const controller = createController();
     const inspection = controller.inspect();
     const original = findLogin(inspection.forms);
@@ -433,7 +519,7 @@ describe('frame autofill controller', () => {
     const moved = controller.inspect();
     expect(moved.generation).toBeGreaterThan(inspection.generation);
     expect(findLogin(moved.forms).formId).not.toBe(original.formId);
-    expect(controller.commitLogin({
+    expect(await commitLogin(controller, {
       formId: original.formId,
       expectedFrameUrl: inspection.frameUrl,
       expectedGeneration: inspection.generation,
@@ -443,7 +529,7 @@ describe('frame autofill controller', () => {
     })).toEqual({ status: 'target_changed' });
   });
 
-  it('changes split-login generation when its surface moves between existing open roots', () => {
+  it('changes split-login generation when its surface moves between existing open roots', async () => {
     document.body.replaceChildren();
     const firstHost = document.createElement('div');
     const secondHost = document.createElement('div');
@@ -467,7 +553,7 @@ describe('frame autofill controller', () => {
 
     expect(moved.generation).toBeGreaterThan(inspection.generation);
     expect(findLogin(moved.forms).formId).not.toBe(original.formId);
-    expect(controller.commitLogin({
+    expect(await commitLogin(controller, {
       formId: original.formId,
       expectedFrameUrl: inspection.frameUrl,
       expectedGeneration: inspection.generation,
@@ -583,6 +669,69 @@ describe('frame autofill controller', () => {
     })).toEqual({ status: 'target_changed' });
     expect(controller.inspect().generation).toBeGreaterThan(inspection.generation);
   });
+
+  it('fails a truncated snapshot closed and advances the structural generation', () => {
+    document.body.innerHTML = '<form><input autocomplete="cc-number"></form>';
+    let truncated = false;
+    const controller = createFrameAutofillController({
+      snapshot: () => ({ roots: [document], truncated }),
+      frameUrl: () => FRAME_URL,
+      now: () => 0,
+    });
+    const inspection = controller.inspect();
+    const card = findCard(inspection.forms);
+
+    truncated = true;
+    const incomplete = controller.inspect();
+
+    expect(incomplete.forms).toEqual([]);
+    expect(incomplete.generation).toBeGreaterThan(inspection.generation);
+    expect(controller.commitStructured({
+      kind: 'card',
+      formId: card.formId,
+      roles: card.roles,
+      expectedFrameUrl: inspection.frameUrl,
+      expectedGeneration: inspection.generation,
+      data: { number: 'must-not-fill' },
+    })).toEqual({ status: 'target_changed' });
+  });
+
+  it('accepts 128 detected forms and fails the entire frame projection closed at 129', () => {
+    document.body.innerHTML = Array.from(
+      { length: 128 },
+      () => '<form><input type="password"></form>',
+    ).join('');
+    const controller = createController();
+
+    expect(controller.inspect().forms).toHaveLength(128);
+
+    document.body.insertAdjacentHTML('beforeend', '<form><input type="password"></form>');
+    expect(controller.inspect().forms).toEqual([]);
+  });
+
+  it('fails the entire frame projection closed when custom targets exceed 32', async () => {
+    document.body.innerHTML = `<form>
+      <input autocomplete="username">
+      <input type="password">
+      ${Array.from({ length: 32 }, (_, index) => `<input name="custom-${index}">`).join('')}
+    </form>`;
+    const controller = createController();
+    const inspection = controller.inspect();
+    const login = findLogin(inspection.forms);
+
+    expect(inspection.forms).toHaveLength(1);
+
+    document.querySelector('form')!.insertAdjacentHTML('beforeend', '<input name="custom-32">');
+    expect(controller.inspect().forms).toEqual([]);
+    expect(await commitLogin(controller, {
+      formId: login.formId,
+      expectedFrameUrl: inspection.frameUrl,
+      expectedGeneration: inspection.generation,
+      login: { username: 'must-not-fill', password: 'must-not-fill' },
+      customPlan: login.customPlan,
+      customAssignments: [],
+    })).toEqual({ status: 'target_changed' });
+  });
 });
 
 function createController(now: () => number = () => 0) {
@@ -590,6 +739,16 @@ function createController(now: () => number = () => 0) {
     root: document,
     frameUrl: () => FRAME_URL,
     now,
+  });
+}
+
+async function commitLogin(
+  controller: FrameAutofillController,
+  request: Omit<FrameLoginCommitRequest, 'customPlanDigest'>,
+): Promise<TabFillOutcome> {
+  return controller.commitLogin({
+    ...request,
+    customPlanDigest: await digestLoginCustomTargetPlan(request.customPlan),
   });
 }
 

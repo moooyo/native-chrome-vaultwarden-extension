@@ -20,6 +20,17 @@ describe('resolveFocusedFill', () => {
     expect(resolveFocusedFill(document.activeElement)).toMatchObject({ kind: 'login' });
   });
 
+  it('returns no focused target from a truncated composed-tree snapshot', () => {
+    document.body.innerHTML = '<form><input type="email"><input type="password"></form>';
+    const password = document.querySelector<HTMLInputElement>('input[type="password"]')!;
+
+    expect(resolveFocusedFill(password, {
+      roots: [document],
+      visitedElements: 3,
+      truncated: true,
+    })).toEqual({ kind: 'none' });
+  });
+
   it('classifies an unhinted native-form identifier and password as the same login target', () => {
     document.body.innerHTML = '<form><input id="identifier" type="text"><input id="password" type="password"></form>';
     const identifier = document.getElementById('identifier') as HTMLInputElement;

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { isVisibleInTree } from './form-detection.js';
+import { isSemanticSourceAvailableInTree, isVisibleInTree } from './form-detection.js';
 import { collectFieldHints } from './semantic-hints.js';
 
 describe('semantic field hints', () => {
@@ -27,6 +27,47 @@ describe('semantic field hints', () => {
     expect(explicit.semanticLabels).toEqual(['Card number', 'Billing address']);
     expect(explicit.semanticLabelsUnsafe).toBe(false);
     expect(wrapped.semanticLabels).toEqual(['Account holder']);
+  });
+
+  it('accepts accessibility sources hidden with visual-only screen-reader techniques', () => {
+    const styles = [
+      'position:absolute;clip:rect(0 0 0 0);width:1px;height:1px;overflow:hidden',
+      'position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden',
+      'position:absolute;left:-10000px;top:auto',
+      'opacity:0',
+      'transform:scale(0)',
+    ];
+
+    for (const style of styles) {
+      document.body.innerHTML = `<label for="field" style="${style}">Username</label><input id="field">`;
+      const hints = collectFieldHints(
+        document.getElementById('field') as HTMLInputElement,
+        isSemanticSourceAvailableInTree,
+      );
+
+      expect(hints.semanticLabels).toEqual(['Username']);
+      expect(hints.semanticLabelsUnsafe).toBe(false);
+    }
+  });
+
+  it.each([
+    ['hidden', 'hidden'],
+    ['inert', 'inert'],
+    ['aria-hidden', 'aria-hidden=" TRUE "'],
+    ['display none', 'style="display:none"'],
+    ['visibility hidden', 'style="visibility:hidden"'],
+    ['content visibility hidden', 'style="content-visibility:hidden"'],
+  ])('rejects a semantic source removed by %s', (_name, sourceAttribute) => {
+    document.body.innerHTML = `
+      <div ${sourceAttribute}><label for="field">Username</label></div>
+      <input id="field">`;
+    const hints = collectFieldHints(
+      document.getElementById('field') as HTMLInputElement,
+      isSemanticSourceAvailableInTree,
+    );
+
+    expect(hints.semanticLabels).toEqual([]);
+    expect(hints.semanticLabelsUnsafe).toBe(true);
   });
 
   it('resolves aria-labelledby only inside the raw shadow root', () => {

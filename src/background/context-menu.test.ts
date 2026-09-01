@@ -20,11 +20,14 @@ import type {
   ClaimContextLoginTargetCommand,
   ContextLoginTargetClaimResult,
   TabAutofillSuggestion,
+  TabFillOutcome,
   TabSuggestionTarget,
 } from '../messaging/protocol.js';
 
 const CLICKED_FRAME_URL = 'https://shop.example/checkout';
 const CLICK_TIME = 1_000;
+const RUNTIME_INCARNATION = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const OTHER_RUNTIME_INCARNATION = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb';
 type ContextMenuMessage =
   | FillCommand
   | FillErrorCommand
@@ -47,6 +50,7 @@ function loginSuggestion(id: string): LoginSuggestion {
       kind: 'login',
       frameId: 0,
       documentId: 'doc-A',
+      runtimeIncarnation: RUNTIME_INCARNATION,
       formId: 'login-form',
       generation: 1,
       customPlanDigest: '0'.repeat(64),
@@ -100,7 +104,7 @@ function makeDeps(
       _cipherId: string,
       _target: TabSuggestionTarget,
       _assertCurrent: () => void,
-    ) => ({ status: 'filled' as const })),
+    ): Promise<TabFillOutcome> => ({ status: 'filled' })),
     findFillItems: vi.fn(async (kind: 'card' | 'identity') => (kind === 'card' ? cards : identities)),
     getFillData: vi.fn(async (
       _cipherId: string,
@@ -117,6 +121,11 @@ function makeDeps(
       url: CLICKED_FRAME_URL,
       documentId: 'doc-A',
     })),
+    getRuntimeIncarnation: vi.fn(async (
+      _tabId: number,
+      _frameId: number,
+      _documentId: string,
+    ): Promise<string | undefined> => RUNTIME_INCARNATION),
     continuation: {
       stageLockedContext: vi.fn(async () => undefined),
       stageContextLoginReprompt: vi.fn(async () => undefined),
@@ -143,13 +152,18 @@ function makeDeps(
       ): Promise<unknown> => {
         sent.push({ id, msg, opts });
         if (msg.type === 'autofill.reserveFillTarget') {
-          return { status: 'reserved', roles: reservationRoles(msg) };
+          return {
+            status: 'reserved',
+            runtimeIncarnation: RUNTIME_INCARNATION,
+            roles: reservationRoles(msg),
+          };
         }
         if (msg.type === 'autofill.holdFillTarget') return { status: 'held' };
         if (msg.type === 'autofill.claimContextLoginTarget') {
           const target = logins.find((login) => login.target)?.target;
           return {
             status: 'claimed',
+            runtimeIncarnation: target?.runtimeIncarnation ?? RUNTIME_INCARNATION,
             formId: target?.formId ?? 'login-form',
             generation: target?.generation ?? 1,
             customPlanDigest: target?.kind === 'login' ? target.customPlanDigest : '0'.repeat(64),
@@ -287,9 +301,28 @@ describe('context menu', () => {
       CLICK_TIME,
     );
 
-    expect(deps.continuation.stageLockedContext).toHaveBeenCalledOnce();
+    expect(deps.continuation.stageLockedContext).toHaveBeenCalledWith(expect.objectContaining({
+      topRuntimeIncarnation: RUNTIME_INCARNATION,
+      frameRuntimeIncarnation: RUNTIME_INCARNATION,
+    }));
+    expect(deps.getRuntimeIncarnation).toHaveBeenCalledWith(7, 0, 'doc-A');
     expect(deps.captureSessionLease).not.toHaveBeenCalled();
     expect(deps.findFillItems).not.toHaveBeenCalled();
+  });
+
+  it('does not stage a continuation without a canonical active runtime binding', async () => {
+    const { deps } = makeDeps('locked');
+    deps.getRuntimeIncarnation.mockResolvedValueOnce('11111111-1111-1111-8111-111111111111');
+
+    await createContextMenu(deps).handleClick(
+      'vw-unlock',
+      { id: 7, windowId: 3 },
+      0,
+      CLICKED_FRAME_URL,
+      CLICK_TIME,
+    );
+
+    expect(deps.continuation.stageLockedContext).not.toHaveBeenCalled();
   });
 
   it('builds root + form/field groups with one item per card/identity when unlocked', async () => {
@@ -317,6 +350,7 @@ describe('context menu', () => {
         kind: 'login',
         frameId: 3,
         documentId: 'doc-A',
+        runtimeIncarnation: RUNTIME_INCARNATION,
         formId: 'login-form',
         generation: 4,
         customPlanDigest: '0'.repeat(64),
@@ -344,7 +378,8 @@ describe('context menu', () => {
       favorite: false,
       target: {
         kind: 'login', frameId: 0, documentId: 'doc-A', formId: 'login-form',
-        generation: 1, customPlanDigest: '0'.repeat(64),
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 1,
+        customPlanDigest: '0'.repeat(64),
       },
     };
     const { deps, created } = makeDeps(
@@ -374,6 +409,7 @@ describe('context menu', () => {
         kind: 'login',
         frameId: 3,
         documentId: 'doc-A',
+        runtimeIncarnation: RUNTIME_INCARNATION,
         formId: 'login-form',
         generation: 4,
         customPlanDigest: '0'.repeat(64),
@@ -407,6 +443,96 @@ describe('context menu', () => {
     expect(deps.getFillData).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['missing', undefined],
+    ['malformed', 'not-a-uuid'],
+    ['wrong version', '11111111-1111-1111-8111-111111111111'],
+    ['wrong variant', '11111111-1111-4111-7111-111111111111'],
+    ['uppercase hexadecimal', RUNTIME_INCARNATION.toUpperCase()],
+    ['non-canonical suffix', `${RUNTIME_INCARNATION} `],
+  ])('rejects a claimed login target with a %s runtime incarnation', async (_label, runtimeIncarnation) => {
+    const login = loginSuggestion('l1');
+    const { deps } = makeDeps('unlocked', [], [], [login]);
+    deps.tabs.sendMessage.mockResolvedValueOnce({
+      status: 'claimed',
+      ...(runtimeIncarnation === undefined ? {} : { runtimeIncarnation }),
+      formId: login.target!.formId,
+      generation: login.target!.generation,
+      customPlanDigest: login.target!.customPlanDigest,
+    });
+
+    await createContextMenu(deps).handleClick(
+      'vw-login|l1',
+      { id: 7 },
+      0,
+      CLICKED_FRAME_URL,
+      CLICK_TIME,
+    );
+
+    expect(deps.getTabSuggestions).not.toHaveBeenCalled();
+    expect(deps.fillTabSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('does not fill a login when the claimed runtime differs from the refreshed target', async () => {
+    const login = loginSuggestion('l1');
+    const { deps } = makeDeps('unlocked', [], [], [login]);
+    deps.tabs.sendMessage.mockResolvedValueOnce({
+      status: 'claimed',
+      runtimeIncarnation: OTHER_RUNTIME_INCARNATION,
+      formId: login.target!.formId,
+      generation: login.target!.generation,
+      customPlanDigest: login.target!.customPlanDigest,
+    });
+
+    await createContextMenu(deps).handleClick(
+      'vw-login|l1',
+      { id: 7 },
+      0,
+      CLICKED_FRAME_URL,
+      CLICK_TIME,
+    );
+
+    expect(deps.fillTabSuggestion).not.toHaveBeenCalled();
+    expect(deps.continuation.stageContextLoginReprompt).not.toHaveBeenCalled();
+  });
+
+  it('carries the claimed runtime in a login reprompt continuation target', async () => {
+    const baseLogin = loginSuggestion('l1');
+    const login: LoginSuggestion = {
+      ...baseLogin,
+      target: {
+        ...baseLogin.target!,
+        frameId: 3,
+        runtimeIncarnation: OTHER_RUNTIME_INCARNATION,
+      },
+    };
+    const { deps } = makeDeps('unlocked', [], [], [login]);
+    deps.getRuntimeIncarnation.mockImplementation(async (_tabId, frameId) => (
+      frameId === 0 ? RUNTIME_INCARNATION : OTHER_RUNTIME_INCARNATION
+    ));
+    deps.fillTabSuggestion.mockResolvedValueOnce({ status: 'reprompt_required' });
+
+    await createContextMenu(deps).handleClick(
+      'vw-login|l1',
+      { id: 7, windowId: 3 },
+      3,
+      CLICKED_FRAME_URL,
+      CLICK_TIME,
+    );
+
+    expect(deps.continuation.stageContextLoginReprompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        frameDocumentId: 'doc-A',
+        topRuntimeIncarnation: RUNTIME_INCARNATION,
+        frameRuntimeIncarnation: OTHER_RUNTIME_INCARNATION,
+      }),
+      'l1',
+      expect.objectContaining({ runtimeIncarnation: OTHER_RUNTIME_INCARNATION }),
+    );
+    expect(deps.getRuntimeIncarnation).toHaveBeenCalledWith(7, 0, 'doc-A');
+    expect(deps.getRuntimeIncarnation).toHaveBeenCalledWith(7, 3, 'doc-A');
+  });
+
   it('does not fill a login when the refreshed target belongs to another browser document', async () => {
     const login: LoginSuggestion = {
       kind: 'login',
@@ -419,6 +545,7 @@ describe('context menu', () => {
         kind: 'login',
         frameId: 3,
         documentId: 'doc-B',
+        runtimeIncarnation: RUNTIME_INCARNATION,
         formId: 'login-form',
         generation: 4,
         customPlanDigest: '0'.repeat(64),
@@ -452,6 +579,7 @@ describe('context menu', () => {
       message.type === 'autofill.claimContextLoginTarget'
         ? {
             status: 'claimed',
+            runtimeIncarnation: RUNTIME_INCARNATION,
             formId: 'deleted-form',
             generation: 4,
             customPlanDigest: '0'.repeat(64),
@@ -483,6 +611,7 @@ describe('context menu', () => {
         kind: 'login',
         frameId: 3,
         documentId: 'doc-A',
+        runtimeIncarnation: RUNTIME_INCARNATION,
         formId: 'form-b',
         generation: 5,
         customPlanDigest: '1'.repeat(64),
@@ -493,6 +622,7 @@ describe('context menu', () => {
       message.type === 'autofill.claimContextLoginTarget'
         ? {
             status: 'claimed',
+            runtimeIncarnation: RUNTIME_INCARNATION,
             formId: 'form-a',
             generation: 4,
             customPlanDigest: '0'.repeat(64),
@@ -720,7 +850,12 @@ describe('context menu', () => {
 
     expect(actions.createCipher).toHaveBeenCalledWith(
       'identity',
-      expect.objectContaining({ tabId: 7, windowId: 4, frameDocumentId: 'doc-A' }),
+      expect.objectContaining({
+        tabId: 7,
+        windowId: 4,
+        frameDocumentId: 'doc-A',
+        frameRuntimeIncarnation: RUNTIME_INCARNATION,
+      }),
       expect.any(Function),
     );
   });
@@ -753,6 +888,7 @@ describe('context menu', () => {
         roles: ['number'],
         data: { number: '4111' },
         expectedFrameUrl: CLICKED_FRAME_URL,
+        expectedRuntimeIncarnation: RUNTIME_INCARNATION,
       },
       opts: { frameId: 3, documentId: 'doc-A' },
     });
@@ -761,8 +897,16 @@ describe('context menu', () => {
 
   it('waits for a successful target reservation before reading fill data', async () => {
     const { deps } = makeDeps('unlocked');
-    let resolveReservation!: (value: { status: 'reserved'; roles: ['number'] }) => void;
-    const reservationGate = new Promise<{ status: 'reserved'; roles: ['number'] }>((resolve) => { resolveReservation = resolve; });
+    let resolveReservation!: (value: {
+      status: 'reserved';
+      runtimeIncarnation: string;
+      roles: ['number'];
+    }) => void;
+    const reservationGate = new Promise<{
+      status: 'reserved';
+      runtimeIncarnation: string;
+      roles: ['number'];
+    }>((resolve) => { resolveReservation = resolve; });
     deps.tabs.sendMessage.mockImplementation(async (_id: number, message: ContextMenuMessage) => {
       if (message.type === 'autofill.reserveFillTarget') return reservationGate;
       return undefined;
@@ -773,15 +917,43 @@ describe('context menu', () => {
     await vi.waitFor(() => expect(deps.tabs.sendMessage).toHaveBeenCalledOnce());
     expect(deps.getFillData).not.toHaveBeenCalled();
 
-    resolveReservation({ status: 'reserved', roles: ['number'] });
+    resolveReservation({
+      status: 'reserved',
+      runtimeIncarnation: RUNTIME_INCARNATION,
+      roles: ['number'],
+    });
     await pending;
     expect(deps.getFillData).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['malformed', 'not-a-uuid'],
+    ['wrong version', '11111111-1111-1111-8111-111111111111'],
+    ['wrong variant', '11111111-1111-4111-7111-111111111111'],
+    ['uppercase hexadecimal', RUNTIME_INCARNATION.toUpperCase()],
+    ['non-canonical suffix', `${RUNTIME_INCARNATION} `],
+  ])('rejects a reservation with a %s runtime incarnation', async (_label, runtimeIncarnation) => {
+    const { deps } = makeDeps('unlocked');
+    deps.tabs.sendMessage.mockResolvedValueOnce({
+      status: 'reserved',
+      ...(runtimeIncarnation === undefined ? {} : { runtimeIncarnation }),
+      roles: ['number'],
+    });
+
+    await createContextMenu(deps)
+      .handleClick('vw-fill|field|card|c1', { id: 7 }, 0, CLICKED_FRAME_URL, CLICK_TIME);
+
+    expect(deps.getFillData).not.toHaveBeenCalled();
+    expect(deps.tabs.sendMessage.mock.calls.map((call) => (call[1] as ContextMenuMessage).type))
+      .toEqual(['autofill.reserveFillTarget']);
   });
 
   it('canonicalizes the reserved form roles before reading or delivering secrets', async () => {
     const { deps } = makeDeps('unlocked');
     deps.tabs.sendMessage.mockResolvedValueOnce({
       status: 'reserved',
+      runtimeIncarnation: RUNTIME_INCARNATION,
       roles: ['code', 'number', 'code', 'exp'],
     });
 
@@ -798,18 +970,33 @@ describe('context menu', () => {
       type: 'autofill.fill',
       kind: 'card',
       scope: 'form',
+      expectedRuntimeIncarnation: RUNTIME_INCARNATION,
       roles: ['number', 'exp', 'code'],
     });
   });
 
   it.each([
-    ['missing roles', { status: 'reserved' }],
-    ['empty roles', { status: 'reserved', roles: [] }],
-    ['non-array roles', { status: 'reserved', roles: 'number' }],
-    ['wrong-kind roles', { status: 'reserved', roles: ['email'] }],
-    ['unknown roles', { status: 'reserved', roles: ['cardSecret'] }],
-    ['too many raw roles', { status: 'reserved', roles: Array.from({ length: 17 }, () => 'number') }],
-    ['more than one field role', { status: 'reserved', roles: ['number', 'code'] }],
+    ['missing roles', { status: 'reserved', runtimeIncarnation: RUNTIME_INCARNATION }],
+    ['empty roles', { status: 'reserved', runtimeIncarnation: RUNTIME_INCARNATION, roles: [] }],
+    ['non-array roles', { status: 'reserved', runtimeIncarnation: RUNTIME_INCARNATION, roles: 'number' }],
+    ['wrong-kind roles', { status: 'reserved', runtimeIncarnation: RUNTIME_INCARNATION, roles: ['email'] }],
+    ['unknown roles', { status: 'reserved', runtimeIncarnation: RUNTIME_INCARNATION, roles: ['cardSecret'] }],
+    ['unexpected field', {
+      status: 'reserved',
+      runtimeIncarnation: RUNTIME_INCARNATION,
+      roles: ['number'],
+      extra: true,
+    }],
+    ['too many raw roles', {
+      status: 'reserved',
+      runtimeIncarnation: RUNTIME_INCARNATION,
+      roles: Array.from({ length: 17 }, () => 'number'),
+    }],
+    ['more than one field role', {
+      status: 'reserved',
+      runtimeIncarnation: RUNTIME_INCARNATION,
+      roles: ['number', 'code'],
+    }],
   ])('rejects a forged field reservation with %s before reading secrets', async (_label, response) => {
     const { deps } = makeDeps('unlocked');
     deps.tabs.sendMessage.mockResolvedValueOnce(response);
@@ -821,9 +1008,13 @@ describe('context menu', () => {
     expect(deps.authorizeFrame).not.toHaveBeenCalled();
     expect(deps.tabs.sendMessage.mock.calls.map((call) => (call[1] as ContextMenuMessage).type))
       .toEqual(['autofill.reserveFillTarget', 'autofill.cancelFillTarget']);
+    expect(deps.tabs.sendMessage.mock.calls[1]?.[1]).toMatchObject({
+      type: 'autofill.cancelFillTarget',
+      expectedRuntimeIncarnation: RUNTIME_INCARNATION,
+    });
   });
 
-  it('cancels a refused reservation without reading fill data', async () => {
+  it('does not cancel when content reports that no reservation was created', async () => {
     const { deps } = makeDeps('unlocked');
     deps.tabs.sendMessage.mockResolvedValueOnce({ status: 'no_target' });
 
@@ -832,7 +1023,7 @@ describe('context menu', () => {
 
     expect(deps.getFillData).not.toHaveBeenCalled();
     expect(deps.tabs.sendMessage.mock.calls.map((call) => (call[1] as ContextMenuMessage).type))
-      .toEqual(['autofill.reserveFillTarget', 'autofill.cancelFillTarget']);
+      .toEqual(['autofill.reserveFillTarget']);
   });
 
   it('records activity only when the content frame confirms a structured fill', async () => {
@@ -846,7 +1037,11 @@ describe('context menu', () => {
 
     vaultTimeout.recordActivity.mockClear();
     deps.tabs.sendMessage
-      .mockResolvedValueOnce({ status: 'reserved', roles: ['number'] })
+      .mockResolvedValueOnce({
+        status: 'reserved',
+        runtimeIncarnation: RUNTIME_INCARNATION,
+        roles: ['number'],
+      })
       .mockResolvedValueOnce({ status: 'target_changed' });
     await createContextMenu(deps)
       .handleClick('vw-fill|field|card|c1', { id: 7 }, 0, CLICKED_FRAME_URL, CLICK_TIME);
@@ -932,6 +1127,7 @@ describe('context menu', () => {
         kind: 'login',
         frameId: 3,
         documentId: 'doc-A',
+        runtimeIncarnation: RUNTIME_INCARNATION,
         formId: 'login-form',
         generation: 4,
         customPlanDigest: '0'.repeat(64),
@@ -1131,7 +1327,50 @@ describe('context menu', () => {
       'autofill.reserveFillTarget',
       'autofill.holdFillTarget',
     ]);
-    expect(deps.continuation.stageContextStructuredReprompt).toHaveBeenCalledOnce();
+    expect(sent[1]?.msg).toMatchObject({
+      type: 'autofill.holdFillTarget',
+      expectedRuntimeIncarnation: RUNTIME_INCARNATION,
+    });
+    expect(deps.continuation.stageContextStructuredReprompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        frameDocumentId: 'doc-A',
+        frameRuntimeIncarnation: RUNTIME_INCARNATION,
+      }),
+      expect.objectContaining({
+        holdId: expect.any(String),
+        runtimeIncarnation: RUNTIME_INCARNATION,
+      }),
+    );
+  });
+
+  it('binds held-target cleanup to the reservation runtime when continuation staging fails', async () => {
+    const { deps, sent } = makeDeps('unlocked');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    deps.getFillData = vi.fn(async () => {
+      throw Object.assign(new Error('x'), { code: 'reprompt_required' });
+    });
+    deps.continuation.stageContextStructuredReprompt.mockRejectedValueOnce(
+      new Error('continuation unavailable'),
+    );
+
+    await createContextMenu(deps).handleClick(
+      'vw-fill|form|card|c9',
+      { id: 7, windowId: 3 },
+      0,
+      CLICKED_FRAME_URL,
+      CLICK_TIME,
+    );
+
+    expect(sent.map(({ msg }) => msg.type)).toEqual([
+      'autofill.reserveFillTarget',
+      'autofill.holdFillTarget',
+      'autofill.cancelHeldFillTarget',
+    ]);
+    expect(sent[2]?.msg).toMatchObject({
+      type: 'autofill.cancelHeldFillTarget',
+      expectedRuntimeIncarnation: RUNTIME_INCARNATION,
+    });
+    spy.mockRestore();
   });
 
   it('ignores clicks with no tab id or unrecognized menu id', async () => {
@@ -1184,7 +1423,11 @@ describe('context menu', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     deps.tabs.sendMessage = vi.fn(async (_id: number, message: ContextMenuMessage) => {
       if (message.type === 'autofill.reserveFillTarget') {
-        return { status: 'reserved', roles: reservationRoles(message) };
+        return {
+          status: 'reserved',
+          runtimeIncarnation: RUNTIME_INCARNATION,
+          roles: reservationRoles(message),
+        };
       }
       throw new Error('Could not establish connection. Receiving end does not exist.');
     });

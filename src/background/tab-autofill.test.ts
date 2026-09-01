@@ -24,6 +24,8 @@ import { CLIENT_EVENT_BEST_EFFORT_WAIT_MS } from './client-event-best-effort.js'
 
 const TOP_URL = 'https://example.com/login';
 const EVENT_CIPHER_ID = '22222222-2222-4222-8222-222222222222';
+const RUNTIME_INCARNATION = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const OTHER_RUNTIME_INCARNATION = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 function deferred<Value>() {
   let resolve!: (value: Value) => void;
@@ -78,8 +80,9 @@ function inspection(
   forms: FrameAutofillForm[] = [loginForm('form-1')],
   generation = 1,
   frameUrl = TOP_URL,
+  runtimeIncarnation = RUNTIME_INCARNATION,
 ): FrameInspection {
-  return { frameUrl, generation, forms };
+  return { runtimeIncarnation, frameUrl, generation, forms };
 }
 
 function defaultSendToFrame() {
@@ -126,6 +129,7 @@ const LOGIN_TARGET: TabSuggestionTarget = {
   frameId: 0,
   formId: 'form-1',
   documentId: 'doc-A',
+  runtimeIncarnation: RUNTIME_INCARNATION,
   generation: 1,
   customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
 };
@@ -147,7 +151,8 @@ describe('tab autofill coordinator', () => {
         kind: 'login',
         id: 'c1',
         target: {
-          kind: 'login', frameId: 1, formId: 'iframe-form', documentId: 'doc-1', generation: 7,
+          kind: 'login', frameId: 1, formId: 'iframe-form', documentId: 'doc-1',
+          runtimeIncarnation: RUNTIME_INCARNATION, generation: 7,
           customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
         },
       })]);
@@ -161,7 +166,8 @@ describe('tab autofill coordinator', () => {
       });
       const topOutcome = await createTabAutofillCoordinator(top).getSuggestions(7);
       expect(topOutcome.suggestions[0]?.target).toEqual({
-        kind: 'login', frameId: 0, formId: 'top-form', documentId: 'doc-0', generation: 2,
+        kind: 'login', frameId: 0, formId: 'top-form', documentId: 'doc-0',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 2,
         customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
       });
 
@@ -174,7 +180,8 @@ describe('tab autofill coordinator', () => {
       });
       const orderOutcome = await createTabAutofillCoordinator(order).getSuggestions(7);
       expect(orderOutcome.suggestions[0]?.target).toEqual({
-        kind: 'login', frameId: 1, formId: 'first-form', documentId: 'doc-1', generation: 5,
+        kind: 'login', frameId: 1, formId: 'first-form', documentId: 'doc-1',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 5,
         customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
       });
     });
@@ -200,12 +207,26 @@ describe('tab autofill coordinator', () => {
       expect(outcome).toEqual({
         status: 'ready',
         suggestions: [
-          expect.objectContaining({ kind: 'login', id: 'login-1', target: expect.objectContaining({ kind: 'login', generation: 9 }) }),
           expect.objectContaining({
-            kind: 'card', id: 'card-1', target: expect.objectContaining({ kind: 'card', roles: ['number', 'exp'], generation: 9 }),
+            kind: 'login',
+            id: 'login-1',
+            target: expect.objectContaining({
+              kind: 'login', runtimeIncarnation: RUNTIME_INCARNATION, generation: 9,
+            }),
           }),
           expect.objectContaining({
-            kind: 'identity', id: 'identity-1', target: expect.objectContaining({ kind: 'identity', roles: ['fullName', 'email'], generation: 9 }),
+            kind: 'card',
+            id: 'card-1',
+            target: expect.objectContaining({
+              kind: 'card', runtimeIncarnation: RUNTIME_INCARNATION, roles: ['number', 'exp'], generation: 9,
+            }),
+          }),
+          expect.objectContaining({
+            kind: 'identity',
+            id: 'identity-1',
+            target: expect.objectContaining({
+              kind: 'identity', runtimeIncarnation: RUNTIME_INCARNATION, roles: ['fullName', 'email'], generation: 9,
+            }),
           }),
         ],
       });
@@ -325,6 +346,26 @@ describe('tab autofill coordinator', () => {
       );
     });
 
+    it.each([
+      undefined,
+      '11111111-1111-3111-8111-111111111111',
+      '11111111-1111-4111-7111-111111111111',
+      RUNTIME_INCARNATION.toUpperCase(),
+    ])('rejects a non-canonical runtime incarnation from frame inspection: %s', async (runtimeIncarnation) => {
+      const deps = makeDeps({
+        sendToFrame: vi.fn(async () => ({
+          ...(runtimeIncarnation === undefined ? {} : { runtimeIncarnation }),
+          frameUrl: TOP_URL,
+          generation: 1,
+          forms: [loginForm('form-1')],
+        })),
+      });
+
+      await expect(createTabAutofillCoordinator(deps).getSuggestions(7)).resolves.toEqual({
+        status: 'content_script_unavailable', suggestions: [],
+      });
+    });
+
     it('fails closed when the session or account changes during the scan', async () => {
       let current = true;
       const accountGate = {
@@ -373,7 +414,7 @@ describe('tab autofill coordinator', () => {
         topUrl: TOP_URL,
         frameUrl: TOP_URL,
         targetKey: JSON.stringify([
-          'login', 0, 'form-1', 'doc-A', 1, EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
+          'login', 0, 'form-1', 'doc-A', RUNTIME_INCARNATION, 1, EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
         ]),
       });
       expect(deps.getTab).toHaveBeenCalledTimes(2);
@@ -628,6 +669,7 @@ describe('tab autofill coordinator', () => {
         type: 'autofill.commitLoginFill',
         formId: 'form-1',
         expectedFrameUrl: TOP_URL,
+        expectedRuntimeIncarnation: RUNTIME_INCARNATION,
         expectedGeneration: 1,
         login: { username: 'ada', password: 'secret' },
         customPlan: EMPTY_LOGIN_CUSTOM_PLAN,
@@ -780,7 +822,8 @@ describe('tab autofill coordinator', () => {
       const receipt = Object.freeze({}) as never;
       const commit = vi.fn(async () => ({ kind: 'enqueued' as const }));
       const target: TabSuggestionTarget = {
-        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form', generation: 3,
+        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 3,
         roles: ['number'],
       };
       const deps = makeDeps({
@@ -860,6 +903,7 @@ describe('tab autofill coordinator', () => {
         type: 'autofill.commitLoginFill',
         formId: 'form-1',
         expectedFrameUrl: TOP_URL,
+        expectedRuntimeIncarnation: RUNTIME_INCARNATION,
         expectedGeneration: 1,
         login: { username: 'ada', password: 'secret' },
         customPlan,
@@ -886,7 +930,8 @@ describe('tab autofill coordinator', () => {
 
     it('requests and commits only the card roles revalidated by fresh inspection', async () => {
       const target: TabSuggestionTarget = {
-        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form', generation: 8, roles: ['number'],
+        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 8, roles: ['number'],
       };
       const getFillData = vi.fn(async () => ({
         number: '4111111111111111', code: '123', expMonth: '09', expYear: '2030', email: 'must-not-cross',
@@ -910,6 +955,7 @@ describe('tab autofill coordinator', () => {
         formId: 'card-form',
         roles: ['number'],
         expectedFrameUrl: TOP_URL,
+        expectedRuntimeIncarnation: RUNTIME_INCARNATION,
         expectedGeneration: 8,
         data: { number: '4111111111111111' },
       });
@@ -917,7 +963,8 @@ describe('tab autofill coordinator', () => {
 
     it('expands only the identity fullName composite into its three backing fields', async () => {
       const target: TabSuggestionTarget = {
-        kind: 'identity', frameId: 0, documentId: 'doc-A', formId: 'identity-form', generation: 3, roles: ['fullName'],
+        kind: 'identity', frameId: 0, documentId: 'doc-A', formId: 'identity-form',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 3, roles: ['fullName'],
       };
       const getFillData = vi.fn(async () => ({
         title: 'Countess', firstName: 'Ada', middleName: 'Byron', lastName: 'Lovelace',
@@ -936,6 +983,7 @@ describe('tab autofill coordinator', () => {
         'identity-1', 'identity', ['fullName'], undefined, expect.any(Function),
       );
       expect(sendToFrame).toHaveBeenNthCalledWith(2, 7, { frameId: 0, documentId: 'doc-A' }, expect.objectContaining({
+        expectedRuntimeIncarnation: RUNTIME_INCARNATION,
         data: { firstName: 'Ada', middleName: 'Byron', lastName: 'Lovelace' },
       }));
     });
@@ -944,6 +992,11 @@ describe('tab autofill coordinator', () => {
       ['generation', { ...LOGIN_TARGET, generation: 99 }, inspection([loginForm('form-1')], 1)],
       ['form id', { ...LOGIN_TARGET, formId: 'forged' }, inspection([loginForm('form-1')], 1)],
       ['kind', { ...LOGIN_TARGET, kind: 'login' }, inspection([cardForm('form-1', ['number'])], 1)],
+      [
+        'runtime incarnation',
+        LOGIN_TARGET,
+        inspection([loginForm('form-1')], 1, TOP_URL, OTHER_RUNTIME_INCARNATION),
+      ],
     ] as const)('rejects a stale or forged %s before secret retrieval', async (_label, target, freshInspection) => {
       const getLoginData = vi.fn(async () => ({ password: 'secret' }));
       const deps = makeDeps({
@@ -959,7 +1012,8 @@ describe('tab autofill coordinator', () => {
 
     it('rejects forged structured roles before retrieving any card data', async () => {
       const target: TabSuggestionTarget = {
-        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form', generation: 2, roles: ['number', 'code'],
+        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 2, roles: ['number', 'code'],
       };
       const getFillData = vi.fn(async () => ({ number: '4111', code: '123' }));
       const deps = makeDeps({
@@ -978,7 +1032,8 @@ describe('tab autofill coordinator', () => {
       ['unknown', ['number', 'ssn']],
     ] as const)('rejects a %s role list at the coordinator boundary', async (_label, roles) => {
       const target = {
-        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form', generation: 1, roles,
+        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 1, roles,
       } as unknown as TabSuggestionTarget;
       const deps = makeDeps();
 
@@ -986,6 +1041,26 @@ describe('tab autofill coordinator', () => {
         .resolves.toEqual({ status: 'target_changed' });
       expect(deps.sessionGate.capture).not.toHaveBeenCalled();
       expect(deps.getFillData).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['missing', undefined],
+      ['wrong version', 'aaaaaaaa-aaaa-3aaa-8aaa-aaaaaaaaaaaa'],
+      ['wrong variant', 'aaaaaaaa-aaaa-4aaa-7aaa-aaaaaaaaaaaa'],
+      ['uppercase', RUNTIME_INCARNATION.toUpperCase()],
+    ] as const)('rejects a %s target runtime incarnation before reading browser state', async (_label, runtimeIncarnation) => {
+      const target: Record<string, unknown> = { ...LOGIN_TARGET };
+      if (runtimeIncarnation === undefined) delete target.runtimeIncarnation;
+      else target.runtimeIncarnation = runtimeIncarnation;
+      const deps = makeDeps();
+
+      await expect(createTabAutofillCoordinator(deps).fill(
+        7,
+        'login-1',
+        target as unknown as TabSuggestionTarget,
+      )).resolves.toEqual({ status: 'target_changed' });
+      expect(deps.sessionGate.capture).not.toHaveBeenCalled();
+      expect(deps.getTab).not.toHaveBeenCalled();
     });
 
     it('rejects an inspection URL mismatch before retrieving secrets', async () => {
@@ -1220,7 +1295,10 @@ describe('manual tab autofill', () => {
       tabId: 7,
       frameId: 0,
       targetDocumentId: 'doc-A',
-      target: { kind: 'login', formId: 'form-1', documentId: 'doc-A', generation: 1 },
+      target: {
+        kind: 'login', formId: 'form-1', documentId: 'doc-A',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 1,
+      },
     });
     expect(deps.findCandidates).not.toHaveBeenCalled();
   });
@@ -1244,7 +1322,7 @@ describe('manual tab autofill', () => {
       .resolves.toMatchObject({
         topUrl: TOP_URL,
         frameUrl: crossUrl,
-        target: { formId: 'cross', documentId: 'doc-X' },
+        target: { formId: 'cross', documentId: 'doc-X', runtimeIncarnation: RUNTIME_INCARNATION },
       });
   });
 

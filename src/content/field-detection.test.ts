@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from 'vitest';
 import { detectCardForms, detectIdentityForms } from './field-detection.js';
+import { createAutofillDetectionContext } from './autofill-detection-context.js';
 
 describe('card form detection', () => {
   beforeEach(() => { document.body.innerHTML = ''; });
@@ -20,6 +21,20 @@ describe('card form detection', () => {
     expect(forms[0]?.fields.has('brand')).toBe(true);
     expect(forms[0]?.fields.has('number')).toBe(true);
     expect(forms[0]?.fields.has('code')).toBe(true);
+  });
+
+  it('classifies a card field from a clipped accessibility label', () => {
+    document.body.innerHTML = `
+      <form>
+        <label for="field-a" style="position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden">
+          Card number
+        </label>
+        <input id="field-a">
+      </form>`;
+
+    const form = detectCardForms()[0];
+
+    expect(form?.fields.get('number')).toBe(document.getElementById('field-a'));
   });
 
   it('classifies a textual security code beside a card number as card code', () => {
@@ -139,10 +154,59 @@ describe('card form detection', () => {
     expect(form.fields.get('number')).toBe(number);
     expect(form.fields.has('code')).toBe(false);
   });
+
+  it('fails closed when raw candidate groups exceed the form budget', () => {
+    document.body.innerHTML = `
+      <form><input autocomplete="cc-number"></form>
+      <form><input autocomplete="cc-number"></form>`;
+    const context = createAutofillDetectionContext({ roots: [document], truncated: false }, {
+      maxForms: 1,
+    });
+
+    expect(detectCardForms(document, new Set(), context, false)).toEqual([]);
+    expect(context.complete).toBe(false);
+    expect(context.failure).toBe('form_limit');
+  });
+
+  it('deduplicates one candidate group across card, identity, and final exclusion passes', () => {
+    document.body.innerHTML = `
+      <section>
+        <input id="excluded" autocomplete="cc-name">
+        <input id="number" autocomplete="cc-number">
+      </section>`;
+    const excluded = document.getElementById('excluded')!;
+    const context = createAutofillDetectionContext({ roots: [document], truncated: false }, {
+      maxForms: 1,
+    });
+
+    expect(detectCardForms(document, new Set(), context, false)).toHaveLength(1);
+    expect(detectIdentityForms(document, new Set(), context, false)).toEqual([]);
+    const final = detectCardForms(document, new Set<Element>([excluded]), context, false);
+
+    expect(final).toHaveLength(1);
+    expect(final[0]?.fields.get('number')).toBe(document.getElementById('number'));
+    expect(context.complete).toBe(true);
+    expect(context.failure).toBeUndefined();
+  });
 });
 
 describe('identity form detection (conservative)', () => {
   beforeEach(() => { document.body.innerHTML = ''; });
+
+  it('classifies identity fields from visually hidden accessibility labels', () => {
+    document.body.innerHTML = `
+      <form>
+        <label for="field-a" style="position:absolute;left:-10000px">First name</label>
+        <input id="field-a">
+        <label for="field-b" style="opacity:0;transform:scale(0)">Last name</label>
+        <input id="field-b">
+      </form>`;
+
+    const form = detectIdentityForms()[0];
+
+    expect(form?.fields.get('firstName')).toBe(document.getElementById('field-a'));
+    expect(form?.fields.get('lastName')).toBe(document.getElementById('field-b'));
+  });
 
   it('detects an identity form when an address signal is present', () => {
     document.body.innerHTML = `

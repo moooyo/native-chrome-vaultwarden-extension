@@ -13,7 +13,14 @@ const MAX_FIELD_ATTRIBUTE_CHARACTERS = 1_024;
 const MAX_FIELD_ATTRIBUTE_BYTES = 1_024;
 const MAX_FIELD_ATTRIBUTES_BYTES = 4_096;
 
-type VisibilityCheck = (element: HTMLElement) => boolean;
+type SemanticSourceCheck = (element: HTMLElement) => boolean;
+
+export interface SemanticHintBudget {
+  claimHintBytes(bytes: number): boolean;
+  claimSemanticSource(): boolean;
+  claimSemanticNode(): boolean;
+  markExceeded(kind: 'hint_bytes' | 'semantic_sources' | 'semantic_nodes'): void;
+}
 
 interface TextBudget {
   visitedNodes: number;
@@ -67,12 +74,18 @@ const NATIVE_NODE_LIST_ITEM = inheritedMethod(NodeList.prototype, 'item');
  */
 export function collectFieldHints(
   control: SemanticHintControl,
-  isVisible: VisibilityCheck,
+  isSemanticSourceAvailable: SemanticSourceCheck,
+  budget?: SemanticHintBudget,
 ): FieldHints {
-  const attributes = boundedFieldAttributes(control);
+  const attributes = boundedFieldAttributes(control, budget);
   const semantic = attributes.unsafe
     ? unsafeLabels()
-    : collectSemanticLabels(control, isVisible, utf8ByteLength(attributes.ariaLabel));
+    : collectSemanticLabels(
+        control,
+        isSemanticSourceAvailable,
+        utf8ByteLength(attributes.ariaLabel),
+        budget,
+      );
   return Object.freeze({
     autocomplete: attributes.autocomplete,
     name: attributes.name,
@@ -89,20 +102,22 @@ export function collectFieldHints(
 
 function collectSemanticLabels(
   control: SemanticHintControl,
-  isVisible: VisibilityCheck,
+  isSemanticSourceAvailable: SemanticSourceCheck,
   initialBytes: number,
+  budget?: SemanticHintBudget,
 ): SemanticLabels {
   const root = semanticRoot(control);
   if (!root) return unsafeLabels();
 
   const sources: HTMLElement[] = [];
   const seenSources = new Set<HTMLElement>();
-  const labels = associatedLabelsFor(control);
+  const labels = associatedLabelsFor(control, budget);
   if (!labels || labels.length > MAX_SEMANTIC_SOURCES) return unsafeLabels();
   for (let index = 0; index < labels.length; index += 1) {
     const label = labels[index];
     if (!label || nativeRoot(label) !== root) return unsafeLabels();
     if (seenSources.has(label)) continue;
+    if (budget && !budget.claimSemanticSource()) return unsafeLabels();
     seenSources.add(label);
     sources.push(label);
   }
@@ -112,33 +127,51 @@ function collectSemanticLabels(
   if (
     ariaLabelledby.length > MAX_ARIA_LABELLEDBY_LENGTH
     || utf8ByteLength(ariaLabelledby) > MAX_FIELD_ATTRIBUTE_BYTES
-  ) return unsafeLabels();
+  ) {
+    budget?.markExceeded('hint_bytes');
+    return unsafeLabels();
+  }
+  if (budget && !budget.claimHintBytes(utf8ByteLength(ariaLabelledby))) return unsafeLabels();
   const references = ariaLabelledby.trim().split(/[\t\n\f\r ]+/u).filter(Boolean);
-  if (references.length > MAX_SEMANTIC_SOURCES) return unsafeLabels();
+  if (references.length > MAX_SEMANTIC_SOURCES) {
+    budget?.markExceeded('semantic_sources');
+    return unsafeLabels();
+  }
   for (const reference of references) {
-    if (reference.length > MAX_ARIA_REFERENCE_LENGTH) return unsafeLabels();
+    if (reference.length > MAX_ARIA_REFERENCE_LENGTH) {
+      budget?.markExceeded('hint_bytes');
+      return unsafeLabels();
+    }
     const target = elementById(root, reference);
     if (!(target instanceof HTMLElement) || target === control || nativeRoot(target) !== root) {
       return unsafeLabels();
     }
     if (seenSources.has(target)) continue;
+    if (budget && !budget.claimSemanticSource()) return unsafeLabels();
     seenSources.add(target);
     sources.push(target);
-    if (sources.length > MAX_SEMANTIC_SOURCES) return unsafeLabels();
+    if (sources.length > MAX_SEMANTIC_SOURCES) {
+      budget?.markExceeded('semantic_sources');
+      return unsafeLabels();
+    }
   }
 
-  const budget: TextBudget = { visitedNodes: 0 };
+  const textBudget: TextBudget = { visitedNodes: 0 };
   const values: string[] = [];
   const seenValues = new Set<string>();
   let totalBytes = initialBytes;
   for (const source of sources) {
-    if (visible(source, isVisible) !== true) return unsafeLabels();
-    const collected = boundedVisibleText(source, isVisible, budget);
+    if (sourceAvailable(source, isSemanticSourceAvailable) !== true) return unsafeLabels();
+    const collected = boundedSemanticText(source, isSemanticSourceAvailable, textBudget, budget);
     if (collected.overflowed) return unsafeLabels();
     const value = collected.value;
     if (!value || seenValues.has(value)) continue;
     const bytes = utf8ByteLength(value);
-    if (bytes > MAX_SEMANTIC_LABEL_BYTES - totalBytes) return unsafeLabels();
+    if (bytes > MAX_SEMANTIC_LABEL_BYTES - totalBytes) {
+      budget?.markExceeded('hint_bytes');
+      return unsafeLabels();
+    }
+    if (budget && !budget.claimHintBytes(bytes)) return unsafeLabels();
     totalBytes += bytes;
     seenValues.add(value);
     values.push(value);
@@ -150,26 +183,34 @@ function unsafeLabels(): SemanticLabels {
   return Object.freeze({ values: EMPTY_LABELS, unsafe: true });
 }
 
-function boundedFieldAttributes(element: Element): BoundedFieldAttributes {
+function boundedFieldAttributes(element: Element, budget?: SemanticHintBudget): BoundedFieldAttributes {
   const names = ['autocomplete', 'name', 'id', 'aria-label', 'placeholder', 'type'] as const;
   const values = new Map<typeof names[number], string>();
   let totalBytes = 0;
   for (const name of names) {
     const raw = attribute(element, name);
     if (raw === undefined) return emptyFieldAttributes(true);
-    if (raw.length > MAX_FIELD_ATTRIBUTE_CHARACTERS) return emptyFieldAttributes(true);
+    if (raw.length > MAX_FIELD_ATTRIBUTE_CHARACTERS) {
+      budget?.markExceeded('hint_bytes');
+      return emptyFieldAttributes(true);
+    }
     const value = name === 'aria-label' ? raw.replace(/\s+/gu, ' ').trim() : raw;
     const characters = name === 'aria-label'
       ? MAX_SEMANTIC_LABEL_CHARACTERS
       : MAX_FIELD_ATTRIBUTE_CHARACTERS;
     if (value.length > characters) {
+      budget?.markExceeded('hint_bytes');
       return emptyFieldAttributes(true);
     }
-    const bytes = utf8ByteLength(value);
+    const bytes = utf8ByteLength(raw);
     if (
       bytes > MAX_FIELD_ATTRIBUTE_BYTES
       || bytes > MAX_FIELD_ATTRIBUTES_BYTES - totalBytes
-    ) return emptyFieldAttributes(true);
+    ) {
+      budget?.markExceeded('hint_bytes');
+      return emptyFieldAttributes(true);
+    }
+    if (budget && !budget.claimHintBytes(bytes)) return emptyFieldAttributes(true);
     totalBytes += bytes;
     values.set(name, value);
   }
@@ -196,10 +237,11 @@ function emptyFieldAttributes(unsafe: boolean): BoundedFieldAttributes {
   };
 }
 
-function boundedVisibleText(
+function boundedSemanticText(
   source: HTMLElement,
-  isVisible: VisibilityCheck,
-  budget: TextBudget,
+  isSemanticSourceAvailable: SemanticSourceCheck,
+  textBudget: TextBudget,
+  projectionBudget?: SemanticHintBudget,
 ): CollectedText {
   const parts: string[] = [];
   let rawCharacters = 0;
@@ -213,20 +255,34 @@ function boundedVisibleText(
   while (stack.length > 0) {
     const frame = stack.at(-1)!;
     if (frame.index >= frame.length) {
+      if (nativeNodeListLength(frame.nodes) !== frame.length) {
+        projectionBudget?.markExceeded('semantic_nodes');
+        return { overflowed: true };
+      }
       stack.pop();
       continue;
     }
     const node = nativeNodeListItem(frame.nodes, frame.index);
     frame.index += 1;
     if (!node) return { overflowed: true };
-    budget.visitedNodes += 1;
-    if (budget.visitedNodes > MAX_SEMANTIC_SOURCE_NODES) return { overflowed: true };
+    textBudget.visitedNodes += 1;
+    if (textBudget.visitedNodes > MAX_SEMANTIC_SOURCE_NODES) {
+      projectionBudget?.markExceeded('semantic_nodes');
+      return { overflowed: true };
+    }
+    if (projectionBudget && !projectionBudget.claimSemanticNode()) return { overflowed: true };
 
     if (node instanceof Text) {
       const value = textData(node);
       if (value === undefined) return { overflowed: true };
+      if (projectionBudget && !projectionBudget.claimHintBytes(utf8ByteLength(value))) {
+        return { overflowed: true };
+      }
       rawCharacters += value.length;
-      if (rawCharacters > MAX_SEMANTIC_SOURCE_RAW_CHARACTERS) return { overflowed: true };
+      if (rawCharacters > MAX_SEMANTIC_SOURCE_RAW_CHARACTERS) {
+        projectionBudget?.markExceeded('hint_bytes');
+        return { overflowed: true };
+      }
       parts.push(value);
       continue;
     }
@@ -237,9 +293,9 @@ function boundedVisibleText(
       return { overflowed: true };
     }
     if (!(node instanceof HTMLElement) || excludedTextSubtree(node)) continue;
-    const visibility = visible(node, isVisible);
-    if (visibility === undefined) return { overflowed: true };
-    if (!visibility) continue;
+    const available = sourceAvailable(node, isSemanticSourceAvailable);
+    if (available === undefined) return { overflowed: true };
+    if (!available) continue;
     const children = childNodes(node);
     if (!children) return { overflowed: true };
     const nextFrame = nodeFrame(children);
@@ -248,7 +304,10 @@ function boundedVisibleText(
   }
 
   const value = parts.join(' ').replace(/\s+/gu, ' ').trim();
-  if (value.length > MAX_SEMANTIC_LABEL_CHARACTERS) return { overflowed: true };
+  if (value.length > MAX_SEMANTIC_LABEL_CHARACTERS) {
+    projectionBudget?.markExceeded('hint_bytes');
+    return { overflowed: true };
+  }
   return { value, overflowed: false };
 }
 
@@ -262,7 +321,7 @@ function excludedTextSubtree(element: HTMLElement): boolean {
     || element instanceof HTMLTemplateElement;
 }
 
-function visible(element: HTMLElement, check: VisibilityCheck): boolean | undefined {
+function sourceAvailable(element: HTMLElement, check: SemanticSourceCheck): boolean | undefined {
   try {
     return check(element);
   } catch {
@@ -280,6 +339,7 @@ function foreignElementIsHidden(element: Element): boolean | undefined {
 /** Read native label associations without consulting an instance-defined `labels` getter. */
 export function associatedLabelsFor(
   control: SemanticHintControl,
+  budget?: SemanticHintBudget,
 ): readonly HTMLLabelElement[] | undefined {
   const getter = control instanceof HTMLInputElement
     ? NATIVE_INPUT_LABELS
@@ -291,7 +351,11 @@ export function associatedLabelsFor(
     const labels = Reflect.apply(getter, control, []) as unknown;
     if (!labels || typeof labels !== 'object') return undefined;
     const length = nativeNodeListLength(labels);
-    if (length === undefined || length > MAX_SEMANTIC_SOURCES) return undefined;
+    if (length === undefined) return undefined;
+    if (length > MAX_SEMANTIC_SOURCES) {
+      budget?.markExceeded('semantic_sources');
+      return undefined;
+    }
     const result: HTMLLabelElement[] = [];
     for (let index = 0; index < length; index += 1) {
       const label = nativeNodeListItem(labels, index);

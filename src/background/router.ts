@@ -186,7 +186,14 @@ export interface RouterDeps {
   pendingSaves?: Pick<AutofillPendingSaveStore, 'put' | 'claim' | 'take' | 'dismiss'>;
   saveCaptureCoordinator?: Pick<
     AutofillSaveCaptureCoordinator,
-    'stage' | 'discardUnconfirmedDocument'
+    | 'activateRuntime'
+    | 'isRuntimeCurrent'
+    | 'stage'
+    | 'stageUsername'
+    | 'consumeUsername'
+    | 'claimPendingSave'
+    | 'takePendingSave'
+    | 'dismissPendingSave'
   >;
   /** Returns an owned key copy. Pending-save stores consume and zero both halves. */
   loadPendingSaveUserKey?: () => Promise<SymmetricKey | undefined>;
@@ -195,6 +202,10 @@ export interface RouterDeps {
     'takeCommand' | 'issueGrant' | 'authorizeGrant' | 'consumeGrant'
   >;
   getKeyboardTopDocument(tabId: number): Promise<{ documentId: string; url: string } | undefined>;
+  getContentDocument?(
+    tabId: number,
+    frameId: number,
+  ): Promise<{ documentId: string; url: string } | undefined>;
   usernameStages?: Pick<AutofillUsernameStageStore, 'stage' | 'consume'>;
   getSessionBindingId?: () => Promise<string | undefined>;
   pageLoadFillDeduper: Pick<PageLoadFillDeduper, 'claim' | 'persist'>;
@@ -610,6 +621,46 @@ function requireContent(context: RequestContext): Extract<RequestContext, { kind
   return context;
 }
 
+const RUNTIME_BOUND_AUTOFILL_REQUESTS = new Set<RequestMessage['type']>([
+  'autofill.findCandidates',
+  'autofill.findStructuredCandidates',
+  'autofill.claimKeyboardGrant',
+  'autofill.keyboard.findCandidates',
+  'autofill.keyboard.issueIntent',
+  'autofill.continuation.redeemKeyboardReprompt',
+  'autofill.keyboard.redeemLoginIntent',
+  'autofill.keyboard.redeemTotpIntent',
+  'autofill.keyboard.redeemStructuredIntent',
+  'autofill.issueIntent',
+  'autofill.issueStructuredIntent',
+  'autofill.redeemLoginIntent',
+  'autofill.redeemTotpIntent',
+  'autofill.redeemStructuredIntent',
+  'autofill.getClientConfig',
+  'autofill.authorizeGeneratorUse',
+  'autofill.trackGeneratedValue',
+  'autofill.issuePageLoadIntent',
+  'autofill.redeemPageLoadIntent',
+  'autofill.captureSubmission',
+  'autofill.claimSavePrompt',
+  'autofill.commitSavePrompt',
+  'autofill.dismissSavePrompt',
+]);
+
+function runtimeIncarnation(value: unknown): string {
+  if (typeof value !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)) {
+    throw deniedAutofillIntent();
+  }
+  return value;
+}
+
+function runtimeIncarnationProperty(value: object, key = 'runtimeIncarnation'): string {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (!descriptor?.enumerable || !('value' in descriptor)) throw deniedAutofillIntent();
+  return runtimeIncarnation(descriptor.value);
+}
+
 function requireExtensionPage(
   context: RequestContext,
 ): Extract<RequestContext, { kind: 'extensionPage' }> {
@@ -828,7 +879,8 @@ function requireContentTopFrame(context: RequestContext): Extract<RequestContext
 }
 
 function isSessionBoundRequest(type: RequestMessage['type']): boolean {
-  if (type === 'vault.popupOpened' || type === 'vault.getSyncStatus') return false;
+  if (type === 'vault.popupOpened' || type === 'vault.getSyncStatus'
+      || type === 'autofill.activateRuntime') return false;
   if (
     type === 'autofill.redeemLoginIntent'
     || type === 'autofill.redeemTotpIntent'
@@ -1045,6 +1097,7 @@ function redeemAutofillIntent(
   purpose: AutofillSecretPurpose,
   channel: 'interactive' | 'keyboard' | 'page-load',
   context: RequestContext,
+  runtimeIncarnationValue: string,
   structuredTarget?: ContentStructuredAutofillTarget,
 ) {
   const redemption = context.kind === 'content'
@@ -1052,6 +1105,7 @@ function redeemAutofillIntent(
         tabId: context.tabId,
         frameId: context.frameId,
         documentId: context.documentId ?? '',
+        runtimeIncarnation: runtimeIncarnationValue,
         frameUrl: context.url,
         purpose,
         channel,
@@ -1061,6 +1115,7 @@ function redeemAutofillIntent(
         tabId: -1,
         frameId: -1,
         documentId: '',
+        runtimeIncarnation: runtimeIncarnationValue,
         frameUrl: 'https://invalid.invalid/',
         purpose,
         channel,
@@ -1212,7 +1267,9 @@ async function usernameStageContext(
   sessionLease: SessionLease,
   accountLease: AccountLease,
   policyLease: AutofillAuthorizationPolicyLease,
+  runtimeIncarnationValue: string,
 ): Promise<AutofillUsernameStageContext> {
+  if (!caller.documentId) throw deniedAutofillIntent();
   const sessionBindingId = await deps.getSessionBindingId?.();
   if (!sessionBindingId) throw deniedAutofillIntent();
   deps.accountGate.assert(accountLease);
@@ -1221,6 +1278,8 @@ async function usernameStageContext(
   return {
     tabId: caller.tabId,
     frameId: caller.frameId,
+    documentId: caller.documentId,
+    runtimeIncarnation: runtimeIncarnationValue,
     origin: caller.origin,
     sessionGeneration: sessionLease.generation,
     sessionBindingId,
@@ -1238,11 +1297,13 @@ type ActiveKeyboardGrant = KeyboardGrant<SessionLease, AccountLease, AutofillAut
 
 function keyboardGrantContext(
   caller: Extract<RequestContext, { kind: 'content' }>,
+  runtimeIncarnationValue: string,
 ): KeyboardGrantContext {
   return {
     tabId: caller.tabId,
     frameId: caller.frameId,
     documentId: caller.documentId ?? '',
+    runtimeIncarnation: runtimeIncarnationValue,
     frameUrl: caller.url,
   };
 }
@@ -1331,6 +1392,7 @@ async function pendingSaveDocumentContext(
   deps: RouterDeps,
   caller: Extract<RequestContext, { kind: 'content' }>,
   leases: { readonly sessionLease: SessionLease; readonly accountLease: AccountLease; readonly policyLease: AutofillAuthorizationPolicyLease },
+  runtimeIncarnationValue: string,
 ): Promise<AutofillPendingSaveDocumentContext> {
   if (!caller.documentId) throw deniedAutofillIntent();
   const binding = await usernameStageContext(
@@ -1339,6 +1401,7 @@ async function pendingSaveDocumentContext(
     leases.sessionLease,
     leases.accountLease,
     leases.policyLease,
+    runtimeIncarnationValue,
   );
   return Object.freeze({
     ...binding,
@@ -1364,7 +1427,9 @@ function parseCapturedSubmission(
     values.set(key as string, descriptor.value);
   }
   if (values.get('type') !== 'autofill.captureSubmission'
-      || [...values.keys()].some((key) => !['type', 'username', 'password', 'submission'].includes(key))) {
+      || [...values.keys()].some((key) => ![
+        'type', 'runtimeIncarnation', 'username', 'password', 'submission',
+      ].includes(key))) {
     throw deniedAutofillIntent();
   }
   const username = values.get('username');
@@ -1375,7 +1440,7 @@ function parseCapturedSubmission(
     || username.trim() !== username
   )) throw deniedAutofillIntent();
   if (!values.has('password')) {
-    if (keys.length !== 2 || !values.has('username') || values.has('submission')) {
+    if (keys.length !== 3 || !values.has('username') || values.has('submission')) {
       throw deniedAutofillIntent();
     }
     return Object.freeze({ username: username as string });
@@ -1445,10 +1510,11 @@ function strictSavePromptId(
   const keys = Reflect.ownKeys(request);
   if (
     request.type !== expectedType
-    || keys.length !== 2
+    || keys.length !== 3
     || keys.some((key) => typeof key !== 'string')
     || !keys.includes('type')
     || !keys.includes('promptId')
+    || !keys.includes('runtimeIncarnation')
     || typeof request.promptId !== 'string'
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.promptId)
   ) throw deniedAutofillIntent();
@@ -1457,6 +1523,34 @@ function strictSavePromptId(
     if (!descriptor?.enumerable || !('value' in descriptor)) throw deniedAutofillIntent();
   }
   return request.promptId;
+}
+
+function strictClaimCaptureId(
+  request: Extract<RequestMessage, { readonly type: 'autofill.claimSavePrompt' }>,
+): string | undefined {
+  const captureDescriptor = Object.getOwnPropertyDescriptor(request, 'captureId');
+  const hasCaptureId = captureDescriptor !== undefined;
+  const expected = hasCaptureId
+    ? ['type', 'runtimeIncarnation', 'captureId']
+    : ['type', 'runtimeIncarnation'];
+  const keys = Reflect.ownKeys(request);
+  if (keys.length !== expected.length
+      || keys.some((key) => typeof key !== 'string' || !expected.includes(key))
+      || expected.some((key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(request, key);
+        return !descriptor?.enumerable || !('value' in descriptor);
+      })) {
+    throw deniedAutofillIntent();
+  }
+  if (!hasCaptureId) return undefined;
+  const captureId = captureDescriptor && 'value' in captureDescriptor
+    ? captureDescriptor.value
+    : undefined;
+  if (typeof captureId !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(captureId)) {
+    throw deniedAutofillIntent();
+  }
+  return captureId;
 }
 
 function strictCipherInputPurpose(
@@ -1647,6 +1741,18 @@ export function createRouter(deps: RouterDeps) {
     async handle(request: RequestMessage, context: RequestContext): Promise<ResponseMessage> {
       let committedSecretMutation = false;
       try {
+        let contentRuntimeIncarnation: string | undefined;
+        if (RUNTIME_BOUND_AUTOFILL_REQUESTS.has(request.type)) {
+          const caller = requireContent(context);
+          if (!caller.documentId || !deps.saveCaptureCoordinator) throw deniedAutofillIntent();
+          contentRuntimeIncarnation = runtimeIncarnationProperty(request);
+          if (!(await deps.saveCaptureCoordinator.isRuntimeCurrent(
+            caller.tabId,
+            caller.frameId,
+            caller.documentId,
+            contentRuntimeIncarnation,
+          ))) throw deniedAutofillIntent();
+        }
         if (request.type === 'auth.requestPasswordHint') {
           requirePopupDocument(context);
           if (!isExactPasswordHintRequest(request)) {
@@ -3154,6 +3260,51 @@ export function createRouter(deps: RouterDeps) {
             await deps.vault.deleteSend(request.id);
             return { ok: true, data: null };
           }
+          case 'autofill.activateRuntime': {
+            const caller = requireContent(context);
+            if (!caller.documentId || !deps.saveCaptureCoordinator || !deps.getContentDocument) {
+              throw deniedAutofillIntent();
+            }
+            const keys = Reflect.ownKeys(request);
+            const hasPrevious = Object.hasOwn(request, 'previousRuntimeIncarnation');
+            const expected = hasPrevious
+              ? ['type', 'runtimeIncarnation', 'previousRuntimeIncarnation']
+              : ['type', 'runtimeIncarnation'];
+            if (keys.length !== expected.length
+                || keys.some((key) => typeof key !== 'string' || !expected.includes(key))
+                || expected.some((key) => {
+                  const descriptor = Object.getOwnPropertyDescriptor(request, key);
+                  return !descriptor?.enumerable || !('value' in descriptor);
+                })) {
+              throw deniedAutofillIntent();
+            }
+            const currentDocument = await deps.getContentDocument(caller.tabId, caller.frameId);
+            let currentUrl: string | undefined;
+            try { currentUrl = currentDocument ? new URL(currentDocument.url).href : undefined; }
+            catch { /* Fail closed below. */ }
+            if (!currentDocument
+                || currentDocument.documentId !== caller.documentId
+                || currentUrl !== new URL(caller.url).href) {
+              throw deniedAutofillIntent();
+            }
+            const active = await deps.saveCaptureCoordinator.activateRuntime({
+              tabId: caller.tabId,
+              frameId: caller.frameId,
+              documentId: caller.documentId,
+              frameUrl: caller.url,
+              runtimeIncarnation: runtimeIncarnationProperty(request),
+              ...(!hasPrevious
+                ? {}
+                : {
+                    previousRuntimeIncarnation: runtimeIncarnationProperty(
+                      request,
+                      'previousRuntimeIncarnation',
+                    ),
+                  }),
+            });
+            if (!active) throw deniedAutofillIntent();
+            return { ok: true, data: { status: 'active' } };
+          }
           case 'autofill.claimKeyboardGrant': {
             const caller = requireContent(context);
             if (!caller.documentId) throw deniedAutofillIntent();
@@ -3174,7 +3325,7 @@ export function createRouter(deps: RouterDeps) {
             deps.sessionGate.assert(claimedSessionLease);
             assertAutofillAuthorizationPolicyLease(deps, authorization.policyLease);
             const keyboardGrantId = deps.keyboardGrants.issueGrant({
-              ...keyboardGrantContext(caller),
+              ...keyboardGrantContext(caller, contentRuntimeIncarnation!),
               topDocumentId: command.topDocumentId,
               topFrameUrl: command.topFrameUrl,
               binding,
@@ -3187,7 +3338,7 @@ export function createRouter(deps: RouterDeps) {
           case 'autofill.keyboard.findCandidates': {
             const caller = requireContent(context);
             if (!caller.documentId) throw deniedAutofillIntent();
-            const grantContext = keyboardGrantContext(caller);
+            const grantContext = keyboardGrantContext(caller, contentRuntimeIncarnation!);
             const grant = deps.keyboardGrants.authorizeGrant(request.keyboardGrantId, grantContext);
             if (!grant) throw deniedAutofillIntent();
             await assertKeyboardGrantTopDocumentCurrent(
@@ -3263,7 +3414,7 @@ export function createRouter(deps: RouterDeps) {
             if (!caller.documentId) throw deniedAutofillIntent();
             const grant = deps.keyboardGrants.consumeGrant(
               request.keyboardGrantId,
-              keyboardGrantContext(caller),
+              keyboardGrantContext(caller, contentRuntimeIncarnation!),
             );
             if (!grant) throw deniedAutofillIntent();
             await assertKeyboardTopDocumentCurrent(deps, grant);
@@ -3310,6 +3461,7 @@ export function createRouter(deps: RouterDeps) {
               tabId: grant.tabId,
               frameId: grant.frameId,
               documentId: grant.documentId,
+              runtimeIncarnation: grant.runtimeIncarnation,
               frameUrl: grant.frameUrl,
               cipherId: candidate.id,
               purpose: grant.purpose,
@@ -3330,7 +3482,13 @@ export function createRouter(deps: RouterDeps) {
             if (!caller.documentId || !deps.autofillContinuation) throw deniedAutofillIntent();
             const proof = await deps.autofillContinuation.redeemKeyboardReprompt(
               request.continuationId,
-              { tabId: caller.tabId, frameId: caller.frameId, documentId: caller.documentId, url: caller.url },
+              {
+                tabId: caller.tabId,
+                frameId: caller.frameId,
+                documentId: caller.documentId,
+                runtimeIncarnation: contentRuntimeIncarnation!,
+                url: caller.url,
+              },
             );
             if (!proof) throw deniedAutofillIntent();
             deps.accountGate.assert(proof.accountLease);
@@ -3360,6 +3518,7 @@ export function createRouter(deps: RouterDeps) {
               tabId: proof.source.tabId,
               frameId: proof.source.frameId,
               documentId: proof.source.frameDocumentId,
+              runtimeIncarnation: proof.runtimeIncarnation,
               frameUrl: caller.url,
               cipherId: proof.cipherId,
               purpose: proof.binding.purpose,
@@ -3410,6 +3569,7 @@ export function createRouter(deps: RouterDeps) {
               tabId: caller.tabId,
               frameId: caller.frameId,
               documentId: caller.documentId,
+              runtimeIncarnation: contentRuntimeIncarnation!,
               frameUrl: caller.url,
               cipherId: candidate.id,
               purpose: request.purpose,
@@ -3442,6 +3602,7 @@ export function createRouter(deps: RouterDeps) {
               tabId: caller.tabId,
               frameId: caller.frameId,
               documentId: caller.documentId,
+              runtimeIncarnation: contentRuntimeIncarnation!,
               frameUrl: caller.url,
               cipherId: candidate.id,
               purpose: target.kind,
@@ -3456,7 +3617,14 @@ export function createRouter(deps: RouterDeps) {
           case 'autofill.redeemLoginIntent':
           case 'autofill.keyboard.redeemLoginIntent': {
             const keyboard = request.type === 'autofill.keyboard.redeemLoginIntent';
-            const intent = redeemAutofillIntent(deps, request.intentId, 'login', keyboard ? 'keyboard' : 'interactive', context);
+            const intent = redeemAutofillIntent(
+              deps,
+              request.intentId,
+              'login',
+              keyboard ? 'keyboard' : 'interactive',
+              context,
+              contentRuntimeIncarnation!,
+            );
             if (!intent) throw deniedAutofillIntent();
             responseSessionLease = intent.sessionLease;
             responseFinalAssert = () => assertAutofillIntentLeases(deps, intent);
@@ -3526,7 +3694,14 @@ export function createRouter(deps: RouterDeps) {
           case 'autofill.redeemTotpIntent':
           case 'autofill.keyboard.redeemTotpIntent': {
             const keyboard = request.type === 'autofill.keyboard.redeemTotpIntent';
-            const intent = redeemAutofillIntent(deps, request.intentId, 'totp', keyboard ? 'keyboard' : 'interactive', context);
+            const intent = redeemAutofillIntent(
+              deps,
+              request.intentId,
+              'totp',
+              keyboard ? 'keyboard' : 'interactive',
+              context,
+              contentRuntimeIncarnation!,
+            );
             if (!intent) throw deniedAutofillIntent();
             responseSessionLease = intent.sessionLease;
             responseFinalAssert = () => assertAutofillIntentLeases(deps, intent);
@@ -3584,6 +3759,7 @@ export function createRouter(deps: RouterDeps) {
               purpose,
               keyboard ? 'keyboard' : 'interactive',
               context,
+              contentRuntimeIncarnation!,
               request.target,
             );
             if (!intent?.structuredTarget) throw deniedAutofillIntent();
@@ -3696,6 +3872,7 @@ export function createRouter(deps: RouterDeps) {
               tabId: caller.tabId,
               frameId: caller.frameId,
               documentId: caller.documentId,
+              runtimeIncarnation: contentRuntimeIncarnation!,
               frameUrl: caller.url,
               cipherId: candidates[0]!.id,
               purpose: 'login',
@@ -3707,7 +3884,14 @@ export function createRouter(deps: RouterDeps) {
             return { ok: true, data: { intentId } };
           }
           case 'autofill.redeemPageLoadIntent': {
-            const intent = redeemAutofillIntent(deps, request.intentId, 'login', 'page-load', context);
+            const intent = redeemAutofillIntent(
+              deps,
+              request.intentId,
+              'login',
+              'page-load',
+              context,
+              contentRuntimeIncarnation!,
+            );
             if (!intent) throw deniedAutofillIntent();
             responseSessionLease = intent.sessionLease;
             responseFinalAssert = () => assertAutofillIntentLeases(deps, intent);
@@ -3777,8 +3961,8 @@ export function createRouter(deps: RouterDeps) {
           case 'autofill.captureSubmission': {
             const caller = requireContent(context);
             if (!caller.documentId || !sessionLease) throw deniedAutofillIntent();
-            if (!deps.pendingSaves || !deps.saveCaptureCoordinator
-                || !deps.usernameStages || !deps.getSessionBindingId) {
+            if (!deps.saveCaptureCoordinator || !deps.getSessionBindingId
+                || !contentRuntimeIncarnation) {
               throw new Error('Pending save capture is not wired');
             }
             const submitted = parseCapturedSubmission(request);
@@ -3791,16 +3975,20 @@ export function createRouter(deps: RouterDeps) {
               sessionLease,
               accountLease,
               authorization.policyLease,
+              contentRuntimeIncarnation,
             );
             if (!('password' in submitted)) {
-              await deps.usernameStages.stage({ ...stageContext, username: submitted.username });
+              await deps.saveCaptureCoordinator.stageUsername({
+                ...stageContext,
+                username: submitted.username,
+              });
               assertPendingSaveLeases(deps, leases);
               return { ok: true, data: null };
             }
             // A password step always drains the one-shot username stage. Its value is used only when
             // this submission has no username of its own, preventing stale stages from contaminating
             // a later password-only flow.
-            const stagedUsername = await deps.usernameStages.consume(stageContext);
+            const stagedUsername = await deps.saveCaptureCoordinator.consumeUsername(stageContext);
             assertPendingSaveLeases(deps, leases);
             const effectiveCredentials: AutofillPendingSaveCredentials = Object.freeze({
               ...(submitted.username ?? stagedUsername
@@ -3808,12 +3996,18 @@ export function createRouter(deps: RouterDeps) {
                 : {}),
               password: submitted.password,
             });
-            const documentContext = await pendingSaveDocumentContext(deps, caller, leases);
+            const documentContext = await pendingSaveDocumentContext(
+              deps,
+              caller,
+              leases,
+              contentRuntimeIncarnation,
+            );
             const ownedUserKey = await loadPendingSaveUserKey(deps, leases);
             await deps.saveCaptureCoordinator.stage({
               tabId: documentContext.tabId,
               frameId: documentContext.frameId,
               sourceDocumentId: documentContext.documentId,
+              runtimeIncarnation: documentContext.runtimeIncarnation,
               sourceUrl: documentContext.frameUrl,
               origin: documentContext.origin,
               sessionGeneration: documentContext.sessionGeneration,
@@ -3829,35 +4023,21 @@ export function createRouter(deps: RouterDeps) {
             assertPendingSaveLeases(deps, leases);
             return { ok: true, data: null };
           }
-          case 'autofill.discardBfcacheCapture': {
-            const caller = requireContent(context);
-            const keys = Reflect.ownKeys(request);
-            const descriptor = Object.getOwnPropertyDescriptor(request, 'type');
-            if (!caller.documentId
-                || !deps.saveCaptureCoordinator
-                || keys.length !== 1
-                || keys[0] !== 'type'
-                || !descriptor?.enumerable
-                || !('value' in descriptor)
-                || descriptor.value !== 'autofill.discardBfcacheCapture') {
-              throw deniedAutofillIntent();
-            }
-            await deps.saveCaptureCoordinator.discardUnconfirmedDocument(
-              caller.tabId,
-              caller.frameId,
-              caller.documentId,
-            );
-            return { ok: true, data: null };
-          }
           case 'autofill.claimSavePrompt': {
             const caller = requireContent(context);
-            if (!caller.documentId || !sessionLease || !deps.pendingSaves) throw deniedAutofillIntent();
+            const captureId = strictClaimCaptureId(request);
+            if (!caller.documentId || !sessionLease || !deps.saveCaptureCoordinator) throw deniedAutofillIntent();
             const accountLease = deps.accountGate.capture();
             const authorization = await authorizeAutofillActions(deps, caller.url, ['save', 'update']);
             const leases = { sessionLease, accountLease, policyLease: authorization.policyLease };
-            const documentContext = await pendingSaveDocumentContext(deps, caller, leases);
+            const documentContext = await pendingSaveDocumentContext(
+              deps,
+              caller,
+              leases,
+              contentRuntimeIncarnation!,
+            );
             const ownedUserKey = await loadPendingSaveUserKey(deps, leases);
-            const prompt = await deps.pendingSaves.claim(
+            const prompt = await deps.saveCaptureCoordinator.claimPendingSave(
               documentContext,
               ownedUserKey,
               (credentials, sourceUrl) => evaluatePendingSave(
@@ -3867,6 +4047,7 @@ export function createRouter(deps: RouterDeps) {
                 authorization,
                 leases,
               ),
+              captureId,
             );
             assertPendingSaveLeases(deps, leases);
             return prompt.action === 'retry'
@@ -3876,13 +4057,18 @@ export function createRouter(deps: RouterDeps) {
           case 'autofill.commitSavePrompt': {
             const caller = requireContent(context);
             const promptId = strictSavePromptId(request, 'autofill.commitSavePrompt');
-            if (!caller.documentId || !sessionLease || !deps.pendingSaves) throw deniedAutofillIntent();
+            if (!caller.documentId || !sessionLease || !deps.saveCaptureCoordinator) throw deniedAutofillIntent();
             const accountLease = deps.accountGate.capture();
             const authorization = await authorizeAutofillActions(deps, caller.url, ['save', 'update']);
             const leases = { sessionLease, accountLease, policyLease: authorization.policyLease };
-            const documentContext = await pendingSaveDocumentContext(deps, caller, leases);
+            const documentContext = await pendingSaveDocumentContext(
+              deps,
+              caller,
+              leases,
+              contentRuntimeIncarnation!,
+            );
             const ownedUserKey = await loadPendingSaveUserKey(deps, leases);
-            const taken = await deps.pendingSaves.take(
+            const taken = await deps.saveCaptureCoordinator.takePendingSave(
               promptId,
               documentContext,
               ownedUserKey,
@@ -3912,12 +4098,19 @@ export function createRouter(deps: RouterDeps) {
           case 'autofill.dismissSavePrompt': {
             const caller = requireContent(context);
             const promptId = strictSavePromptId(request, 'autofill.dismissSavePrompt');
-            if (!caller.documentId || !sessionLease || !deps.pendingSaves) throw deniedAutofillIntent();
+            if (!caller.documentId || !sessionLease || !deps.saveCaptureCoordinator) throw deniedAutofillIntent();
             const accountLease = deps.accountGate.capture();
             const authorization = await authorizeAutofillActions(deps, caller.url, ['save', 'update']);
             const leases = { sessionLease, accountLease, policyLease: authorization.policyLease };
-            const documentContext = await pendingSaveDocumentContext(deps, caller, leases);
-            if (!(await deps.pendingSaves.dismiss(promptId, documentContext))) throw deniedAutofillIntent();
+            const documentContext = await pendingSaveDocumentContext(
+              deps,
+              caller,
+              leases,
+              contentRuntimeIncarnation!,
+            );
+            if (!(await deps.saveCaptureCoordinator.dismissPendingSave(promptId, documentContext))) {
+              throw deniedAutofillIntent();
+            }
             assertPendingSaveLeases(deps, leases);
             return { ok: true, data: null };
           }
@@ -4134,6 +4327,16 @@ export function createRouter(deps: RouterDeps) {
           (responseFinalAssert ?? (() => deps.sessionGate.assert(responseSessionLease!)))();
           for (const assertVaultCurrent of vaultFinalAuthorities) assertVaultCurrent();
         };
+        const assertContentRuntimeCurrent = async (): Promise<void> => {
+          if (!contentRuntimeIncarnation || context.kind !== 'content' || !context.documentId) return;
+          if (!deps.saveCaptureCoordinator || !(await deps.saveCaptureCoordinator.isRuntimeCurrent(
+            context.tabId,
+            context.frameId,
+            context.documentId,
+            contentRuntimeIncarnation,
+          ))) throw deniedAutofillIntent();
+        };
+        await assertContentRuntimeCurrent();
         if (response.ok && responseReleaseLease && deps.vaultReleaseGate) {
           const releaseProof = await deps.vaultReleaseGate.checkpoint(responseReleaseLease);
           deps.vaultReleaseGate.assertAuthorities(
@@ -4144,6 +4347,7 @@ export function createRouter(deps: RouterDeps) {
         } else if (responseSessionLease) {
           assertResponseCurrent();
         }
+        await assertContentRuntimeCurrent();
         await deps.vaultTimeout?.settlePendingAction?.();
         return response;
       } catch (err) {
@@ -4199,11 +4403,14 @@ function narrowInteractiveLoginProjection(
 function parseContentStructuredAutofillTarget(value: unknown): ContentStructuredAutofillTarget | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).some((key) => !['kind', 'formId', 'generation', 'roles'].includes(key))) return undefined;
+  if (Object.keys(record).some((key) => ![
+    'kind', 'runtimeIncarnation', 'formId', 'generation', 'roles',
+  ].includes(key))) return undefined;
   const kind = record.kind;
   if (kind !== 'card' && kind !== 'identity') return undefined;
   if (
     typeof record.formId !== 'string'
+    || runtimeIncarnation(record.runtimeIncarnation) !== record.runtimeIncarnation
     || record.formId.length === 0
     || record.formId.length > 4_096
     || record.formId.trim() !== record.formId
@@ -4218,6 +4425,7 @@ function parseContentStructuredAutofillTarget(value: unknown): ContentStructured
         || roles.some((role, index) => role !== unsafeRoles[index])) return undefined;
     return Object.freeze({
       kind,
+      runtimeIncarnation: record.runtimeIncarnation as string,
       formId: record.formId,
       generation: record.generation as number,
       roles: Object.freeze([...roles]),
@@ -4228,6 +4436,7 @@ function parseContentStructuredAutofillTarget(value: unknown): ContentStructured
       || roles.some((role, index) => role !== unsafeRoles[index])) return undefined;
   return Object.freeze({
     kind,
+    runtimeIncarnation: record.runtimeIncarnation as string,
     formId: record.formId,
     generation: record.generation as number,
     roles: Object.freeze([...roles]),

@@ -8,11 +8,26 @@ import {
 } from './commands.js';
 import type { TabAutofillSuggestion, TabFillOutcome, TabSuggestionTarget } from '../messaging/protocol.js';
 
+const TOP_RUNTIME_INCARNATION = '11111111-2222-4abc-8def-000000000001';
+const NEXT_TOP_RUNTIME_INCARNATION = '11111111-2222-4abc-8def-000000000002';
+const FRAME_RUNTIME_INCARNATION = '33333333-4444-4abc-8def-000000000001';
+const NEXT_FRAME_RUNTIME_INCARNATION = '33333333-4444-4abc-8def-000000000002';
+
 function deps() {
   return {
     tabs: { sendMessage: vi.fn().mockResolvedValue(undefined) },
-    getTopDocument: vi.fn<(tabId: number) => Promise<{ documentId: string; url: string } | undefined>>(
-      async () => ({ documentId: 'top-doc', url: 'https://example.com/' }),
+    getTopDocument: vi.fn<
+      (tabId: number) => Promise<{
+        documentId: string;
+        url: string;
+        runtimeIncarnation?: string;
+      } | undefined>
+    >(
+      async () => ({
+        documentId: 'top-doc',
+        url: 'https://example.com/',
+        runtimeIncarnation: TOP_RUNTIME_INCARNATION,
+      }),
     ),
     getState: vi.fn<() => Promise<'loggedOut' | 'locked' | 'restricted' | 'unlocked'>>(
       async () => 'unlocked',
@@ -26,7 +41,15 @@ function deps() {
   };
 }
 
-function loginSuggestion(id: string, formId = 'login-form'): TabAutofillSuggestion {
+function loginSuggestion(
+  id: string,
+  formId = 'login-form',
+  target: {
+    readonly frameId?: number;
+    readonly documentId?: string;
+    readonly runtimeIncarnation?: string;
+  } = {},
+): TabAutofillSuggestion {
   return {
     kind: 'login',
     id,
@@ -36,8 +59,9 @@ function loginSuggestion(id: string, formId = 'login-form'): TabAutofillSuggesti
     favorite: false,
     target: {
       kind: 'login',
-      frameId: 0,
-      documentId: 'top-doc',
+      frameId: target.frameId ?? 0,
+      documentId: target.documentId ?? 'top-doc',
+      runtimeIncarnation: target.runtimeIncarnation ?? TOP_RUNTIME_INCARNATION,
       formId,
       generation: 1,
       customPlanDigest: '0'.repeat(64),
@@ -55,6 +79,7 @@ function cardSuggestion(id: string): TabAutofillSuggestion {
       kind: 'card',
       frameId: 0,
       documentId: 'top-doc',
+      runtimeIncarnation: TOP_RUNTIME_INCARNATION,
       formId: 'card-form',
       generation: 1,
       roles: ['number'],
@@ -80,7 +105,11 @@ function coordinatorFixture(initialSuggestions: TabAutofillSuggestion[] = []) {
   });
   const deps = {
     tabs: { sendMessage: vi.fn(async () => undefined) },
-    getTopDocument: vi.fn(async () => ({ documentId: 'top-doc', url: 'https://example.com/' })),
+    getTopDocument: vi.fn(async () => ({
+      documentId: 'top-doc',
+      url: 'https://example.com/',
+      runtimeIncarnation: TOP_RUNTIME_INCARNATION,
+    })),
     getState: vi.fn(async () => state),
     captureSessionLease: vi.fn(() => authority.session),
     assertSessionLease: vi.fn((lease: number) => assertEqual(lease, authority.session)),
@@ -168,6 +197,19 @@ describe('handleFocusedFillCommand', () => {
     expect(d.tabs.sendMessage).not.toHaveBeenCalled();
   });
 
+  it('does not require a runtime incarnation before content claims the command token', async () => {
+    const d = deps();
+    d.getTopDocument.mockResolvedValue({
+      documentId: 'top-doc',
+      url: 'https://example.com/',
+    });
+
+    await handleFocusedFillCommand(FOCUSED_FILL_COMMAND, { id: 7, windowId: 3 }, d);
+
+    expect(d.keyboardGrants.issueCommand).toHaveBeenCalledOnce();
+    expect(d.tabs.sendMessage).toHaveBeenCalledOnce();
+  });
+
   it('stages a locked action without minting or sending a command token', async () => {
     const d = deps();
     d.getState.mockResolvedValueOnce('locked');
@@ -232,9 +274,24 @@ describe('CommandCoordinator', () => {
         windowId: 3,
         documentId: 'top-doc',
         url: 'https://example.com/',
+        runtimeIncarnation: TOP_RUNTIME_INCARNATION,
       },
     );
     expect(fixture.deps.generatePasswordAndTrack).not.toHaveBeenCalled();
+  });
+
+  it('does not stage a locked command for a malformed top runtime incarnation', async () => {
+    const fixture = coordinatorFixture();
+    fixture.setState('locked');
+    fixture.deps.getTopDocument.mockResolvedValue({
+      documentId: 'top-doc',
+      url: 'https://example.com/',
+      runtimeIncarnation: TOP_RUNTIME_INCARNATION.toUpperCase(),
+    });
+
+    await fixture.coordinator.handle(EXTENSION_COMMANDS.GeneratePassword, tab);
+
+    expect(fixture.deps.continuation.stageLockedCommand).not.toHaveBeenCalled();
   });
 
   it('generates through the shared adapter, then copies with owned clear', async () => {
@@ -265,6 +322,28 @@ describe('CommandCoordinator', () => {
     expect(fixture.deps.clipboard.writeSecretAndScheduleClear).not.toHaveBeenCalled();
   });
 
+  it('does not resume a locked generator command into a replacement content runtime', async () => {
+    const fixture = coordinatorFixture();
+    fixture.deps.getTopDocument.mockResolvedValue({
+      documentId: 'top-doc',
+      url: 'https://example.com/',
+      runtimeIncarnation: NEXT_TOP_RUNTIME_INCARNATION,
+    });
+
+    await fixture.coordinator.handle(
+      EXTENSION_COMMANDS.GeneratePassword,
+      tab,
+      () => undefined,
+      {
+        documentId: 'top-doc',
+        url: 'https://example.com/',
+        runtimeIncarnation: TOP_RUNTIME_INCARNATION,
+      },
+    );
+
+    expect(fixture.deps.generatePasswordAndTrack).not.toHaveBeenCalled();
+  });
+
   it('fills and cycles matching logins without requiring a focused claim', async () => {
     const fixture = coordinatorFixture([loginSuggestion('login-a'), loginSuggestion('login-b')]);
 
@@ -275,6 +354,113 @@ describe('CommandCoordinator', () => {
     expect(fixture.deps.fillTabSuggestion.mock.calls.map((call) => call[1]))
       .toEqual(['login-a', 'login-b', 'login-a']);
     expect(fixture.deps.tabs.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('rejects stale or malformed top-frame target runtime incarnations', async () => {
+    const fixture = coordinatorFixture([
+      loginSuggestion('stale-runtime', 'login-form-a', {
+        runtimeIncarnation: NEXT_TOP_RUNTIME_INCARNATION,
+      }),
+      loginSuggestion('malformed-runtime', 'login-form-b', {
+        runtimeIncarnation: TOP_RUNTIME_INCARNATION.toUpperCase(),
+      }),
+    ]);
+
+    await fixture.coordinator.handle(EXTENSION_COMMANDS.AutofillLogin, tab);
+
+    expect(fixture.deps.fillTabSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('propagates a distinct valid child-frame runtime incarnation', async () => {
+    const suggestion = loginSuggestion('child-login', 'child-form', {
+      frameId: 4,
+      documentId: 'child-doc',
+      runtimeIncarnation: FRAME_RUNTIME_INCARNATION,
+    });
+    const fixture = coordinatorFixture([suggestion]);
+
+    await fixture.coordinator.handle(EXTENSION_COMMANDS.AutofillLogin, tab);
+
+    expect(fixture.deps.fillTabSuggestion).toHaveBeenCalledWith(
+      7,
+      'child-login',
+      suggestion.target,
+      expect.any(Function),
+    );
+  });
+
+  it('stops a direct fill when the top runtime changes during candidate discovery', async () => {
+    const fixture = coordinatorFixture([loginSuggestion('login-a')]);
+    fixture.deps.getTabSuggestions.mockImplementationOnce(async () => {
+      fixture.deps.getTopDocument.mockResolvedValue({
+        documentId: 'top-doc',
+        url: 'https://example.com/',
+        runtimeIncarnation: NEXT_TOP_RUNTIME_INCARNATION,
+      });
+      return { status: 'ready' as const, suggestions: fixture.suggestions };
+    });
+
+    await fixture.coordinator.handle(EXTENSION_COMMANDS.AutofillLogin, tab);
+
+    expect(fixture.deps.fillTabSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('restarts cycling when the top content runtime incarnation changes', async () => {
+    const childTarget = {
+      frameId: 4,
+      documentId: 'child-doc',
+      runtimeIncarnation: FRAME_RUNTIME_INCARNATION,
+    } as const;
+    const fixture = coordinatorFixture([
+      loginSuggestion('login-a', 'login-form-a', childTarget),
+      loginSuggestion('login-b', 'login-form-b', childTarget),
+    ]);
+
+    await fixture.coordinator.handle(EXTENSION_COMMANDS.AutofillLogin, tab);
+    fixture.deps.getTopDocument.mockResolvedValue({
+      documentId: 'top-doc',
+      url: 'https://example.com/',
+      runtimeIncarnation: NEXT_TOP_RUNTIME_INCARNATION,
+    });
+    await fixture.coordinator.handle(EXTENSION_COMMANDS.AutofillLogin, tab);
+
+    expect(fixture.deps.fillTabSuggestion.mock.calls.map((call) => call[1]))
+      .toEqual(['login-a', 'login-a']);
+  });
+
+  it('restarts cycling when a target runtime incarnation changes', async () => {
+    const fixture = coordinatorFixture([
+      loginSuggestion('login-a', 'login-form-a', {
+        frameId: 4,
+        documentId: 'child-doc',
+        runtimeIncarnation: FRAME_RUNTIME_INCARNATION,
+      }),
+      loginSuggestion('login-b', 'login-form-b', {
+        frameId: 4,
+        documentId: 'child-doc',
+        runtimeIncarnation: FRAME_RUNTIME_INCARNATION,
+      }),
+    ]);
+
+    await fixture.coordinator.handle(EXTENSION_COMMANDS.AutofillLogin, tab);
+    fixture.suggestions.splice(
+      0,
+      fixture.suggestions.length,
+      loginSuggestion('login-a', 'login-form-a', {
+        frameId: 4,
+        documentId: 'child-doc',
+        runtimeIncarnation: NEXT_FRAME_RUNTIME_INCARNATION,
+      }),
+      loginSuggestion('login-b', 'login-form-b', {
+        frameId: 4,
+        documentId: 'child-doc',
+        runtimeIncarnation: NEXT_FRAME_RUNTIME_INCARNATION,
+      }),
+    );
+    await fixture.coordinator.handle(EXTENSION_COMMANDS.AutofillLogin, tab);
+
+    expect(fixture.deps.fillTabSuggestion.mock.calls.map((call) => call[1]))
+      .toEqual(['login-a', 'login-a']);
   });
 
   it('restarts cycling after tab or account lifecycle revocation', async () => {
@@ -320,7 +506,11 @@ describe('CommandCoordinator', () => {
   });
 
   it('stages a reprompt result without attempting another secret release', async () => {
-    const suggestion = loginSuggestion('protected-login');
+    const suggestion = loginSuggestion('protected-login', 'child-form', {
+      frameId: 4,
+      documentId: 'child-doc',
+      runtimeIncarnation: FRAME_RUNTIME_INCARNATION,
+    });
     const fixture = coordinatorFixture([suggestion]);
     fixture.deps.fillTabSuggestion.mockResolvedValueOnce({ status: 'reprompt_required' });
 
@@ -333,6 +523,7 @@ describe('CommandCoordinator', () => {
         windowId: 3,
         documentId: 'top-doc',
         url: 'https://example.com/',
+        runtimeIncarnation: TOP_RUNTIME_INCARNATION,
       },
       cipherId: 'protected-login',
       target: suggestion.target,

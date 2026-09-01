@@ -56,7 +56,9 @@ export interface AutofillSaveCaptureBrowserLogger {
 
 type SaveCaptureNetworkCoordinator = Pick<
   AutofillSaveCaptureCoordinator,
-  | 'observeBeforeRequest'
+  | 'beginBeforeRequest'
+  | 'resolveBeforeRequest'
+  | 'failBeforeRequest'
   | 'observeRedirect'
   | 'observeCompleted'
   | 'observeError'
@@ -104,30 +106,65 @@ export function registerAutofillSaveCaptureBrowserListeners(
     const originUrl = string(details.originUrl);
     if (!initiatorOrigin || initiatorOrigin !== initiator
         || (common.type === 'xmlhttprequest' && !browserDocumentId)) return;
-    enqueue(common.requestId, () => webNavigation.getFrame({
-      tabId: common.tabId,
-      frameId: common.frameId,
-    }).then((frame) => {
-      const documentId = string(frame?.documentId);
-      const sourceDocumentUrl = string(frame?.url);
-      const sourceUrl = sourceDocumentUrl ? canonicalHttpUrl(sourceDocumentUrl) : undefined;
-      if (!documentId || !sourceDocumentUrl || !sourceUrl
-          || canonicalHttpOrigin(sourceUrl) !== initiatorOrigin
-          || (common.type === 'xmlhttprequest' && documentId !== browserDocumentId)
-          || (common.type === 'xmlhttprequest'
-            && documentUrl !== undefined
-            && sourceUrl !== canonicalHttpUrl(documentUrl))
-          || (common.type !== 'xmlhttprequest'
-            && originUrl !== undefined
-            && sourceUrl !== canonicalHttpUrl(originUrl))) return;
-      return coordinator.observeBeforeRequest({
-        ...common,
-        documentId,
-        sourceDocumentUrl: sourceUrl,
-        initiator,
-        method,
+    const sourceHint = common.type === 'xmlhttprequest' ? documentUrl : originUrl;
+    const canonicalSourceHint = sourceHint ? canonicalHttpUrl(sourceHint) : undefined;
+    if (sourceHint !== undefined && (!canonicalSourceHint
+        || canonicalHttpOrigin(canonicalSourceHint) !== initiatorOrigin)) return;
+    let admission: Promise<string | undefined>;
+    try {
+      admission = coordinator.beginBeforeRequest({
+        requestId: common.requestId,
+        tabId: common.tabId,
+        frameId: common.frameId,
+        ...(common.type === 'xmlhttprequest' && browserDocumentId
+          ? { documentId: browserDocumentId }
+          : {}),
+        ...(canonicalSourceHint ? { sourceDocumentUrl: canonicalSourceHint } : {}),
+        timeStamp: common.timeStamp,
       });
-    }).then(() => undefined), 'before_request');
+    } catch (error) {
+      run((async () => {
+        await coordinator.invalidateNetworkWindow(Date.now());
+        throw error;
+      })(), logger, 'before_request');
+      return;
+    }
+    void admission.catch(() => undefined);
+    enqueue(common.requestId, async () => {
+      const admissionId = await admission;
+      if (!admissionId) return;
+      try {
+        const frame = await webNavigation.getFrame({
+          tabId: common.tabId,
+          frameId: common.frameId,
+        });
+        const documentId = string(frame?.documentId);
+        const sourceDocumentUrl = string(frame?.url);
+        const sourceUrl = sourceDocumentUrl ? canonicalHttpUrl(sourceDocumentUrl) : undefined;
+        if (!documentId || !sourceDocumentUrl || !sourceUrl
+            || canonicalHttpOrigin(sourceUrl) !== initiatorOrigin
+            || (common.type === 'xmlhttprequest' && documentId !== browserDocumentId)
+            || (common.type === 'xmlhttprequest'
+              && documentUrl !== undefined
+              && sourceUrl !== canonicalHttpUrl(documentUrl))
+            || (common.type !== 'xmlhttprequest'
+              && originUrl !== undefined
+              && sourceUrl !== canonicalHttpUrl(originUrl))) {
+          await coordinator.failBeforeRequest(admissionId);
+          return;
+        }
+        await coordinator.resolveBeforeRequest(admissionId, {
+          ...common,
+          documentId,
+          sourceDocumentUrl: sourceUrl,
+          initiator,
+          method,
+        });
+      } catch (error) {
+        await coordinator.failBeforeRequest(admissionId).catch(() => undefined);
+        throw error;
+      }
+    }, 'before_request');
   }, REQUEST_FILTER);
 
   webRequest.onBeforeRedirect.addListener((details) => {

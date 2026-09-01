@@ -171,4 +171,13 @@ describe('page-load login target', () => {
     expect(selectPageLoadLoginTargetFromSnapshot({ roots: [document], truncated: true })).toBeUndefined();
     expect(selectPageLoadLoginTargetFromSnapshot({ roots: [document], truncated: false })).toBeDefined();
   });
+
+  it('rejects current-target revalidation when the composed snapshot becomes truncated', () => {
+    document.body.innerHTML = '<form><input type="password" autocomplete="current-password"></form>';
+    makeVisible(document.querySelector('input')!);
+    const target = selectPageLoadLoginTargetFromSnapshot({ roots: [document], truncated: false });
+    expect(target).toBeDefined();
+
+    expect(isPageLoadLoginTargetCurrent(target!, { roots: [document], truncated: true })).toBe(false);
+  });
 });

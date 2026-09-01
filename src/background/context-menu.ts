@@ -30,6 +30,7 @@ const LOGIN_GROUP_ID = 'vw-login-form';
 const EMPTY_ID = 'vw-empty';
 const UNLOCK_ID = 'vw-unlock';
 const GENERATE_PASSWORD_ID = 'vw-action|generate-password';
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export const CONTEXT_COPY_FIELDS = Object.freeze(['username', 'password', 'totp'] as const);
 export type ContextCopyField = (typeof CONTEXT_COPY_FIELDS)[number];
@@ -165,6 +166,12 @@ export interface ContextMenuDeps<SessionLease = unknown, AccountLease = unknown>
     defaultStrategy: UriMatchStrategySetting;
   }>;
   getFrame(tabId: number, frameId: number): Promise<ContextMenuFrame | undefined>;
+  /** Resolve only the currently active runtime bound to this exact browser document. */
+  getRuntimeIncarnation(
+    tabId: number,
+    frameId: number,
+    documentId: string,
+  ): Promise<string | undefined>;
   actions?: ContextMenuPlatformActions;
   continuation?: {
     stageLockedContext(source: AutofillContinuationBrowserSource): Promise<void>;
@@ -181,6 +188,7 @@ export interface ContextMenuDeps<SessionLease = unknown, AccountLease = unknown>
         scope: 'form' | 'field';
         fillKind: FillKind;
         roles: readonly FillRole[];
+        runtimeIncarnation: string;
       },
     ): Promise<void>;
     stageContextCopyReprompt?(
@@ -448,7 +456,9 @@ export function createContextMenu<SessionLease = unknown, AccountLease = unknown
       let lease: DocumentLease<SessionLease, AccountLease> | undefined;
       let releaseLease: object | undefined;
       let reservationId: string | undefined;
+      let reservationRuntimeIncarnation: string | undefined;
       let heldTargetId: string | undefined;
+      let heldTargetRuntimeIncarnation: string | undefined;
       let reservedRoles: readonly FillRole[] | undefined;
       try {
         const activityLease = deps.vaultTimeout?.captureActivity();
@@ -494,6 +504,7 @@ export function createContextMenu<SessionLease = unknown, AccountLease = unknown
             && suggestion.id === loginCipherId
             && suggestion.target?.frameId === lease!.frameId
             && suggestion.target.documentId === lease!.documentId
+            && suggestion.target.runtimeIncarnation === claimResult.runtimeIncarnation
             && suggestion.target.formId === claimResult.formId
             && suggestion.target.generation === claimResult.generation
             && suggestion.target.customPlanDigest === claimResult.customPlanDigest
@@ -533,6 +544,8 @@ export function createContextMenu<SessionLease = unknown, AccountLease = unknown
           reserveCommand,
           messageOptions(targetFrameId, lease),
         );
+        reservationRuntimeIncarnation = reservedTargetRuntimeIncarnation(reserveResult);
+        if (!reservationRuntimeIncarnation) return;
         const roles = reservedTargetRoles(reserveResult, parsed.kind, parsed.scope);
         if (!roles) return;
         reservedRoles = roles;
@@ -560,6 +573,7 @@ export function createContextMenu<SessionLease = unknown, AccountLease = unknown
           roles,
           data,
           expectedFrameUrl: lease.frameUrl,
+          expectedRuntimeIncarnation: reservationRuntimeIncarnation,
         };
         assertDocumentSecurityCurrent(deps, lease, authorization);
         const releaseProof = releaseLease && deps.vaultReleaseGate
@@ -598,20 +612,29 @@ export function createContextMenu<SessionLease = unknown, AccountLease = unknown
             );
             return;
           }
-          if (!lease || !reservationId || !reservedRoles || !parsed || !deps.continuation
+          if (!lease || !reservationId || !reservationRuntimeIncarnation || !reservedRoles
+              || !parsed || !deps.continuation
               || typeof tab.windowId !== 'number') return;
           try {
             if (!(await isDocumentLeaseCurrent(deps, lease))) return;
             heldTargetId = crypto.randomUUID();
+            const runtimeIncarnation = reservationRuntimeIncarnation;
+            heldTargetRuntimeIncarnation = runtimeIncarnation;
             const command: HoldFillTargetCommand = {
               type: 'autofill.holdFillTarget',
               reservationId,
               holdId: heldTargetId,
               expectedFrameUrl: lease.frameUrl,
+              expectedRuntimeIncarnation: runtimeIncarnation,
             };
             const held = await deps.tabs.sendMessage(tab.id, command, messageOptions(targetFrameId, lease));
             reservationId = undefined;
-            if (!isHeldTarget(held)) { heldTargetId = undefined; return; }
+            reservationRuntimeIncarnation = undefined;
+            if (!isHeldTarget(held)) {
+              heldTargetId = undefined;
+              heldTargetRuntimeIncarnation = undefined;
+              return;
+            }
             const source = await captureBrowserSource(
               deps, tab.id, tab.windowId, targetFrameId, clickedFrameUrl,
             );
@@ -622,8 +645,10 @@ export function createContextMenu<SessionLease = unknown, AccountLease = unknown
               scope: parsed.scope,
               fillKind: parsed.kind,
               roles: reservedRoles,
+              runtimeIncarnation,
             });
             heldTargetId = undefined;
+            heldTargetRuntimeIncarnation = undefined;
           } catch (deliveryError) {
             if (!isStaleDocumentDeliveryError(deliveryError)) {
               console.error('context menu fill error delivery failed', deliveryError);
@@ -639,10 +664,12 @@ export function createContextMenu<SessionLease = unknown, AccountLease = unknown
         // Anything else is unexpected; surface it for diagnosis rather than a silent no-op.
         console.error('context menu fill failed', err);
       } finally {
-        if (lease && reservationId) {
-          await cancelReservation(deps, lease, reservationId);
+        if (lease && reservationId && reservationRuntimeIncarnation) {
+          await cancelReservation(deps, lease, reservationId, reservationRuntimeIncarnation);
         }
-        if (lease && heldTargetId) await cancelHeldTarget(deps, lease, heldTargetId);
+        if (lease && heldTargetId && heldTargetRuntimeIncarnation) {
+          await cancelHeldTarget(deps, lease, heldTargetId, heldTargetRuntimeIncarnation);
+        }
       }
       } finally {
         await deps.vaultReleaseGate?.settlePendingAction?.();
@@ -846,10 +873,11 @@ function isClaimedLoginTarget(value: unknown): value is Extract<
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  return keys.length === 4
+  return keys.length === 5
     && keys.every((key) => key === 'status' || key === 'formId'
-      || key === 'generation' || key === 'customPlanDigest')
+      || key === 'generation' || key === 'customPlanDigest' || key === 'runtimeIncarnation')
     && record.status === 'claimed'
+    && isRuntimeIncarnation(record.runtimeIncarnation)
     && typeof record.formId === 'string'
     && record.formId.length > 0
     && record.formId.length <= 4_096
@@ -871,19 +899,33 @@ async function captureBrowserSource<SessionLease, AccountLease>(
   frameId: number,
   clickedFrameUrl: string,
 ): Promise<AutofillContinuationBrowserSource | undefined> {
+  const topFrame = deps.getFrame(tabId, 0);
   const [top, frame] = await Promise.all([
-    deps.getFrame(tabId, 0),
-    frameId === 0 ? deps.getFrame(tabId, 0) : deps.getFrame(tabId, frameId),
+    topFrame,
+    frameId === 0 ? topFrame : deps.getFrame(tabId, frameId),
   ]);
   if (!top?.documentId || top.frameId !== 0 || !frame?.documentId
       || frame.frameId !== frameId || frame.url !== clickedFrameUrl) return undefined;
+  const topRuntime = deps.getRuntimeIncarnation(tabId, 0, top.documentId);
+  const sameRuntimeBinding = frameId === 0 && frame.documentId === top.documentId;
+  const frameRuntime = sameRuntimeBinding
+    ? topRuntime
+    : deps.getRuntimeIncarnation(tabId, frameId, frame.documentId);
+  const [topRuntimeIncarnation, frameRuntimeIncarnation] = await Promise.all([
+    topRuntime,
+    frameRuntime,
+  ]);
+  if (!isRuntimeIncarnation(topRuntimeIncarnation)
+      || !isRuntimeIncarnation(frameRuntimeIncarnation)) return undefined;
   return Object.freeze({
     tabId,
     windowId,
     topDocumentId: top.documentId,
+    topRuntimeIncarnation,
     topUrl: top.url,
     frameId,
     frameDocumentId: frame.documentId,
+    frameRuntimeIncarnation,
     frameUrl: frame.url,
   });
 }
@@ -894,28 +936,46 @@ function isContextFillResult(value: unknown): value is ContextFillResult {
   return status === 'filled' || status === 'no_target' || status === 'page_changed' || status === 'target_changed';
 }
 
+function reservedTargetRuntimeIncarnation(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const result = value as Record<string, unknown>;
+  return result.status === 'reserved' && isRuntimeIncarnation(result.runtimeIncarnation)
+    ? result.runtimeIncarnation
+    : undefined;
+}
+
 function reservedTargetRoles(
   value: unknown,
   kind: FillKind,
   scope: 'form' | 'field',
 ): FillRole[] | undefined {
-  if (typeof value !== 'object' || value === null) return undefined;
-  const result = value as { status?: unknown; roles?: unknown };
-  if (result.status !== 'reserved') return undefined;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const result = value as Record<string, unknown>;
+  const keys = Object.keys(result);
+  if (result.status !== 'reserved' || keys.length !== 3
+      || !keys.every((key) => key === 'status' || key === 'runtimeIncarnation' || key === 'roles')) {
+    return undefined;
+  }
   const normalized = normalizeFillRoles(kind, result.roles);
   if (!normalized || (scope === 'field' && normalized.length !== 1)) return undefined;
   return [...normalized];
+}
+
+function isRuntimeIncarnation(value: unknown): value is string {
+  return typeof value === 'string' && UUID_V4.test(value);
 }
 
 async function cancelReservation<SessionLease, AccountLease>(
   deps: ContextMenuDeps<SessionLease, AccountLease>,
   lease: DocumentLease<SessionLease, AccountLease>,
   reservationId: string,
+  runtimeIncarnation: string,
 ): Promise<void> {
   const command: CancelFillTargetCommand = {
     type: 'autofill.cancelFillTarget',
     reservationId,
     expectedFrameUrl: lease.frameUrl,
+    expectedRuntimeIncarnation: runtimeIncarnation,
   };
   try {
     await deps.tabs.sendMessage(lease.tabId, command, messageOptions(lease.frameId, lease));
@@ -928,12 +988,14 @@ async function cancelHeldTarget<SessionLease, AccountLease>(
   deps: ContextMenuDeps<SessionLease, AccountLease>,
   lease: DocumentLease<SessionLease, AccountLease>,
   holdId: string,
+  runtimeIncarnation: string,
 ): Promise<void> {
   try {
     await deps.tabs.sendMessage(lease.tabId, {
       type: 'autofill.cancelHeldFillTarget',
       holdId,
       expectedFrameUrl: lease.frameUrl,
+      expectedRuntimeIncarnation: runtimeIncarnation,
     }, messageOptions(lease.frameId, lease));
   } catch {
     // Holds expire in content; cancellation is best effort after a document disappears.

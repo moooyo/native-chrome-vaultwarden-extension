@@ -76,7 +76,7 @@ function nativeFormInputs(form: HTMLFormElement): HTMLInputElement[] {
 function selectSubmittedPassword(inputs: readonly HTMLInputElement[]): HTMLInputElement | undefined {
   const passwords = inputs
     .filter((input) => input.type === 'password')
-    .filter(isLoginPasswordCandidate)
+    .filter((input) => isLoginPasswordCandidate(input))
     .filter((input) => !isPaymentSecret(input, inputs));
   if (passwords.length === 0) return undefined;
 

@@ -2,7 +2,8 @@ import type { SymmetricKey } from '../core/crypto/keys.js';
 import type { KeyValueStore } from '../platform/store.js';
 
 export const AUTOFILL_PENDING_SAVE_STORAGE_KEY = 'autofillPendingSaves';
-export const AUTOFILL_PENDING_SAVE_SCHEMA_VERSION = 3 as const;
+export const AUTOFILL_PENDING_SAVE_ALARM = 'autofillPendingSaves.expiry';
+export const AUTOFILL_PENDING_SAVE_SCHEMA_VERSION = 4 as const;
 export const DEFAULT_AUTOFILL_PENDING_SAVE_TTL_MS = 2 * 60_000;
 export const MAX_AUTOFILL_PENDING_SAVE_TTL_MS = 10 * 60_000;
 export const DEFAULT_AUTOFILL_PENDING_SAVE_CLAIM_LEASE_MS = 5_000;
@@ -27,9 +28,9 @@ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 const HKDF_SALT = new TextEncoder().encode('miyu/autofill-pending-save/hkdf-salt/v1');
 const AES_INFO = new TextEncoder().encode('miyu/autofill-pending-save/aes-gcm/v1');
 const DECISION_INFO = new TextEncoder().encode('miyu/autofill-pending-save/decision-hmac/v1');
-const AAD_DOMAIN = 'miyu/autofill-pending-save/aad/v3';
-const DECISION_AAD_DOMAIN = 'miyu/autofill-pending-save/decision-aad/v3';
-const DECISION_DOMAIN = 'miyu/autofill-pending-save/decision/v3';
+const AAD_DOMAIN = 'miyu/autofill-pending-save/aad/v4';
+const DECISION_AAD_DOMAIN = 'miyu/autofill-pending-save/decision-aad/v4';
+const DECISION_DOMAIN = 'miyu/autofill-pending-save/decision/v4';
 
 export interface AutofillPendingSaveSecurityBinding {
   readonly sessionGeneration: number;
@@ -47,6 +48,7 @@ export interface AutofillPendingSaveInput extends AutofillPendingSaveSecurityBin
   readonly tabId: number;
   readonly frameId: number;
   readonly sourceDocumentId: string;
+  readonly runtimeIncarnation: string;
   readonly sourceUrl: string;
   readonly origin: string;
 }
@@ -55,6 +57,7 @@ export interface AutofillPendingSaveDocumentContext extends AutofillPendingSaveS
   readonly tabId: number;
   readonly frameId: number;
   readonly documentId: string;
+  readonly runtimeIncarnation: string;
   readonly frameUrl: string;
   readonly origin: string;
 }
@@ -105,6 +108,10 @@ export interface AutofillPendingSaveStoreOptions {
   readonly maxEntries?: number;
   readonly createId?: () => string;
   readonly randomBytes?: (length: number) => Uint8Array;
+  readonly scheduler?: {
+    schedule(when: number): void | Promise<void>;
+    cancel(): void | Promise<void>;
+  };
 }
 
 export type AutofillPendingSaveStoreErrorCode =
@@ -126,6 +133,7 @@ interface PendingEntryBase extends AutofillPendingSaveSecurityBinding {
   readonly tabId: number;
   readonly frameId: number;
   readonly sourceDocumentId: string;
+  readonly runtimeIncarnation: string;
   readonly sourceUrl: string;
   readonly origin: string;
   readonly createdAt: number;
@@ -150,6 +158,7 @@ interface ClaimedPendingEntry extends PendingEntryBase {
   readonly state: 'claimed';
   readonly promptId: string;
   readonly claimDocumentId: string;
+  readonly claimRuntimeIncarnation: string;
   readonly claimedAt: number;
   readonly claimExpiresAt: number;
   readonly decisionIv: string;
@@ -197,6 +206,7 @@ export class AutofillPendingSaveStore {
   readonly #maxEntries: number;
   readonly #createId: () => string;
   readonly #randomBytes: (length: number) => Uint8Array;
+  readonly #scheduler: NonNullable<AutofillPendingSaveStoreOptions['scheduler']>;
   readonly #queue: OperationQueue;
 
   constructor(options: AutofillPendingSaveStoreOptions) {
@@ -223,6 +233,7 @@ export class AutofillPendingSaveStore {
     );
     this.#createId = options.createId ?? (() => crypto.randomUUID());
     this.#randomBytes = options.randomBytes ?? ((length) => crypto.getRandomValues(new Uint8Array(length)));
+    this.#scheduler = options.scheduler ?? { schedule: () => {}, cancel: () => {} };
     this.#queue = operationQueue(this.#storageKey);
   }
 
@@ -232,7 +243,7 @@ export class AutofillPendingSaveStore {
     credentials: AutofillPendingSaveCredentials,
     ownedUserKey: SymmetricKey,
   ): Promise<void> {
-    await this.#put(input, credentials, ownedUserKey, 'confirmed');
+    await this.#put(input, credentials, ownedUserKey, 'confirmed', () => {});
   }
 
   /** Quarantine one encrypted capture until browser-owned network evidence confirms submission. */
@@ -240,8 +251,10 @@ export class AutofillPendingSaveStore {
     input: AutofillPendingSaveInput,
     credentials: AutofillPendingSaveCredentials,
     ownedUserKey: SymmetricKey,
+    beforeCommit: () => void = () => {},
   ): Promise<AutofillUnconfirmedSaveMetadata> {
-    return this.#put(input, credentials, ownedUserKey, 'unconfirmed');
+    if (typeof beforeCommit !== 'function') throw new TypeError('beforeCommit is invalid');
+    return this.#put(input, credentials, ownedUserKey, 'unconfirmed', beforeCommit);
   }
 
   async #put(
@@ -249,6 +262,7 @@ export class AutofillPendingSaveStore {
     credentials: AutofillPendingSaveCredentials,
     ownedUserKey: SymmetricKey,
     confirmation: AutofillPendingSaveCaptureState,
+    beforeCommit: () => void,
   ): Promise<AutofillUnconfirmedSaveMetadata> {
     return withOwnedUserKey(ownedUserKey, async (keys) => {
       const canonicalInput = canonicalizeInput(input);
@@ -263,6 +277,7 @@ export class AutofillPendingSaveStore {
           tabId: canonicalInput.tabId,
           frameId: canonicalInput.frameId,
           sourceDocumentId: canonicalInput.sourceDocumentId,
+          runtimeIncarnation: canonicalInput.runtimeIncarnation,
           sourceUrl: canonicalInput.sourceUrl,
           origin: canonicalInput.origin,
           sessionGeneration: canonicalInput.sessionGeneration,
@@ -302,6 +317,7 @@ export class AutofillPendingSaveStore {
             'The pending-save storage envelope is too large.',
           );
         }
+        beforeCommit();
         await this.#write(current.revision, retained);
         return unconfirmedMetadata(entry);
       });
@@ -312,7 +328,9 @@ export class AutofillPendingSaveStore {
   async confirmUnconfirmed(
     metadataInput: AutofillUnconfirmedSaveMetadata,
     ownedUserKey: SymmetricKey,
+    beforeCommit: () => void = () => {},
   ): Promise<boolean> {
+    if (typeof beforeCommit !== 'function') throw new TypeError('beforeCommit is invalid');
     return withOwnedUserKey(ownedUserKey, async (keys) => {
       const expected = canonicalizeUnconfirmedMetadata(metadataInput);
       return this.#serialize(async () => {
@@ -356,7 +374,14 @@ export class AutofillPendingSaveStore {
             'The confirmed pending-save envelope is too large.',
           );
         }
+        beforeCommit();
         await this.#write(current.revision, entries);
+        try {
+          beforeCommit();
+        } catch (error) {
+          await this.#write(current.revision, current.entries);
+          throw error;
+        }
         return true;
       });
     });
@@ -413,11 +438,21 @@ export class AutofillPendingSaveStore {
     context: AutofillPendingSaveDocumentContext,
     ownedUserKey: SymmetricKey,
     evaluate: AutofillPendingSaveEvaluator,
+    captureIdInput?: string,
+    beforeCommit: () => void = () => {},
   ): Promise<AutofillPendingSavePublicPrompt> {
+    if (typeof beforeCommit !== 'function') throw new TypeError('beforeCommit is invalid');
     return withOwnedUserKey(ownedUserKey, async (keys) => {
       const canonicalContext = canonicalizeDocumentContext(context);
+      const captureId = captureIdInput === undefined
+        ? undefined
+        : uuid(captureIdInput, 'captureId');
       assertEvaluator(evaluate);
       return this.#serialize(async () => {
+        const write = (revision: number, entries: readonly StoredPendingEntry[]): Promise<void> => {
+          beforeCommit();
+          return this.#write(revision, entries);
+        };
         const now = this.#currentTime();
         const current = await this.#read(now, true);
         let entries = current.entries;
@@ -432,25 +467,30 @@ export class AutofillPendingSaveStore {
           dirty = true;
         }
 
-        const matching = entries.filter((entry) => sameClaimScope(entry, canonicalContext));
+        const matching = entries.filter((entry) => (
+          (captureId === undefined || entry.entryId === captureId)
+          && sameClaimScope(entry, canonicalContext)
+        ));
         const idempotent = [...matching].reverse().find((entry): entry is ClaimedPendingEntry => (
-          entry.state === 'claimed' && entry.claimDocumentId === canonicalContext.documentId
+          entry.state === 'claimed'
+          && entry.claimDocumentId === canonicalContext.documentId
+          && entry.claimRuntimeIncarnation === canonicalContext.runtimeIncarnation
         ));
         if (idempotent) {
           const decision = await decryptDecision(idempotent, keys.encryption);
           if (!decision) {
             entries = entries.filter((entry) => entry.entryId !== idempotent.entryId);
-            await this.#write(current.revision, entries);
+            await write(current.revision, entries);
             return { action: 'none' };
           }
           const expectedTag = await decisionTag(keys.decision, idempotent, decision);
           const authentic = constantTimeBase64Equal(expectedTag, idempotent.decisionTag);
           if (!authentic) {
             entries = entries.filter((entry) => entry.entryId !== idempotent.entryId);
-            await this.#write(current.revision, entries);
+            await write(current.revision, entries);
             return { action: 'none' };
           }
-          if (dirty) await this.#write(current.revision, entries);
+          if (dirty) await write(current.revision, entries);
           return publicPrompt(idempotent.promptId, decision);
         }
 
@@ -461,7 +501,7 @@ export class AutofillPendingSaveStore {
               ? soonest
               : Math.min(soonest ?? entry.claimExpiresAt, entry.claimExpiresAt)
           ), undefined);
-          if (dirty) await this.#write(current.revision, entries);
+          if (dirty) await write(current.revision, entries);
           return retryAt === undefined
             ? { action: 'none' }
             : { action: 'retry', retryAfterMs: Math.max(1, retryAt - now) };
@@ -470,7 +510,7 @@ export class AutofillPendingSaveStore {
         const evaluated = await this.#evaluateEntry(available, keys, evaluate);
         if (!evaluated || evaluated.action === 'none') {
           entries = entries.filter((entry) => entry.entryId !== available.entryId);
-          await this.#write(current.revision, entries);
+          await write(current.revision, entries);
           return { action: 'none' };
         }
         const promptId = this.#freshId(entries, 'prompt');
@@ -480,7 +520,7 @@ export class AutofillPendingSaveStore {
         );
         if (claimExpiresAt <= now) {
           entries = entries.filter((entry) => entry.entryId !== available.entryId);
-          await this.#write(current.revision, entries);
+          await write(current.revision, entries);
           return { action: 'none' };
         }
         const claimMetadata = {
@@ -488,6 +528,7 @@ export class AutofillPendingSaveStore {
           state: 'claimed' as const,
           promptId,
           claimDocumentId: canonicalContext.documentId,
+          claimRuntimeIncarnation: canonicalContext.runtimeIncarnation,
           claimedAt: now,
           claimExpiresAt,
         };
@@ -509,7 +550,7 @@ export class AutofillPendingSaveStore {
             'The claimed pending-save envelope is too large.',
           );
         }
-        await this.#write(current.revision, entries);
+        await write(current.revision, entries);
         return publicPrompt(promptId, evaluated);
       });
     });
@@ -523,7 +564,9 @@ export class AutofillPendingSaveStore {
     promptId: string,
     context: AutofillPendingSaveDocumentContext,
     ownedUserKey: SymmetricKey,
+    beforeCommit: () => void = () => {},
   ): Promise<TakenAutofillPendingSave | undefined> {
+    if (typeof beforeCommit !== 'function') throw new TypeError('beforeCommit is invalid');
     return withOwnedUserKey(ownedUserKey, async (keys) => {
       const canonicalPromptId = uuid(promptId, 'promptId');
       const canonicalContext = canonicalizeDocumentContext(context);
@@ -534,6 +577,7 @@ export class AutofillPendingSaveStore {
           candidate.state === 'claimed'
           && candidate.promptId === canonicalPromptId
           && candidate.claimDocumentId === canonicalContext.documentId
+          && candidate.claimRuntimeIncarnation === canonicalContext.runtimeIncarnation
           && sameClaimScope(candidate, canonicalContext)
         ));
         if (!entry) {
@@ -552,6 +596,7 @@ export class AutofillPendingSaveStore {
           ? await decryptCredentials(entry, keys.encryption)
           : undefined;
 
+        beforeCommit();
         await this.#write(
           current.revision,
           current.entries.filter((candidate) => candidate.entryId !== entry.entryId),
@@ -566,7 +611,9 @@ export class AutofillPendingSaveStore {
   async dismiss(
     promptId: string,
     context: AutofillPendingSaveDocumentContext,
+    beforeCommit: () => void = () => {},
   ): Promise<boolean> {
+    if (typeof beforeCommit !== 'function') throw new TypeError('beforeCommit is invalid');
     const canonicalPromptId = uuid(promptId, 'promptId');
     const canonicalContext = canonicalizeDocumentContext(context);
     return this.#serialize(async () => {
@@ -575,12 +622,14 @@ export class AutofillPendingSaveStore {
         candidate.state === 'claimed'
         && candidate.promptId === canonicalPromptId
         && candidate.claimDocumentId === canonicalContext.documentId
+        && candidate.claimRuntimeIncarnation === canonicalContext.runtimeIncarnation
         && sameClaimScope(candidate, canonicalContext)
       ));
       if (!entry) {
         if (current.dirty) await this.#write(current.revision, current.entries);
         return false;
       }
+      beforeCommit();
       await this.#write(
         current.revision,
         current.entries.filter((candidate) => candidate.entryId !== entry.entryId),
@@ -604,6 +653,14 @@ export class AutofillPendingSaveStore {
     await this.#serialize(async () => {
       const current = await this.#read(this.#currentTime());
       await this.#write(current.revision, []);
+    });
+  }
+
+  async reconcile(): Promise<void> {
+    await this.#serialize(async () => {
+      const current = await this.#read(this.#currentTime());
+      if (current.dirty) await this.#write(current.revision, current.entries);
+      else this.#reschedule(current.entries);
     });
   }
 
@@ -684,6 +741,19 @@ export class AutofillPendingSaveStore {
     }
     await this.#store.set(this.#storageKey, envelope);
     this.#queue.highWaterRevision = envelope.revision;
+    this.#reschedule(entries);
+  }
+
+  #reschedule(entries: readonly StoredPendingEntry[]): void {
+    try {
+      const now = this.#currentTime();
+      const deadlines = entries.map((entry) => entry.expiresAt).filter((deadline) => deadline > now);
+      const next = deadlines.sort((left, right) => left - right)[0];
+      if (next === undefined) void Promise.resolve(this.#scheduler.cancel()).catch(() => undefined);
+      else void Promise.resolve(this.#scheduler.schedule(next)).catch(() => undefined);
+    } catch {
+      // Alarm failure reduces availability but never exposes encrypted credentials.
+    }
   }
 
   #fitsNextEnvelope(revision: number, entries: readonly StoredPendingEntry[]): boolean {
@@ -916,6 +986,7 @@ function encodeAad(entry: Omit<PendingEntryBase, 'iv' | 'ciphertext'>): Uint8Arr
     entry.tabId,
     entry.frameId,
     entry.sourceDocumentId,
+    entry.runtimeIncarnation,
     entry.origin,
     entry.sourceUrl,
     entry.sessionBindingId,
@@ -943,6 +1014,7 @@ function encodeDecisionAad(
     claim.tabId,
     claim.frameId,
     claim.sourceDocumentId,
+    claim.runtimeIncarnation,
     claim.origin,
     claim.sourceUrl,
     claim.sessionBindingId,
@@ -962,6 +1034,7 @@ function encodeDecisionAad(
     claim.state,
     claim.promptId,
     claim.claimDocumentId,
+    claim.claimRuntimeIncarnation,
     claim.claimedAt,
     claim.claimExpiresAt,
   ]));
@@ -974,6 +1047,7 @@ async function decisionTag(
     | 'entryId'
     | 'promptId'
     | 'claimDocumentId'
+    | 'claimRuntimeIncarnation'
     | 'sourceUrl'
     | 'origin'
     | 'enterprisePolicyGeneration'
@@ -986,6 +1060,7 @@ async function decisionTag(
     claim.entryId,
     claim.promptId,
     claim.claimDocumentId,
+    claim.claimRuntimeIncarnation,
     claim.origin,
     claim.sourceUrl,
     claim.enterprisePolicyGeneration,
@@ -1081,14 +1156,14 @@ function parseEntry(value: unknown, now: number): StoredPendingEntry | undefined
   const state = dataValue(value, 'state');
   const confirmation = dataValue(value, 'confirmation');
   const baseKeys = [
-    'entryId', 'tabId', 'frameId', 'sourceDocumentId', 'sourceUrl', 'origin',
+    'entryId', 'tabId', 'frameId', 'sourceDocumentId', 'runtimeIncarnation', 'sourceUrl', 'origin',
     'sessionGeneration', 'sessionBindingId', 'serverGeneration', 'accountGeneration',
     'serverUrl', 'accountIdentity', 'policyGeneration', 'enterprisePolicyGeneration',
     'enterprisePolicyRawGeneration', 'createdAt', 'expiresAt', 'confirmation', 'iv', 'ciphertext', 'state',
   ] as const;
   const expected = state === 'claimed'
     ? [
-        ...baseKeys, 'promptId', 'claimDocumentId', 'claimedAt', 'claimExpiresAt',
+        ...baseKeys, 'promptId', 'claimDocumentId', 'claimRuntimeIncarnation', 'claimedAt', 'claimExpiresAt',
         'decisionIv', 'decisionCiphertext', 'decisionTag',
       ]
     : baseKeys;
@@ -1105,6 +1180,7 @@ function parseEntry(value: unknown, now: number): StoredPendingEntry | undefined
       tabId: dataValue(value, 'tabId'),
       frameId: dataValue(value, 'frameId'),
       sourceDocumentId: dataValue(value, 'sourceDocumentId'),
+      runtimeIncarnation: dataValue(value, 'runtimeIncarnation'),
       sourceUrl: dataValue(value, 'sourceUrl'),
       origin: dataValue(value, 'origin'),
       sessionGeneration: dataValue(value, 'sessionGeneration'),
@@ -1149,6 +1225,7 @@ function parseEntry(value: unknown, now: number): StoredPendingEntry | undefined
 
   const promptId = dataValue(value, 'promptId');
   const claimDocumentId = dataValue(value, 'claimDocumentId');
+  const claimRuntimeIncarnation = dataValue(value, 'claimRuntimeIncarnation');
   const claimedAt = dataValue(value, 'claimedAt');
   const claimExpiresAt = dataValue(value, 'claimExpiresAt');
   const decisionIv = dataValue(value, 'decisionIv');
@@ -1159,6 +1236,8 @@ function parseEntry(value: unknown, now: number): StoredPendingEntry | undefined
     || !UUID_V4.test(promptId)
     || typeof claimDocumentId !== 'string'
     || !isOpaqueId(claimDocumentId)
+    || typeof claimRuntimeIncarnation !== 'string'
+    || !UUID_V4.test(claimRuntimeIncarnation)
     || !isTimestamp(claimedAt)
     || !isTimestamp(claimExpiresAt)
     || claimedAt < createdAt
@@ -1176,6 +1255,7 @@ function parseEntry(value: unknown, now: number): StoredPendingEntry | undefined
     state,
     promptId,
     claimDocumentId,
+    claimRuntimeIncarnation,
     claimedAt,
     claimExpiresAt,
     decisionIv: decisionIv as string,
@@ -1188,6 +1268,7 @@ function toUnclaimed(entry: ClaimedPendingEntry): UnclaimedPendingEntry {
   const {
     promptId: _promptId,
     claimDocumentId: _claimDocumentId,
+    claimRuntimeIncarnation: _claimRuntimeIncarnation,
     claimedAt: _claimedAt,
     claimExpiresAt: _claimExpiresAt,
     decisionIv: _decisionIv,
@@ -1207,6 +1288,7 @@ function credentialAadBase(
     tabId: entry.tabId,
     frameId: entry.frameId,
     sourceDocumentId: entry.sourceDocumentId,
+    runtimeIncarnation: entry.runtimeIncarnation,
     sourceUrl: entry.sourceUrl,
     origin: entry.origin,
     sessionGeneration: entry.sessionGeneration,
@@ -1230,6 +1312,7 @@ function unconfirmedMetadata(entry: PendingEntryBase): AutofillUnconfirmedSaveMe
     tabId: entry.tabId,
     frameId: entry.frameId,
     sourceDocumentId: entry.sourceDocumentId,
+    runtimeIncarnation: entry.runtimeIncarnation,
     sourceUrl: entry.sourceUrl,
     origin: entry.origin,
     sessionGeneration: entry.sessionGeneration,
@@ -1248,7 +1331,7 @@ function unconfirmedMetadata(entry: PendingEntryBase): AutofillUnconfirmedSaveMe
 
 function canonicalizeUnconfirmedMetadata(value: unknown): AutofillUnconfirmedSaveMetadata {
   const record = strictInputRecord(value, [
-    'captureId', 'tabId', 'frameId', 'sourceDocumentId', 'sourceUrl', 'origin',
+    'captureId', 'tabId', 'frameId', 'sourceDocumentId', 'runtimeIncarnation', 'sourceUrl', 'origin',
     'sessionGeneration', 'sessionBindingId', 'serverGeneration', 'accountGeneration',
     'serverUrl', 'accountIdentity', 'policyGeneration', 'enterprisePolicyGeneration',
     'enterprisePolicyRawGeneration', 'createdAt', 'expiresAt',
@@ -1257,6 +1340,7 @@ function canonicalizeUnconfirmedMetadata(value: unknown): AutofillUnconfirmedSav
     tabId: dataValue(record, 'tabId'),
     frameId: dataValue(record, 'frameId'),
     sourceDocumentId: dataValue(record, 'sourceDocumentId'),
+    runtimeIncarnation: dataValue(record, 'runtimeIncarnation'),
     sourceUrl: dataValue(record, 'sourceUrl'),
     origin: dataValue(record, 'origin'),
     sessionGeneration: dataValue(record, 'sessionGeneration'),
@@ -1287,6 +1371,7 @@ function sameUnconfirmedMetadata(
     && entry.tabId === expected.tabId
     && entry.frameId === expected.frameId
     && entry.sourceDocumentId === expected.sourceDocumentId
+    && entry.runtimeIncarnation === expected.runtimeIncarnation
     && entry.sourceUrl === expected.sourceUrl
     && entry.origin === expected.origin
     && entry.sessionGeneration === expected.sessionGeneration
@@ -1304,7 +1389,7 @@ function sameUnconfirmedMetadata(
 
 function canonicalizeInput(value: unknown): AutofillPendingSaveInput {
   const record = strictInputRecord(value, [
-    'tabId', 'frameId', 'sourceDocumentId', 'sourceUrl', 'origin', 'sessionGeneration',
+    'tabId', 'frameId', 'sourceDocumentId', 'runtimeIncarnation', 'sourceUrl', 'origin', 'sessionGeneration',
     'sessionBindingId', 'serverGeneration', 'accountGeneration', 'serverUrl',
     'accountIdentity', 'policyGeneration', 'enterprisePolicyGeneration',
     'enterprisePolicyRawGeneration',
@@ -1316,6 +1401,7 @@ function canonicalizeInput(value: unknown): AutofillPendingSaveInput {
     tabId: nonNegativeInteger(dataValue(record, 'tabId'), 'tabId'),
     frameId: nonNegativeInteger(dataValue(record, 'frameId'), 'frameId'),
     sourceDocumentId: opaqueId(dataValue(record, 'sourceDocumentId'), 'sourceDocumentId'),
+    runtimeIncarnation: uuid(dataValue(record, 'runtimeIncarnation'), 'runtimeIncarnation'),
     sourceUrl,
     origin,
     ...canonicalizeSecurityBinding(record),
@@ -1324,7 +1410,7 @@ function canonicalizeInput(value: unknown): AutofillPendingSaveInput {
 
 function canonicalizeDocumentContext(value: unknown): AutofillPendingSaveDocumentContext {
   const record = strictInputRecord(value, [
-    'tabId', 'frameId', 'documentId', 'frameUrl', 'origin', 'sessionGeneration',
+    'tabId', 'frameId', 'documentId', 'runtimeIncarnation', 'frameUrl', 'origin', 'sessionGeneration',
     'sessionBindingId', 'serverGeneration', 'accountGeneration', 'serverUrl',
     'accountIdentity', 'policyGeneration', 'enterprisePolicyGeneration',
     'enterprisePolicyRawGeneration',
@@ -1336,6 +1422,7 @@ function canonicalizeDocumentContext(value: unknown): AutofillPendingSaveDocumen
     tabId: nonNegativeInteger(dataValue(record, 'tabId'), 'tabId'),
     frameId: nonNegativeInteger(dataValue(record, 'frameId'), 'frameId'),
     documentId: opaqueId(dataValue(record, 'documentId'), 'documentId'),
+    runtimeIncarnation: uuid(dataValue(record, 'runtimeIncarnation'), 'runtimeIncarnation'),
     frameUrl,
     origin,
     ...canonicalizeSecurityBinding(record),
@@ -1412,7 +1499,9 @@ function canonicalizeDecision(value: unknown): AutofillPendingSaveDecision {
 }
 
 function sameCaptureSlot(left: PendingEntryBase, right: AutofillPendingSaveInput): boolean {
-  return sameBrowserOrigin(left, right) && sameSecurityBinding(left, right);
+  return left.runtimeIncarnation === right.runtimeIncarnation
+    && sameBrowserOrigin(left, right)
+    && sameSecurityBinding(left, right);
 }
 
 function sameClaimScope(

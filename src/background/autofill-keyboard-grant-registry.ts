@@ -20,6 +20,7 @@ const MAX_CAPACITY = 4_096;
 const MAX_OPAQUE_ID_LENGTH = 4_096;
 const MAX_URL_LENGTH = 16_384;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const RUNTIME_INCARNATION_UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export interface KeyboardCommandIssue<SessionLease = unknown> {
   readonly tabId: number;
@@ -46,6 +47,7 @@ export interface KeyboardGrantContext {
   readonly tabId: number;
   readonly frameId: number;
   readonly documentId: string;
+  readonly runtimeIncarnation: string;
   readonly frameUrl: string;
 }
 
@@ -219,6 +221,7 @@ export class AutofillKeyboardGrantRegistry<SessionLease, AccountLease, PolicyLea
       grant.tabId !== context.tabId
       || grant.frameId !== context.frameId
       || grant.documentId !== context.documentId
+      || grant.runtimeIncarnation !== context.runtimeIncarnation
       || grant.frameUrl !== context.frameUrl
       || !this.#leasesCurrent(grant)
     ) {
@@ -293,6 +296,7 @@ function canonicalContext(input: KeyboardGrantContext): KeyboardGrantContext {
     tabId: nonNegativeInteger(input?.tabId, 'tabId'),
     frameId: nonNegativeInteger(input.frameId, 'frameId'),
     documentId: opaqueId(input.documentId, 'documentId'),
+    runtimeIncarnation: canonicalRuntimeIncarnation(input.runtimeIncarnation, 'runtimeIncarnation'),
     frameUrl: canonicalHttpUrl(input.frameUrl, 'frameUrl'),
   });
 }
@@ -304,6 +308,14 @@ function canonicalGrant<SessionLease, AccountLease, PolicyLease>(
   const topDocumentId = opaqueId(input.topDocumentId, 'topDocumentId');
   const topFrameUrl = canonicalHttpUrl(input.topFrameUrl, 'topFrameUrl');
   const binding = canonicalBinding(input.binding);
+  if (context.frameId === 0 && (
+    context.documentId !== topDocumentId
+    || context.frameUrl !== topFrameUrl
+  )) throw new TypeError('Keyboard top-frame grant context is invalid');
+  if (
+    (binding.purpose === 'card' || binding.purpose === 'identity')
+    && binding.structuredTarget.runtimeIncarnation !== context.runtimeIncarnation
+  ) throw new TypeError('Keyboard structured binding runtime is invalid');
   if (input.sessionLease == null || input.accountLease == null || input.policyLease == null) {
     throw new TypeError('Keyboard grant lease is invalid');
   }
@@ -366,18 +378,31 @@ function hasExactOwnKeys(value: object, expected: readonly string[]): boolean {
 
 function canonicalStructuredTarget(value: ContentStructuredAutofillTarget): ContentStructuredAutofillTarget | undefined {
   if (!value || (value.kind !== 'card' && value.kind !== 'identity')) return undefined;
+  const runtimeIncarnation = canonicalRuntimeIncarnation(value.runtimeIncarnation, 'runtimeIncarnation');
   const formId = opaqueId(value.formId, 'formId');
   const generation = nonNegativeInteger(value.generation, 'generation');
   if (value.kind === 'card') {
     const roles = normalizeFillRoles(value.kind, value.roles);
     if (!roles || roles.length !== value.roles.length
         || roles.some((role, index) => role !== value.roles[index])) return undefined;
-    return Object.freeze({ kind: value.kind, formId, generation, roles: Object.freeze([...roles]) });
+    return Object.freeze({
+      kind: value.kind,
+      runtimeIncarnation,
+      formId,
+      generation,
+      roles: Object.freeze([...roles]),
+    });
   }
   const roles = normalizeFillRoles(value.kind, value.roles);
   if (!roles || roles.length !== value.roles.length
       || roles.some((role, index) => role !== value.roles[index])) return undefined;
-  return Object.freeze({ kind: value.kind, formId, generation, roles: Object.freeze([...roles]) });
+  return Object.freeze({
+    kind: value.kind,
+    runtimeIncarnation,
+    formId,
+    generation,
+    roles: Object.freeze([...roles]),
+  });
 }
 
 function copyGrant<SessionLease, AccountLease, PolicyLease>(
@@ -387,6 +412,7 @@ function copyGrant<SessionLease, AccountLease, PolicyLease>(
     tabId: grant.tabId,
     frameId: grant.frameId,
     documentId: grant.documentId,
+    runtimeIncarnation: grant.runtimeIncarnation,
     frameUrl: grant.frameUrl,
     topDocumentId: grant.topDocumentId,
     topFrameUrl: grant.topFrameUrl,
@@ -410,6 +436,13 @@ function opaqueId(value: unknown, field: string): string {
     || value.length > MAX_OPAQUE_ID_LENGTH
     || value.trim() !== value
   ) throw new TypeError(`${field} is invalid`);
+  return value;
+}
+
+function canonicalRuntimeIncarnation(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !RUNTIME_INCARNATION_UUID_V4.test(value)) {
+    throw new TypeError(`${field} is invalid`);
+  }
   return value;
 }
 

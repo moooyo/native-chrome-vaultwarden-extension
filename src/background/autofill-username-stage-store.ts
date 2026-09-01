@@ -15,7 +15,8 @@ const MAX_IDENTITY_LENGTH = 4_096;
 export const AUTOFILL_USERNAME_STAGE_ENVELOPE_MAX_UTF8_BYTES = 256 * 1024;
 const MAX_CIPHERTEXT_BYTES = 16 * 1024;
 const AES_GCM_IV_BYTES = 12;
-const KEY_INFO = 'miyu/autofill/username-stage/v3';
+const KEY_INFO = 'miyu/autofill/username-stage/v4';
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 export interface AutofillUsernameStageBinding {
@@ -33,6 +34,8 @@ export interface AutofillUsernameStageBinding {
 export interface AutofillUsernameStageContext extends AutofillUsernameStageBinding {
   readonly tabId: number;
   readonly frameId: number;
+  readonly documentId: string;
+  readonly runtimeIncarnation: string;
   readonly origin: string;
 }
 
@@ -57,7 +60,7 @@ interface StoredUsernameStage extends AutofillUsernameStageContext {
 }
 
 interface UsernameStageEnvelope {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly revision: number;
   readonly entries: readonly StoredUsernameStage[];
 }
@@ -131,6 +134,29 @@ export class AutofillUsernameStageStore {
     });
   }
 
+  async clearRuntime(
+    tabId: number,
+    frameId: number,
+    documentId: string,
+    runtimeIncarnation: string,
+  ): Promise<void> {
+    const expected = {
+      tabId: boundedNonNegativeInteger(tabId, 'tabId'),
+      frameId: boundedNonNegativeInteger(frameId, 'frameId'),
+      documentId: boundedIdentity(documentId, 'documentId'),
+      runtimeIncarnation: runtimeId(runtimeIncarnation),
+    };
+    await this.#serialize(async () => {
+      const current = await this.#read(this.#readClock());
+      await this.#write(current.entries.filter((entry) => !(
+        entry.tabId === expected.tabId
+        && entry.frameId === expected.frameId
+        && entry.documentId === expected.documentId
+        && entry.runtimeIncarnation === expected.runtimeIncarnation
+      )), nextRevision(current.revision));
+    });
+  }
+
   async clear(): Promise<void> {
     await this.#serialize(() => this.#store.remove(AUTOFILL_USERNAME_STAGE_KEY));
   }
@@ -164,7 +190,7 @@ export class AutofillUsernameStageStore {
       return;
     }
     const envelope: UsernameStageEnvelope = Object.freeze({
-      schemaVersion: 3,
+      schemaVersion: 4,
       revision,
       entries: Object.freeze([...entries]),
     });
@@ -177,14 +203,14 @@ export class AutofillUsernameStageStore {
 
 function parseEnvelope(value: unknown): UsernameStageEnvelope | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, ['schemaVersion', 'revision', 'entries'])) return undefined;
-  if (value.schemaVersion !== 3 || !Number.isSafeInteger(value.revision) || (value.revision as number) < 0
+  if (value.schemaVersion !== 4 || !Number.isSafeInteger(value.revision) || (value.revision as number) < 0
       || !Array.isArray(value.entries) || value.entries.length > MAX_CAPACITY) return undefined;
   if (utf8ToBytes(JSON.stringify(value)).byteLength > AUTOFILL_USERNAME_STAGE_ENVELOPE_MAX_UTF8_BYTES) return undefined;
   const entries: StoredUsernameStage[] = [];
   const keys = new Set<string>();
   for (const candidate of value.entries) {
     if (!isRecord(candidate) || !hasOnlyKeys(candidate, [
-      'tabId', 'frameId', 'origin', 'sessionGeneration', 'sessionBindingId', 'serverGeneration',
+      'tabId', 'frameId', 'documentId', 'runtimeIncarnation', 'origin', 'sessionGeneration', 'sessionBindingId', 'serverGeneration',
       'accountGeneration', 'serverUrl', 'accountIdentity', 'policyGeneration',
       'enterprisePolicyGeneration', 'enterprisePolicyRawGeneration', 'createdAt', 'expiresAt',
       'iv', 'ciphertext',
@@ -205,7 +231,7 @@ function parseEnvelope(value: unknown): UsernameStageEnvelope | undefined {
       return undefined;
     }
   }
-  return Object.freeze({ schemaVersion: 3, revision: value.revision as number, entries: Object.freeze(entries) });
+  return Object.freeze({ schemaVersion: 4, revision: value.revision as number, entries: Object.freeze(entries) });
 }
 
 async function sealText(
@@ -277,7 +303,8 @@ async function withStorageKey<T>(
 
 function stageAad(value: Omit<StoredUsernameStage, 'iv' | 'ciphertext'>): string {
   return JSON.stringify([
-    'username-stage-v3', value.tabId, value.frameId, value.origin, value.sessionGeneration,
+    'username-stage-v4', value.tabId, value.frameId, value.documentId, value.runtimeIncarnation,
+    value.origin, value.sessionGeneration,
     value.sessionBindingId, value.serverGeneration, value.accountGeneration, value.serverUrl,
     value.accountIdentity, value.policyGeneration, value.enterprisePolicyGeneration,
     value.enterprisePolicyRawGeneration, value.createdAt, value.expiresAt,
@@ -304,6 +331,8 @@ function canonicalizeContext(input: AutofillUsernameStageContext): AutofillUsern
   return Object.freeze({
     tabId: boundedNonNegativeInteger(input.tabId, 'tabId'),
     frameId: boundedNonNegativeInteger(input.frameId, 'frameId'),
+    documentId: boundedIdentity(input.documentId, 'documentId'),
+    runtimeIncarnation: runtimeId(input.runtimeIncarnation),
     origin: canonicalOrigin(input.origin),
     sessionGeneration: boundedNonNegativeInteger(input.sessionGeneration, 'sessionGeneration'),
     sessionBindingId: boundedIdentity(input.sessionBindingId, 'sessionBindingId'),
@@ -366,6 +395,13 @@ function sameSecurityBinding(left: AutofillUsernameStageBinding, right: Autofill
 
 function contextKey(value: Pick<AutofillUsernameStageContext, 'tabId' | 'frameId' | 'origin'>): string {
   return JSON.stringify([value.tabId, value.frameId, value.origin]);
+}
+
+function runtimeId(value: unknown): string {
+  if (typeof value !== 'string' || !UUID_V4.test(value)) {
+    throw new TypeError('runtimeIncarnation is invalid');
+  }
+  return value;
 }
 
 function canonicalBase64(value: unknown, minBytes: number, maxBytes: number, name: string): string {

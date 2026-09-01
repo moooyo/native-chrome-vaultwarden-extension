@@ -20,6 +20,7 @@ export interface AutofillDocumentController {
   readonly ownerDocument: Document;
   snapshot(): ComposedTreeSnapshot;
   roots(): readonly ComposedTreeRoot[];
+  /** Perform an immediate authoritative, bounded root scan even while observation is paused. */
   refresh(): ComposedTreeSnapshot;
   isObserving(): boolean;
   resumeObservation(): ComposedTreeSnapshot;

@@ -49,7 +49,7 @@ const CONTENT_SCRIPT_VERBS = new Set<string>([
   'autofill.redeemPageLoadIntent',
   'clientEvent.ack',
   'autofill.captureSubmission',
-  'autofill.discardBfcacheCapture',
+  'autofill.activateRuntime',
   'autofill.claimSavePrompt',
   'autofill.commitSavePrompt',
   'autofill.dismissSavePrompt',
@@ -69,7 +69,7 @@ const CONTENT_DOCUMENT_ONLY_VERBS = new Set<string>([
   'autofill.ackTotpCopy',
   'autofill.authorizeGeneratorUse',
   'autofill.trackGeneratedValue',
-  'autofill.discardBfcacheCapture',
+  'autofill.activateRuntime',
 ]);
 
 const POPUP_DOCUMENT_ONLY_VERBS = new Set<string>([

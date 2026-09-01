@@ -57,15 +57,18 @@ describe('login custom DOM targets', () => {
     expect(planLoginCustomTargets(loginForm()).targets.map((target) => target.hints[0]!.value)).toEqual(['safe-custom']);
   });
 
-  it('caps a malicious form at 32 metadata targets', () => {
+  it('accepts 32 custom targets and fails the entire plan closed at 33', () => {
     document.body.innerHTML = `<form><input name="username"><input type="password">${Array.from(
-      { length: 80 },
+      { length: 32 },
       (_, index) => `<input name="custom-${index}">`,
     ).join('')}</form>`;
     expect(planLoginCustomTargets(loginForm()).targets).toHaveLength(32);
+
+    document.querySelector('form')!.insertAdjacentHTML('beforeend', '<input name="custom-32">');
+    expect(planLoginCustomTargets(loginForm()).targets).toHaveLength(0);
   });
 
-  it('drops oversized hints and permits repeated page hints with distinct private ids', () => {
+  it('fails the entire custom plan closed when one field exceeds its hint budget', () => {
     document.body.innerHTML = `<form>
       <input name="username"><input type="password">
       <input name="${'x'.repeat(257)}">
@@ -73,15 +76,7 @@ describe('login custom DOM targets', () => {
     </form>`;
     const form = loginForm();
     const plan = planLoginCustomTargets(form);
-    expect(plan.targets).toHaveLength(2);
-    expect(plan.targets.map((target) => target.hints[0]!.value)).toEqual(['team', 'team']);
-    expect(new Set(plan.targets.map((target) => target.fieldId)).size).toBe(2);
-    expect(commitLoginCustomAssignments(form, plan, plan.targets.map((target) => ({
-      fieldId: target.fieldId,
-      value: 'platform',
-    })))).toBe(true);
-    expect(Array.from(document.querySelectorAll<HTMLInputElement>('[name=team]')).map((input) => input.value))
-      .toEqual(['platform', 'platform']);
+    expect(plan.targets).toHaveLength(0);
   });
 
   it('includes external form=id controls but never crosses a native form boundary', () => {

@@ -226,6 +226,62 @@ describe('observeOpenComposedTree', () => {
     handle.disconnect();
   });
 
+  it('discovers roots by scanning only the added subtree', async () => {
+    const existingHost = document.createElement('div');
+    const existingRoot = closedShadow(existingHost);
+    document.body.append(existingHost);
+    const entries = new Map<Element, ShadowRoot>([[existingHost, existingRoot]]);
+    const getRoot = vi.fn(rootGetter(entries));
+    const handle = observeOpenComposedTree(document, () => {}, { getShadowRoot: getRoot });
+    getRoot.mockClear();
+
+    const wrapper = document.createElement('section');
+    const addedHost = document.createElement('div');
+    const addedRoot = closedShadow(addedHost);
+    entries.set(addedHost, addedRoot);
+    wrapper.append(addedHost);
+    document.body.append(wrapper);
+    await flushMutations();
+
+    expect(handle.snapshot().roots).toEqual([document, existingRoot, addedRoot]);
+    expect(getRoot).toHaveBeenCalledWith(wrapper);
+    expect(getRoot).toHaveBeenCalledWith(addedHost);
+    expect(getRoot.mock.calls.some(([element]) => element === existingHost)).toBe(false);
+    handle.disconnect();
+  });
+
+  it('visits overlapping added-node subtrees only once', async () => {
+    const getRoot = vi.fn((_element: Element) => null);
+    const handle = observeOpenComposedTree(document, () => {}, { getShadowRoot: getRoot });
+    getRoot.mockClear();
+    const parent = document.createElement('div');
+    const child = document.createElement('span');
+
+    document.body.append(parent);
+    parent.append(child);
+    await flushMutations();
+
+    expect(getRoot.mock.calls.filter(([element]) => element === parent)).toHaveLength(1);
+    expect(getRoot.mock.calls.filter(([element]) => element === child)).toHaveLength(1);
+    handle.disconnect();
+  });
+
+  it('keeps extension-owned roots excluded when their hosts are added incrementally', async () => {
+    const handle = observeOpenComposedTree(document, () => {});
+    const surface = mountRenderSurface('');
+    vi.stubGlobal('chrome', {
+      dom: {
+        openOrClosedShadowRoot: (element: Element) => element === surface.host ? surface.root : null,
+      },
+    });
+
+    await flushMutations();
+
+    expect(handle.snapshot().roots).toEqual([document]);
+    handle.disconnect();
+    surface.remove();
+  });
+
   it('observes autofill-relevant attribute changes inside every open root', async () => {
     const host = document.createElement('div');
     const shadow = openShadow(host);
@@ -263,6 +319,174 @@ describe('observeOpenComposedTree', () => {
 
     expect(handle.snapshot().roots).toEqual([document, shadow]);
     expect(changes.at(-1)?.reason).toBe('roots');
+    handle.disconnect();
+  });
+
+  it('keeps canonical breadth-first order when a sibling root attaches late', async () => {
+    vi.useFakeTimers();
+    const firstHost = document.createElement('div');
+    const firstRoot = openShadow(firstHost);
+    const lateHost = document.createElement('div');
+    const nestedHost = document.createElement('div');
+    const nestedRoot = openShadow(nestedHost);
+    firstRoot.append(nestedHost);
+    document.body.append(firstHost, lateHost);
+    const handle = observeOpenComposedTree(
+      document,
+      () => {},
+      { rediscoveryIntervalMs: MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS },
+    );
+    expect(handle.snapshot().roots).toEqual([document, firstRoot, nestedRoot]);
+
+    const lateRoot = openShadow(lateHost);
+    await vi.advanceTimersByTimeAsync(MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS);
+
+    expect(handle.snapshot().roots).toEqual([document, firstRoot, lateRoot, nestedRoot]);
+    handle.disconnect();
+  });
+
+  it('keeps a late root inventory within the canonical root limit', async () => {
+    vi.useFakeTimers();
+    const baseHost = document.createElement('div');
+    const baseRoot = openShadow(baseHost);
+    document.body.append(baseHost);
+    const lateHost = document.createElement('div');
+    const existingHost = document.createElement('div');
+    const existingRoot = openShadow(existingHost);
+    baseRoot.append(lateHost, existingHost);
+    const handle = observeOpenComposedTree(
+      baseRoot,
+      () => {},
+      {
+        maxRoots: 2,
+        rediscoveryIntervalMs: MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS,
+      },
+    );
+    expect(handle.snapshot().roots).toEqual([baseRoot, existingRoot]);
+
+    const lateRoot = openShadow(lateHost);
+    await vi.advanceTimersByTimeAsync(MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS);
+
+    expect(handle.snapshot().roots).toEqual([baseRoot, lateRoot]);
+    expect(handle.snapshot().roots).toHaveLength(2);
+    expect(handle.snapshot().truncated).toBe(true);
+    handle.disconnect();
+  });
+
+  it('retains the full canonical prefix when several roots overflow one mutation batch', async () => {
+    const baseHost = document.createElement('div');
+    const baseRoot = openShadow(baseHost);
+    document.body.append(baseHost);
+    const laterHost = document.createElement('div');
+    const laterRoot = openShadow(laterHost);
+    const lastHost = document.createElement('div');
+    const lastRoot = openShadow(lastHost);
+    baseRoot.append(laterHost, lastHost);
+    const handle = observeOpenComposedTree(baseRoot, () => {}, { maxRoots: 3 });
+    expect(handle.snapshot().roots).toEqual([baseRoot, laterRoot, lastRoot]);
+    const firstHost = document.createElement('div');
+    const firstRoot = openShadow(firstHost);
+    const secondHost = document.createElement('div');
+    const secondRoot = openShadow(secondHost);
+
+    baseRoot.prepend(firstHost, secondHost);
+    await flushMutations();
+
+    expect(handle.snapshot().roots).toEqual([baseRoot, firstRoot, secondRoot]);
+    expect(handle.snapshot().truncated).toBe(true);
+    handle.disconnect();
+  });
+
+  it('resumes a late-root sweep across bounded idle slices', async () => {
+    vi.useFakeTimers();
+    const idleCallbacks: Array<(deadline: { didTimeout: boolean; timeRemaining(): number }) => void> = [];
+    vi.stubGlobal('requestIdleCallback', vi.fn((callback: (typeof idleCallbacks)[number]) => {
+      idleCallbacks.push(callback);
+      return idleCallbacks.length;
+    }));
+    vi.stubGlobal('cancelIdleCallback', vi.fn());
+    const baseHost = document.createElement('div');
+    const baseRoot = openShadow(baseHost);
+    document.body.append(baseHost);
+    baseRoot.append(document.createElement('span'), document.createElement('span'));
+    const lateHost = document.createElement('div');
+    baseRoot.append(lateHost);
+    const handle = observeOpenComposedTree(
+      baseRoot,
+      () => {},
+      { rediscoveryIntervalMs: MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS },
+    );
+    const lateRoot = openShadow(lateHost);
+
+    await vi.advanceTimersByTimeAsync(MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS);
+    for (let slice = 0; slice < 3; slice += 1) {
+      const callback = idleCallbacks.shift();
+      expect(callback).toBeDefined();
+      callback!({ didTimeout: false, timeRemaining: () => 0 });
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    expect(handle.snapshot().roots).toEqual([baseRoot, lateRoot]);
+    expect(handle.snapshot().truncated).toBe(true);
+    for (let slice = 0; slice < 3; slice += 1) {
+      const completion = idleCallbacks.shift();
+      expect(completion).toBeDefined();
+      completion!({ didTimeout: false, timeRemaining: () => 0 });
+      if (!handle.snapshot().truncated) break;
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(handle.snapshot().truncated).toBe(false);
+    handle.disconnect();
+  });
+
+  it('backs off empty late-root sweeps and resets after a child-list mutation', async () => {
+    vi.useFakeTimers();
+    const getRoot = vi.fn(() => null);
+    const handle = observeOpenComposedTree(
+      document,
+      () => {},
+      {
+        getShadowRoot: getRoot,
+        rediscoveryIntervalMs: MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS,
+      },
+    );
+    getRoot.mockClear();
+
+    await vi.advanceTimersByTimeAsync(MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS);
+    expect(getRoot).toHaveBeenCalled();
+    getRoot.mockClear();
+    await vi.advanceTimersByTimeAsync(MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS);
+    expect(getRoot).not.toHaveBeenCalled();
+
+    document.body.append(document.createElement('div'));
+    await vi.advanceTimersByTimeAsync(0);
+    getRoot.mockClear();
+    await vi.advanceTimersByTimeAsync(MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS);
+    expect(getRoot).toHaveBeenCalled();
+    handle.disconnect();
+  });
+
+  it('does not postpone a pending sweep during continuous child-list churn', async () => {
+    vi.useFakeTimers();
+    const host = document.createElement('div');
+    document.body.append(host);
+    const handle = observeOpenComposedTree(
+      document,
+      () => {},
+      { rediscoveryIntervalMs: MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS },
+    );
+    const shadow = openShadow(host);
+
+    await vi.advanceTimersByTimeAsync(MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS / 2);
+    document.body.append(document.createElement('span'));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync((MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS / 2) - 1);
+    document.body.append(document.createElement('span'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handle.snapshot().roots).toEqual([document]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handle.snapshot().roots).toContain(shadow);
     handle.disconnect();
   });
 
@@ -340,6 +564,136 @@ describe('observeOpenComposedTree', () => {
     handle.disconnect();
   });
 
+  it('frees the root budget before processing same-batch replacements', async () => {
+    const baseHost = document.createElement('div');
+    const baseRoot = openShadow(baseHost);
+    document.body.append(baseHost);
+    const oldHost = document.createElement('div');
+    const oldRoot = openShadow(oldHost);
+    baseRoot.append(oldHost);
+    const handle = observeOpenComposedTree(baseRoot, () => {}, {
+      maxRoots: 2,
+      maxVisitedElements: 1,
+    });
+    const newHost = document.createElement('div');
+    const newRoot = openShadow(newHost);
+
+    oldHost.remove();
+    oldRoot.append(document.createElement('span'));
+    baseRoot.append(newHost);
+    await flushMutations();
+
+    expect(handle.snapshot().roots).toEqual([baseRoot, newRoot]);
+    expect(handle.snapshot().truncated).toBe(false);
+    handle.disconnect();
+  });
+
+  it('keeps incremental truncation fail-closed until an authoritative refresh completes', async () => {
+    const baseHost = document.createElement('div');
+    const baseRoot = openShadow(baseHost);
+    document.body.append(baseHost);
+    const handle = observeOpenComposedTree(
+      baseRoot,
+      () => {},
+      { maxVisitedElements: 1 },
+    );
+    expect(handle.snapshot().truncated).toBe(false);
+
+    const wrapper = document.createElement('div');
+    const child = document.createElement('span');
+    wrapper.append(child);
+    baseRoot.append(wrapper);
+    await flushMutations();
+    expect(handle.snapshot().truncated).toBe(true);
+
+    child.remove();
+    expect(handle.refresh().truncated).toBe(false);
+    handle.disconnect();
+  });
+
+  it('does not recount mutation records already covered by an authoritative refresh', async () => {
+    const baseHost = document.createElement('div');
+    const baseRoot = openShadow(baseHost);
+    document.body.append(baseHost);
+    const handle = observeOpenComposedTree(
+      baseRoot,
+      () => {},
+      { maxVisitedElements: 1 },
+    );
+
+    baseRoot.append(document.createElement('span'));
+    expect(handle.refresh().truncated).toBe(false);
+    await flushMutations();
+
+    expect(handle.snapshot().truncated).toBe(false);
+    expect(handle.snapshot().visitedElements).toBe(1);
+    handle.disconnect();
+  });
+
+  it('accounts for the element budget across separate mutation batches', async () => {
+    const baseHost = document.createElement('div');
+    const baseRoot = openShadow(baseHost);
+    document.body.append(baseHost);
+    const handle = observeOpenComposedTree(
+      baseRoot,
+      () => {},
+      { maxVisitedElements: 2 },
+    );
+
+    baseRoot.append(document.createElement('span'));
+    await flushMutations();
+    expect(handle.snapshot().truncated).toBe(false);
+    baseRoot.append(document.createElement('span'));
+    await flushMutations();
+    expect(handle.snapshot().truncated).toBe(false);
+    baseRoot.append(document.createElement('span'));
+    await flushMutations();
+    expect(handle.snapshot().truncated).toBe(true);
+    handle.disconnect();
+  });
+
+  it('bounds the added-node work performed in one mutation flush', async () => {
+    vi.useFakeTimers();
+    const baseHost = document.createElement('div');
+    const baseRoot = openShadow(baseHost);
+    document.body.append(baseHost);
+    const handle = observeOpenComposedTree(baseRoot, () => {});
+    const additions = Array.from({ length: 2_049 }, () => document.createElement('span'));
+
+    baseRoot.append(...additions);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(handle.snapshot().truncated).toBe(true);
+    expect(handle.snapshot().visitedElements).toBe(2_048);
+    handle.disconnect();
+  });
+
+  it('re-probes known hosts after removed-node cleanup is truncated', async () => {
+    vi.useFakeTimers();
+    const baseHost = document.createElement('div');
+    const baseRoot = openShadow(baseHost);
+    document.body.append(baseHost);
+    const container = document.createElement('div');
+    container.append(...Array.from({ length: 2_048 }, () => document.createElement('span')));
+    const shadowHost = document.createElement('div');
+    const shadowRoot = openShadow(shadowHost);
+    container.append(shadowHost);
+    baseRoot.append(container);
+    const handle = observeOpenComposedTree(baseRoot, () => {});
+    expect(handle.snapshot().roots).toContain(shadowRoot);
+
+    container.remove();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handle.snapshot().truncated).toBe(true);
+    expect(handle.snapshot().roots).not.toContain(shadowRoot);
+
+    baseRoot.append(shadowHost);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handle.snapshot().roots).toContain(shadowRoot);
+    expect(handle.snapshot().truncated).toBe(true);
+    handle.disconnect();
+  });
+
   it('automatically tears down when a shadow base root disconnects', async () => {
     vi.useFakeTimers();
     const host = document.createElement('div');
@@ -378,6 +732,37 @@ describe('observeOpenComposedTree', () => {
 
     expect(onChange).not.toHaveBeenCalled();
     expect(handle.snapshot().roots).toEqual([document]);
+  });
+
+  it('cancels a pending platform idle callback on disconnect', async () => {
+    vi.useFakeTimers();
+    type TestIdleCallback = (deadline: { didTimeout: boolean; timeRemaining(): number }) => void;
+    let idleCallback: TestIdleCallback | undefined;
+    const requestIdleCallback = vi.fn((callback: TestIdleCallback) => {
+      idleCallback = callback;
+      return 17;
+    });
+    const cancelIdleCallback = vi.fn();
+    vi.stubGlobal('requestIdleCallback', requestIdleCallback);
+    vi.stubGlobal('cancelIdleCallback', cancelIdleCallback);
+    const host = document.createElement('div');
+    document.body.append(host);
+    const handle = observeOpenComposedTree(
+      document,
+      () => {},
+      { rediscoveryIntervalMs: MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS },
+    );
+    const shadow = openShadow(host);
+
+    await vi.advanceTimersByTimeAsync(MIN_COMPOSED_TREE_REDISCOVERY_INTERVAL_MS);
+    expect(requestIdleCallback).toHaveBeenCalledOnce();
+    handle.disconnect();
+    expect(cancelIdleCallback).toHaveBeenCalledWith(17);
+
+    const staleCallback = idleCallback;
+    expect(staleCallback).toBeDefined();
+    (staleCallback as TestIdleCallback)({ didTimeout: true, timeRemaining: () => 0 });
+    expect(handle.snapshot().roots).not.toContain(shadow);
   });
 
   it('validates the bounded rediscovery interval', () => {

@@ -5,14 +5,23 @@ import type { AutofillSaveCaptureSubmission } from '../messaging/protocol.js';
 import {
   MAX_AUTOFILL_PENDING_SAVE_TTL_MS,
   type AutofillPendingSaveCredentials,
+  type AutofillPendingSaveDocumentContext,
+  type AutofillPendingSaveEvaluator,
   type AutofillPendingSaveInput,
+  type AutofillPendingSavePublicPrompt,
+  type TakenAutofillPendingSave,
   type AutofillUnconfirmedSaveMetadata,
   type AutofillPendingSaveStore,
 } from './autofill-pending-save-store.js';
+import type {
+  AutofillUsernameStageContext,
+  AutofillUsernameStageInput,
+  AutofillUsernameStageStore,
+} from './autofill-username-stage-store.js';
 
 export const AUTOFILL_SAVE_CAPTURE_NETWORK_STORAGE_KEY = 'autofillSaveCaptureNetworkJournal';
 export const AUTOFILL_SAVE_CAPTURE_ALARM = 'autofillSaveCaptureNetwork';
-export const AUTOFILL_SAVE_CAPTURE_NETWORK_SCHEMA_VERSION = 1 as const;
+export const AUTOFILL_SAVE_CAPTURE_NETWORK_SCHEMA_VERSION = 3 as const;
 export const DEFAULT_SAVE_CAPTURE_BEFORE_WINDOW_MS = 2_000;
 export const DEFAULT_SAVE_CAPTURE_AFTER_WINDOW_MS = 1_500;
 export const DEFAULT_SAVE_CAPTURE_NETWORK_TTL_MS = 30_000;
@@ -45,6 +54,24 @@ export interface AutofillSaveCaptureBeforeRequest {
   readonly url: string;
   readonly method: string;
   readonly type: 'main_frame' | 'sub_frame' | 'xmlhttprequest';
+  readonly timeStamp: number;
+}
+
+export interface AutofillSaveCaptureRuntimeActivation {
+  readonly tabId: number;
+  readonly frameId: number;
+  readonly documentId: string;
+  readonly frameUrl: string;
+  readonly runtimeIncarnation: string;
+  readonly previousRuntimeIncarnation?: string;
+}
+
+export interface AutofillSaveCaptureBeforeRequestAdmission {
+  readonly requestId: string;
+  readonly tabId: number;
+  readonly frameId: number;
+  readonly documentId?: string;
+  readonly sourceDocumentUrl?: string;
   readonly timeStamp: number;
 }
 
@@ -99,11 +126,24 @@ export interface AutofillSaveCaptureCoordinatorOptions {
     | 'captureState'
     | 'captureMetadata'
     | 'listUnconfirmed'
+    | 'claim'
+    | 'take'
+    | 'dismiss'
   >;
   /** Returns a fresh owned key copy. The capture store consumes and zeroes it. */
   readonly loadUserKey: (metadata: AutofillUnconfirmedSaveMetadata) => Promise<SymmetricKey | undefined>;
   readonly assertCurrent?: (metadata: AutofillUnconfirmedSaveMetadata) => void;
   readonly onConfirmed?: (metadata: AutofillUnconfirmedSaveMetadata) => void | Promise<void>;
+  readonly clearUsernameRuntime?: (
+    tabId: number,
+    frameId: number,
+    documentId: string,
+    runtimeIncarnation: string,
+  ) => void | Promise<void>;
+  readonly usernameStages?: Pick<
+    AutofillUsernameStageStore,
+    'stage' | 'consume' | 'clearRuntime' | 'clearTab' | 'clear'
+  >;
   readonly scheduler?: AutofillSaveCaptureAlarmScheduler;
   readonly storageKey?: string;
   readonly now?: () => number;
@@ -119,6 +159,7 @@ interface CaptureBinding {
   readonly tabId: number;
   readonly frameId: number;
   readonly documentId: string;
+  readonly runtimeIncarnation: string;
   readonly sourceOrigin: string;
   readonly sourceSite: string;
   readonly sourceUrlFingerprint: string;
@@ -148,6 +189,7 @@ interface RequestRecord {
   readonly tabId: number;
   readonly frameId: number;
   readonly documentId: string;
+  readonly runtimeIncarnation: string;
   readonly documentOrigin: string;
   readonly documentSite: string;
   readonly documentUrlFingerprint: string;
@@ -163,6 +205,12 @@ interface RequestRecord {
   readonly expiresAt: number;
   phase: 'started' | 'redirected' | 'succeeded' | 'failed';
   redirectCount: number;
+  allowGetTerminal: boolean;
+  continuation?: {
+    readonly statusCode: 307 | 308;
+    readonly redirectedAt: number;
+    readonly expectedUrlFingerprint: string;
+  };
 }
 
 interface TerminalOutcome {
@@ -170,6 +218,7 @@ interface TerminalOutcome {
   readonly tabId: number;
   readonly frameId: number;
   readonly documentId: string;
+  readonly runtimeIncarnation: string;
   readonly urlFingerprint: string;
   readonly method: string;
   readonly type: 'main_frame' | 'sub_frame' | 'xmlhttprequest';
@@ -191,6 +240,7 @@ interface PreparedRedirect {
   readonly type: 'main_frame' | 'sub_frame' | 'xmlhttprequest';
   readonly timeStamp: number;
   readonly expiresAt: number;
+  readonly statusCode: number;
 }
 
 interface PreparedTerminal {
@@ -208,19 +258,102 @@ interface PreparedTerminal {
 interface JournalState {
   revision: number;
   blockedUntil: number;
+  runtimeFenceUntil: number;
   captures: CaptureRecord[];
   requests: RequestRecord[];
   outcomes: TerminalOutcome[];
+  activeRuntimes: ActiveRuntimeRecord[];
+  retiredRuntimes: RetiredRuntimeRecord[];
+  admissions: PendingBeforeRequestAdmission[];
 }
 
 interface StoredJournal {
   readonly schemaVersion: typeof AUTOFILL_SAVE_CAPTURE_NETWORK_SCHEMA_VERSION;
   readonly revision: number;
   readonly blockedUntil: number;
+  readonly runtimeFenceUntil: number;
   readonly captures: readonly CaptureRecord[];
   readonly requests: readonly RequestRecord[];
   readonly outcomes: readonly TerminalOutcome[];
+  readonly activeRuntimes: readonly ActiveRuntimeRecord[];
+  readonly retiredRuntimes: readonly RetiredRuntimeRecord[];
+  readonly admissions: readonly PendingBeforeRequestAdmission[];
 }
+
+interface ActiveRuntimeRecord {
+  readonly tabId: number;
+  readonly frameId: number;
+  readonly documentId: string;
+  readonly runtimeIncarnation: string;
+  readonly documentUrlFingerprint: string;
+  readonly activatedAt: number;
+}
+
+interface RetiredRuntimeRecord {
+  readonly tabId: number;
+  readonly frameId: number;
+  readonly documentId: string;
+  readonly runtimeIncarnation: string;
+  readonly retiredAt: number;
+  expiresAt: number;
+  cleanupPending: boolean;
+}
+
+interface PendingBeforeRequestAdmission {
+  readonly admissionId: string;
+  readonly requestId: string;
+  readonly tabId: number;
+  readonly frameId: number;
+  readonly documentId: string;
+  readonly runtimeIncarnation: string;
+  status: 'pending' | 'failed';
+  readonly enteredAt: number;
+  readonly expiresAt: number;
+}
+
+interface VolatileRetiredRuntimeRecord {
+  readonly tabId: number;
+  readonly frameId: number;
+  readonly documentId: string;
+  readonly runtimeIncarnation: string;
+  readonly expiresAt: number;
+}
+
+interface SaveCaptureConfirmationFence {
+  readonly generation: object;
+  readonly sequence: number;
+}
+
+interface NetworkConfirmationWindow {
+  readonly opensAt: number;
+  readonly closesAt: number;
+}
+
+interface InFlightStageInterest {
+  readonly frameKey: string;
+}
+
+interface SaveCaptureRuntimeOperationFence {
+  readonly global: object;
+  readonly tabId: number;
+  readonly tab: object;
+  readonly frameKey: string;
+  readonly frame: object;
+}
+
+type CanonicalRuntimeActivation = AutofillSaveCaptureRuntimeActivation;
+
+interface CanonicalBeforeRequestAdmission {
+  readonly requestId: string;
+  readonly tabId: number;
+  readonly frameId: number;
+  readonly documentId?: string;
+  readonly sourceDocumentUrl?: string;
+  readonly enteredAt: number;
+  readonly expiresAt: number;
+}
+
+type PreparedBeforeRequest = Omit<RequestRecord, 'runtimeIncarnation'>;
 
 interface ParsedJournal extends JournalState {
   dirty: boolean;
@@ -236,6 +369,8 @@ export class AutofillSaveCaptureCoordinator {
   readonly #loadUserKey: AutofillSaveCaptureCoordinatorOptions['loadUserKey'];
   readonly #assertCurrent: (metadata: AutofillUnconfirmedSaveMetadata) => void;
   readonly #onConfirmed: (metadata: AutofillUnconfirmedSaveMetadata) => void | Promise<void>;
+  readonly #clearUsernameRuntime: NonNullable<AutofillSaveCaptureCoordinatorOptions['clearUsernameRuntime']>;
+  readonly #usernameStages: AutofillSaveCaptureCoordinatorOptions['usernameStages'];
   readonly #scheduler: AutofillSaveCaptureAlarmScheduler;
   readonly #storageKey: string;
   readonly #now: () => number;
@@ -246,6 +381,22 @@ export class AutofillSaveCaptureCoordinator {
   readonly #maxJournalBytes: number;
   #tail = Promise.resolve();
   #highWaterRevision = 0;
+  #confirmationGeneration: object = {};
+  #confirmationSequence = 0;
+  #globalConfirmationSequence = 0;
+  readonly #runtimeConfirmationTabSequences = new Map<number, number>();
+  readonly #runtimeConfirmationFrameSequences = new Map<string, number>();
+  readonly #networkConfirmationTabSequences = new Map<number, number>();
+  readonly #networkConfirmationFrameSequences = new Map<string, number>();
+  readonly #networkConfirmationWindows = new Map<string, readonly NetworkConfirmationWindow[]>();
+  readonly #networkConfirmationRequestIds = new Set<string>();
+  readonly #inFlightStageInterests = new Set<InFlightStageInterest>();
+  #networkConfirmationWindowsKnown = false;
+  #runtimeOperationGlobalFence: object = {};
+  readonly #runtimeOperationTabFences = new Map<number, object>();
+  readonly #runtimeOperationFrameFences = new Map<string, object>();
+  readonly #volatileRetiredRuntimes = new Map<string, VolatileRetiredRuntimeRecord>();
+  #volatileRuntimeFenceUntil = 0;
 
   constructor(options: AutofillSaveCaptureCoordinatorOptions) {
     if (!options || typeof options.store?.get !== 'function' || typeof options.store?.set !== 'function'
@@ -255,6 +406,9 @@ export class AutofillSaveCaptureCoordinator {
         || typeof options.captures?.captureState !== 'function'
         || typeof options.captures?.captureMetadata !== 'function'
         || typeof options.captures?.listUnconfirmed !== 'function'
+        || typeof options.captures?.claim !== 'function'
+        || typeof options.captures?.take !== 'function'
+        || typeof options.captures?.dismiss !== 'function'
         || typeof options.loadUserKey !== 'function') {
       throw new TypeError('Save-capture coordinator dependencies are invalid');
     }
@@ -263,6 +417,8 @@ export class AutofillSaveCaptureCoordinator {
     this.#loadUserKey = options.loadUserKey;
     this.#assertCurrent = options.assertCurrent ?? (() => {});
     this.#onConfirmed = options.onConfirmed ?? (() => {});
+    this.#clearUsernameRuntime = options.clearUsernameRuntime ?? (() => {});
+    this.#usernameStages = options.usernameStages;
     this.#scheduler = options.scheduler ?? { schedule: () => {}, cancel: () => {} };
     this.#storageKey = boundedString(
       options.storageKey ?? AUTOFILL_SAVE_CAPTURE_NETWORK_STORAGE_KEY,
@@ -298,78 +454,582 @@ export class AutofillSaveCaptureCoordinator {
     );
   }
 
+  activateRuntime(input: AutofillSaveCaptureRuntimeActivation): Promise<boolean> {
+    const activation = canonicalRuntimeActivation(input);
+    if (activation.frameId === 0) {
+      this.#bumpRuntimeConfirmationTab(activation.tabId);
+      this.#bumpRuntimeOperationTab(activation.tabId);
+    } else {
+      this.#bumpRuntimeConfirmationFrame(activation.tabId, activation.frameId);
+      this.#bumpRuntimeOperationFrame(activation.tabId, activation.frameId);
+    }
+    const confirmationFence = this.#captureConfirmationFence();
+    return this.#serialize(async () => {
+      const documentUrlFingerprint = (await documentUrlBinding(
+        activation.frameUrl,
+      )).documentUrlFingerprint;
+      const state = await this.#read();
+      await this.#reconcileCaptureStore(state);
+      if (state.runtimeFenceUntil > this.#time() || this.#volatileRuntimeFenceActive()) {
+        await this.#settle(state, confirmationFence);
+        return false;
+      }
+      const pendingDocumentCleanup = (): boolean => state.retiredRuntimes.some((candidate) => (
+        sameRuntimeDocument(candidate, activation) && candidate.cleanupPending
+      ));
+      if (pendingDocumentCleanup()) {
+        await this.#evaluate(state, confirmationFence);
+        if (pendingDocumentCleanup()) {
+          await this.#write(state);
+          await this.#notifyConfirmed(state);
+          await this.#write(state);
+          this.#reschedule(state);
+          return false;
+        }
+      }
+      if (state.retiredRuntimes.some((candidate) => (
+        sameRuntimeDocument(candidate, activation)
+        && candidate.runtimeIncarnation === activation.runtimeIncarnation
+      ))) {
+        await this.#settle(state, confirmationFence);
+        return false;
+      }
+      const existing = state.activeRuntimes.find((candidate) => sameRuntimeDocument(candidate, activation));
+      let volatileRetirementKey: string | undefined;
+      if (existing?.runtimeIncarnation === activation.runtimeIncarnation) {
+        if (this.#runtimeRetired(state, existing)) {
+          await this.#settle(state, confirmationFence);
+          return false;
+        }
+        if (existing.documentUrlFingerprint !== documentUrlFingerprint) {
+          state.activeRuntimes = state.activeRuntimes.map((candidate) => candidate === existing
+            ? Object.freeze({
+                ...existing,
+                documentUrlFingerprint,
+                activatedAt: this.#time(),
+              })
+            : candidate);
+        }
+        if (activation.frameId === 0) {
+          state.activeRuntimes = state.activeRuntimes.filter((candidate) => (
+            candidate.tabId !== activation.tabId || candidate.frameId === 0
+          ));
+        }
+        await this.#settle(state, confirmationFence);
+        return true;
+      }
+      if (activation.previousRuntimeIncarnation === undefined) {
+        if (existing || state.activeRuntimes.some((candidate) => (
+          candidate.tabId === activation.tabId && candidate.frameId === activation.frameId
+        ))) {
+          await this.#settle(state, confirmationFence);
+          return false;
+        }
+      } else {
+        if (existing && existing.runtimeIncarnation !== activation.previousRuntimeIncarnation) {
+          await this.#settle(state, confirmationFence);
+          return false;
+        }
+        let retired = state.retiredRuntimes.find((candidate) => (
+          sameRuntimeDocument(candidate, activation)
+          && candidate.runtimeIncarnation === activation.previousRuntimeIncarnation
+        ));
+        if (!retired) {
+          if (state.retiredRuntimes.length >= this.#maxRequests) {
+            await this.#blockAll(state, safeDeadline(this.#time(), this.#networkTtlMs));
+            await this.#settle(state, confirmationFence);
+            return false;
+          }
+          volatileRetirementKey = this.#rememberVolatileRetirement({
+            tabId: activation.tabId,
+            frameId: activation.frameId,
+            documentId: activation.documentId,
+            runtimeIncarnation: activation.previousRuntimeIncarnation,
+          });
+          if (!volatileRetirementKey) {
+            state.runtimeFenceUntil = Math.max(
+              state.runtimeFenceUntil,
+              safeDeadline(this.#time(), this.#networkTtlMs),
+            );
+            await this.#blockAll(state, state.runtimeFenceUntil);
+            await this.#settle(state, confirmationFence);
+            return false;
+          }
+          const retiredAt = this.#time();
+          retired = {
+            tabId: activation.tabId,
+            frameId: activation.frameId,
+            documentId: activation.documentId,
+            runtimeIncarnation: activation.previousRuntimeIncarnation,
+            retiredAt,
+            expiresAt: safeDeadline(retiredAt, this.#networkTtlMs),
+            cleanupPending: true,
+          };
+          state.retiredRuntimes.push(retired);
+          // Persist the tombstone before touching stores outside this journal. A retry can finish the
+          // idempotent cleanup, but no delayed stage can cross this write-ahead fence.
+          await this.#write(state);
+          this.#reschedule(state);
+        }
+        if (retired.cleanupPending) {
+          await this.#retireRuntimeState(state, activation, activation.previousRuntimeIncarnation);
+          await this.#write(state);
+          this.#reschedule(state);
+          await this.#clearUsernameRuntime(
+            activation.tabId,
+            activation.frameId,
+            activation.documentId,
+            activation.previousRuntimeIncarnation,
+          );
+          await this.#usernameStages?.clearRuntime(
+            activation.tabId,
+            activation.frameId,
+            activation.documentId,
+            activation.previousRuntimeIncarnation,
+          );
+          retired.cleanupPending = false;
+        }
+      }
+
+      state.activeRuntimes = state.activeRuntimes.filter((candidate) => (
+        candidate.tabId !== activation.tabId
+        || (activation.frameId !== 0 && candidate.frameId !== activation.frameId)
+      ));
+      if (state.activeRuntimes.length >= this.#maxRequests) {
+        await this.#blockAll(state, safeDeadline(this.#time(), this.#networkTtlMs));
+        await this.#settle(state, confirmationFence);
+        if (volatileRetirementKey) this.#volatileRetiredRuntimes.delete(volatileRetirementKey);
+        return false;
+      }
+      state.activeRuntimes.push(Object.freeze({
+        tabId: activation.tabId,
+        frameId: activation.frameId,
+        documentId: activation.documentId,
+        runtimeIncarnation: activation.runtimeIncarnation,
+        documentUrlFingerprint,
+        activatedAt: this.#time(),
+      }));
+      await this.#settle(state, confirmationFence);
+      if (volatileRetirementKey) this.#volatileRetiredRuntimes.delete(volatileRetirementKey);
+      return true;
+    });
+  }
+
+  beginBeforeRequest(
+    input: AutofillSaveCaptureBeforeRequestAdmission,
+  ): Promise<string | undefined> {
+    const admission = canonicalBeforeRequestAdmission(input, this.#networkTtlMs);
+    this.#bumpNetworkConfirmationFrame(
+      admission.tabId,
+      admission.frameId,
+      admission.enteredAt,
+      admission.requestId,
+    );
+    const confirmationFence = this.#captureConfirmationFence();
+    return this.#serialize(async () => {
+      const documentUrlFingerprint = admission.sourceDocumentUrl
+        ? (await documentUrlBinding(admission.sourceDocumentUrl)).documentUrlFingerprint
+        : undefined;
+      const state = await this.#read();
+      await this.#reconcileCaptureStore(state);
+      const candidates = state.activeRuntimes.filter((runtime) => (
+        runtime.tabId === admission.tabId
+        && runtime.frameId === admission.frameId
+        && (admission.documentId === undefined || runtime.documentId === admission.documentId)
+        && (documentUrlFingerprint === undefined
+          || runtime.documentUrlFingerprint === documentUrlFingerprint)
+      ));
+      if (candidates.length !== 1) return undefined;
+      const runtime = candidates[0]!;
+      if (this.#runtimeRetired(state, runtime)) return undefined;
+      if (state.admissions.length >= this.#maxRequests) {
+        await this.#blockAll(state, admission.expiresAt);
+        await this.#write(state);
+        this.#reschedule(state);
+        return undefined;
+      }
+      const admissionId = this.#freshAdmissionId(state);
+      state.admissions.push({
+        admissionId,
+        requestId: admission.requestId,
+        tabId: runtime.tabId,
+        frameId: runtime.frameId,
+        documentId: runtime.documentId,
+        runtimeIncarnation: runtime.runtimeIncarnation,
+        status: 'pending',
+        enteredAt: admission.enteredAt,
+        expiresAt: admission.expiresAt,
+      });
+      await this.#evaluate(state, confirmationFence);
+      await this.#write(state);
+      this.#reschedule(state);
+      return admissionId;
+    });
+  }
+
+  async resolveBeforeRequest(
+    admissionIdInput: string,
+    input: AutofillSaveCaptureBeforeRequest,
+  ): Promise<void> {
+    const admissionId = uuid(admissionIdInput, 'admissionId');
+    const parsed = await parseBeforeRequest(input, this.#networkTtlMs);
+    return this.#mutate(async (state) => {
+      const admission = this.#takeAdmission(state, admissionId);
+      if (!admission) return;
+      if (admission.status !== 'pending'
+          || parsed.requestId !== admission.requestId
+          || parsed.tabId !== admission.tabId
+          || parsed.frameId !== admission.frameId
+          || parsed.documentId !== admission.documentId
+          || parsed.startedAt !== admission.enteredAt
+          || this.#runtimeRetired(state, admission)) {
+        admission.status = 'failed';
+        state.admissions.push(admission);
+        await this.#failAdmission(state, admission);
+        return;
+      }
+      await this.#addRequest(state, {
+        ...parsed,
+        runtimeIncarnation: admission.runtimeIncarnation,
+      });
+    });
+  }
+
+  async failBeforeRequest(admissionIdInput: string): Promise<void> {
+    const admissionId = uuid(admissionIdInput, 'admissionId');
+    return this.#mutate(async (state) => {
+      const admission = state.admissions.find((candidate) => candidate.admissionId === admissionId);
+      if (!admission) return;
+      admission.status = 'failed';
+      await this.#failAdmission(state, admission);
+    });
+  }
+
+  isRuntimeCurrent(
+    tabIdInput: number,
+    frameIdInput: number,
+    documentIdInput: string,
+    runtimeIncarnationInput: string,
+  ): Promise<boolean> {
+    const tabId = nonNegativeInteger(tabIdInput, 'tabId');
+    const frameId = nonNegativeInteger(frameIdInput, 'frameId');
+    const documentId = opaqueId(documentIdInput, 'documentId', MAX_DOCUMENT_ID_LENGTH);
+    const runtimeIncarnation = uuid(runtimeIncarnationInput, 'runtimeIncarnation');
+    return this.#serialize(async () => {
+      const state = await this.#read();
+      const runtime = state.activeRuntimes.find((candidate) => (
+        candidate.tabId === tabId
+        && candidate.frameId === frameId
+        && candidate.documentId === documentId
+        && candidate.runtimeIncarnation === runtimeIncarnation
+      ));
+      return Boolean(runtime && !this.#runtimeRetired(state, runtime));
+    });
+  }
+
+  getRuntimeIncarnation(
+    tabIdInput: number,
+    frameIdInput: number,
+    documentIdInput: string,
+  ): Promise<string | undefined> {
+    const tabId = nonNegativeInteger(tabIdInput, 'tabId');
+    const frameId = nonNegativeInteger(frameIdInput, 'frameId');
+    const documentId = opaqueId(documentIdInput, 'documentId', MAX_DOCUMENT_ID_LENGTH);
+    return this.#serialize(async () => {
+      const state = await this.#read();
+      const matches = state.activeRuntimes.filter((candidate) => (
+        candidate.tabId === tabId
+        && candidate.frameId === frameId
+        && candidate.documentId === documentId
+        && !this.#runtimeRetired(state, candidate)
+      ));
+      return matches.length === 1 ? matches[0]!.runtimeIncarnation : undefined;
+    });
+  }
+
+  noteDocumentNavigation(
+    tabIdInput: number,
+    frameIdInput: number,
+    documentIdInput?: string,
+  ): Promise<void> {
+    const tabId = nonNegativeInteger(tabIdInput, 'tabId');
+    const frameId = nonNegativeInteger(frameIdInput, 'frameId');
+    const documentId = documentIdInput === undefined
+      ? undefined
+      : opaqueId(documentIdInput, 'documentId', MAX_DOCUMENT_ID_LENGTH);
+    if (frameId === 0) {
+      this.#bumpRuntimeConfirmationTab(tabId);
+      this.#bumpRuntimeOperationTab(tabId);
+    } else {
+      this.#bumpRuntimeConfirmationFrame(tabId, frameId);
+      this.#bumpRuntimeOperationFrame(tabId, frameId);
+    }
+    return this.#mutate((state) => {
+      state.activeRuntimes = state.activeRuntimes.filter((runtime) => (
+        runtime.tabId !== tabId || (frameId === 0
+          ? runtime.frameId === 0 && documentId !== undefined && runtime.documentId === documentId
+          : runtime.frameId !== frameId
+            || (documentId !== undefined && runtime.documentId === documentId))
+      ));
+      for (const [key, runtime] of this.#volatileRetiredRuntimes) {
+        const survivesNavigation = frameId === 0
+          ? runtime.frameId === 0 && documentId !== undefined && runtime.documentId === documentId
+          : runtime.frameId !== frameId
+            || (documentId !== undefined && runtime.documentId === documentId);
+        if (runtime.tabId === tabId && !survivesNavigation) {
+          this.#volatileRetiredRuntimes.delete(key);
+        }
+      }
+    });
+  }
+
+  stageUsername(input: AutofillUsernameStageInput): Promise<void> {
+    if (!this.#usernameStages) return Promise.reject(new Error('Username stage store is unavailable'));
+    return this.#serialize(async () => {
+      const state = await this.#read();
+      const runtime = state.activeRuntimes.find((candidate) => (
+        candidate.tabId === input.tabId
+        && candidate.frameId === input.frameId
+        && candidate.documentId === input.documentId
+        && candidate.runtimeIncarnation === input.runtimeIncarnation
+      ));
+      if (!runtime || this.#runtimeRetired(state, runtime)) {
+        throw new Error('Username stage runtime is stale');
+      }
+      await this.#usernameStages!.stage(input);
+    });
+  }
+
+  consumeUsername(context: AutofillUsernameStageContext): Promise<string | undefined> {
+    if (!this.#usernameStages) return Promise.reject(new Error('Username stage store is unavailable'));
+    return this.#serialize(async () => {
+      const state = await this.#read();
+      const runtime = state.activeRuntimes.find((candidate) => (
+        candidate.tabId === context.tabId
+        && candidate.frameId === context.frameId
+        && candidate.documentId === context.documentId
+        && candidate.runtimeIncarnation === context.runtimeIncarnation
+      ));
+      if (!runtime || this.#runtimeRetired(state, runtime)) return undefined;
+      return this.#usernameStages!.consume(context);
+    });
+  }
+
+  async claimPendingSave(
+    context: AutofillPendingSaveDocumentContext,
+    ownedUserKey: SymmetricKey,
+    evaluate: AutofillPendingSaveEvaluator,
+    captureId?: string,
+  ): Promise<AutofillPendingSavePublicPrompt> {
+    const runtimeFence = this.#captureRuntimeOperationFence(context.tabId, context.frameId);
+    try {
+      return await this.#serialize(async () => {
+        const state = await this.#read();
+        if (!this.#pendingSaveRuntimeCurrent(state, context)) {
+          throw new Error('Pending-save runtime is stale');
+        }
+        const assertFence = (): void => {
+          if (!this.#runtimeOperationFenceCurrent(runtimeFence)) {
+            throw new Error('Pending-save runtime fence changed');
+          }
+        };
+        const prompt = await this.#captures.claim(
+          context,
+          ownedUserKey,
+          evaluate,
+          captureId,
+          assertFence,
+        );
+        assertFence();
+        return prompt;
+      });
+    } finally {
+      zeroOwnedUserKey(ownedUserKey);
+    }
+  }
+
+  async takePendingSave(
+    promptId: string,
+    context: AutofillPendingSaveDocumentContext,
+    ownedUserKey: SymmetricKey,
+  ): Promise<TakenAutofillPendingSave | undefined> {
+    const runtimeFence = this.#captureRuntimeOperationFence(context.tabId, context.frameId);
+    try {
+      return await this.#serialize(async () => {
+        const state = await this.#read();
+        if (!this.#pendingSaveRuntimeCurrent(state, context)) return undefined;
+        const assertFence = (): void => {
+          if (!this.#runtimeOperationFenceCurrent(runtimeFence)) {
+            throw new Error('Pending-save runtime fence changed');
+          }
+        };
+        const taken = await this.#captures.take(promptId, context, ownedUserKey, assertFence);
+        assertFence();
+        return taken;
+      });
+    } finally {
+      zeroOwnedUserKey(ownedUserKey);
+    }
+  }
+
+  dismissPendingSave(
+    promptId: string,
+    context: AutofillPendingSaveDocumentContext,
+  ): Promise<boolean> {
+    const runtimeFence = this.#captureRuntimeOperationFence(context.tabId, context.frameId);
+    return this.#serialize(async () => {
+      const state = await this.#read();
+      if (!this.#pendingSaveRuntimeCurrent(state, context)) return false;
+      const assertFence = (): void => {
+        if (!this.#runtimeOperationFenceCurrent(runtimeFence)) {
+          throw new Error('Pending-save runtime fence changed');
+        }
+      };
+      const dismissed = await this.#captures.dismiss(promptId, context, assertFence);
+      assertFence();
+      return dismissed;
+    });
+  }
+
+  #pendingSaveRuntimeCurrent(
+    state: JournalState,
+    context: AutofillPendingSaveDocumentContext,
+  ): boolean {
+    const runtime = state.activeRuntimes.find((candidate) => (
+      candidate.tabId === context.tabId
+      && candidate.frameId === context.frameId
+      && candidate.documentId === context.documentId
+      && candidate.runtimeIncarnation === context.runtimeIncarnation
+    ));
+    return Boolean(runtime && !this.#runtimeRetired(state, runtime));
+  }
+
   async stage(
     input: AutofillPendingSaveInput,
     credentials: AutofillPendingSaveCredentials,
     ownedUserKey: SymmetricKey,
     submissionInput: AutofillSaveCaptureSubmission,
   ): Promise<AutofillUnconfirmedSaveMetadata> {
-    let submission: AutofillSaveCaptureSubmission;
+    let stageInterest: InFlightStageInterest | undefined;
     try {
-      submission = parseSubmission(submissionInput);
-    } catch (error) {
-      zeroOwnedUserKey(ownedUserKey);
-      throw error;
-    }
-    const metadata = await this.#captures.putUnconfirmed(input, credentials, ownedUserKey);
-    try {
-      const captureRecord = await createCaptureRecord(metadata, submission);
-      await this.#serialize(async () => {
+      const submission = parseSubmission(submissionInput);
+      const tabId = nonNegativeInteger(input.tabId, 'tabId');
+      const frameId = nonNegativeInteger(input.frameId, 'frameId');
+      stageInterest = this.#beginInFlightStageInterest(tabId, frameId);
+      const runtimeFence = this.#captureRuntimeOperationFence(tabId, frameId);
+      const confirmationFence = this.#captureConfirmationFence();
+      return await this.#serialize(async () => {
+        const assertFence = (): void => {
+          if (!this.#runtimeOperationFenceCurrent(runtimeFence)) {
+            throw new Error('Save-capture runtime fence changed');
+          }
+        };
+        const source = await documentUrlBinding(input.sourceUrl);
         const state = await this.#read();
-        const existingIndex = state.captures.findIndex((capture) => (
-          sameCaptureSlot(capture.binding, captureRecord.binding)
-        ));
-        if (existingIndex >= 0) {
-          const [replaced] = state.captures.splice(existingIndex, 1);
-          if (replaced) await this.#captures.discardCapture(replaced.binding.captureId);
-        }
-        state.captures.push(captureRecord);
         await this.#reconcileCaptureStore(state);
-        while (state.captures.length > this.#maxRequests) {
-          const removed = state.captures.shift();
-          if (removed) await this.#captures.discardCapture(removed.binding.captureId);
+        const runtime = state.activeRuntimes.find((candidate) => (
+          candidate.tabId === input.tabId
+          && candidate.frameId === input.frameId
+          && candidate.documentId === input.sourceDocumentId
+          && candidate.runtimeIncarnation === input.runtimeIncarnation
+          && candidate.documentUrlFingerprint === source.documentUrlFingerprint
+        ));
+        if (!runtime || this.#runtimeRetired(state, runtime) || state.blockedUntil > this.#time()) {
+          throw new Error('Save-capture runtime is stale');
         }
-        await this.#evaluate(state);
-        await this.#write(state);
-        await this.#notifyConfirmed(state);
-        await this.#write(state);
-        this.#reschedule(state);
+        const metadata = await this.#captures.putUnconfirmed(
+          input,
+          credentials,
+          ownedUserKey,
+          assertFence,
+        );
+        try {
+          assertFence();
+          const captureRecord = await createCaptureRecord(metadata, submission);
+          assertFence();
+          const existingIndex = state.captures.findIndex((capture) => (
+            sameCaptureSlot(capture.binding, captureRecord.binding)
+          ));
+          if (existingIndex >= 0) {
+            const [replaced] = state.captures.splice(existingIndex, 1);
+            if (replaced) await this.#captures.discardCapture(replaced.binding.captureId);
+          }
+          state.captures.push(captureRecord);
+          await this.#reconcileCaptureStore(state);
+          while (state.captures.length > this.#maxRequests) {
+            const removed = state.captures.shift();
+            if (removed) await this.#captures.discardCapture(removed.binding.captureId);
+          }
+          await this.#evaluate(state, confirmationFence);
+          await this.#write(state);
+          await this.#notifyConfirmed(state);
+          await this.#write(state);
+          this.#reschedule(state);
+          return metadata;
+        } catch (error) {
+          await this.#captures.discardCapture(metadata.captureId).catch(() => false);
+          throw error;
+        }
       });
-      return metadata;
-    } catch (error) {
-      await this.#captures.discardCapture(metadata.captureId).catch(() => false);
-      throw error;
+    } finally {
+      if (stageInterest) this.#endInFlightStageInterest(stageInterest);
+      zeroOwnedUserKey(ownedUserKey);
     }
   }
 
   async observeBeforeRequest(input: AutofillSaveCaptureBeforeRequest): Promise<void> {
-    const request = await parseBeforeRequest(input, this.#networkTtlMs);
+    const eventTime = timestamp(input.timeStamp, 'timeStamp');
+    this.#bumpNetworkConfirmationFrame(
+      nonNegativeInteger(input.tabId, 'tabId'),
+      nonNegativeInteger(input.frameId, 'frameId'),
+      eventTime,
+      typeof input.requestId === 'string' ? input.requestId : undefined,
+    );
     return this.#mutate(async (state) => {
-      const existing = state.requests.find((candidate) => candidate.requestId === request.requestId);
-      if (existing) {
-        if (!sameStartedRequest(existing, request)) await this.#blockAll(state, request.expiresAt);
+      let prepared: PreparedBeforeRequest;
+      try {
+        prepared = await parseBeforeRequest(input, this.#networkTtlMs);
+      } catch {
+        await this.#blockAll(state, safeDeadline(this.#time(), this.#networkTtlMs));
         return;
       }
-      if (state.requests.length >= this.#maxRequests) {
-        await this.#blockAll(state, request.expiresAt);
+      const runtime = uniqueRuntimeForPreparedRequest(state, prepared);
+      if (!runtime) {
+        await this.#blockAll(state, prepared.expiresAt);
         return;
       }
-      const outcomeIndex = state.outcomes.findIndex((candidate) => candidate.requestId === request.requestId);
-      const outcome = outcomeIndex >= 0 ? state.outcomes.splice(outcomeIndex, 1)[0] : undefined;
-      if (outcome) {
-        request.phase = terminalMatchesRequest(outcome, request) ? outcome.phase : 'failed';
-      }
-      state.requests.push(request);
+      await this.#addRequest(state, { ...prepared, runtimeIncarnation: runtime.runtimeIncarnation });
     });
   }
 
   async observeRedirect(input: AutofillSaveCaptureRedirectRequest): Promise<void> {
-    const redirect = await parseRedirectRequest(input, this.#networkTtlMs);
+    const eventTime = timestamp(input.timeStamp, 'timeStamp');
+    this.#bumpNetworkConfirmationFrame(
+      nonNegativeInteger(input.tabId, 'tabId'),
+      nonNegativeInteger(input.frameId, 'frameId'),
+      eventTime,
+      typeof input.requestId === 'string' ? input.requestId : undefined,
+    );
     return this.#mutate(async (state) => {
+      let redirect: PreparedRedirect;
+      try {
+        redirect = await parseRedirectRequest(input, this.#networkTtlMs);
+      } catch {
+        await this.#blockAll(state, safeDeadline(this.#time(), this.#networkTtlMs));
+        return;
+      }
       const request = state.requests.find((candidate) => candidate.requestId === redirect.requestId);
-      if (!request || !terminalIdentityMatches(redirect, request)
+      const acceptsRedirect = request?.phase === 'started'
+        || (request?.phase === 'redirected'
+          && request.continuation === undefined
+          && request.allowGetTerminal
+          && redirect.method === 'GET');
+      if (!request || !acceptsRedirect
+          || !terminalIdentityMatches(redirect, request)
           || redirect.type !== request.type
           || redirect.urlFingerprint !== request.currentUrlFingerprint
+          || (redirect.method !== request.method
+            && !(request.allowGetTerminal && redirect.method === 'GET'))
           || redirect.timeStamp < request.startedAt
           || request.redirectCount >= MAX_REDIRECTS
           || !sameSiteBinding(
@@ -379,18 +1039,23 @@ export class AutofillSaveCaptureCoordinator {
             redirect.redirectSite,
           )) {
         if (request) request.phase = 'failed';
-        else if (MUTATION_METHODS.has(redirect.method)) this.#upsertOutcome(state, {
+        else if (MUTATION_METHODS.has(redirect.method)) {
+          const runtimeIncarnation = runtimeForTerminal(state, redirect);
+          if (!runtimeIncarnation) return;
+          this.#upsertOutcome(state, {
           requestId: redirect.requestId,
           tabId: redirect.tabId,
           frameId: redirect.frameId,
           documentId: redirect.documentId,
+          runtimeIncarnation,
           urlFingerprint: redirect.urlFingerprint,
           method: redirect.method,
           type: redirect.type,
           completedAt: redirect.timeStamp,
           expiresAt: redirect.expiresAt,
           phase: 'failed',
-        });
+          });
+        }
         return;
       }
       request.currentOrigin = redirect.redirectOrigin;
@@ -398,37 +1063,77 @@ export class AutofillSaveCaptureCoordinator {
       request.currentUrlFingerprint = redirect.redirectUrlFingerprint;
       request.redirectCount += 1;
       request.phase = 'redirected';
+      const preservesTrackedMutation = (redirect.statusCode === 307 || redirect.statusCode === 308)
+        && redirect.method === request.method;
+      if (!preservesTrackedMutation) request.allowGetTerminal = true;
+      if (preservesTrackedMutation) {
+        request.continuation = Object.freeze({
+          statusCode: redirect.statusCode as 307 | 308,
+          redirectedAt: redirect.timeStamp,
+          expectedUrlFingerprint: redirect.redirectUrlFingerprint,
+        });
+      } else {
+        delete request.continuation;
+      }
     });
   }
 
   async observeCompleted(input: AutofillSaveCaptureCompletedRequest): Promise<void> {
-    const completed = await parseCompletedRequest(input, this.#networkTtlMs);
+    const eventTime = timestamp(input.timeStamp, 'timeStamp');
+    this.#bumpNetworkConfirmationFrame(
+      nonNegativeInteger(input.tabId, 'tabId'),
+      nonNegativeInteger(input.frameId, 'frameId'),
+      eventTime,
+      typeof input.requestId === 'string' ? input.requestId : undefined,
+    );
     return this.#mutate(async (state) => {
+      let completed: Awaited<ReturnType<typeof parseCompletedRequest>>;
+      try {
+        completed = await parseCompletedRequest(input, this.#networkTtlMs);
+      } catch {
+        await this.#blockAll(state, safeDeadline(this.#time(), this.#networkTtlMs));
+        return;
+      }
       const request = state.requests.find((candidate) => candidate.requestId === completed.requestId);
       const phase = completed.statusCode >= 200 && completed.statusCode < 300
         ? 'succeeded' as const
         : 'failed' as const;
       if (!request) {
-        if (MUTATION_METHODS.has(completed.method)) {
-          this.#upsertOutcome(state, terminalOutcome(completed, phase));
+        const runtimeIncarnation = runtimeForTerminal(state, completed);
+        if (MUTATION_METHODS.has(completed.method) && runtimeIncarnation) {
+          this.#upsertOutcome(state, terminalOutcome(completed, phase, runtimeIncarnation));
         }
         return;
       }
+      if (request.phase === 'failed') return;
       request.phase = terminalMatchesRequest({
         ...completed,
         completedAt: completed.timeStamp,
-        phase,
       }, request) ? phase : 'failed';
     });
   }
 
   async observeError(input: AutofillSaveCaptureErrorRequest): Promise<void> {
-    const failed = await parseErrorRequest(input, this.#networkTtlMs);
+    const eventTime = timestamp(input.timeStamp, 'timeStamp');
+    this.#bumpNetworkConfirmationFrame(
+      nonNegativeInteger(input.tabId, 'tabId'),
+      nonNegativeInteger(input.frameId, 'frameId'),
+      eventTime,
+      typeof input.requestId === 'string' ? input.requestId : undefined,
+    );
     return this.#mutate(async (state) => {
+      let failed: PreparedTerminal;
+      try {
+        failed = await parseErrorRequest(input, this.#networkTtlMs);
+      } catch {
+        await this.#blockAll(state, safeDeadline(this.#time(), this.#networkTtlMs));
+        return;
+      }
       const request = state.requests.find((candidate) => candidate.requestId === failed.requestId);
       if (!request) {
-        if (MUTATION_METHODS.has(failed.method)) {
-          this.#upsertOutcome(state, terminalOutcome(failed, 'failed'));
+        const runtimeIncarnation = runtimeForTerminal(state, failed);
+        if (MUTATION_METHODS.has(failed.method) && runtimeIncarnation) {
+          this.#upsertOutcome(state, terminalOutcome(failed, 'failed', runtimeIncarnation));
         }
         return;
       }
@@ -446,33 +1151,40 @@ export class AutofillSaveCaptureCoordinator {
 
   clearTab(tabIdInput: number): Promise<void> {
     const tabId = nonNegativeInteger(tabIdInput, 'tabId');
-    return this.#mutate(async (state) => {
+    this.#bumpRuntimeConfirmationTab(tabId);
+    this.#bumpNetworkConfirmationTab(tabId);
+    this.#bumpRuntimeOperationTab(tabId);
+    const confirmationFence = this.#captureConfirmationFence();
+    return this.#serialize(async () => {
+      let usernameFailure: unknown;
+      let usernameClearFailed = false;
+      try {
+        await this.#usernameStages?.clearTab(tabId);
+      } catch (error) {
+        usernameFailure = error;
+        usernameClearFailed = true;
+      }
+      const state = await this.#read();
+      await this.#reconcileCaptureStore(state);
       const captures = state.captures.filter((capture) => capture.binding.tabId === tabId);
       for (const capture of captures) await this.#captures.discardCapture(capture.binding.captureId);
       state.captures = state.captures.filter((capture) => capture.binding.tabId !== tabId);
       state.requests = state.requests.filter((request) => request.tabId !== tabId);
       state.outcomes = state.outcomes.filter((outcome) => outcome.tabId !== tabId);
-    });
-  }
-
-  discardUnconfirmedDocument(tabIdInput: number, frameIdInput: number, documentIdInput: string): Promise<void> {
-    const tabId = nonNegativeInteger(tabIdInput, 'tabId');
-    const frameId = nonNegativeInteger(frameIdInput, 'frameId');
-    const documentId = opaqueId(documentIdInput, 'documentId', MAX_DOCUMENT_ID_LENGTH);
-    return this.#mutate(async (state) => {
-      for (const capture of [...state.captures]) {
-        if (capture.phase === 'unconfirmed'
-            && capture.binding.tabId === tabId
-            && capture.binding.frameId === frameId
-            && capture.binding.documentId === documentId) {
-          await this.#discardCapture(state, capture);
-        }
+      state.activeRuntimes = state.activeRuntimes.filter((runtime) => runtime.tabId !== tabId);
+      state.retiredRuntimes = state.retiredRuntimes.filter((runtime) => runtime.tabId !== tabId);
+      state.admissions = state.admissions.filter((admission) => admission.tabId !== tabId);
+      for (const [key, runtime] of this.#volatileRetiredRuntimes) {
+        if (runtime.tabId === tabId) this.#volatileRetiredRuntimes.delete(key);
       }
+      await this.#settle(state, confirmationFence);
+      if (usernameClearFailed) throw usernameFailure;
     });
   }
 
   invalidateNetworkWindow(timeStampInput: number): Promise<void> {
     const timeStamp = timestamp(timeStampInput, 'timeStamp');
+    this.#bumpGlobalConfirmation();
     return this.#mutate((state) => this.#blockAll(
       state,
       safeDeadline(timeStamp, this.#networkTtlMs),
@@ -480,7 +1192,19 @@ export class AutofillSaveCaptureCoordinator {
   }
 
   clear(): Promise<void> {
+    this.#bumpGlobalConfirmation();
+    this.#runtimeOperationGlobalFence = {};
+    this.#runtimeOperationTabFences.clear();
+    this.#runtimeOperationFrameFences.clear();
     return this.#serialize(async () => {
+      let usernameFailure: unknown;
+      let usernameClearFailed = false;
+      try {
+        await this.#usernameStages?.clear();
+      } catch (error) {
+        usernameFailure = error;
+        usernameClearFailed = true;
+      }
       const state = await this.#read();
       for (const capture of state.captures) {
         await this.#captures.discardCapture(capture.binding.captureId);
@@ -491,20 +1215,338 @@ export class AutofillSaveCaptureCoordinator {
       const empty = emptyJournal(Math.max(state.revision, this.#highWaterRevision));
       await this.#write(empty);
       this.#reschedule(empty);
+      this.#volatileRetiredRuntimes.clear();
+      this.#volatileRuntimeFenceUntil = 0;
+      if (usernameClearFailed) throw usernameFailure;
     });
   }
 
+  async #retireRuntimeState(
+    state: JournalState,
+    activation: Pick<CanonicalRuntimeActivation, 'tabId' | 'frameId' | 'documentId'>,
+    runtimeIncarnation: string,
+  ): Promise<void> {
+    for (const capture of [...state.captures]) {
+      if (capture.phase === 'unconfirmed'
+          && capture.binding.tabId === activation.tabId
+          && capture.binding.frameId === activation.frameId
+          && capture.binding.documentId === activation.documentId
+          && capture.binding.runtimeIncarnation === runtimeIncarnation) {
+        await this.#discardCapture(state, capture);
+      }
+    }
+    state.requests = state.requests.filter((request) => !(
+      request.tabId === activation.tabId
+      && request.frameId === activation.frameId
+      && request.documentId === activation.documentId
+      && request.runtimeIncarnation === runtimeIncarnation
+    ));
+    state.outcomes = state.outcomes.filter((outcome) => !(
+      outcome.tabId === activation.tabId
+      && outcome.frameId === activation.frameId
+      && outcome.documentId === activation.documentId
+      && outcome.runtimeIncarnation === runtimeIncarnation
+    ));
+    state.admissions = state.admissions.filter((admission) => !(
+      admission.tabId === activation.tabId
+      && admission.frameId === activation.frameId
+      && admission.documentId === activation.documentId
+      && admission.runtimeIncarnation === runtimeIncarnation
+    ));
+    state.activeRuntimes = state.activeRuntimes.filter((runtime) => !(
+      runtime.tabId === activation.tabId
+      && runtime.frameId === activation.frameId
+      && runtime.documentId === activation.documentId
+      && runtime.runtimeIncarnation === runtimeIncarnation
+    ));
+  }
+
+  #runtimeRetired(
+    state: JournalState,
+    runtime: Pick<ActiveRuntimeRecord, 'tabId' | 'frameId' | 'documentId' | 'runtimeIncarnation'>,
+  ): boolean {
+    this.#pruneVolatileRetirements();
+    return this.#volatileRuntimeFenceUntil > this.#time()
+      || this.#volatileRetiredRuntimes.has(runtimeRecordKey(runtime))
+      || state.retiredRuntimes.some((retired) => (
+      retired.tabId === runtime.tabId
+      && retired.frameId === runtime.frameId
+      && retired.documentId === runtime.documentId
+      && retired.runtimeIncarnation === runtime.runtimeIncarnation
+      ));
+  }
+
+  #rememberVolatileRetirement(
+    runtime: Pick<ActiveRuntimeRecord, 'tabId' | 'frameId' | 'documentId' | 'runtimeIncarnation'>,
+  ): string | undefined {
+    this.#pruneVolatileRetirements();
+    const key = runtimeRecordKey(runtime);
+    if (this.#volatileRetiredRuntimes.has(key)) return key;
+    if (this.#volatileRetiredRuntimes.size >= this.#maxRequests) {
+      this.#volatileRuntimeFenceUntil = Math.max(
+        this.#volatileRuntimeFenceUntil,
+        safeDeadline(this.#time(), this.#networkTtlMs),
+      );
+      return undefined;
+    }
+    this.#volatileRetiredRuntimes.set(key, Object.freeze({
+      ...runtime,
+      expiresAt: safeDeadline(this.#time(), this.#networkTtlMs),
+    }));
+    return key;
+  }
+
+  #volatileRuntimeFenceActive(): boolean {
+    this.#pruneVolatileRetirements();
+    return this.#volatileRuntimeFenceUntil > this.#time();
+  }
+
+  #pruneVolatileRetirements(): void {
+    const now = this.#time();
+    if (this.#volatileRuntimeFenceUntil <= now) this.#volatileRuntimeFenceUntil = 0;
+    for (const [key, runtime] of this.#volatileRetiredRuntimes) {
+      if (runtime.expiresAt <= now) this.#volatileRetiredRuntimes.delete(key);
+    }
+  }
+
+  #freshAdmissionId(state: JournalState): string {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const admissionId = crypto.randomUUID();
+      if (!UUID_V4.test(admissionId)) throw new Error('Save-capture admission id is invalid');
+      if (!state.admissions.some((candidate) => candidate.admissionId === admissionId)) return admissionId;
+    }
+    throw new Error('Save-capture admission id collision');
+  }
+
+  #takeAdmission(
+    state: JournalState,
+    admissionId: string,
+  ): PendingBeforeRequestAdmission | undefined {
+    const index = state.admissions.findIndex((candidate) => candidate.admissionId === admissionId);
+    return index >= 0 ? state.admissions.splice(index, 1)[0] : undefined;
+  }
+
+  async #failAdmission(
+    state: JournalState,
+    admission: PendingBeforeRequestAdmission,
+  ): Promise<void> {
+    for (const capture of [...state.captures]) {
+      if (capture.phase === 'unconfirmed'
+          && capture.binding.tabId === admission.tabId
+          && capture.binding.frameId === admission.frameId
+          && capture.binding.documentId === admission.documentId
+          && capture.binding.runtimeIncarnation === admission.runtimeIncarnation
+          && admission.enteredAt >= capture.binding.createdAt - this.#beforeWindowMs
+          && admission.enteredAt <= capture.binding.createdAt + this.#afterWindowMs) {
+        await this.#discardCapture(state, capture);
+      }
+    }
+  }
+
+  async #addRequest(state: JournalState, request: RequestRecord): Promise<void> {
+    const existing = state.requests.find((candidate) => candidate.requestId === request.requestId);
+    if (existing) {
+      if (sameStartedRequest(existing, request)) return;
+      if (consumeRedirectContinuation(existing, request)) return;
+      await this.#blockAll(state, request.expiresAt);
+      return;
+    }
+    if (state.requests.length >= this.#maxRequests) {
+      await this.#blockAll(state, request.expiresAt);
+      return;
+    }
+    const outcomeIndex = state.outcomes.findIndex((candidate) => (
+      candidate.requestId === request.requestId
+      && candidate.runtimeIncarnation === request.runtimeIncarnation
+    ));
+    const outcome = outcomeIndex >= 0 ? state.outcomes.splice(outcomeIndex, 1)[0] : undefined;
+    if (outcome) request.phase = terminalMatchesRequest(outcome, request) ? outcome.phase : 'failed';
+    state.requests.push(request);
+  }
+
+  #captureConfirmationFence(): SaveCaptureConfirmationFence {
+    return Object.freeze({
+      generation: this.#confirmationGeneration,
+      sequence: this.#confirmationSequence,
+    });
+  }
+
+  #confirmationFenceCurrent(
+    fence: SaveCaptureConfirmationFence,
+    binding: Pick<CaptureBinding, 'tabId' | 'frameId'>,
+  ): boolean {
+    if (fence.generation !== this.#confirmationGeneration
+        || this.#globalConfirmationSequence > fence.sequence) return false;
+    const frameKey = runtimeOperationFrameKey(binding.tabId, binding.frameId);
+    return (this.#runtimeConfirmationTabSequences.get(binding.tabId) ?? 0) <= fence.sequence
+      && (this.#runtimeConfirmationFrameSequences.get(frameKey) ?? 0) <= fence.sequence
+      && (this.#networkConfirmationTabSequences.get(binding.tabId) ?? 0) <= fence.sequence
+      && (this.#networkConfirmationFrameSequences.get(frameKey) ?? 0) <= fence.sequence;
+  }
+
+  #nextConfirmationSequence(): number {
+    if (this.#confirmationSequence >= Number.MAX_SAFE_INTEGER) {
+      this.#confirmationGeneration = {};
+      this.#confirmationSequence = 0;
+      this.#globalConfirmationSequence = 0;
+      this.#runtimeConfirmationTabSequences.clear();
+      this.#runtimeConfirmationFrameSequences.clear();
+      this.#networkConfirmationTabSequences.clear();
+      this.#networkConfirmationFrameSequences.clear();
+    }
+    this.#confirmationSequence += 1;
+    return this.#confirmationSequence;
+  }
+
+  #bumpGlobalConfirmation(): void {
+    this.#globalConfirmationSequence = this.#nextConfirmationSequence();
+    this.#runtimeConfirmationTabSequences.clear();
+    this.#runtimeConfirmationFrameSequences.clear();
+    this.#networkConfirmationTabSequences.clear();
+    this.#networkConfirmationFrameSequences.clear();
+  }
+
+  #bumpRuntimeConfirmationTab(tabId: number): void {
+    if (!this.#runtimeConfirmationTabSequences.has(tabId)
+        && this.#runtimeConfirmationTabSequences.size >= this.#maxRequests) {
+      this.#bumpGlobalConfirmation();
+    }
+    this.#runtimeConfirmationTabSequences.set(tabId, this.#nextConfirmationSequence());
+    this.#deleteConfirmationFrames(this.#runtimeConfirmationFrameSequences, tabId);
+  }
+
+  #bumpRuntimeConfirmationFrame(tabId: number, frameId: number): void {
+    const key = runtimeOperationFrameKey(tabId, frameId);
+    if (!this.#runtimeConfirmationFrameSequences.has(key)
+        && this.#runtimeConfirmationFrameSequences.size >= this.#maxRequests) {
+      this.#bumpGlobalConfirmation();
+    }
+    this.#runtimeConfirmationFrameSequences.set(
+      key,
+      this.#nextConfirmationSequence(),
+    );
+  }
+
+  #bumpNetworkConfirmationTab(tabId: number): void {
+    if (!this.#networkConfirmationTabSequences.has(tabId)
+        && this.#networkConfirmationTabSequences.size >= this.#maxRequests) {
+      this.#bumpGlobalConfirmation();
+    }
+    this.#networkConfirmationTabSequences.set(tabId, this.#nextConfirmationSequence());
+    this.#deleteConfirmationFrames(this.#networkConfirmationFrameSequences, tabId);
+  }
+
+  #bumpNetworkConfirmationFrame(
+    tabId: number,
+    frameId: number,
+    eventTime: number,
+    requestId?: string,
+  ): void {
+    const key = runtimeOperationFrameKey(tabId, frameId);
+    if (this.#networkConfirmationWindowsKnown
+        && !this.#hasInFlightStageInterest(key)
+        && !(requestId !== undefined && this.#networkConfirmationRequestIds.has(
+          networkConfirmationRequestKey(tabId, frameId, requestId),
+        ))
+        && !this.#networkConfirmationWindows.get(key)?.some((window) => (
+          eventTime >= window.opensAt && eventTime <= window.closesAt
+        ))) return;
+    if (!this.#networkConfirmationFrameSequences.has(key)
+        && this.#networkConfirmationFrameSequences.size >= this.#maxRequests) {
+      this.#bumpGlobalConfirmation();
+    }
+    this.#networkConfirmationFrameSequences.set(
+      key,
+      this.#nextConfirmationSequence(),
+    );
+  }
+
+  #beginInFlightStageInterest(tabId: number, frameId: number): InFlightStageInterest {
+    if (this.#inFlightStageInterests.size >= this.#maxRequests) {
+      this.#bumpGlobalConfirmation();
+      throw new Error('Save-capture in-flight stage capacity was exceeded');
+    }
+    const interest = Object.freeze({ frameKey: runtimeOperationFrameKey(tabId, frameId) });
+    this.#inFlightStageInterests.add(interest);
+    return interest;
+  }
+
+  #endInFlightStageInterest(interest: InFlightStageInterest): void {
+    this.#inFlightStageInterests.delete(interest);
+  }
+
+  #hasInFlightStageInterest(frameKey: string): boolean {
+    for (const interest of this.#inFlightStageInterests) {
+      if (interest.frameKey === frameKey) return true;
+    }
+    return false;
+  }
+
+  #deleteConfirmationFrames(sequences: Map<string, number>, tabId: number): void {
+    const prefix = `${tabId}\u0000`;
+    for (const key of sequences.keys()) {
+      if (key.startsWith(prefix)) sequences.delete(key);
+    }
+  }
+
+  #captureRuntimeOperationFence(tabId: number, frameId: number): SaveCaptureRuntimeOperationFence {
+    let tab = this.#runtimeOperationTabFences.get(tabId);
+    if (!tab) {
+      tab = {};
+      this.#runtimeOperationTabFences.set(tabId, tab);
+    }
+    const frameKey = runtimeOperationFrameKey(tabId, frameId);
+    let frame = this.#runtimeOperationFrameFences.get(frameKey);
+    if (!frame) {
+      frame = {};
+      this.#runtimeOperationFrameFences.set(frameKey, frame);
+    }
+    return Object.freeze({
+      global: this.#runtimeOperationGlobalFence,
+      tabId,
+      tab,
+      frameKey,
+      frame,
+    });
+  }
+
+  #runtimeOperationFenceCurrent(fence: SaveCaptureRuntimeOperationFence): boolean {
+    return fence.global === this.#runtimeOperationGlobalFence
+      && this.#runtimeOperationTabFences.get(fence.tabId) === fence.tab
+      && this.#runtimeOperationFrameFences.get(fence.frameKey) === fence.frame;
+  }
+
+  #bumpRuntimeOperationFrame(tabId: number, frameId: number): void {
+    if (!this.#runtimeOperationTabFences.has(tabId)) {
+      this.#runtimeOperationTabFences.set(tabId, {});
+    }
+    this.#runtimeOperationFrameFences.set(runtimeOperationFrameKey(tabId, frameId), {});
+  }
+
+  #bumpRuntimeOperationTab(tabId: number): void {
+    this.#runtimeOperationTabFences.delete(tabId);
+    const prefix = `${tabId}\u0000`;
+    for (const key of this.#runtimeOperationFrameFences.keys()) {
+      if (key.startsWith(prefix)) this.#runtimeOperationFrameFences.delete(key);
+    }
+  }
+
   #mutate(mutation: (state: JournalState) => void | Promise<void>): Promise<void> {
+    const confirmationFence = this.#captureConfirmationFence();
     return this.#serialize(async () => {
       const state = await this.#read();
       await this.#reconcileCaptureStore(state);
       await mutation(state);
-      await this.#evaluate(state);
-      await this.#write(state);
-      await this.#notifyConfirmed(state);
-      await this.#write(state);
-      this.#reschedule(state);
+      await this.#settle(state, confirmationFence);
     });
+  }
+
+  async #settle(state: JournalState, confirmationFence: SaveCaptureConfirmationFence): Promise<void> {
+    await this.#evaluate(state, confirmationFence);
+    await this.#write(state);
+    await this.#notifyConfirmed(state);
+    await this.#write(state);
+    this.#reschedule(state);
   }
 
   #serialize<Result>(operation: () => Promise<Result>): Promise<Result> {
@@ -516,19 +1558,28 @@ export class AutofillSaveCaptureCoordinator {
   async #read(): Promise<JournalState> {
     const now = this.#time();
     const raw = await this.#store.get<unknown>(this.#storageKey);
-    if (raw === undefined) return emptyJournal(this.#highWaterRevision);
+    if (raw === undefined) {
+      const state = emptyJournal(this.#highWaterRevision);
+      this.#refreshNetworkConfirmationScope(state);
+      return state;
+    }
     const parsed = parseJournal(raw, now, this.#maxRequests);
     if (!parsed) {
-      return {
+      const state = {
         ...emptyJournal(this.#highWaterRevision),
         blockedUntil: safeDeadline(now, this.#networkTtlMs),
+        runtimeFenceUntil: safeDeadline(now, this.#networkTtlMs),
       };
+      this.#refreshNetworkConfirmationScope(state);
+      return state;
     }
     this.#highWaterRevision = Math.max(this.#highWaterRevision, parsed.revision);
+    this.#refreshNetworkConfirmationScope(parsed);
     return parsed;
   }
 
   async #write(state: JournalState): Promise<void> {
+    this.#refreshNetworkConfirmationScope(state);
     const revision = Math.max(state.revision, this.#highWaterRevision);
     if (!Number.isSafeInteger(revision) || revision >= Number.MAX_SAFE_INTEGER) {
       throw new Error('Save-capture journal revision is exhausted');
@@ -537,28 +1588,76 @@ export class AutofillSaveCaptureCoordinator {
       schemaVersion: AUTOFILL_SAVE_CAPTURE_NETWORK_SCHEMA_VERSION,
       revision: revision + 1,
       blockedUntil: state.blockedUntil,
+      runtimeFenceUntil: state.runtimeFenceUntil,
       captures: Object.freeze(state.captures.map(freezeCaptureRecord)),
       requests: Object.freeze(state.requests.map(freezeRequestRecord)),
       outcomes: Object.freeze(state.outcomes.map((outcome) => Object.freeze({ ...outcome }))),
+      activeRuntimes: Object.freeze(state.activeRuntimes.map((runtime) => Object.freeze({ ...runtime }))),
+      retiredRuntimes: Object.freeze(state.retiredRuntimes.map((runtime) => Object.freeze({ ...runtime }))),
+      admissions: Object.freeze(state.admissions.map((admission) => Object.freeze({ ...admission }))),
     });
     if (utf8Size(this.#storageKey, envelope) > this.#maxJournalBytes) {
-      await this.#blockAll(state, safeDeadline(this.#time(), this.#networkTtlMs));
+      const captures = [...state.captures];
+      const blockedUntil = safeDeadline(this.#time(), this.#networkTtlMs);
+      state.blockedUntil = Math.max(state.blockedUntil, blockedUntil);
+      state.runtimeFenceUntil = Math.max(state.runtimeFenceUntil, blockedUntil);
+      state.captures = [];
+      state.requests = [];
+      state.outcomes = [];
+      state.activeRuntimes = [];
+      state.retiredRuntimes = [];
+      state.admissions = [];
+      this.#refreshNetworkConfirmationScope(state);
       const blockedEnvelope: StoredJournal = Object.freeze({
         schemaVersion: AUTOFILL_SAVE_CAPTURE_NETWORK_SCHEMA_VERSION,
         revision: revision + 1,
         blockedUntil: state.blockedUntil,
+        runtimeFenceUntil: state.runtimeFenceUntil,
         captures: Object.freeze([]),
         requests: Object.freeze([]),
         outcomes: Object.freeze([]),
+        activeRuntimes: Object.freeze([]),
+        retiredRuntimes: Object.freeze([]),
+        admissions: Object.freeze([]),
       });
       await this.#store.set(this.#storageKey, blockedEnvelope);
       state.revision = blockedEnvelope.revision;
       this.#highWaterRevision = blockedEnvelope.revision;
+      for (const capture of captures) {
+        await this.#captures.discardCapture(capture.binding.captureId).catch(() => false);
+      }
       throw new Error('Save-capture journal capacity was exceeded');
     }
     await this.#store.set(this.#storageKey, envelope);
     state.revision = envelope.revision;
     this.#highWaterRevision = envelope.revision;
+  }
+
+  #refreshNetworkConfirmationScope(state: JournalState): void {
+    this.#networkConfirmationWindows.clear();
+    this.#networkConfirmationRequestIds.clear();
+    const captures = state.captures.filter((capture) => capture.phase === 'unconfirmed');
+    for (const capture of captures) {
+      const key = runtimeOperationFrameKey(capture.binding.tabId, capture.binding.frameId);
+      const windows = this.#networkConfirmationWindows.get(key) ?? [];
+      this.#networkConfirmationWindows.set(key, Object.freeze([
+        ...windows,
+        Object.freeze({
+          opensAt: Math.max(0, capture.binding.createdAt - this.#beforeWindowMs),
+          closesAt: safeDeadline(capture.binding.createdAt, this.#afterWindowMs),
+        }),
+      ]));
+    }
+    for (const request of state.requests) {
+      if (captures.some((capture) => this.#requestMatches(capture, request))) {
+        this.#networkConfirmationRequestIds.add(networkConfirmationRequestKey(
+          request.tabId,
+          request.frameId,
+          request.requestId,
+        ));
+      }
+    }
+    this.#networkConfirmationWindowsKnown = true;
   }
 
   async #reconcileCaptureStore(state: JournalState): Promise<void> {
@@ -577,12 +1676,45 @@ export class AutofillSaveCaptureCoordinator {
       capture.metadata = metadata;
       const captureState = await this.#captures.captureState(capture.binding.captureId);
       if (captureState === undefined) state.captures.splice(index, 1);
-      else capture.phase = captureState;
+      else if (captureState !== capture.phase) {
+        await this.#captures.discardCapture(capture.binding.captureId);
+        state.captures.splice(index, 1);
+      }
     }
   }
 
-  async #evaluate(state: JournalState): Promise<void> {
+  async #evaluate(
+    state: JournalState,
+    confirmationFence = this.#captureConfirmationFence(),
+  ): Promise<void> {
     const now = this.#time();
+    for (const retired of state.retiredRuntimes.filter((runtime) => runtime.cleanupPending)) {
+      try {
+        await this.#retireRuntimeState(state, retired, retired.runtimeIncarnation);
+        await this.#clearUsernameRuntime(
+          retired.tabId,
+          retired.frameId,
+          retired.documentId,
+          retired.runtimeIncarnation,
+        );
+        await this.#usernameStages?.clearRuntime(
+          retired.tabId,
+          retired.frameId,
+          retired.documentId,
+          retired.runtimeIncarnation,
+        );
+        retired.cleanupPending = false;
+        this.#volatileRetiredRuntimes.delete(runtimeRecordKey(retired));
+      } catch {
+        // The durable tombstone remains authoritative and the alarm retries bounded cleanup.
+      }
+    }
+    const expiredAdmissions = state.admissions.filter((admission) => admission.expiresAt <= now);
+    state.admissions = state.admissions.filter((admission) => admission.expiresAt > now);
+    for (const admission of expiredAdmissions) await this.#failAdmission(state, admission);
+    state.retiredRuntimes = state.retiredRuntimes.filter((runtime) => (
+      runtime.cleanupPending || runtime.expiresAt > now
+    ));
     state.requests = state.requests.filter((request) => request.expiresAt > now);
     state.outcomes = state.outcomes.filter((outcome) => outcome.expiresAt > now);
     state.captures = state.captures.filter((capture) => capture.binding.expiresAt > now);
@@ -593,6 +1725,9 @@ export class AutofillSaveCaptureCoordinator {
       return;
     }
     if (state.blockedUntil !== 0) state.blockedUntil = 0;
+    if (state.runtimeFenceUntil !== 0 && state.runtimeFenceUntil <= now) {
+      state.runtimeFenceUntil = 0;
+    }
 
     const activeCaptures = state.captures.filter((capture) => capture.phase === 'unconfirmed');
     const matches = new Map<CaptureRecord, RequestRecord[]>();
@@ -609,6 +1744,10 @@ export class AutofillSaveCaptureCoordinator {
 
     for (const capture of [...activeCaptures]) {
       if (!state.captures.includes(capture)) continue;
+      if (this.#runtimeRetired(state, capture.binding)) {
+        await this.#discardCapture(state, capture);
+        continue;
+      }
       const candidates = matches.get(capture) ?? [];
       if (candidates.some((request) => request.phase === 'failed')
           || candidates.length > 1
@@ -619,7 +1758,14 @@ export class AutofillSaveCaptureCoordinator {
       const [request] = candidates;
       if (!request || request.phase !== 'succeeded') continue;
       if (now < safeDeadline(capture.binding.createdAt, this.#afterWindowMs)) continue;
-      await this.#confirmCapture(capture);
+      const admissions = state.admissions.filter((admission) => this.#admissionMayMatch(capture, admission));
+      if (admissions.some((admission) => admission.status === 'failed')) {
+        await this.#discardCapture(state, capture);
+        continue;
+      }
+      if (admissions.length > 0) continue;
+      await this.#confirmCapture(state, capture, confirmationFence);
+      if (state.blockedUntil > now) return;
     }
   }
 
@@ -628,6 +1774,7 @@ export class AutofillSaveCaptureCoordinator {
     if (request.tabId !== binding.tabId
         || request.frameId !== binding.frameId
         || request.documentId !== binding.documentId
+        || request.runtimeIncarnation !== binding.runtimeIncarnation
         || request.documentOrigin !== binding.sourceOrigin
         || request.documentSite !== binding.sourceSite
         || request.documentUrlFingerprint !== binding.sourceUrlFingerprint
@@ -648,7 +1795,23 @@ export class AutofillSaveCaptureCoordinator {
     return request.type === 'xmlhttprequest';
   }
 
-  async #confirmCapture(capture: CaptureRecord): Promise<void> {
+  #admissionMayMatch(
+    capture: CaptureRecord,
+    admission: PendingBeforeRequestAdmission,
+  ): boolean {
+    return admission.tabId === capture.binding.tabId
+      && admission.frameId === capture.binding.frameId
+      && admission.documentId === capture.binding.documentId
+      && admission.runtimeIncarnation === capture.binding.runtimeIncarnation
+      && admission.enteredAt >= capture.binding.createdAt - this.#beforeWindowMs
+      && admission.enteredAt <= capture.binding.createdAt + this.#afterWindowMs;
+  }
+
+  async #confirmCapture(
+    state: JournalState,
+    capture: CaptureRecord,
+    confirmationFence: SaveCaptureConfirmationFence,
+  ): Promise<void> {
     const metadata = capture.metadata;
     if (!metadata) return;
     let key: SymmetricKey | undefined;
@@ -657,15 +1820,43 @@ export class AutofillSaveCaptureCoordinator {
       key = await this.#loadUserKey(metadata);
       this.#assertCurrent(metadata);
       if (!key) return;
-      const confirmed = await this.#captures.confirmUnconfirmed(metadata, key);
+      const confirmed = await this.#captures.confirmUnconfirmed(metadata, key, () => {
+        if (!this.#confirmationFenceCurrent(confirmationFence, capture.binding)) {
+          throw new Error('Save-capture confirmation fence changed');
+        }
+      });
       key = undefined;
+      if (!this.#confirmationFenceCurrent(confirmationFence, capture.binding)) {
+        throw new Error('Save-capture confirmation fence changed');
+      }
       this.#assertCurrent(metadata);
       if (confirmed || await this.#captures.captureState(capture.binding.captureId) === 'confirmed') {
         capture.phase = 'confirmed';
       }
     } catch {
       zeroOwnedUserKey(key);
+      try {
+        if (await this.#captures.captureState(capture.binding.captureId) === 'confirmed') {
+          try {
+            await this.#discardCapture(state, capture);
+          } catch {
+            this.#markConfirmationBlocked(state);
+          }
+        }
+      } catch {
+        this.#markConfirmationBlocked(state);
+      }
     }
+  }
+
+  #markConfirmationBlocked(state: JournalState): void {
+    state.blockedUntil = Math.max(
+      state.blockedUntil,
+      safeDeadline(this.#time(), this.#networkTtlMs),
+    );
+    state.requests = [];
+    state.outcomes = [];
+    state.admissions = [];
   }
 
   async #discardCapture(state: JournalState, capture: CaptureRecord): Promise<void> {
@@ -696,7 +1887,10 @@ export class AutofillSaveCaptureCoordinator {
   }
 
   #upsertOutcome(state: JournalState, outcome: TerminalOutcome): void {
-    const existing = state.outcomes.find((candidate) => candidate.requestId === outcome.requestId);
+    const existing = state.outcomes.find((candidate) => (
+      candidate.requestId === outcome.requestId
+      && candidate.runtimeIncarnation === outcome.runtimeIncarnation
+    ));
     if (existing) {
       if (!sameTerminalOutcome(existing, outcome)) {
         state.blockedUntil = Math.max(state.blockedUntil, outcome.expiresAt);
@@ -716,6 +1910,7 @@ export class AutofillSaveCaptureCoordinator {
     state.blockedUntil = Math.max(state.blockedUntil, until);
     state.requests = [];
     state.outcomes = [];
+    state.admissions = [];
     for (const capture of [...state.captures]) await this.#discardCapture(state, capture);
   }
 
@@ -723,16 +1918,28 @@ export class AutofillSaveCaptureCoordinator {
     const now = this.#time();
     const candidates: number[] = [];
     if (state.blockedUntil > now) candidates.push(state.blockedUntil);
+    if (state.runtimeFenceUntil > now) candidates.push(state.runtimeFenceUntil);
     for (const capture of state.captures) {
       candidates.push(capture.binding.expiresAt);
       if (capture.phase === 'confirmed') candidates.push(safeDeadline(now, CONFIRMED_NOTIFICATION_RETRY_MS));
       else {
         const closesAt = safeDeadline(capture.binding.createdAt, this.#afterWindowMs);
         if (closesAt > now) candidates.push(closesAt);
+        else {
+          const matchingRequests = state.requests.filter((request) => this.#requestMatches(capture, request));
+          if (matchingRequests.length === 1 && matchingRequests[0]?.phase === 'succeeded') {
+            candidates.push(safeDeadline(now, CONFIRMED_NOTIFICATION_RETRY_MS));
+          }
+        }
       }
     }
     for (const request of state.requests) candidates.push(request.expiresAt);
     for (const outcome of state.outcomes) candidates.push(outcome.expiresAt);
+    for (const retired of state.retiredRuntimes) {
+      if (retired.cleanupPending) candidates.push(safeDeadline(now, CONFIRMED_NOTIFICATION_RETRY_MS));
+      else candidates.push(retired.expiresAt);
+    }
+    for (const admission of state.admissions) candidates.push(admission.expiresAt);
     const next = candidates.filter((value) => value > now).sort((left, right) => left - right)[0];
     try {
       if (next === undefined) void Promise.resolve(this.#scheduler.cancel()).catch(() => undefined);
@@ -773,6 +1980,7 @@ async function createCaptureRecord(
       tabId: metadata.tabId,
       frameId: metadata.frameId,
       documentId: metadata.sourceDocumentId,
+      runtimeIncarnation: metadata.runtimeIncarnation,
       sourceOrigin: source.documentOrigin,
       sourceSite: source.documentSite,
       sourceUrlFingerprint: source.documentUrlFingerprint,
@@ -794,12 +2002,71 @@ async function captureBindingMatches(
     && binding.tabId === metadata.tabId
     && binding.frameId === metadata.frameId
     && binding.documentId === metadata.sourceDocumentId
+    && binding.runtimeIncarnation === metadata.runtimeIncarnation
     && binding.sourceOrigin === metadata.origin
     && binding.sourceOrigin === source.documentOrigin
     && binding.sourceSite === source.documentSite
     && binding.sourceUrlFingerprint === source.documentUrlFingerprint
     && binding.createdAt === metadata.createdAt
     && binding.expiresAt === metadata.expiresAt;
+}
+
+function canonicalRuntimeActivation(
+  value: AutofillSaveCaptureRuntimeActivation,
+): CanonicalRuntimeActivation {
+  if (!isPlainRecord(value)) throw new TypeError('Save-capture runtime activation is invalid');
+  const hasPrevious = Object.hasOwn(value, 'previousRuntimeIncarnation');
+  const record = strictRecord(value, hasPrevious
+    ? ['tabId', 'frameId', 'documentId', 'frameUrl', 'runtimeIncarnation', 'previousRuntimeIncarnation']
+    : ['tabId', 'frameId', 'documentId', 'frameUrl', 'runtimeIncarnation'], 'runtime activation');
+  const frameUrl = canonicalRequestUrl(dataValue(record, 'frameUrl'), 'frameUrl');
+  const runtimeIncarnation = uuid(dataValue(record, 'runtimeIncarnation'), 'runtimeIncarnation');
+  const previousRuntimeIncarnation = hasPrevious
+    ? uuid(dataValue(record, 'previousRuntimeIncarnation'), 'previousRuntimeIncarnation')
+    : undefined;
+  if (previousRuntimeIncarnation === runtimeIncarnation) {
+    throw new TypeError('Save-capture replacement runtime must change');
+  }
+  return {
+    tabId: nonNegativeInteger(dataValue(record, 'tabId'), 'tabId'),
+    frameId: nonNegativeInteger(dataValue(record, 'frameId'), 'frameId'),
+    documentId: opaqueId(dataValue(record, 'documentId'), 'documentId', MAX_DOCUMENT_ID_LENGTH),
+    frameUrl,
+    runtimeIncarnation,
+    ...(previousRuntimeIncarnation ? { previousRuntimeIncarnation } : {}),
+  };
+}
+
+function canonicalBeforeRequestAdmission(
+  value: AutofillSaveCaptureBeforeRequestAdmission,
+  ttlMs: number,
+): CanonicalBeforeRequestAdmission {
+  if (!isPlainRecord(value)) throw new TypeError('Save-capture before-request admission is invalid');
+  const optional = [
+    ...(Object.hasOwn(value, 'documentId') ? ['documentId'] : []),
+    ...(Object.hasOwn(value, 'sourceDocumentUrl') ? ['sourceDocumentUrl'] : []),
+  ];
+  const record = strictRecord(
+    value,
+    ['requestId', 'tabId', 'frameId', 'timeStamp', ...optional],
+    'before-request admission',
+  );
+  const enteredAt = timestamp(dataValue(record, 'timeStamp'), 'timeStamp');
+  const documentId = Object.hasOwn(record, 'documentId')
+    ? opaqueId(dataValue(record, 'documentId'), 'documentId', MAX_DOCUMENT_ID_LENGTH)
+    : undefined;
+  const sourceDocumentUrl = Object.hasOwn(record, 'sourceDocumentUrl')
+    ? canonicalRequestUrl(dataValue(record, 'sourceDocumentUrl'), 'sourceDocumentUrl')
+    : undefined;
+  return Object.freeze({
+    requestId: opaqueId(dataValue(record, 'requestId'), 'requestId', MAX_REQUEST_ID_LENGTH),
+    tabId: nonNegativeInteger(dataValue(record, 'tabId'), 'tabId'),
+    frameId: nonNegativeInteger(dataValue(record, 'frameId'), 'frameId'),
+    ...(documentId ? { documentId } : {}),
+    ...(sourceDocumentUrl ? { sourceDocumentUrl } : {}),
+    enteredAt,
+    expiresAt: safeDeadline(enteredAt, ttlMs),
+  });
 }
 
 function parseSubmission(value: unknown): AutofillSaveCaptureSubmission {
@@ -819,7 +2086,7 @@ function parseSubmission(value: unknown): AutofillSaveCaptureSubmission {
   });
 }
 
-async function parseBeforeRequest(value: unknown, ttlMs: number): Promise<RequestRecord> {
+async function parseBeforeRequest(value: unknown, ttlMs: number): Promise<PreparedBeforeRequest> {
   const record = strictRecord(value, [
     'requestId', 'tabId', 'frameId', 'documentId', 'sourceDocumentUrl', 'initiator',
     'url', 'method', 'type', 'timeStamp',
@@ -864,6 +2131,7 @@ async function parseBeforeRequest(value: unknown, ttlMs: number): Promise<Reques
     expiresAt: safeDeadline(startedAt, ttlMs),
     phase: 'started',
     redirectCount: 0,
+    allowGetTerminal: false,
   };
 }
 
@@ -916,6 +2184,7 @@ async function parseRedirectRequest(
     redirectOrigin: redirectBinding.origin,
     redirectSite: redirectBinding.site,
     redirectUrlFingerprint: redirectBinding.fingerprint,
+    statusCode: statusCode as number,
     timeStamp,
     expiresAt: safeDeadline(timeStamp, ttlMs),
   });
@@ -966,12 +2235,14 @@ function terminalTransport(record: Record<string, unknown>): {
 function terminalOutcome(
   input: PreparedTerminal,
   phase: 'succeeded' | 'failed',
+  runtimeIncarnation: string,
 ): TerminalOutcome {
   return {
     requestId: input.requestId,
     tabId: input.tabId,
     frameId: input.frameId,
     documentId: input.documentId,
+    runtimeIncarnation,
     urlFingerprint: input.urlFingerprint,
     method: input.method,
     type: input.type,
@@ -991,13 +2262,19 @@ function terminalIdentityMatches(
     && (request.type !== 'xmlhttprequest' || terminal.documentId === request.documentId);
 }
 
-function terminalMatchesRequest(outcome: TerminalOutcome, request: RequestRecord): boolean {
+function terminalMatchesRequest(
+  outcome: Pick<
+    TerminalOutcome,
+    'requestId' | 'tabId' | 'frameId' | 'documentId' | 'urlFingerprint' | 'method' | 'type' | 'completedAt'
+  >,
+  request: RequestRecord,
+): boolean {
   return terminalIdentityMatches(outcome, request)
+    && request.continuation === undefined
     && outcome.urlFingerprint === request.currentUrlFingerprint
     && outcome.type === request.type
-    && (request.redirectCount === 0
-      ? outcome.method === request.method
-      : outcome.method === request.method || outcome.method === 'GET')
+    && (outcome.method === request.method
+      || (request.allowGetTerminal && outcome.method === 'GET'))
     && outcome.completedAt >= request.startedAt;
 }
 
@@ -1006,6 +2283,7 @@ function sameStartedRequest(left: RequestRecord, right: RequestRecord): boolean 
     && left.tabId === right.tabId
     && left.frameId === right.frameId
     && left.documentId === right.documentId
+    && left.runtimeIncarnation === right.runtimeIncarnation
     && left.documentOrigin === right.documentOrigin
     && left.documentSite === right.documentSite
     && left.documentUrlFingerprint === right.documentUrlFingerprint
@@ -1022,6 +2300,7 @@ function sameTerminalOutcome(left: TerminalOutcome, right: TerminalOutcome): boo
     && left.tabId === right.tabId
     && left.frameId === right.frameId
     && left.documentId === right.documentId
+    && left.runtimeIncarnation === right.runtimeIncarnation
     && left.urlFingerprint === right.urlFingerprint
     && left.method === right.method
     && left.type === right.type
@@ -1036,7 +2315,84 @@ function sameCaptureSlot(
   return left.tabId === right.tabId
     && left.frameId === right.frameId
     && left.documentId === right.documentId
+    && left.runtimeIncarnation === right.runtimeIncarnation
     && left.sourceUrlFingerprint === right.sourceUrlFingerprint;
+}
+
+function consumeRedirectContinuation(existing: RequestRecord, next: RequestRecord): boolean {
+  const continuation = existing.continuation;
+  if (!continuation
+      || existing.phase !== 'redirected'
+      || existing.requestId !== next.requestId
+      || existing.tabId !== next.tabId
+      || existing.frameId !== next.frameId
+      || existing.documentId !== next.documentId
+      || existing.runtimeIncarnation !== next.runtimeIncarnation
+      || existing.documentOrigin !== next.documentOrigin
+      || existing.documentSite !== next.documentSite
+      || existing.documentUrlFingerprint !== next.documentUrlFingerprint
+      || existing.method !== next.method
+      || existing.type !== next.type
+      || next.initialUrlFingerprint !== continuation.expectedUrlFingerprint
+      || next.initialUrlFingerprint !== existing.currentUrlFingerprint
+      || next.startedAt < continuation.redirectedAt) return false;
+  existing.currentOrigin = next.initialOrigin;
+  existing.currentSite = next.initialSite;
+  existing.currentUrlFingerprint = next.initialUrlFingerprint;
+  existing.phase = 'started';
+  delete existing.continuation;
+  return true;
+}
+
+function uniqueRuntimeForPreparedRequest(
+  state: JournalState,
+  request: PreparedBeforeRequest,
+): ActiveRuntimeRecord | undefined {
+  const active = state.activeRuntimes.filter((runtime) => (
+    runtime.tabId === request.tabId
+    && runtime.frameId === request.frameId
+    && runtime.documentId === request.documentId
+    && runtime.documentUrlFingerprint === request.documentUrlFingerprint
+  ));
+  if (active.length === 1) return active[0];
+  const incarnations = new Set(state.captures.filter((capture) => (
+    capture.binding.tabId === request.tabId
+    && capture.binding.frameId === request.frameId
+    && capture.binding.documentId === request.documentId
+    && capture.binding.sourceUrlFingerprint === request.documentUrlFingerprint
+  )).map((capture) => capture.binding.runtimeIncarnation));
+  if (incarnations.size !== 1) return undefined;
+  const runtimeIncarnation = incarnations.values().next().value as string;
+  return {
+    tabId: request.tabId,
+    frameId: request.frameId,
+    documentId: request.documentId,
+    runtimeIncarnation,
+    documentUrlFingerprint: request.documentUrlFingerprint,
+    activatedAt: request.startedAt,
+  };
+}
+
+function runtimeForTerminal(
+  state: JournalState,
+  terminal: Pick<PreparedTerminal, 'requestId' | 'tabId' | 'frameId' | 'documentId' | 'type'>,
+): string | undefined {
+  const matches = new Set(state.admissions.filter((admission) => (
+    admission.requestId === terminal.requestId
+    && admission.tabId === terminal.tabId
+    && admission.frameId === terminal.frameId
+    && (terminal.type !== 'xmlhttprequest' || admission.documentId === terminal.documentId)
+  )).map((admission) => admission.runtimeIncarnation));
+  return matches.size === 1 ? matches.values().next().value : undefined;
+}
+
+function sameRuntimeDocument(
+  left: Pick<ActiveRuntimeRecord, 'tabId' | 'frameId' | 'documentId'>,
+  right: Pick<CanonicalRuntimeActivation, 'tabId' | 'frameId' | 'documentId'>,
+): boolean {
+  return left.tabId === right.tabId
+    && left.frameId === right.frameId
+    && left.documentId === right.documentId;
 }
 
 function sameSiteBinding(
@@ -1099,35 +2455,56 @@ async function urlFingerprint(value: string, domain: string): Promise<string> {
 
 function parseJournal(value: unknown, now: number, capacity: number): ParsedJournal | undefined {
   if (!isPlainRecord(value) || !hasExactDataKeys(value, [
-    'schemaVersion', 'revision', 'blockedUntil', 'captures', 'requests', 'outcomes',
+    'schemaVersion', 'revision', 'blockedUntil', 'runtimeFenceUntil', 'captures', 'requests', 'outcomes',
+    'activeRuntimes', 'retiredRuntimes', 'admissions',
   ])) return undefined;
   if (dataValue(value, 'schemaVersion') !== AUTOFILL_SAVE_CAPTURE_NETWORK_SCHEMA_VERSION) return undefined;
   const revision = dataValue(value, 'revision');
   const blockedUntil = dataValue(value, 'blockedUntil');
+  const runtimeFenceUntil = dataValue(value, 'runtimeFenceUntil');
   const rawCaptures = dataValue(value, 'captures');
   const rawRequests = dataValue(value, 'requests');
   const rawOutcomes = dataValue(value, 'outcomes');
+  const rawActiveRuntimes = dataValue(value, 'activeRuntimes');
+  const rawRetiredRuntimes = dataValue(value, 'retiredRuntimes');
+  const rawAdmissions = dataValue(value, 'admissions');
   if (!Number.isSafeInteger(revision) || (revision as number) < 0
       || !Number.isSafeInteger(blockedUntil) || (blockedUntil as number) < 0
+      || !Number.isSafeInteger(runtimeFenceUntil) || (runtimeFenceUntil as number) < 0
       || !Array.isArray(rawCaptures) || !denseArray(rawCaptures) || rawCaptures.length > capacity
       || !Array.isArray(rawRequests) || !denseArray(rawRequests) || rawRequests.length > capacity
-      || !Array.isArray(rawOutcomes) || !denseArray(rawOutcomes) || rawOutcomes.length > capacity) return undefined;
+      || !Array.isArray(rawOutcomes) || !denseArray(rawOutcomes) || rawOutcomes.length > capacity
+      || !Array.isArray(rawActiveRuntimes) || !denseArray(rawActiveRuntimes) || rawActiveRuntimes.length > capacity
+      || !Array.isArray(rawRetiredRuntimes) || !denseArray(rawRetiredRuntimes) || rawRetiredRuntimes.length > capacity
+      || !Array.isArray(rawAdmissions) || !denseArray(rawAdmissions) || rawAdmissions.length > capacity) return undefined;
   try {
     const captures = rawCaptures.map(parseCaptureRecord);
     const requests = rawRequests.map(parseStoredRequest);
     const outcomes = rawOutcomes.map(parseStoredOutcome);
+    const activeRuntimes = rawActiveRuntimes.map(parseActiveRuntime);
+    const retiredRuntimes = rawRetiredRuntimes.map(parseRetiredRuntime);
+    const admissions = rawAdmissions.map(parseAdmission);
     if (new Set(captures.map((capture) => capture.binding.captureId)).size !== captures.length
         || new Set(requests.map((request) => request.requestId)).size !== requests.length
-        || new Set(outcomes.map((outcome) => outcome.requestId)).size !== outcomes.length) return undefined;
+        || new Set(outcomes.map((outcome) => `${outcome.runtimeIncarnation}\u0000${outcome.requestId}`)).size !== outcomes.length
+        || new Set(activeRuntimes.map((runtime) => JSON.stringify([runtime.tabId, runtime.frameId]))).size !== activeRuntimes.length
+        || new Set(retiredRuntimes.map(runtimeRecordKey)).size !== retiredRuntimes.length
+        || new Set(admissions.map((admission) => admission.admissionId)).size !== admissions.length) return undefined;
     return {
       revision: revision as number,
       blockedUntil: blockedUntil as number,
+      runtimeFenceUntil: runtimeFenceUntil as number,
       captures: captures.filter((capture) => capture.binding.expiresAt > now),
       requests: requests.filter((request) => request.expiresAt > now),
       outcomes: outcomes.filter((outcome) => outcome.expiresAt > now),
+      activeRuntimes,
+      retiredRuntimes: retiredRuntimes.filter((runtime) => runtime.cleanupPending || runtime.expiresAt > now),
+      admissions,
       dirty: captures.some((capture) => capture.binding.expiresAt <= now)
         || requests.some((request) => request.expiresAt <= now)
-        || outcomes.some((outcome) => outcome.expiresAt <= now),
+        || outcomes.some((outcome) => outcome.expiresAt <= now)
+        || retiredRuntimes.some((runtime) => !runtime.cleanupPending && runtime.expiresAt <= now)
+        || admissions.some((admission) => admission.expiresAt <= now),
     };
   } catch {
     return undefined;
@@ -1147,7 +2524,7 @@ function parseCaptureRecord(value: unknown): CaptureRecord {
 function parseCaptureBinding(value: unknown): CaptureBinding {
   const record = strictRecord(value, [
     'captureId', 'tabId', 'frameId', 'documentId', 'sourceOrigin', 'sourceSite',
-    'sourceUrlFingerprint', 'createdAt', 'expiresAt',
+    'runtimeIncarnation', 'sourceUrlFingerprint', 'createdAt', 'expiresAt',
   ], 'capture binding');
   const sourceOrigin = canonicalOrigin(dataValue(record, 'sourceOrigin'));
   const sourceSite = site(dataValue(record, 'sourceSite'), 'sourceSite');
@@ -1162,6 +2539,7 @@ function parseCaptureBinding(value: unknown): CaptureBinding {
     tabId: nonNegativeInteger(dataValue(record, 'tabId'), 'tabId'),
     frameId: nonNegativeInteger(dataValue(record, 'frameId'), 'frameId'),
     documentId: opaqueId(dataValue(record, 'documentId'), 'documentId', MAX_DOCUMENT_ID_LENGTH),
+    runtimeIncarnation: uuid(dataValue(record, 'runtimeIncarnation'), 'runtimeIncarnation'),
     sourceOrigin,
     sourceSite,
     sourceUrlFingerprint: fingerprint(dataValue(record, 'sourceUrlFingerprint')),
@@ -1192,20 +2570,29 @@ function parseStoredSubmission(value: unknown): StoredSubmission {
 }
 
 function parseStoredRequest(value: unknown): RequestRecord {
-  const record = strictRecord(value, [
+  const baseKeys = [
     'requestId', 'tabId', 'frameId', 'documentId',
+    'runtimeIncarnation',
     'documentOrigin', 'documentSite', 'documentUrlFingerprint',
     'initialOrigin', 'initialSite', 'initialUrlFingerprint',
     'currentOrigin', 'currentSite', 'currentUrlFingerprint',
-    'method', 'type', 'startedAt', 'expiresAt', 'phase', 'redirectCount',
-  ], 'request record');
+    'method', 'type', 'startedAt', 'expiresAt', 'phase', 'redirectCount', 'allowGetTerminal',
+  ] as const;
+  const hasContinuation = isPlainRecord(value) && Object.hasOwn(value, 'continuation');
+  const record = strictRecord(
+    value,
+    hasContinuation ? [...baseKeys, 'continuation'] : baseKeys,
+    'request record',
+  );
   const startedAt = timestamp(dataValue(record, 'startedAt'), 'startedAt');
   const expiresAt = timestamp(dataValue(record, 'expiresAt'), 'expiresAt');
   const redirectCount = dataValue(record, 'redirectCount');
+  const allowGetTerminal = dataValue(record, 'allowGetTerminal');
   const phase = dataValue(record, 'phase');
   const type = dataValue(record, 'type');
   if (expiresAt <= startedAt
       || !Number.isSafeInteger(redirectCount) || (redirectCount as number) < 0 || (redirectCount as number) > MAX_REDIRECTS
+      || typeof allowGetTerminal !== 'boolean'
       || (phase !== 'started' && phase !== 'redirected' && phase !== 'succeeded' && phase !== 'failed')
       || typeof type !== 'string' || !REQUEST_TYPES.has(type)) throw new TypeError('Request record is invalid');
   const documentOrigin = canonicalOrigin(dataValue(record, 'documentOrigin'));
@@ -1226,11 +2613,18 @@ function parseStoredRequest(value: unknown): RequestRecord {
       || (phase === 'redirected' && redirectCount === 0)) {
     throw new TypeError('Request record binding is invalid');
   }
+  const continuation = parseStoredContinuation(dataValue(record, 'continuation'));
+  if (continuation && (phase !== 'redirected'
+      || continuation.redirectedAt < startedAt
+      || continuation.redirectedAt >= expiresAt)) {
+    throw new TypeError('Request continuation is invalid');
+  }
   return {
     requestId: opaqueId(dataValue(record, 'requestId'), 'requestId', MAX_REQUEST_ID_LENGTH),
     tabId: nonNegativeInteger(dataValue(record, 'tabId'), 'tabId'),
     frameId,
     documentId: opaqueId(dataValue(record, 'documentId'), 'documentId', MAX_DOCUMENT_ID_LENGTH),
+    runtimeIncarnation: uuid(dataValue(record, 'runtimeIncarnation'), 'runtimeIncarnation'),
     documentOrigin,
     documentSite,
     documentUrlFingerprint: fingerprint(dataValue(record, 'documentUrlFingerprint')),
@@ -1246,13 +2640,15 @@ function parseStoredRequest(value: unknown): RequestRecord {
     expiresAt,
     phase,
     redirectCount: redirectCount as number,
+    allowGetTerminal,
+    ...(continuation ? { continuation } : {}),
   };
 }
 
 function parseStoredOutcome(value: unknown): TerminalOutcome {
   const record = strictRecord(value, [
     'requestId', 'tabId', 'frameId', 'documentId', 'urlFingerprint',
-    'method', 'type', 'completedAt', 'expiresAt', 'phase',
+    'runtimeIncarnation', 'method', 'type', 'completedAt', 'expiresAt', 'phase',
   ], 'terminal outcome');
   const phase = dataValue(record, 'phase');
   const completedAt = timestamp(dataValue(record, 'completedAt'), 'completedAt');
@@ -1262,12 +2658,119 @@ function parseStoredOutcome(value: unknown): TerminalOutcome {
   }
   return {
     ...terminalIdentityWithoutUrl(record),
+    runtimeIncarnation: uuid(dataValue(record, 'runtimeIncarnation'), 'runtimeIncarnation'),
     ...terminalTransport(record),
     urlFingerprint: fingerprint(dataValue(record, 'urlFingerprint')),
     completedAt,
     expiresAt,
     phase,
   };
+}
+
+function parseStoredContinuation(
+  value: unknown,
+): RequestRecord['continuation'] {
+  if (value === undefined) return undefined;
+  const record = strictRecord(
+    value,
+    ['statusCode', 'redirectedAt', 'expectedUrlFingerprint'],
+    'redirect continuation',
+  );
+  const statusCode = dataValue(record, 'statusCode');
+  if (statusCode !== 307 && statusCode !== 308) {
+    throw new TypeError('Redirect continuation status is invalid');
+  }
+  return Object.freeze({
+    statusCode,
+    redirectedAt: timestamp(dataValue(record, 'redirectedAt'), 'redirectedAt'),
+    expectedUrlFingerprint: fingerprint(dataValue(record, 'expectedUrlFingerprint')),
+  });
+}
+
+function parseActiveRuntime(value: unknown): ActiveRuntimeRecord {
+  const record = strictRecord(value, [
+    'tabId', 'frameId', 'documentId', 'runtimeIncarnation',
+    'documentUrlFingerprint', 'activatedAt',
+  ], 'active runtime');
+  return Object.freeze({
+    tabId: nonNegativeInteger(dataValue(record, 'tabId'), 'tabId'),
+    frameId: nonNegativeInteger(dataValue(record, 'frameId'), 'frameId'),
+    documentId: opaqueId(dataValue(record, 'documentId'), 'documentId', MAX_DOCUMENT_ID_LENGTH),
+    runtimeIncarnation: uuid(dataValue(record, 'runtimeIncarnation'), 'runtimeIncarnation'),
+    documentUrlFingerprint: fingerprint(dataValue(record, 'documentUrlFingerprint')),
+    activatedAt: timestamp(dataValue(record, 'activatedAt'), 'activatedAt'),
+  });
+}
+
+function parseRetiredRuntime(value: unknown): RetiredRuntimeRecord {
+  const record = strictRecord(value, [
+    'tabId', 'frameId', 'documentId', 'runtimeIncarnation',
+    'retiredAt', 'expiresAt', 'cleanupPending',
+  ], 'retired runtime');
+  const retiredAt = timestamp(dataValue(record, 'retiredAt'), 'retiredAt');
+  const expiresAt = timestamp(dataValue(record, 'expiresAt'), 'expiresAt');
+  const cleanupPending = dataValue(record, 'cleanupPending');
+  if (expiresAt <= retiredAt || expiresAt - retiredAt > 5 * 60_000) {
+    throw new TypeError('Retired runtime expiry is invalid');
+  }
+  if (typeof cleanupPending !== 'boolean') {
+    throw new TypeError('Retired runtime cleanup state is invalid');
+  }
+  return {
+    tabId: nonNegativeInteger(dataValue(record, 'tabId'), 'tabId'),
+    frameId: nonNegativeInteger(dataValue(record, 'frameId'), 'frameId'),
+    documentId: opaqueId(dataValue(record, 'documentId'), 'documentId', MAX_DOCUMENT_ID_LENGTH),
+    runtimeIncarnation: uuid(dataValue(record, 'runtimeIncarnation'), 'runtimeIncarnation'),
+    retiredAt,
+    expiresAt,
+    cleanupPending,
+  };
+}
+
+function parseAdmission(value: unknown): PendingBeforeRequestAdmission {
+  const record = strictRecord(value, [
+    'admissionId', 'requestId', 'tabId', 'frameId', 'documentId',
+    'runtimeIncarnation', 'status', 'enteredAt', 'expiresAt',
+  ], 'before-request admission');
+  const enteredAt = timestamp(dataValue(record, 'enteredAt'), 'enteredAt');
+  const expiresAt = timestamp(dataValue(record, 'expiresAt'), 'expiresAt');
+  if (expiresAt <= enteredAt || expiresAt - enteredAt > 5 * 60_000) {
+    throw new TypeError('Before-request admission expiry is invalid');
+  }
+  const status = dataValue(record, 'status');
+  if (status !== 'pending' && status !== 'failed') {
+    throw new TypeError('Before-request admission status is invalid');
+  }
+  return {
+    admissionId: uuid(dataValue(record, 'admissionId'), 'admissionId'),
+    requestId: opaqueId(dataValue(record, 'requestId'), 'requestId', MAX_REQUEST_ID_LENGTH),
+    tabId: nonNegativeInteger(dataValue(record, 'tabId'), 'tabId'),
+    frameId: nonNegativeInteger(dataValue(record, 'frameId'), 'frameId'),
+    documentId: opaqueId(dataValue(record, 'documentId'), 'documentId', MAX_DOCUMENT_ID_LENGTH),
+    runtimeIncarnation: uuid(dataValue(record, 'runtimeIncarnation'), 'runtimeIncarnation'),
+    status,
+    enteredAt,
+    expiresAt,
+  };
+}
+
+function runtimeRecordKey(
+  runtime: Pick<ActiveRuntimeRecord, 'tabId' | 'frameId' | 'documentId' | 'runtimeIncarnation'>,
+): string {
+  return JSON.stringify([
+    runtime.tabId,
+    runtime.frameId,
+    runtime.documentId,
+    runtime.runtimeIncarnation,
+  ]);
+}
+
+function runtimeOperationFrameKey(tabId: number, frameId: number): string {
+  return `${tabId}\u0000${frameId}`;
+}
+
+function networkConfirmationRequestKey(tabId: number, frameId: number, requestId: string): string {
+  return `${runtimeOperationFrameKey(tabId, frameId)}\u0000${requestId}`;
 }
 
 function freezeCaptureRecord(record: CaptureRecord): CaptureRecord {
@@ -1279,11 +2782,26 @@ function freezeCaptureRecord(record: CaptureRecord): CaptureRecord {
 }
 
 function freezeRequestRecord(record: RequestRecord): RequestRecord {
-  return Object.freeze({ ...record });
+  return Object.freeze({
+    ...record,
+    ...(record.continuation
+      ? { continuation: Object.freeze({ ...record.continuation }) }
+      : {}),
+  });
 }
 
 function emptyJournal(revision: number): JournalState {
-  return { revision, blockedUntil: 0, captures: [], requests: [], outcomes: [] };
+  return {
+    revision,
+    blockedUntil: 0,
+    runtimeFenceUntil: 0,
+    captures: [],
+    requests: [],
+    outcomes: [],
+    activeRuntimes: [],
+    retiredRuntimes: [],
+    admissions: [],
+  };
 }
 
 function canonicalRequestUrl(value: unknown, name: string, preserveFragment = false): string {

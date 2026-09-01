@@ -16,6 +16,8 @@ const MANUAL_TOKEN = '11111111-1111-4111-8111-111111111111';
 const REPROMPT_TOKEN = '22222222-2222-4222-8222-222222222222';
 const REVISION = '2026-09-01T00:00:00.0000001Z';
 const URI_DIGEST = 'a'.repeat(64);
+const RUNTIME_INCARNATION = '33333333-3333-4333-8333-333333333333';
+const REPLACEMENT_RUNTIME_INCARNATION = '44444444-4444-4444-8444-444444444444';
 
 const SESSION: SessionLease = Object.freeze({ generation: 1 });
 const ACCOUNT: AccountLease = Object.freeze({
@@ -36,12 +38,21 @@ const TARGET: ResolvedManualAutofillTarget = Object.freeze({
   targetDocumentId: 'target-document',
   topUrl: 'https://example.com/account/login?step=2',
   frameUrl: 'https://example.com/account/login?step=2',
-  targetKey: JSON.stringify(['login', 0, 'form-1', 'target-document', 4, EMPTY_LOGIN_CUSTOM_PLAN_DIGEST]),
+  targetKey: JSON.stringify([
+    'login',
+    0,
+    'form-1',
+    'target-document',
+    RUNTIME_INCARNATION,
+    4,
+    EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
+  ]),
   target: Object.freeze({
     kind: 'login',
     frameId: 0,
     formId: 'form-1',
     documentId: 'target-document',
+    runtimeIncarnation: RUNTIME_INCARNATION,
     generation: 4,
     customPlanDigest: EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
   }),
@@ -224,6 +235,34 @@ describe('manual autofill coordinator', () => {
       authorizationId: wrongPopup.authorization.authorizationId,
       action: 'fill_only',
     })).rejects.toMatchObject({ code: 'denied' });
+  });
+
+  it('fails closed when the content runtime changes without changing the document or form', async () => {
+    const state = harness();
+    const prepared = await prepare(state);
+    state.resolveManualLoginTarget.mockResolvedValue({
+      ...TARGET,
+      targetKey: JSON.stringify([
+        'login',
+        0,
+        'form-1',
+        'target-document',
+        REPLACEMENT_RUNTIME_INCARNATION,
+        4,
+        EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
+      ]),
+      target: Object.freeze({
+        ...TARGET.target,
+        runtimeIncarnation: REPLACEMENT_RUNTIME_INCARNATION,
+      }),
+    });
+
+    await expect(state.coordinator.commit(POPUP_DOCUMENT, {
+      type: 'autofill.manual.commit',
+      authorizationId: prepared.authorization.authorizationId,
+      action: 'fill_only',
+    })).rejects.toMatchObject({ code: 'conflict' });
+    expect(state.fillManual).not.toHaveBeenCalled();
   });
 
   it('consumes when hostile property inspection fails before request validation', async () => {

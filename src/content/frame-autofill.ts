@@ -17,10 +17,12 @@ import {
   CARD_FILL_ROLES,
   IDENTITY_FILL_ROLES,
 } from '../core/vault/fill-roles.js';
-import { scanOpenComposedRoots } from './composed-tree.js';
 import {
-  detectCardForms,
-  detectIdentityForms,
+  digestLoginCustomTargetPlan,
+  equalLoginCustomPlanDigest,
+} from '../core/vault/login-custom-fields.js';
+import { scanOpenComposedRoots, type ComposedTreeSnapshot } from './composed-tree.js';
+import {
   isFillableField,
   type DetectedFillForm,
   type FillFieldElement,
@@ -39,13 +41,24 @@ import {
   type ControlOwnerSnapshot,
 } from './form-detection.js';
 import { fillLoginForm } from './fill.js';
-import { commitLoginCustomAssignments, planLoginCustomTargets } from './login-custom-fields.js';
-import { computeFillExclusion } from './focused-fill.js';
+import { commitLoginCustomAssignments } from './login-custom-fields.js';
+import { computeFillProjection, type FillProjection } from './focused-fill.js';
 import { createStagedFillCommit } from './staged-fill.js';
+import {
+  createAutofillDetectionContext,
+  type AutofillDetectionContext,
+  type AutofillDetectionSnapshot,
+} from './autofill-detection-context.js';
 
 export interface FrameAutofillControllerOptions {
   /** The document (or one test subtree) to scan. Defaults to `document`. */
   root?: ParentNode;
+  /** Complete root snapshot; preferred because truncation must fail the entire frame projection. */
+  snapshot?: () => AutofillDetectionSnapshot;
+  /** Authoritative bounded refresh used for every state read, including staged revalidation. */
+  refresh?: () => AutofillDetectionSnapshot;
+  /** Optional owner-runtime guard for asynchronous digest verification and staged writes. */
+  isCurrent?: () => boolean;
   /** Live root inventory for a document with nested open shadow roots. */
   roots?: () => readonly ParentNode[];
   /** Returns the frame's current URL. Injected so tests and iframes can control/observe it. */
@@ -60,6 +73,7 @@ export interface FrameLoginCommitRequest {
   expectedGeneration: number;
   login: AutofillLoginData;
   customPlan: LoginCustomTargetPlan;
+  customPlanDigest: string;
   customAssignments: readonly LoginCustomAssignment[];
 }
 
@@ -85,9 +99,9 @@ export interface FrameAutofillController {
   /** Record the detected form that owns a focused input or select. */
   noteFocus(field: FillFieldElement): void;
   /** Re-detect every live root and return metadata only, never field values. */
-  inspect(): FrameInspection;
+  inspect(): Omit<FrameInspection, 'runtimeIncarnation'>;
   /** Re-detect and fill a login only when URL, generation, and form identity still match. */
-  commitLogin(request: FrameLoginCommitRequest): TabFillOutcome;
+  commitLogin(request: FrameLoginCommitRequest): Promise<TabFillOutcome>;
   /** Re-detect and fill a card/identity only when every structural binding still matches. */
   commitStructured(request: FrameStructuredCommitRequest): TabFillOutcome;
 }
@@ -117,6 +131,7 @@ type FrameTarget = LoginTarget | CardTarget | IdentityTarget;
 
 interface StructuralSnapshot {
   readonly roots: readonly ParentNode[];
+  readonly complete: boolean;
   readonly forms: readonly FrameAutofillForm[];
 }
 
@@ -150,7 +165,7 @@ export function createFrameAutofillController(options: FrameAutofillControllerOp
     focusedAt = options.now();
   }
 
-  function inspect(): FrameInspection {
+  function inspect(): Omit<FrameInspection, 'runtimeIncarnation'> {
     const state = readState();
     return {
       frameUrl: options.frameUrl(),
@@ -159,8 +174,20 @@ export function createFrameAutofillController(options: FrameAutofillControllerOp
     };
   }
 
-  function commitLogin(request: FrameLoginCommitRequest): TabFillOutcome {
-    if (options.frameUrl() !== request.expectedFrameUrl) return { status: 'target_changed' };
+  async function commitLogin(request: FrameLoginCommitRequest): Promise<TabFillOutcome> {
+    if (!controllerIsCurrent(options) || options.frameUrl() !== request.expectedFrameUrl) {
+      return { status: 'target_changed' };
+    }
+    try {
+      const actualDigest = await digestLoginCustomTargetPlan(request.customPlan);
+      if (!controllerIsCurrent(options)
+          || options.frameUrl() !== request.expectedFrameUrl
+          || !equalLoginCustomPlanDigest(actualDigest, request.customPlanDigest)) {
+        return { status: 'target_changed' };
+      }
+    } catch {
+      return { status: 'target_changed' };
+    }
     const state = readState();
     if (state.generation !== request.expectedGeneration) return { status: 'target_changed' };
     const target = state.targets.find(
@@ -169,7 +196,7 @@ export function createFrameAutofillController(options: FrameAutofillControllerOp
     );
     if (!target || !allLoginFieldsLive(target.detected)) return { status: 'target_changed' };
     const staged = createStagedFillCommit(() => {
-      if (options.frameUrl() !== request.expectedFrameUrl) return false;
+      if (!controllerIsCurrent(options) || options.frameUrl() !== request.expectedFrameUrl) return false;
       const currentState = readState();
       if (currentState.generation !== request.expectedGeneration) return false;
       const current = currentState.targets.find(
@@ -193,7 +220,9 @@ export function createFrameAutofillController(options: FrameAutofillControllerOp
   }
 
   function commitStructured(request: FrameStructuredCommitRequest): TabFillOutcome {
-    if (options.frameUrl() !== request.expectedFrameUrl) return { status: 'target_changed' };
+    if (!controllerIsCurrent(options) || options.frameUrl() !== request.expectedFrameUrl) {
+      return { status: 'target_changed' };
+    }
     const state = readState();
     if (state.generation !== request.expectedGeneration) return { status: 'target_changed' };
     const target = state.targets.find((candidate) => (
@@ -204,7 +233,7 @@ export function createFrameAutofillController(options: FrameAutofillControllerOp
       return { status: 'target_changed' };
     }
     const staged = createStagedFillCommit(() => {
-      if (options.frameUrl() !== request.expectedFrameUrl) return false;
+      if (!controllerIsCurrent(options) || options.frameUrl() !== request.expectedFrameUrl) return false;
       const currentState = readState();
       if (currentState.generation !== request.expectedGeneration) return false;
       const current = currentState.targets.find((candidate) => (
@@ -234,10 +263,15 @@ export function createFrameAutofillController(options: FrameAutofillControllerOp
   }
 
   function readState(): { readonly generation: number; readonly targets: readonly FrameTarget[] } {
-    const roots = readRoots(options);
-    const targets = detectTargets(roots, privateIdFor);
+    const snapshot = readSnapshot(options);
+    const context = createAutofillDetectionContext(snapshot);
+    const projection = computeFillProjection(snapshot, context);
+    let targets = projection.complete ? detectTargets(projection, context, privateIdFor) : [];
+    const complete = projection.complete && context.complete;
+    if (!complete) targets = [];
     const structure: StructuralSnapshot = {
-      roots,
+      roots: snapshot.roots,
+      complete,
       forms: targets.map((target) => target.metadata),
     };
     if (!previousStructure || !sameStructure(previousStructure, structure)) {
@@ -291,21 +325,35 @@ export function createFrameAutofillController(options: FrameAutofillControllerOp
   return { noteFocus, inspect, commitLogin, commitStructured };
 }
 
-function readRoots(options: FrameAutofillControllerOptions): readonly ParentNode[] {
-  const supplied = options.roots?.();
-  const roots = supplied ?? discoverRoots(options.root ?? document);
-  return [...new Set(roots)];
+function controllerIsCurrent(options: FrameAutofillControllerOptions): boolean {
+  try {
+    return options.isCurrent?.() ?? true;
+  } catch {
+    return false;
+  }
 }
 
-function discoverRoots(root: ParentNode): readonly ParentNode[] {
-  if (root.nodeType === Node.DOCUMENT_NODE || (root.nodeType === Node.DOCUMENT_FRAGMENT_NODE && 'host' in root)) {
-    return scanOpenComposedRoots(root as Document | ShadowRoot).roots;
+function readSnapshot(options: FrameAutofillControllerOptions): AutofillDetectionSnapshot {
+  const suppliedSnapshot = options.refresh?.() ?? options.snapshot?.();
+  if (suppliedSnapshot) {
+    return { roots: [...new Set(suppliedSnapshot.roots)], truncated: suppliedSnapshot.truncated };
   }
-  return [root];
+  const suppliedRoots = options.roots?.();
+  if (suppliedRoots) return { roots: [...new Set(suppliedRoots)], truncated: false };
+  return discoverSnapshot(options.root ?? document);
+}
+
+function discoverSnapshot(root: ParentNode): AutofillDetectionSnapshot {
+  if (root.nodeType === Node.DOCUMENT_NODE || (root.nodeType === Node.DOCUMENT_FRAGMENT_NODE && 'host' in root)) {
+    const snapshot: ComposedTreeSnapshot = scanOpenComposedRoots(root as Document | ShadowRoot);
+    return snapshot;
+  }
+  return { roots: [root], truncated: false };
 }
 
 function detectTargets(
-  roots: readonly ParentNode[],
+  projection: FillProjection,
+  context: AutofillDetectionContext,
   privateIdFor: (
     kind: FrameAutofillForm['kind'],
     anchor: HTMLElement,
@@ -314,58 +362,73 @@ function detectTargets(
   ) => string,
 ): FrameTarget[] {
   const targets: FrameTarget[] = [];
-  for (const root of roots) {
-    const { loginForms, exclude } = computeFillExclusion(root);
-    for (const form of loginForms) {
-      if (!hasLoginCredentialTarget(form)) continue;
-      const fields: Array<readonly [string, HTMLInputElement]> = [];
-      if (form.usernameInput) fields.push(['username', form.usernameInput]);
-      if (form.passwordInput) fields.push(['password', form.passwordInput]);
-      totpInputsForForm(form).forEach((field, index) => fields.push([`totp:${index}`, field]));
-      targets.push({
+  for (const form of projection.loginForms) {
+    const root = form.anchor.getRootNode() as ParentNode;
+    if (!hasLoginCredentialTarget(form)) continue;
+    const fields: Array<readonly [string, HTMLInputElement]> = [];
+    if (form.usernameInput) fields.push(['username', form.usernameInput]);
+    if (form.passwordInput) fields.push(['password', form.passwordInput]);
+    totpInputsForForm(form).forEach((field, index) => fields.push([`totp:${index}`, field]));
+    targets.push({
+      kind: 'login',
+      root,
+      metadata: {
         kind: 'login',
-        root,
-        metadata: {
-          kind: 'login',
-          formId: privateIdFor('login', form.anchor, form.form ?? scopeFor(form.anchor), fields),
-          visible: isVisibleInTree(form.anchor),
-          customPlan: planLoginCustomTargets(form),
-        },
-        detected: form,
-      });
-    }
-    for (const form of detectCardForms(root, exclude)) {
-      const roles = CARD_FILL_ROLES.filter((role) => form.fields.has(role));
-      const fields = roles.map((role) => [role, form.fields.get(role)!] as const);
-      targets.push({
-        kind: 'card',
-        root,
-        metadata: {
-          kind: 'card',
-          formId: privateIdFor('card', form.anchor, scopeFor(form.anchor), fields),
-          roles: [...roles],
-          visible: isVisibleInTree(form.anchor),
-        },
-        detected: form,
-      });
-    }
-    for (const form of detectIdentityForms(root, exclude)) {
-      const roles = IDENTITY_FILL_ROLES.filter((role) => form.fields.has(role));
-      const fields = roles.map((role) => [role, form.fields.get(role)!] as const);
-      targets.push({
-        kind: 'identity',
-        root,
-        metadata: {
-          kind: 'identity',
-          formId: privateIdFor('identity', form.anchor, scopeFor(form.anchor), fields),
-          roles: [...roles],
-          visible: isVisibleInTree(form.anchor),
-        },
-        detected: form,
-      });
-    }
+        formId: privateIdFor('login', form.anchor, form.form ?? scopeFor(form.anchor), fields),
+        visible: isVisibleInTree(form.anchor),
+        customPlan: projection.customPlans.get(form)!,
+      },
+      detected: form,
+    });
   }
-  return targets;
+  if (!context.complete) return [];
+  for (const form of projection.cardForms) {
+    const root = form.anchor.getRootNode() as ParentNode;
+    const roles = CARD_FILL_ROLES.filter((role) => form.fields.has(role));
+    const fields = roles.map((role) => [role, form.fields.get(role)!] as const);
+    targets.push({
+      kind: 'card',
+      root,
+      metadata: {
+        kind: 'card',
+        formId: privateIdFor('card', form.anchor, scopeFor(form.anchor), fields),
+        roles: [...roles],
+        visible: isVisibleInTree(form.anchor),
+      },
+      detected: form,
+    });
+  }
+  for (const form of projection.identityForms) {
+    const root = form.anchor.getRootNode() as ParentNode;
+    const roles = IDENTITY_FILL_ROLES.filter((role) => form.fields.has(role));
+    const fields = roles.map((role) => [role, form.fields.get(role)!] as const);
+    targets.push({
+      kind: 'identity',
+      root,
+      metadata: {
+        kind: 'identity',
+        formId: privateIdFor('identity', form.anchor, scopeFor(form.anchor), fields),
+        roles: [...roles],
+        visible: isVisibleInTree(form.anchor),
+      },
+      detected: form,
+    });
+  }
+  if (!context.complete) return [];
+  const rootOrder = new Map(context.roots.map((root, index) => [root, index]));
+  return targets.map((target, index) => ({ target, index })).sort((left, right) => {
+    const rootDifference = (rootOrder.get(left.target.root) ?? Number.MAX_SAFE_INTEGER)
+      - (rootOrder.get(right.target.root) ?? Number.MAX_SAFE_INTEGER);
+    if (rootDifference !== 0) return rootDifference;
+    try {
+      const position = left.target.detected.anchor.compareDocumentPosition(right.target.detected.anchor);
+      if ((position & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return -1;
+      if ((position & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return 1;
+    } catch {
+      // Preserve detector admission order when the platform cannot compare two live anchors.
+    }
+    return left.index - right.index;
+  }).map(({ target }) => target);
 }
 
 function ownsField(target: FrameTarget, field: FillFieldElement): boolean {
@@ -443,7 +506,8 @@ function allFillFieldsLive(form: DetectedFillForm): boolean {
 }
 
 function sameStructure(first: StructuralSnapshot, second: StructuralSnapshot): boolean {
-  return first.roots.length === second.roots.length
+  return first.complete === second.complete
+    && first.roots.length === second.roots.length
     && first.roots.every((root, index) => root === second.roots[index])
     && first.forms.length === second.forms.length
     && first.forms.every((form, index) => sameFormStructure(form, second.forms[index]));
@@ -465,6 +529,7 @@ function sameRoles(first: readonly string[], second: readonly string[]): boolean
 function copyStructure(structure: StructuralSnapshot): StructuralSnapshot {
   return {
     roots: [...structure.roots],
+    complete: structure.complete,
     forms: structure.forms.map(copyFormStructure),
   };
 }

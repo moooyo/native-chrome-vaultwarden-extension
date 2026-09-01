@@ -159,7 +159,7 @@ describe('isMessageAllowed', () => {
     'autofill.ackTotpCopy',
     'autofill.authorizeGeneratorUse',
     'autofill.trackGeneratedValue',
-    'autofill.discardBfcacheCapture',
+    'autofill.activateRuntime',
   ])('allows %s only from a browser-owned content document', (type) => {
     const { documentId: _documentId, ...withoutDocument } = CONTENT_CONTEXT;
     expect(isMessageAllowed(type, CONTENT_CONTEXT)).toBe(true);
@@ -187,6 +187,7 @@ describe('isMessageAllowed', () => {
     'autofill.findFillItems',
     'autofill.getFillData',
     'autofill.futureVerb',
+    'autofill.discardBfcacheCapture',
     'vault.hasPasskey',
     'vault.getPasskeyCandidates',
     'vault.getPasskeyAssertion',

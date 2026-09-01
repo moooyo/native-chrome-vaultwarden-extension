@@ -5,6 +5,14 @@ import {
   type DetectedLoginForm,
 } from './form-detection.js';
 import { detectCardForms, detectIdentityForms, type DetectedFillForm, type FillFieldElement } from './field-detection.js';
+import {
+  createAutofillDetectionContext,
+  createScopedAutofillDetectionContext,
+  type AutofillDetectionContext,
+  type AutofillDetectionSnapshot,
+} from './autofill-detection-context.js';
+import { planLoginCustomTargets } from './login-custom-fields.js';
+import type { LoginCustomTargetPlan } from '../core/vault/login-custom-fields.js';
 import type {
   AutofillCandidate,
   AutofillIntentPurpose,
@@ -28,26 +36,55 @@ export interface FillExclusion {
   exclude: Set<Element>;
 }
 
-export type AutofillDetectionRoots = ParentNode | readonly ParentNode[];
+export interface FillProjection extends FillExclusion {
+  readonly complete: boolean;
+  readonly cardForms: readonly DetectedFillForm[];
+  readonly identityForms: readonly DetectedFillForm[];
+  readonly customPlans: ReadonlyMap<DetectedLoginForm, LoginCustomTargetPlan>;
+  readonly context: AutofillDetectionContext;
+}
+
+export type AutofillDetectionRoots = ParentNode | readonly ParentNode[] | AutofillDetectionSnapshot;
 
 /**
  * Single source of truth for the login/card/identity carve-out. Mirrors what attachPopovers did inline:
  * build the set of card CVC fields first, then treat a "login" form whose password IS a CVC as not-a-login.
  */
 export function computeFillExclusion(root: AutofillDetectionRoots = document): FillExclusion {
+  const projection = computeFillProjection(root);
+  return { loginForms: [...projection.loginForms], exclude: projection.exclude };
+}
+
+/** Build login/card/identity forms from one shared, bounded control and hint inventory. */
+export function computeFillProjection(
+  root: AutofillDetectionRoots = document,
+  suppliedContext?: AutofillDetectionContext,
+): FillProjection {
+  const roots = normalizeRoots(root);
+  const context = suppliedContext ?? contextFor(root, roots);
+  if ((isDetectionSnapshot(root) && root.truncated) || !context.complete) {
+    return emptyProjection(context);
+  }
   const loginForms: DetectedLoginForm[] = [];
   const exclude = new Set<Element>();
-  for (const candidateRoot of normalizeRoots(root)) {
+  const rawCardForms = new Map<ParentNode, readonly DetectedFillForm[]>();
+  const rawIdentityForms = new Map<ParentNode, readonly DetectedFillForm[]>();
+  for (const candidateRoot of roots) {
+    rawCardForms.set(candidateRoot, detectCardForms(candidateRoot, new Set(), context, false));
+    rawIdentityForms.set(candidateRoot, detectIdentityForms(candidateRoot, new Set(), context, false));
+  }
+  if (!context.complete) return emptyProjection(context);
+  for (const candidateRoot of roots) {
     const cardCodeFields = new Set<Element>();
-    for (const card of detectCardForms(candidateRoot)) {
+    for (const card of rawCardForms.get(candidateRoot) ?? []) {
       const code = card.fields.get('code');
       if (code) cardCodeFields.add(code);
     }
     const identityFields = new Set<Element>();
-    for (const identity of detectIdentityForms(candidateRoot)) {
+    for (const identity of rawIdentityForms.get(candidateRoot) ?? []) {
       for (const field of identity.fields.values()) identityFields.add(field);
     }
-    for (const form of detectLoginForms(candidateRoot)) {
+    for (const form of detectLoginForms(candidateRoot, context)) {
       if (form.passwordInput && cardCodeFields.has(form.passwordInput)) continue; // a CVC, not a login
       // A strong address/name form may contain an email field that superficially resembles a
       // username-only login step. Keep that field in the identity projection; real two-step login
@@ -59,18 +96,33 @@ export function computeFillExclusion(root: AutofillDetectionRoots = document): F
       }
     }
   }
-  return { loginForms, exclude };
+  if (!context.complete) return emptyProjection(context);
+  const cardForms = roots.flatMap((candidateRoot) => detectCardForms(candidateRoot, exclude, context));
+  const identityForms = roots.flatMap((candidateRoot) => detectIdentityForms(candidateRoot, exclude, context));
+  if (!context.complete) return emptyProjection(context);
+  const customPlans = new Map<DetectedLoginForm, LoginCustomTargetPlan>();
+  for (const form of loginForms) {
+    customPlans.set(form, planLoginCustomTargets(form, context));
+    if (!context.complete) return emptyProjection(context);
+  }
+  return { complete: true, loginForms, cardForms, identityForms, customPlans, exclude, context };
 }
 
 /**
  * Determine which detected form the focused element belongs to. Precedence (identical to attachPopovers):
  * CVC carve-out (inside computeFillExclusion) → login → card → identity → none.
  */
-export function resolveFocusedFill(activeEl: Element | null, root: AutofillDetectionRoots = document): FocusedTarget {
+export function resolveFocusedFill(
+  activeEl: Element | null,
+  root: AutofillDetectionRoots = document,
+  suppliedProjection?: FillProjection,
+): FocusedTarget {
   if (!isFillFieldElement(activeEl)) return { kind: 'none' };
   const candidateRoot = normalizeRoots(root).find((entry) => entry === activeEl.getRootNode());
   if (!candidateRoot) return { kind: 'none' };
-  const { loginForms, exclude } = computeFillExclusion(candidateRoot);
+  const projection = suppliedProjection ?? computeFillProjection(root);
+  if (!projection.complete) return { kind: 'none' };
+  const { loginForms } = projection;
   for (const form of loginForms) {
     if (activeEl instanceof HTMLInputElement && totpInputsForForm(form).includes(activeEl)) {
       return { kind: 'totp', form, input: activeEl };
@@ -79,10 +131,10 @@ export function resolveFocusedFill(activeEl: Element | null, root: AutofillDetec
       return { kind: 'login', form, input: activeEl };
     }
   }
-  for (const form of detectCardForms(candidateRoot, exclude)) {
+  for (const form of projection.cardForms.filter((candidate) => candidate.anchor.getRootNode() === candidateRoot)) {
     for (const field of form.fields.values()) if (field === activeEl) return { kind: 'card', form };
   }
-  for (const form of detectIdentityForms(candidateRoot, exclude)) {
+  for (const form of projection.identityForms.filter((candidate) => candidate.anchor.getRootNode() === candidateRoot)) {
     for (const field of form.fields.values()) if (field === activeEl) return { kind: 'identity', form };
   }
   return { kind: 'none' };
@@ -95,7 +147,49 @@ function isFillFieldElement(element: Element | null): element is FillFieldElemen
 }
 
 function normalizeRoots(roots: AutofillDetectionRoots): readonly ParentNode[] {
-  return Array.isArray(roots) ? roots : [roots as ParentNode];
+  const requested = isDetectionSnapshot(roots)
+    ? roots.roots
+    : Array.isArray(roots) ? roots : [roots as ParentNode];
+  const unique = [...new Set(requested)];
+  return unique.filter((candidate, index) => !unique.some((ancestor, ancestorIndex) => (
+    ancestorIndex !== index && containsRoot(ancestor, candidate)
+  )));
+}
+
+function containsRoot(ancestor: ParentNode, candidate: ParentNode): boolean {
+  try {
+    return ancestor !== candidate && (ancestor as Node).contains(candidate as Node);
+  } catch {
+    return false;
+  }
+}
+
+function contextFor(
+  input: AutofillDetectionRoots,
+  roots: readonly ParentNode[],
+): AutofillDetectionContext {
+  return isDetectionSnapshot(input)
+    ? createAutofillDetectionContext(input)
+    : createScopedAutofillDetectionContext(roots);
+}
+
+function emptyProjection(context: AutofillDetectionContext): FillProjection {
+  return {
+    complete: false,
+    loginForms: [],
+    cardForms: [],
+    identityForms: [],
+    customPlans: new Map(),
+    exclude: new Set<Element>(),
+    context,
+  };
+}
+
+function isDetectionSnapshot(value: AutofillDetectionRoots): value is AutofillDetectionSnapshot {
+  if (Array.isArray(value) || value instanceof Node) return false;
+  const candidate = value as AutofillDetectionSnapshot;
+  return Array.isArray(candidate.roots)
+    && typeof candidate.truncated === 'boolean';
 }
 
 export const NOTICE_FOCUS = 'Focus a login, verification code, card, or identity field, then use the shortcut';
@@ -253,7 +347,8 @@ function loginTargetLive(target: Extract<FocusedTarget, { kind: 'login' }>): boo
   if (fields.length === 0 || fields.some((field) => !field.isConnected)) return false;
   const root = form.anchor.getRootNode();
   if (!isParentNode(root)) return false;
-  return computeFillExclusion(root).loginForms.some((current) => (
+  const projection = computeFillProjection(root);
+  return projection.complete && projection.loginForms.some((current) => (
     current.id === form.id
     && current.form === form.form
     && current.anchor === form.anchor
@@ -269,10 +364,9 @@ function fillFormLive(form: DetectedFillForm): boolean {
   if (fields.length === 0 || fields.some((field) => !field.isConnected)) return false;
   const root = form.anchor.getRootNode();
   if (!isParentNode(root)) return false;
-  const { exclude } = computeFillExclusion(root);
-  const currentForms = form.kind === 'card'
-    ? detectCardForms(root, exclude)
-    : detectIdentityForms(root, exclude);
+  const projection = computeFillProjection(root);
+  if (!projection.complete) return false;
+  const currentForms = form.kind === 'card' ? projection.cardForms : projection.identityForms;
   return currentForms.some((current) => (
     current.id === form.id
     && current.fields.size === form.fields.size
@@ -285,7 +379,8 @@ function totpTargetLive(target: Extract<FocusedTarget, { kind: 'totp' }>): boole
   if (!input.isConnected) return false;
   const root = input.getRootNode();
   if (!isParentNode(root)) return false;
-  return computeFillExclusion(root).loginForms.some((current) => (
+  const projection = computeFillProjection(root);
+  return projection.complete && projection.loginForms.some((current) => (
     current.id === form.id
     && current.form === form.form
     && current.anchor === form.anchor
@@ -298,7 +393,9 @@ function totpTargetLive(target: Extract<FocusedTarget, { kind: 'totp' }>): boole
 }
 
 function isParentNode(node: Node): node is ParentNode {
-  return 'querySelectorAll' in node;
+  return node.nodeType === Node.ELEMENT_NODE
+    || node.nodeType === Node.DOCUMENT_NODE
+    || node.nodeType === Node.DOCUMENT_FRAGMENT_NODE;
 }
 
 /** Resolve a focused target to an autofill action, reusing existing worker requests via injected deps. */
