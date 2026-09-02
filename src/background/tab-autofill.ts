@@ -928,10 +928,17 @@ function isIdentityFillDataKey(value: string): value is keyof IdentityFillData {
   return IDENTITY_DATA_KEYS.has(value as keyof IdentityFillData);
 }
 
-/** Parse browser frame data that may include Chrome's documentId extension field. */
-export function parseBrowserFrame(value: unknown): BrowserFrame | undefined {
+/** Parse browser frame data that may omit frameId when returned by webNavigation.getFrame(). */
+export function parseBrowserFrame(value: unknown, expectedFrameId?: number): BrowserFrame | undefined {
   if (!isRecord(value)) return undefined;
-  const { frameId, url, documentId } = value;
+  const { frameId: rawFrameId, url, documentId } = value;
+  const hasRawFrameId = Object.hasOwn(value, 'frameId');
+  if (expectedFrameId !== undefined && !isNonNegativeSafeInteger(expectedFrameId)) return undefined;
+  if (hasRawFrameId && !isNonNegativeSafeInteger(rawFrameId)) return undefined;
+  if (hasRawFrameId && expectedFrameId !== undefined && rawFrameId !== expectedFrameId) {
+    return undefined;
+  }
+  const frameId = hasRawFrameId ? rawFrameId : expectedFrameId;
   if (!isNonNegativeSafeInteger(frameId) || typeof url !== 'string') return undefined;
   if (documentId !== undefined && !isOpaqueId(documentId)) return undefined;
   return documentId !== undefined ? { frameId, url, documentId } : { frameId, url };

@@ -1,6 +1,6 @@
 # Engineering Handoff
 
-Date: 2026-09-02
+Date: 2026-09-03
 
 ## Snapshot
 
@@ -111,6 +111,9 @@ adversarial tests.
   deleting already confirmed captures.
 - Top-frame BFCache activation revokes stale child-frame content authority while ordinary navigation
   preserves the network evidence required to confirm a legitimate cross-document form submission.
+- Single-frame `webNavigation.getFrame()` results are normalized with the queried frame id because
+  Chrome omits `frameId` from this API while `getAllFrames()` includes it. A conflicting explicit id
+  still fails closed across autofill, continuation, context-menu, save wake, and website-passkey paths.
 - Login and structured staged fills re-run authoritative composed-tree discovery after every write,
   verify runtime ownership, and reject a changed custom-plan digest before releasing credentials.
 
@@ -132,8 +135,9 @@ adversarial tests.
 ### Closed shadow roots, accessibility, and bounded detection
 
 - Trusted `focusin`, `contextmenu`, and `pointerdown` listeners are bound to every discovered root in
-  the capture phase. Closed-root and document observations are identity-deduplicated while preserving
-  the deepest trusted target.
+  the capture phase. When Chrome retargets a closed-root event to its host, the document listener uses
+  the privileged root's `activeElement` or `elementFromPoint()` synchronously, recursively validates
+  the composed subtree, and identity-deduplicates any later root observation.
 - Accessibility-source visibility permits standard off-screen, clipped, and transparent screen-reader
   labels while rejecting semantic-tree removal.
 - Composed-tree maintenance is incremental for added/removed subtrees. Late shadow attachment uses
@@ -175,9 +179,10 @@ These are product/backend gaps rather than regressions in the implemented paths.
 
 ## Verification Status
 
-All verification for this continuation ran on `test-env`; no local test, build, smoke, or runtime
-probe was used. A checksum-verified temporary Node `v22.23.2` runtime was used to match CI's Node 22
-major version.
+The initial continuation gate ran on `test-env` with a checksum-verified temporary Node `v22.23.2`.
+On 2026-09-03 the user explicitly authorized local verification, including real-browser UI tests.
+The final candidate then ran locally on Node `v26.1.0`, Google Chrome `152.0.7977.65`, and Playwright
+Chromium `149.0.7827.55`.
 
 ```powershell
 npm ci
@@ -185,20 +190,25 @@ npm run typecheck
 npm run lint
 npm test
 npm run build:prod
-dbus-run-session -- xvfb-run -a npm run verify:render
+npm run verify:render
+npm run verify:autofill-browser
 git diff --check
 ```
 
 - Dependency install/audit: passed; 0 vulnerabilities
 - TypeScript: passed
 - ESLint: passed
-- Unit tests: 294 files, 7,344 tests passed; 1 existing test skipped
+- Unit tests: 294 files, 7,354 tests passed; 0 skipped
 - Production build and `assert-build`: passed
-- Chrome for Testing `149.0.7827.55` MV3 render smoke: passed for popup, options, and receive pages;
-  zero page/console errors. An expected background warning was emitted because no device-login server
-  was configured.
-- Whitespace check: passed after normalizing the Windows working-copy line endings in the disposable
-  Linux verification clone.
+- Google Chrome 152 MV3 render smoke: popup, options, and receive pages passed with zero page/console
+  errors. A non-fatal background warning was emitted because no device-login server was configured.
+- The backend-free autofill browser gate passed in both Google Chrome 152 and Playwright Chromium 149:
+  runtime activation; login/card/identity detection; screen-reader-only label fill; late closed-root
+  discovery; trusted closed-root context reservation, deduplication, and fill; BFCache restoration with
+  the same browser `documentId`, a new runtime incarnation, and rejection of the pre-restore commit.
+- Screenshots were visually inspected for the three extension pages and the autofill test page; no
+  clipping, blank view, or broken layout was found.
+- Whitespace check: passed.
 
 Authenticated live Vaultwarden verification remains environmentally blocked. The service currently
 published at `test-env` `127.0.0.1:18082` is `ghcr.io/bitwarden/lite`, not Vaultwarden; the unrelated
@@ -212,9 +222,9 @@ Store publishing was not performed.
 
 1. Restore a real disposable Vaultwarden service on `test-env`, confirm its container/image and data
    isolation, then run the authenticated live/API gates with cleanup enabled.
-2. Add dedicated CDP-driven real-Chrome scenarios for BFCache restore, 307/308 save correlation, and
-   closed-shadow interactions if those behaviors require a browser-level release gate beyond the
-   adversarial unit coverage.
+2. Add a dedicated browser-level 307/308 save-correlation scenario if it needs a release gate beyond
+   the current adversarial unit coverage. BFCache and closed-shadow interaction are now covered by
+   `npm run verify:autofill-browser` in both CI and release verification.
 3. Add a durable Receive-page permission-cleanup journal only if cross-lifecycle retry is required.
 4. Address the remaining official-client product/backend gaps independently of this completed
    hardening pass.

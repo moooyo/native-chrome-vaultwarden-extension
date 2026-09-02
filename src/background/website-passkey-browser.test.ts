@@ -227,11 +227,10 @@ describe('createWebsitePasskeyTopFrameNotifier', () => {
     );
   });
 
-  it('notifies the exact browser-owned top document and stops after a strict acknowledgement', async () => {
+  it('uses the requested top-frame id when getFrame omits it and stops after a strict acknowledgement', async () => {
     const fixture = createBrowser({
       tabs: [{ id: 7 }, {}, { id: 7 }],
       getFrame: () => ({
-        frameId: 0,
         documentId: 'exact-document',
         url: 'https://accounts.example/path?secret=redacted',
       }),
@@ -248,6 +247,36 @@ describe('createWebsitePasskeyTopFrameNotifier', () => {
     );
     expect(fixture.contains).not.toHaveBeenCalled();
     expect(fixture.executeScript).not.toHaveBeenCalled();
+  });
+
+  it('uses the requested frame id for same-document checks when getFrame omits it', async () => {
+    const fixture = createBrowser({
+      sendMessage: (_tabId, call) => call === 1 ? undefined : { websitePasskey: true },
+      getFrame: () => ({
+        documentId: 'exact-document',
+        url: 'https://accounts.example/sign-in',
+      }),
+    });
+
+    await createWebsitePasskeyTopFrameNotifier(fixture.browser)(ACTIVE_STATE);
+
+    expect(fixture.contains).toHaveBeenCalledOnce();
+    expect(fixture.executeScript).toHaveBeenCalledTimes(2);
+    expect(fixture.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a getFrame result that carries an invalid or conflicting frame id', async () => {
+    const fixture = createBrowser({
+      tabs: [{ id: 1 }, { id: 2 }],
+      getFrame: (tabId) => Object.defineProperty({
+        documentId: `document-${tabId}`,
+        url: `https://tab-${tabId}.example/sign-in`,
+      }, 'frameId', { enumerable: true, value: tabId === 1 ? undefined : 1 }),
+    });
+
+    await createWebsitePasskeyTopFrameNotifier(fixture.browser)(ACTIVE_STATE);
+
+    expect(fixture.sendMessage).not.toHaveBeenCalled();
   });
 
   it('checks exact host access, injects MAIN before ISOLATED, and requires a second strict ack', async () => {

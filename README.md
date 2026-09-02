@@ -86,6 +86,7 @@ npm run typecheck
 npm test               # unit tests (vitest)
 npm run build          # dev build with sourcemaps
 npm run test:ui        # smoke the built extension in real Chromium (0 console errors)
+npm run verify:autofill-browser # BFCache, closed-shadow, and autofill browser gate (no backend)
 ```
 
 Live / end-to-end checks (`test/live/`, `npm run verify:e2e`, `npm run seed:testvault`) need a

@@ -198,7 +198,8 @@ async function readEligibleTopFrame(
     return undefined;
   }
   if (
-    frame?.frameId !== 0
+    !frame
+    || !queriedFrameIdMatches(frame, 0)
     || !validDocumentId(frame.documentId)
     || typeof frame.url !== 'string'
   ) return undefined;
@@ -268,7 +269,8 @@ async function isSameDocument(
   } catch {
     return false;
   }
-  if (current?.frameId !== expected.frameId
+  if (!current
+    || !queriedFrameIdMatches(current, expected.frameId)
     || current.documentId !== expected.documentId
     || typeof current.url !== 'string') return false;
   const originPattern = websitePasskeyOriginMatchPattern(current.url);
@@ -337,6 +339,10 @@ function shouldInstallDynamicScripts(state: Readonly<WebsitePasskeyScriptState>)
 
 function isTabId(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function queriedFrameIdMatches(frame: WebsitePasskeyBrowserFrame, expectedFrameId: number): boolean {
+  return !Object.hasOwn(frame, 'frameId') || frame.frameId === expectedFrameId;
 }
 
 function validDocumentId(value: unknown): value is string {

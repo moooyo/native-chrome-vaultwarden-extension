@@ -68,6 +68,110 @@ describe('bindTrustedRootCaptureEvent', () => {
     controller.disconnect();
   });
 
+  it('hit-tests through nested closed roots when Chrome exposes no inner event dispatch', () => {
+    const outerHost = document.createElement('div');
+    const outerRoot = outerHost.attachShadow({ mode: 'closed' });
+    const innerHost = document.createElement('div');
+    const innerRoot = innerHost.attachShadow({ mode: 'closed' });
+    const input = document.createElement('input');
+    innerRoot.append(input);
+    outerRoot.append(innerHost);
+    document.body.append(outerHost);
+    Object.defineProperty(outerRoot, 'elementFromPoint', {
+      configurable: true,
+      value: vi.fn(() => innerHost),
+    });
+    Object.defineProperty(innerRoot, 'elementFromPoint', {
+      configurable: true,
+      value: vi.fn(() => input),
+    });
+    const roots = new Map<Element, ShadowRoot>([
+      [outerHost, outerRoot],
+      [innerHost, innerRoot],
+    ]);
+    const controller = createAutofillDocumentController(document, {
+      getShadowRoot: (element) => roots.get(element) ?? null,
+    });
+    const onEvent = vi.fn();
+    const cleanup = bindTrustedRootCaptureEvent(controller, 'contextmenu', onEvent);
+    const stopBeforeRoot = (event: Event) => event.stopPropagation();
+    document.addEventListener('contextmenu', stopBeforeRoot, true);
+    const event = new MouseEvent('contextmenu', {
+      bubbles: true,
+      composed: true,
+      clientX: 40,
+      clientY: 50,
+    });
+    vi.spyOn(event, 'composedPath').mockReturnValue(documentPath(outerHost));
+
+    dispatchTrusted(input, event);
+
+    expect(onEvent).toHaveBeenCalledOnce();
+    expect(onEvent).toHaveBeenCalledWith(input);
+    document.removeEventListener('contextmenu', stopBeforeRoot, true);
+    cleanup();
+    controller.disconnect();
+  });
+
+  it('resolves a focused closed-root control from the privileged active element', () => {
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'closed' });
+    const input = document.createElement('input');
+    root.append(input);
+    document.body.append(host);
+    vi.spyOn(root, 'activeElement', 'get').mockReturnValue(input);
+    const controller = createAutofillDocumentController(document, {
+      getShadowRoot: (element) => element === host ? root : null,
+    });
+    const onEvent = vi.fn();
+    const cleanup = bindTrustedRootCaptureEvent(controller, 'focusin', onEvent);
+    const stopBeforeRoot = (event: Event) => event.stopPropagation();
+    document.addEventListener('focusin', stopBeforeRoot, true);
+    const event = new FocusEvent('focusin', { bubbles: true, composed: true });
+    vi.spyOn(event, 'composedPath').mockReturnValue(documentPath(host));
+
+    dispatchTrusted(input, event);
+
+    expect(onEvent).toHaveBeenCalledOnce();
+    expect(onEvent).toHaveBeenCalledWith(input);
+    document.removeEventListener('focusin', stopBeforeRoot, true);
+    cleanup();
+    controller.disconnect();
+  });
+
+  it('uses the active closed-root control for a keyboard context menu', () => {
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'closed' });
+    const focused = document.createElement('input');
+    const hit = document.createElement('button');
+    root.append(focused, hit);
+    document.body.append(host);
+    vi.spyOn(root, 'activeElement', 'get').mockReturnValue(focused);
+    const elementFromPoint = vi.fn(() => hit);
+    Object.defineProperty(root, 'elementFromPoint', {
+      configurable: true,
+      value: elementFromPoint,
+    });
+    const controller = createAutofillDocumentController(document, {
+      getShadowRoot: (element) => element === host ? root : null,
+    });
+    const onEvent = vi.fn();
+    const cleanup = bindTrustedRootCaptureEvent(controller, 'contextmenu', onEvent);
+    const stopBeforeRoot = (event: Event) => event.stopPropagation();
+    document.addEventListener('contextmenu', stopBeforeRoot, true);
+    const event = new MouseEvent('contextmenu', { bubbles: true, composed: true });
+    Object.defineProperty(event, 'button', { value: -1 });
+    vi.spyOn(event, 'composedPath').mockReturnValue(documentPath(host));
+
+    dispatchTrusted(focused, event);
+
+    expect(onEvent).toHaveBeenCalledWith(focused);
+    expect(elementFromPoint).not.toHaveBeenCalled();
+    document.removeEventListener('contextmenu', stopBeforeRoot, true);
+    cleanup();
+    controller.disconnect();
+  });
+
   it('defers a direct shadow-host target to one microtask fallback', async () => {
     const host = document.createElement('div');
     host.attachShadow({ mode: 'open' });

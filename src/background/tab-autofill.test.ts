@@ -11,6 +11,7 @@ import type {
 } from '../messaging/protocol.js';
 import {
   createTabAutofillCoordinator,
+  parseBrowserFrame,
   type BrowserDocumentTarget,
   type BrowserFrame,
   type TabAutofillDeps,
@@ -26,6 +27,32 @@ const TOP_URL = 'https://example.com/login';
 const EVENT_CIPHER_ID = '22222222-2222-4222-8222-222222222222';
 const RUNTIME_INCARNATION = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const OTHER_RUNTIME_INCARNATION = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+describe('parseBrowserFrame', () => {
+  it('uses the requested frame id when getFrame omits it', () => {
+    expect(parseBrowserFrame({
+      documentId: 'document-A',
+      parentFrameId: -1,
+      url: TOP_URL,
+    }, 0)).toEqual({ frameId: 0, documentId: 'document-A', url: TOP_URL });
+  });
+
+  it('rejects a browser-owned frame id that conflicts with the requested frame', () => {
+    expect(parseBrowserFrame({ frameId: 2, documentId: 'document-A', url: TOP_URL }, 1))
+      .toBeUndefined();
+  });
+
+  it('accepts a browser-owned frame id only when it matches the requested frame', () => {
+    expect(parseBrowserFrame({ frameId: 1, documentId: 'document-A', url: TOP_URL }, 1))
+      .toEqual({ frameId: 1, documentId: 'document-A', url: TOP_URL });
+    expect(parseBrowserFrame({ frameId: undefined, documentId: 'document-A', url: TOP_URL }, 1))
+      .toBeUndefined();
+  });
+
+  it('still requires a browser-owned frame id for getAllFrames records', () => {
+    expect(parseBrowserFrame({ documentId: 'document-A', url: TOP_URL })).toBeUndefined();
+  });
+});
 
 function deferred<Value>() {
   let resolve!: (value: Value) => void;

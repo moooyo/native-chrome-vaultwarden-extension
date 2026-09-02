@@ -492,7 +492,9 @@ const saveCaptureCoordinator = new AutofillSaveCaptureCoordinator({
       tabId: metadata.tabId,
       frameId: metadata.frameId,
     });
-    const frame = rawFrame === null ? undefined : parseBrowserFrame(rawFrame);
+    const frame = rawFrame === null
+      ? undefined
+      : parseBrowserFrame(rawFrame, metadata.frameId);
     if (!frame?.documentId) throw new Error('Save-capture target document is unavailable');
     const response: unknown = await browser.tabs.sendMessage(metadata.tabId, {
       type: 'autofill.saveCaptureConfirmed',
@@ -1795,7 +1797,7 @@ async function getKeyboardTopDocument(
   tabId: number,
 ): Promise<{ documentId: string; url: string; runtimeIncarnation?: string } | undefined> {
   const frame = await browser.webNavigation.getFrame({ tabId, frameId: 0 });
-  const parsed = frame === null ? undefined : parseBrowserFrame(frame);
+  const parsed = frame === null ? undefined : parseBrowserFrame(frame, 0);
   if (parsed?.frameId !== 0 || !parsed.documentId) return undefined;
   const runtimeIncarnation = await saveCaptureCoordinator.getRuntimeIncarnation(
     tabId,
@@ -1931,7 +1933,7 @@ const contextMenu = createContextMenu({
   authorizeFrame: (frameUrl, action) => authorizeBackgroundAutofill(frameUrl, action),
   getFrame: async (tabId, frameId) => {
     const frame = await browser.webNavigation.getFrame({ tabId, frameId });
-    return frame === null ? undefined : parseBrowserFrame(frame);
+    return frame === null ? undefined : parseBrowserFrame(frame, frameId);
   },
   getRuntimeIncarnation: (tabId, frameId, documentId) => (
     saveCaptureCoordinator.getRuntimeIncarnation(tabId, frameId, documentId)
@@ -2052,7 +2054,7 @@ const tabAutofill = createTabAutofillCoordinator({
   },
   getFrame: async (tabId, frameId) => {
     const frame = await browser.webNavigation.getFrame({ tabId, frameId });
-    return frame === null ? undefined : parseBrowserFrame(frame);
+    return frame === null ? undefined : parseBrowserFrame(frame, frameId);
   },
   sendToFrame: (tabId, target, message) => documentTabs.sendMessage(tabId, message, target),
   authorizeFrame: (frameUrl, action) => authorizeBackgroundAutofill(frameUrl, action),
@@ -2144,7 +2146,7 @@ const autofillContinuation = new AutofillContinuationCoordinator({
   },
   getFrame: async (tabId, frameId) => {
     const frame = await browser.webNavigation.getFrame({ tabId, frameId });
-    return frame === null ? undefined : parseBrowserFrame(frame);
+    return frame === null ? undefined : parseBrowserFrame(frame, frameId);
   },
   isRuntimeCurrent: (tabId, frameId, documentId, runtimeIncarnation) => (
     saveCaptureCoordinator.isRuntimeCurrent(tabId, frameId, documentId, runtimeIncarnation)
@@ -2281,7 +2283,9 @@ async function commandContinuationSource(
     });
   }
   const rawFrame = await browser.webNavigation.getFrame({ tabId: source.tabId, frameId: target.frameId });
-  const frame = rawFrame === null ? undefined : parseBrowserFrame(rawFrame);
+  const frame = rawFrame === null
+    ? undefined
+    : parseBrowserFrame(rawFrame, target.frameId);
   if (!frame?.documentId || frame.documentId !== target.documentId) return undefined;
   if (!(await saveCaptureCoordinator.isRuntimeCurrent(
     source.tabId,
@@ -2328,8 +2332,10 @@ async function contextMenuSourceCurrent(
       ),
     ]);
     assertCurrent();
-    const top = rawTop === null ? undefined : parseBrowserFrame(rawTop);
-    const frame = rawFrame === null ? undefined : parseBrowserFrame(rawFrame);
+    const top = rawTop === null ? undefined : parseBrowserFrame(rawTop, 0);
+    const frame = rawFrame === null
+      ? undefined
+      : parseBrowserFrame(rawFrame, source.frameId);
     return tab.id === source.tabId
       && tab.windowId === source.windowId
       && tab.active === true
@@ -2556,7 +2562,7 @@ const router = createRouter({
   getKeyboardTopDocument,
   getContentDocument: async (tabId, frameId) => {
     const frame = await browser.webNavigation.getFrame({ tabId, frameId });
-    const parsed = frame === null ? undefined : parseBrowserFrame(frame);
+    const parsed = frame === null ? undefined : parseBrowserFrame(frame, frameId);
     return parsed?.documentId
       ? { documentId: parsed.documentId, url: parsed.url }
       : undefined;
