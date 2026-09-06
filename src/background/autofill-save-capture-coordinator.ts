@@ -1,4 +1,5 @@
 import type { SymmetricKey } from '../core/crypto/keys.js';
+import { AppError } from '../core/errors.js';
 import { getBaseDomain } from '../core/vault/domain.js';
 import type { KeyValueStore } from '../platform/store.js';
 import type { AutofillSaveCaptureSubmission } from '../messaging/protocol.js';
@@ -64,6 +65,11 @@ export interface AutofillSaveCaptureRuntimeActivation {
   readonly frameUrl: string;
   readonly runtimeIncarnation: string;
   readonly previousRuntimeIncarnation?: string;
+}
+
+export interface AutofillSaveCaptureRuntimeAuthority {
+  /** A synchronous fence for a runtime observed in the persisted journal. */
+  readonly assertCurrent: () => void;
 }
 
 export interface AutofillSaveCaptureBeforeRequestAdmission {
@@ -711,10 +717,34 @@ export class AutofillSaveCaptureCoordinator {
     documentIdInput: string,
     runtimeIncarnationInput: string,
   ): Promise<boolean> {
+    return this.captureRuntimeAuthority(
+      tabIdInput,
+      frameIdInput,
+      documentIdInput,
+      runtimeIncarnationInput,
+    ).then((authority) => {
+      if (!authority) return false;
+      try {
+        authority.assertCurrent();
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  captureRuntimeAuthority(
+    tabIdInput: number,
+    frameIdInput: number,
+    documentIdInput: string,
+    runtimeIncarnationInput: string,
+  ): Promise<AutofillSaveCaptureRuntimeAuthority | undefined> {
     const tabId = nonNegativeInteger(tabIdInput, 'tabId');
     const frameId = nonNegativeInteger(frameIdInput, 'frameId');
     const documentId = opaqueId(documentIdInput, 'documentId', MAX_DOCUMENT_ID_LENGTH);
     const runtimeIncarnation = uuid(runtimeIncarnationInput, 'runtimeIncarnation');
+    // Capture before queueing: a later navigation can revoke this read before its turn begins.
+    const fence = this.#captureRuntimeOperationFence(tabId, frameId);
     return this.#serialize(async () => {
       const state = await this.#read();
       const runtime = state.activeRuntimes.find((candidate) => (
@@ -723,7 +753,15 @@ export class AutofillSaveCaptureCoordinator {
         && candidate.documentId === documentId
         && candidate.runtimeIncarnation === runtimeIncarnation
       ));
-      return Boolean(runtime && !this.#runtimeRetired(state, runtime));
+      if (!runtime || state.runtimeFenceUntil > this.#time() || this.#runtimeRetired(state, runtime)
+          || !this.#runtimeOperationFenceCurrent(fence)) return undefined;
+      return Object.freeze({
+        assertCurrent: (): void => {
+          if (!this.#runtimeOperationFenceCurrent(fence)) {
+            throw new AppError('denied', 'Save-capture runtime authority changed');
+          }
+        },
+      });
     });
   }
 
@@ -1193,9 +1231,7 @@ export class AutofillSaveCaptureCoordinator {
 
   clear(): Promise<void> {
     this.#bumpGlobalConfirmation();
-    this.#runtimeOperationGlobalFence = {};
-    this.#runtimeOperationTabFences.clear();
-    this.#runtimeOperationFrameFences.clear();
+    this.#bumpRuntimeOperationGlobal();
     return this.#serialize(async () => {
       let usernameFailure: unknown;
       let usernameClearFailed = false;
@@ -1283,6 +1319,7 @@ export class AutofillSaveCaptureCoordinator {
     const key = runtimeRecordKey(runtime);
     if (this.#volatileRetiredRuntimes.has(key)) return key;
     if (this.#volatileRetiredRuntimes.size >= this.#maxRequests) {
+      this.#bumpRuntimeOperationGlobal();
       this.#volatileRuntimeFenceUntil = Math.max(
         this.#volatileRuntimeFenceUntil,
         safeDeadline(this.#time(), this.#networkTtlMs),
@@ -1531,6 +1568,12 @@ export class AutofillSaveCaptureCoordinator {
     }
   }
 
+  #bumpRuntimeOperationGlobal(): void {
+    this.#runtimeOperationGlobalFence = {};
+    this.#runtimeOperationTabFences.clear();
+    this.#runtimeOperationFrameFences.clear();
+  }
+
   #mutate(mutation: (state: JournalState) => void | Promise<void>): Promise<void> {
     const confirmationFence = this.#captureConfirmationFence();
     return this.#serialize(async () => {
@@ -1557,14 +1600,22 @@ export class AutofillSaveCaptureCoordinator {
 
   async #read(): Promise<JournalState> {
     const now = this.#time();
-    const raw = await this.#store.get<unknown>(this.#storageKey);
+    let raw: unknown;
+    try {
+      raw = await this.#store.get<unknown>(this.#storageKey);
+    } catch (error) {
+      this.#bumpRuntimeOperationGlobal();
+      throw error;
+    }
     if (raw === undefined) {
+      this.#bumpRuntimeOperationGlobal();
       const state = emptyJournal(this.#highWaterRevision);
       this.#refreshNetworkConfirmationScope(state);
       return state;
     }
     const parsed = parseJournal(raw, now, this.#maxRequests);
     if (!parsed) {
+      this.#bumpRuntimeOperationGlobal();
       const state = {
         ...emptyJournal(this.#highWaterRevision),
         blockedUntil: safeDeadline(now, this.#networkTtlMs),
@@ -1573,6 +1624,7 @@ export class AutofillSaveCaptureCoordinator {
       this.#refreshNetworkConfirmationScope(state);
       return state;
     }
+    if (parsed.runtimeFenceUntil > now) this.#bumpRuntimeOperationGlobal();
     this.#highWaterRevision = Math.max(this.#highWaterRevision, parsed.revision);
     this.#refreshNetworkConfirmationScope(parsed);
     return parsed;
@@ -1597,6 +1649,7 @@ export class AutofillSaveCaptureCoordinator {
       admissions: Object.freeze(state.admissions.map((admission) => Object.freeze({ ...admission }))),
     });
     if (utf8Size(this.#storageKey, envelope) > this.#maxJournalBytes) {
+      this.#bumpRuntimeOperationGlobal();
       const captures = [...state.captures];
       const blockedUntil = safeDeadline(this.#time(), this.#networkTtlMs);
       state.blockedUntil = Math.max(state.blockedUntil, blockedUntil);

@@ -105,7 +105,8 @@ import type {
   DataOwnershipMigrationModel,
   DataOwnershipMigrationSubmitDetail,
 } from './tools/data-ownership-view.js';
-import { safeWebUrl, triggerDownload } from './utils.js';
+import { safeWebUrl, triggerBlobDownload } from './utils.js';
+import { downloadBinaryTransfer, uploadBinaryTransfer } from '../binary-transfer-client.js';
 import {
   parseContextMenuCreateIntent,
   type ContextMenuCreateIntent,
@@ -1514,6 +1515,16 @@ export class VwPopupApp extends LitElement {
   /** Injectable worker request function; defaults to the real messaging channel. */
   request: PopupRequest = sendRequest;
 
+  /** Injectable binary transport seams; each file transfer owns a document-bound Port. */
+  uploadBinaryTransfer = uploadBinaryTransfer;
+  downloadBinaryTransfer = downloadBinaryTransfer;
+  private readonly binaryTransfers = new Set<AbortController>();
+
+  private cancelBinaryTransfers(): void {
+    for (const controller of this.binaryTransfers) controller.abort();
+    this.binaryTransfers.clear();
+  }
+
   /** Injectable browser seam; defaults to the real `webextension-polyfill`-backed implementation. */
   browser: PopupBrowser = createDefaultBrowser();
 
@@ -1573,8 +1584,17 @@ export class VwPopupApp extends LitElement {
   /** Invalidates every async result owned by a previous lock/account/workspace generation. */
   private workspaceGeneration = 0;
 
+  /** A notification refresh must not restore state captured before a newer session transition. */
+  private latestSessionRefreshSeq = 0;
+  private sessionRevocation = 0;
+  private sessionWorkspaceRevoked = false;
+
   /** Invalidates pending login results and connector messages from a previous authentication attempt. */
   private authAttemptGeneration = 0;
+  private activeUnlockAttempt: {
+    acceptSuccess: boolean;
+    readonly startRevocation: number;
+  } | undefined;
   /** Non-secret provider preference, retained only for one in-memory pending authentication attempt. */
   private twoFactorSelection: { readonly attemptKey: string; readonly provider: number } | undefined;
   private newDeviceVerificationExpiryTimer: number | undefined;
@@ -1842,28 +1862,83 @@ export class VwPopupApp extends LitElement {
     ) return;
     const phase = (message as { phase?: unknown }).phase;
     if (phase !== 'revoke' && phase !== 'refresh') return;
-    const unlocked = this.isUnlockedWorkspace() && this.route.name !== 'restricted';
+    const sequence = ++this.latestSessionRefreshSeq;
+    const workspaceActive = this.isUnlockedWorkspace() && this.route.name !== 'websitePasskey';
     if (phase === 'revoke') {
-      this.workspaceGeneration += 1;
-      if (unlocked) {
-        this.organizationDataOwnershipStatus = { status: 'unavailable' };
-        this.dataOwnershipError = undefined;
+      this.sessionRevocation += 1;
+      if (workspaceActive) {
+        this.resetVaultState();
+        this.sessionWorkspaceRevoked = true;
+        this.pending = false;
         this.dataOwnershipCheckPending = true;
         this.navigate({ name: 'dataOwnership' });
+      } else {
+        this.workspaceGeneration += 1;
       }
     }
     this.latestGeneratorPolicySeq += 1;
     this.latestGeneratorHistorySeq += 1;
     this.generatorHistory = [];
     this.generatorPolicy = UNAVAILABLE_GENERATOR_POLICY_SNAPSHOT;
-    if (phase === 'refresh') {
-      if (this.generatorSurfaceActive()) {
-        void this.loadGeneratorPolicy();
-        void this.loadGeneratorHistory();
-      }
-      if (unlocked) void this.loadListing(this.workspaceGeneration);
+    if (phase === 'refresh' && (workspaceActive || this.route.name === 'unlock')) {
+      void this.refreshSessionFromNotification(sequence);
     }
   };
+
+  /** The worker uses the same notification for policy changes and session settlement. Read its
+   *  authoritative state before treating an ownership-read failure as an organization restriction. */
+  private async refreshSessionFromNotification(
+    sequence: number,
+    completingUnlock?: NonNullable<VwPopupApp['activeUnlockAttempt']>,
+  ): Promise<void> {
+    const generation = this.workspaceGeneration;
+    let response: ResponseMessage;
+    try {
+      response = await this.request({ type: 'auth.getState' });
+    } catch {
+      response = { ok: false, error: { code: 'error', message: t('common.error') } };
+    }
+    if (!this.isConnected
+        || sequence !== this.latestSessionRefreshSeq
+        || generation !== this.workspaceGeneration) return;
+    const state = response.ok ? (response.data as { state?: SessionState } | null)?.state : undefined;
+    if (state === 'unlocked') {
+      if (completingUnlock && this.activeUnlockAttempt === completingUnlock) {
+        completingUnlock.acceptSuccess = true;
+      }
+      if (this.route.name === 'unlock' && this.activeUnlockAttempt?.acceptSuccess) return;
+      this.activeUnlockAttempt = undefined;
+      if (this.sessionWorkspaceRevoked || !this.isUnlockedWorkspace() || this.route.name === 'restricted') {
+        this.pending = false;
+        this.enterVault();
+      } else {
+        if (this.generatorSurfaceActive()) {
+          void this.loadGeneratorPolicy();
+          void this.loadGeneratorHistory();
+        }
+        void this.loadListing(generation);
+      }
+      return;
+    }
+    if (state === 'locked' && this.route.name === 'unlock' && this.activeUnlockAttempt) {
+      // A failed unlock still owns its error feedback. A successful reply from an older transition
+      // must not reopen a workspace that the worker has already locked again.
+      if (this.sessionRevocation > this.activeUnlockAttempt.startRevocation) {
+        this.activeUnlockAttempt.acceptSuccess = false;
+      }
+      return;
+    }
+    this.resetVaultState();
+    this.pending = false;
+    if (state === 'locked') this.navigate(unlockRoute());
+    else if (state === 'loggedOut') this.navigate(loginRoute());
+    else if (state === 'restricted' && response.ok) {
+      const requirement = restrictionFromStateData(response.data);
+      this.navigate(requirement ? restrictedRoute(requirement) : loginRoute(t('common.error')));
+    } else {
+      this.navigate(loginRoute(response.ok ? t('common.error') : response.error.message));
+    }
+  }
 
   private readonly handleContextMenuCreateIntent = (
     message: unknown,
@@ -2123,6 +2198,8 @@ export class VwPopupApp extends LitElement {
   }
 
   override disconnectedCallback(): void {
+    this.cancelBinaryTransfers();
+    this.activeUnlockAttempt = undefined;
     this.cleanupWebsitePasskey();
     this.clearDeviceLoginRequesterState();
     this.clearDeviceLoginApprovalState();
@@ -2615,6 +2692,7 @@ export class VwPopupApp extends LitElement {
   }
 
   private async init(): Promise<void> {
+    const generation = this.workspaceGeneration;
     const passkeyQuery = accountPasskeyQuery(window.location.href);
     const lockedContinuationResponse = this.websitePasskeyUnlockQuery.kind === 'continuation'
       ? this.request({
@@ -2627,6 +2705,11 @@ export class VwPopupApp extends LitElement {
       this.request({ type: 'autofill.continuation.status' }),
       lockedContinuationResponse,
     ]);
+    if (!this.isConnected) return;
+    if (generation !== this.workspaceGeneration) {
+      await this.init();
+      return;
+    }
     this.autofillContinuation = continuationResponse.ok
       ? parseAutofillContinuationStatus(continuationResponse.data)
       : null;
@@ -3672,36 +3755,61 @@ export class VwPopupApp extends LitElement {
 
   private async handleUnlockSubmit(detail: UnlockSubmitDetail): Promise<void> {
     if (this.pending) return;
+    const attempt = { acceptSuccess: true, startRevocation: this.sessionRevocation };
+    this.activeUnlockAttempt = attempt;
     this.pending = true;
     try {
       const response = await this.request({ type: 'auth.unlock', masterPassword: detail.masterPassword });
+      if (!this.isConnected || this.activeUnlockAttempt !== attempt) return;
       if (response.ok) {
+        if (!attempt.acceptSuccess) {
+          await this.refreshSessionFromNotification(++this.latestSessionRefreshSeq, attempt);
+          if (!this.isConnected || this.activeUnlockAttempt !== attempt || !attempt.acceptSuccess) return;
+        }
         if (await this.resumeWebsitePasskeyAfterUnlock()) return;
+        if (!this.isConnected || this.activeUnlockAttempt !== attempt || !attempt.acceptSuccess) return;
         const continuation = await this.resumeAutofillAfterUnlock();
+        if (!this.isConnected || this.activeUnlockAttempt !== attempt || !attempt.acceptSuccess) return;
         if (continuation === 'closed') return;
         this.enterVault(continuation);
       }
       else this.navigate(unlockRoute(response.error.message));
     } finally {
-      this.pending = false;
+      if (this.activeUnlockAttempt === attempt) {
+        this.activeUnlockAttempt = undefined;
+        this.pending = false;
+      }
     }
   }
 
   private async handlePinUnlockSubmit(detail: PinUnlockSubmitDetail): Promise<void> {
     if (this.pending) return;
+    const attempt = { acceptSuccess: true, startRevocation: this.sessionRevocation };
+    this.activeUnlockAttempt = attempt;
     this.pending = true;
     try {
       const response = await this.request({ type: 'auth.unlockWithPin', pin: detail.pin });
+      if (!this.isConnected || this.activeUnlockAttempt !== attempt) return;
       if (response.ok) {
+        if (!attempt.acceptSuccess) {
+          await this.refreshSessionFromNotification(++this.latestSessionRefreshSeq, attempt);
+          if (!this.isConnected || this.activeUnlockAttempt !== attempt || !attempt.acceptSuccess) return;
+        }
         if (await this.resumeWebsitePasskeyAfterUnlock()) return;
+        if (!this.isConnected || this.activeUnlockAttempt !== attempt || !attempt.acceptSuccess) return;
         const continuation = await this.resumeAutofillAfterUnlock();
+        if (!this.isConnected || this.activeUnlockAttempt !== attempt || !attempt.acceptSuccess) return;
         if (continuation === 'closed') return;
         this.enterVault(continuation);
       } else if (response.error.code === 'invalid_pin') {
         this.navigate(unlockRoute(t('auth.invalidPin')));
       } else if (response.error.code === 'pin_attempts_exceeded') {
+        const generation = this.workspaceGeneration;
         const state = await this.request({ type: 'auth.getState' });
+        if (!this.isConnected || this.activeUnlockAttempt !== attempt
+            || generation !== this.workspaceGeneration) return;
         this.resetVaultState();
+        this.pending = false;
         if (state.ok && (state.data as { state?: SessionState }).state === 'locked') {
           this.navigate(unlockRoute(t('auth.tooManyInvalidPin')));
         } else {
@@ -3711,7 +3819,10 @@ export class VwPopupApp extends LitElement {
         this.navigate(unlockRoute(response.error.message));
       }
     } finally {
-      this.pending = false;
+      if (this.activeUnlockAttempt === attempt) {
+        this.activeUnlockAttempt = undefined;
+        this.pending = false;
+      }
     }
   }
 
@@ -3769,6 +3880,7 @@ export class VwPopupApp extends LitElement {
     continuationSuggestions?: { readonly tabId: number; readonly outcome: TabSuggestionsOutcome },
   ): void {
     this.clearSyncStatusPoll();
+    this.sessionWorkspaceRevoked = false;
     this.workspaceGeneration += 1;
     this.vaultDataReadyGeneration = undefined;
     this.latestListingSeq += 1;
@@ -4971,7 +5083,10 @@ export class VwPopupApp extends LitElement {
   /** Read the session state and route to the matching surface (used after switching/removing an
    *  account, where the resulting state can be logged-out, locked, or unlocked). */
   private async reRouteFromState(): Promise<void> {
+    const generation = this.workspaceGeneration;
     const response = await this.request({ type: 'auth.getState' });
+    if (!this.isConnected
+        || generation !== this.workspaceGeneration) return;
     if (!response.ok) {
       this.navigate(loginRoute(response.error.message));
       return;
@@ -4989,6 +5104,9 @@ export class VwPopupApp extends LitElement {
   }
 
   private resetVaultState(): void {
+    this.cancelBinaryTransfers();
+    this.activeUnlockAttempt = undefined;
+    this.sessionWorkspaceRevoked = false;
     this.clearSyncStatusPoll();
     this.clearDeviceLoginRequesterState();
     this.clearDeviceLoginApprovalState();
@@ -5121,15 +5239,16 @@ export class VwPopupApp extends LitElement {
       case 'lock': {
         if (this.pending) return;
         if (!this.promptForDraftDiscard()) return;
+        const generation = this.workspaceGeneration;
         this.pending = true;
         try {
           const response = await this.request({ type: 'auth.lock' });
-          // A lock must drop the unlocked vault's non-secret listing state (items/folders/
-          // collections/org permissions/suggestions), not only the tool state.
-          if (response.ok) { this.resetVaultState(); this.navigate(unlockRoute()); }
+          // Another transition may settle before this request's reply reaches the popup.
+          // Reuse notification routing so a newer unlock retains its continuation ownership.
+          if (response.ok) await this.refreshSessionFromNotification(++this.latestSessionRefreshSeq);
           else this.showToast(response.error.message); // surface the failure instead of an unread route error
         } finally {
-          this.pending = false;
+          if (generation === this.workspaceGeneration) this.pending = false;
         }
         return;
       }
@@ -5358,10 +5477,17 @@ export class VwPopupApp extends LitElement {
     this.toolStatusEpoch += 1;
     this.pending = true;
     this.toolStatus = undefined;
+    const controller = detail.kind === 'file' ? new AbortController() : undefined;
+    if (controller) this.binaryTransfers.add(controller);
     try {
       const response = detail.kind === 'text'
         ? await this.request({ type: 'sends.createText', input: detail.input })
-        : await this.request({ type: 'sends.createFile', input: detail.input, dataB64: detail.dataB64, fileName: detail.fileName });
+        : await this.uploadBinaryTransfer({
+          type: 'sends.createFile',
+          input: detail.input,
+          fileName: detail.fileName,
+          expectedBytes: detail.file.size,
+        }, detail.file, { signal: controller!.signal });
       if (!this.isCurrentWorkspace(generation) || this.route.name !== 'sends') return;
       if (!response.ok) {
         this.toolStatus = response.error.code === 'committed_unsynced'
@@ -5381,7 +5507,8 @@ export class VwPopupApp extends LitElement {
       }
       await this.loadSends();
     } finally {
-      this.pending = false;
+      if (controller) this.binaryTransfers.delete(controller);
+      if (generation === this.workspaceGeneration) this.pending = false;
     }
   }
 
@@ -6090,28 +6217,32 @@ export class VwPopupApp extends LitElement {
     const generation = this.workspaceGeneration;
     const epoch = this.detailEpoch;
     this.pending = true;
+    const controller = new AbortController();
+    this.binaryTransfers.add(controller);
     try {
       const mp = this.repromptMp(detail.cipherId);
-      const response = await this.request(
-        mp === undefined
-          ? { type: 'vault.getAttachment', cipherId: detail.cipherId, attachmentId: detail.attachmentId }
-          : { type: 'vault.getAttachment', cipherId: detail.cipherId, attachmentId: detail.attachmentId, masterPassword: mp },
-      );
+      const response = await this.downloadBinaryTransfer({
+        type: 'vault.getAttachment',
+        cipherId: detail.cipherId,
+        attachmentId: detail.attachmentId,
+        ...(mp === undefined ? {} : { masterPassword: mp }),
+      }, { signal: controller.signal });
       if (!this.isCurrentDetailContext(detail.cipherId, generation, epoch)) return;
       if (!response.ok) {
         this.setDetailFailure(response.error.message);
         return;
       }
-      const { fileName, dataB64 } = response.data as { fileName: string; dataB64: string };
+      const { fileName, blob } = response.data;
       try {
-        triggerDownload(dataB64, fileName);
+        triggerBlobDownload(blob, fileName);
       } catch {
         this.setDetailFailure(t('detail.downloadFailed', { name: fileName }));
         return;
       }
       this.detailStatus = { message: t('detail.downloaded', { name: fileName }), tone: 'success' };
     } finally {
-      this.pending = false;
+      this.binaryTransfers.delete(controller);
+      if (generation === this.workspaceGeneration) this.pending = false;
     }
   }
 
@@ -6122,26 +6253,31 @@ export class VwPopupApp extends LitElement {
     const generation = this.workspaceGeneration;
     const epoch = this.detailEpoch;
     this.pending = true;
+    const controller = new AbortController();
+    this.binaryTransfers.add(controller);
     try {
       const mp = this.repromptMp(detail.cipherId);
-      const response = await this.request(
-        mp === undefined
-          ? { type: 'vault.addAttachment', cipherId: detail.cipherId, fileName: detail.fileName, dataB64: detail.dataB64 }
-          : { type: 'vault.addAttachment', cipherId: detail.cipherId, fileName: detail.fileName, dataB64: detail.dataB64, masterPassword: mp },
-      );
+      const response = await this.uploadBinaryTransfer({
+        type: 'vault.addAttachment',
+        cipherId: detail.cipherId,
+        fileName: detail.fileName,
+        expectedBytes: detail.file.size,
+        ...(mp === undefined ? {} : { masterPassword: mp }),
+      }, detail.file, { signal: controller.signal });
       if (!this.isCurrentDetailContext(detail.cipherId, generation, epoch)) return;
       if (!response.ok) {
         this.setDetailFailure(response.error.message);
         return;
       }
-      this.applyListingResponse(response);
+      this.applyListingResponse(response as ResponseMessage);
       this.detailEpoch += 1;
       this.detailExtrasCache = undefined;
       this.detailCipher = null;
       this.detailStatus = { message: t('detail.uploaded', { name: detail.fileName }), tone: 'success' };
       await this.loadDetail(detail.cipherId, this.detailEpoch);
     } finally {
-      this.pending = false;
+      this.binaryTransfers.delete(controller);
+      if (generation === this.workspaceGeneration) this.pending = false;
     }
   }
 

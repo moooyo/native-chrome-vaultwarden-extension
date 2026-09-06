@@ -21,7 +21,6 @@ import {
   sendDraftHasEdits,
   type SendDraftSnapshot,
 } from '../../send-form-draft.js';
-import { fileToBase64 } from '../utils.js';
 import type {
   CopyDetail,
   DetailStatus,
@@ -96,7 +95,6 @@ export class VwSendsView extends LitElement {
   private draftBaseline: SendDraftSnapshot | undefined;
   private draftRevision = 0;
   private editSource: SendSummary | undefined;
-  private encodeGeneration = 0;
   private deleteTrigger: HTMLButtonElement | null = null;
   private i18n = new LocalizeController(this);
 
@@ -410,7 +408,6 @@ export class VwSendsView extends LitElement {
 
   override disconnectedCallback(): void {
     this.draftRevision += 1;
-    this.encodeGeneration += 1;
     this.submitting = null;
     this.generatorOwner = null;
     super.disconnectedCallback();
@@ -433,7 +430,6 @@ export class VwSendsView extends LitElement {
       if (el) el.value = '';
     }
     this.draftRevision += 1;
-    this.encodeGeneration += 1;
     this.draftBaseline = undefined;
     this.validationError = undefined;
     this.generatorOwner = null;
@@ -715,30 +711,8 @@ export class VwSendsView extends LitElement {
         this.validationError = t('send.error.fileTooLarge', { max: '100 MB' });
         return;
       }
-      // base64-encoding a large file blocks the popup's main thread; flip the busy flag before the
-      // first await so the button disables and shows a spinner rather than appearing frozen.
-      const draftRevision = this.draftRevision;
-      const encodeGeneration = ++this.encodeGeneration;
-      this.encoding = true;
-      emit(this, 'vw-send-encoding', { encoding: true });
-      let dataB64: string;
-      try {
-        dataB64 = await fileToBase64(file, MAX_FILE_BYTES);
-      } catch {
-        if (encodeGeneration === this.encodeGeneration && draftRevision === this.draftRevision) {
-          this.validationError = t('send.error.fileRead');
-        }
-        return;
-      } finally {
-        if (encodeGeneration === this.encodeGeneration) {
-          this.encoding = false;
-          emit(this, 'vw-send-encoding', { encoding: false });
-        }
-      }
-      const currentFile = this.renderRoot.querySelector<HTMLInputElement>('[data-file]')?.files?.[0];
-      if (!this.isConnected || draftRevision !== this.draftRevision || this.mode !== 'file' || currentFile !== file) return;
-      this.submitting = { kind: 'create', revision: draftRevision };
-      emit<SendCreateDetail>(this, 'vw-send-create', { kind: 'file', input: { ...base, name: rawName || file.name }, dataB64, fileName: file.name });
+      this.submitting = { kind: 'create', revision: this.draftRevision };
+      emit<SendCreateDetail>(this, 'vw-send-create', { kind: 'file', input: { ...base, name: rawName || file.name }, file, fileName: file.name });
       return;
     }
 

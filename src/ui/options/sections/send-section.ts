@@ -9,7 +9,6 @@ import {
   type SendInput,
   type SendSummary,
 } from '../../../core/vault/sends.js';
-import { bytesToBase64 } from '../../../core/crypto/encoding.js';
 import {
   normalizeSendDraft,
   sendDraftHasEdits,
@@ -38,7 +37,6 @@ export class VwSendSection extends LitElement {
     pending: { type: Boolean },
     status: { attribute: false },
     validationError: { state: true },
-    encoding: { state: true },
   };
 
   declare sends: AsyncState<SendSummary[]>;
@@ -46,7 +44,6 @@ export class VwSendSection extends LitElement {
   declare pending: boolean;
   declare status: SectionStatus | undefined;
   declare validationError: string | undefined;
-  declare encoding: boolean;
 
   private i18n = new LocalizeController(this);
   private formOpen = false;
@@ -56,7 +53,6 @@ export class VwSendSection extends LitElement {
   private draftBaseline: SendDraftSnapshot | undefined;
   private draftRevision = 0;
   private submittedRevision: number | undefined;
-  private encodeGeneration = 0;
   private wasPending = false;
 
   constructor() {
@@ -66,7 +62,6 @@ export class VwSendSection extends LitElement {
     this.pending = false;
     this.status = undefined;
     this.validationError = undefined;
-    this.encoding = false;
   }
 
   static override styles = [
@@ -111,10 +106,7 @@ export class VwSendSection extends LitElement {
       .icon-btn svg { width: 15px; height: 15px; }
       .footer { font-size: 11px; color: var(--vw-faint); padding: 4px 2px; }
       .empty { padding: 24px; text-align: center; color: var(--vw-muted); font-size: 12.5px; }
-      .spin { display:inline-flex; }
-      .spin svg { width:14px; height:14px; animation:mvSpin .8s linear infinite; }
       button:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; box-shadow: var(--vw-focus); }
-      @media (prefers-reduced-motion: reduce) { .spin svg { animation:none; } }
     `,
   ];
 
@@ -128,7 +120,6 @@ export class VwSendSection extends LitElement {
 
   override disconnectedCallback(): void {
     this.draftRevision += 1;
-    this.encodeGeneration += 1;
     this.submittedRevision = undefined;
     super.disconnectedCallback();
   }
@@ -177,7 +168,7 @@ export class VwSendSection extends LitElement {
   }
 
   promptForUnsavedEdits(): boolean {
-    if (this.formOpen && (this.pending || this.encoding)) return false;
+    if (this.formOpen && this.pending) return false;
     if (!this.sendFormHasEdits()) return true;
     return typeof window === 'undefined' || window.confirm(t('send.unsavedChanges'));
   }
@@ -185,7 +176,7 @@ export class VwSendSection extends LitElement {
   private changeKind(event: CustomEvent<{ id: string }>): void {
     const control = event.currentTarget as HTMLElement & { value: string };
     const next = event.detail.id as 'text' | 'file';
-    if (this.pending || this.encoding || next === this.kind) {
+    if (this.pending || next === this.kind) {
       control.value = this.kind;
       return;
     }
@@ -204,7 +195,7 @@ export class VwSendSection extends LitElement {
 
   private changePasswordEnabled(event: CustomEvent<{ checked: boolean }>): void {
     const control = event.currentTarget as HTMLElement & { checked: boolean };
-    if (this.pending || this.encoding) {
+    if (this.pending) {
       control.checked = this.passwordOn;
       return;
     }
@@ -220,7 +211,7 @@ export class VwSendSection extends LitElement {
   }
 
   private openForm(): void {
-    if (this.locked || this.pending || this.encoding) return;
+    if (this.locked || this.pending) return;
     this.draftRevision += 1;
     this.formOpen = true;
     this.draftBaseline = this.createBaseline();
@@ -228,10 +219,8 @@ export class VwSendSection extends LitElement {
   }
   private resetFormState(): void {
     this.draftRevision += 1;
-    this.encodeGeneration += 1;
     this.formOpen = false;
     this.file = undefined;
-    this.encoding = false;
     this.passwordOn = false;
     this.kind = 'text';
     this.draftBaseline = undefined;
@@ -241,7 +230,7 @@ export class VwSendSection extends LitElement {
   }
 
   private closeForm(): void {
-    if (this.pending || this.encoding || !this.promptForUnsavedEdits()) return;
+    if (this.pending || !this.promptForUnsavedEdits()) return;
     this.resetFormState();
     this.requestUpdate();
   }
@@ -264,8 +253,8 @@ export class VwSendSection extends LitElement {
     if (changed.has('pending')) this.wasPending = this.pending;
   }
 
-  private async create(): Promise<void> {
-    if (this.locked || this.pending || this.encoding) return;
+  private create(): void {
+    if (this.locked || this.pending || !this.isConnected) return;
     this.validationError = undefined;
     const rawName = (this.q<HTMLInputElement>('[data-name]')?.value ?? '').trim();
     const name = rawName || t('send.defaultName');
@@ -285,24 +274,8 @@ export class VwSendSection extends LitElement {
       const file = this.file;
       if (!file) { this.validationError = t('send.error.fileRequired'); return; }
       if (file.size > MAX_FILE_BYTES) { this.validationError = t('send.error.fileTooLarge', { max: '100 MB' }); return; }
-      const draftRevision = this.draftRevision;
-      const encodeGeneration = ++this.encodeGeneration;
-      this.encoding = true;
-      let dataB64: string;
-      try {
-        dataB64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
-      } catch {
-        if (!this.locked && encodeGeneration === this.encodeGeneration && draftRevision === this.draftRevision) {
-          this.validationError = t('send.error.fileRead');
-        }
-        return;
-      } finally {
-        if (encodeGeneration === this.encodeGeneration) this.encoding = false;
-      }
-      if (this.locked || !this.isConnected || draftRevision !== this.draftRevision
-        || this.kind !== 'file' || this.file !== file) return;
-      this.submittedRevision = draftRevision;
-      this.emit('vw-send-create', { kind: 'file', input: { ...base, name: rawName || file.name }, dataB64, fileName: file.name });
+      this.submittedRevision = this.draftRevision;
+      this.emit('vw-send-create', { kind: 'file', input: { ...base, name: rawName || file.name }, file, fileName: file.name });
     } else {
       const text = this.q<HTMLTextAreaElement>('[data-content]')?.value ?? '';
       if (!text.trim()) { this.validationError = t('send.error.textRequired'); return; }
@@ -357,7 +330,7 @@ export class VwSendSection extends LitElement {
           <div class="title">${t('options.send.introTitle')}</div>
           <div class="desc">${t('options.send.introDesc')}</div>
         </div>
-        <button type="button" class="btn-primary" ?disabled=${this.locked || this.pending || this.encoding} @click=${() => this.openForm()}>
+        <button type="button" class="btn-primary" ?disabled=${this.locked || this.pending} @click=${() => this.openForm()}>
           ${uiIcon('plus')}${t('options.send.new')}
         </button>
       </div>
@@ -381,7 +354,7 @@ export class VwSendSection extends LitElement {
       { value: '', label: t('options.send.access.unlimited') },
     ];
     return html`
-      <div class="card form" ?inert=${this.pending || this.encoding}>
+      <div class="card form" ?inert=${this.pending}>
         <div class="form-head">
           <span class="t">${t('options.send.formTitle')}</span>
           <vw-segmented
@@ -394,14 +367,14 @@ export class VwSendSection extends LitElement {
         </div>
         <div class="field">
           <label>${t('options.send.name')}</label>
-          <input data-name type="text" placeholder=${t('options.send.namePlaceholder')} ?disabled=${this.pending || this.encoding} />
+          <input data-name type="text" placeholder=${t('options.send.namePlaceholder')} ?disabled=${this.pending} />
         </div>
         <div class="field">
           <label>${this.kind === 'text' ? t('options.send.textContent') : t('options.send.fileContent')}</label>
           ${this.kind === 'text'
-            ? html`<textarea data-content rows="3" placeholder=${t('options.send.contentPlaceholder')} ?disabled=${this.pending || this.encoding}></textarea>`
-            : html`<input data-file type="file" ?disabled=${this.pending || this.encoding} @change=${(e: Event) => {
-                if (this.pending || this.encoding) return;
+            ? html`<textarea data-content rows="3" placeholder=${t('options.send.contentPlaceholder')} ?disabled=${this.pending}></textarea>`
+            : html`<input data-file type="file" ?disabled=${this.pending} @change=${(e: Event) => {
+                if (this.pending) return;
                 this.file = (e.target as HTMLInputElement).files?.[0];
                 this.validationError = undefined;
               }} />`}
@@ -417,21 +390,21 @@ export class VwSendSection extends LitElement {
           </div>
           <div class="row-toggle">
             <span style="font-size:12px;color:var(--vw-text-4)">${t('options.send.accessPassword')}</span>
-            <vw-toggle size="sm" .checked=${this.passwordOn} .disabled=${this.pending || this.encoding}
+            <vw-toggle size="sm" .checked=${this.passwordOn} .disabled=${this.pending}
               @vw-toggle-change=${(e: CustomEvent<{ checked: boolean }>) => this.changePasswordEnabled(e)}></vw-toggle>
           </div>
           <div class="row-toggle">
             <span style="font-size:12px;color:var(--vw-text-4)">${t('send.hideEmail')}</span>
-            <vw-toggle data-hide-email size="sm" .disabled=${this.pending || this.encoding}></vw-toggle>
+            <vw-toggle data-hide-email size="sm" .disabled=${this.pending}></vw-toggle>
           </div>
         </div>
-        ${this.passwordOn ? html`<div class="field"><input data-pass type="password" placeholder=${t('options.send.accessPassword')} ?disabled=${this.pending || this.encoding} /></div>` : nothing}
+        ${this.passwordOn ? html`<div class="field"><input data-pass type="password" placeholder=${t('options.send.accessPassword')} ?disabled=${this.pending} /></div>` : nothing}
         ${this.validationError ? html`<vw-status-message tone="danger" .icon=${'alert'} .message=${this.validationError}></vw-status-message>` : nothing}
         <div class="actions">
-          <button type="button" class="btn-primary" ?disabled=${this.pending || this.encoding} @click=${() => void this.create()}>
-            ${this.encoding ? html`<span class="spin">${uiIcon('refresh')}</span>${t('send.encoding')}` : t('options.send.create')}
+          <button type="button" class="btn-primary" ?disabled=${this.pending} @click=${() => this.create()}>
+            ${t('options.send.create')}
           </button>
-          <button type="button" class="btn-outline" ?disabled=${this.pending || this.encoding} @click=${() => this.closeForm()}>${t('common.cancel')}</button>
+          <button type="button" class="btn-outline" ?disabled=${this.pending} @click=${() => this.closeForm()}>${t('common.cancel')}</button>
         </div>
       </div>
     `;
@@ -459,8 +432,8 @@ export class VwSendSection extends LitElement {
           <div class="name">${send.name}</div>
           <div class="sub">${this.meta(send)}</div>
         </div>
-        <button type="button" class="icon-btn" title=${t('options.send.copyLink')} aria-label=${t('send.copyAria')} ?disabled=${this.locked || this.pending || this.encoding} @click=${() => this.emit('vw-copy', { value: send.url })}>${uiIcon('link')}</button>
-        <button type="button" class="icon-btn danger" title=${t('common.delete')} aria-label=${t('send.deleteAria')} ?disabled=${this.locked || this.pending || this.encoding} @click=${() => this.emit('vw-send-delete', { id: send.id })}>${uiIcon('trash')}</button>
+        <button type="button" class="icon-btn" title=${t('options.send.copyLink')} aria-label=${t('send.copyAria')} ?disabled=${this.locked || this.pending} @click=${() => this.emit('vw-copy', { value: send.url })}>${uiIcon('link')}</button>
+        <button type="button" class="icon-btn danger" title=${t('common.delete')} aria-label=${t('send.deleteAria')} ?disabled=${this.locked || this.pending} @click=${() => this.emit('vw-send-delete', { id: send.id })}>${uiIcon('trash')}</button>
       </div>
     `;
   }

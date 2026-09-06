@@ -14,6 +14,7 @@
     "test:ui": "node build.mjs && node tools/verify-render.mjs",
     "verify:render": "node tools/verify-render.mjs",
     "verify:autofill-browser": "node tools/verify-autofill-browser.mjs",
+    "verify:binary-transport-browser": "node tools/verify-binary-transport-browser.mjs",
     "verify:e2e": "node tools/verify-e2e.mjs",
     "verify:ssh-e2e": "node tools/verify-ssh-e2e.mjs",
     "verify:passkey-e2e": "node tools/verify-passkey-e2e.mjs",

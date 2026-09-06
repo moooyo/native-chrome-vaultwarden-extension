@@ -282,6 +282,7 @@ beforeEach(() => {
 afterEach(() => {
   document.body.replaceChildren();
   window.history.replaceState(null, '', '/');
+  if (vi.isMockFunction(window.close)) vi.mocked(window.close).mockRestore();
   vi.useRealTimers();
 });
 
@@ -2487,7 +2488,15 @@ describe('vw-popup-app unlocked navigation', () => {
   });
 
   it('locks the vault', async () => {
-    const app = await mountApp(fakeRequest({ ...UNLOCKED, 'auth.lock': async () => ({ ok: true, data: null }) }));
+    let state: SessionState = 'unlocked';
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.getState': async () => ({ ok: true, data: { state } }),
+      'auth.lock': async () => {
+        state = 'locked';
+        return { ok: true, data: null };
+      },
+    }));
     app.selectedOrganizationId = PERSONAL_VAULT_FILTER_ID;
     view(app, 'vw-popup-header').dispatchEvent(new CustomEvent('vw-lock', { bubbles: true, composed: true }));
     await settle(app);
@@ -5247,6 +5256,468 @@ describe('vw-popup-app vault interactions', () => {
   });
 });
 
+describe('vw-popup-app session transition notifications', () => {
+  it('re-reads bootstrap state when an external transition invalidates the initial response', async () => {
+    const staleState = deferred<Res>();
+    const getState = vi.fn()
+      .mockImplementationOnce(() => staleState.promise)
+      .mockResolvedValue({ ok: true, data: { state: 'loggedOut' } });
+    const listItems = vi.fn(UNLOCKED['vault.listItems']!);
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.getState': getState,
+      'vault.listItems': listItems,
+    }));
+    expect(app.route.name).toBe('loading');
+    const listener = enterprisePolicyMessageListener();
+
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    staleState.resolve({ ok: true, data: { state: 'unlocked' } });
+    await settle(app);
+    await settle(app);
+
+    expect(app.route.name).toBe('login');
+    expect(getState).toHaveBeenCalledTimes(2);
+    expect(listItems).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { settledState: 'locked', expectedRoute: 'unlock' },
+    { settledState: 'loggedOut', expectedRoute: 'login' },
+  ] as const)('routes an open popup to $expectedRoute after external $settledState settlement', async ({ settledState, expectedRoute }) => {
+    let state: SessionState = 'unlocked';
+    const getState = vi.fn(async () => ({ ok: true, data: { state } } as Res));
+    const rejectedVaultRead = (): Res => state === 'loggedOut'
+      ? { ok: false, error: { code: 'session_expired', message: 'No active account is available.' } }
+      : { ok: false, error: { code: 'locked', message: 'Vault is locked' } };
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.getState': getState,
+      'vault.listItems': async () => state === 'unlocked'
+        ? { ok: true, data: { items: [login()], folders: [], collections: [], orgPermissions: [] } }
+        : rejectedVaultRead(),
+      'vault.getSkippedOrgCount': async () => state === 'unlocked'
+        ? { ok: true, data: { count: 0 } }
+        : rejectedVaultRead(),
+      'vault.getOrganizationDataOwnershipStatus': async () => state === 'unlocked'
+        ? { ok: true, data: { status: 'not_required' } }
+        : rejectedVaultRead(),
+    }));
+    await settle(app);
+    app.navigate({ name: 'editor', mode: 'create', cipherType: 1 });
+    await settle(app);
+    app.generatorHistory = [{ generatedAt: 1, type: 'password', value: 'previous-secret' }];
+    app.selectedOrganizationId = PERSONAL_VAULT_FILTER_ID;
+    app.pending = true;
+    const listener = enterprisePolicyMessageListener();
+
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    expect(app.route.name).toBe('dataOwnership');
+    expect(app.items).toEqual([]);
+    expect(app.accounts).toEqual([]);
+    expect(app.editorInput).toBeNull();
+    expect(app.generatorHistory).toEqual([]);
+    expect(app.selectedOrganizationId).toBeNull();
+    state = settledState;
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    await settle(app);
+
+    expect(app.route.name).toBe(expectedRoute);
+    expect(app.pending).toBe(false);
+    expect(app.shadowRoot!.querySelector('vw-cipher-editor')).toBeNull();
+    expect(getState.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('reloads the destination account and suggestions after an external account switch', async () => {
+    let email = 'first@example.com';
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.listAccounts': async () => ({ ok: true, data: { accounts: [{ email, active: true }] } }),
+      'vault.listItems': async () => ({
+        ok: true,
+        data: { items: [login({ id: email })], folders: [], collections: [], orgPermissions: [] },
+      }),
+      'autofill.getTabSuggestions': async () => ({
+        ok: true,
+        data: { outcome: { status: 'ready', suggestions: [] } },
+      }),
+    }), fakeBrowser());
+    await settle(app);
+    expect(app.accounts[0]?.email).toBe('first@example.com');
+    const listener = enterprisePolicyMessageListener();
+
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    expect(app.items).toEqual([]);
+    expect(app.accounts).toEqual([]);
+    email = 'second@example.com';
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    await settle(app);
+
+    expect(app.route.name).toBe('vault');
+    expect(app.accounts).toEqual([{ email: 'second@example.com', active: true }]);
+    expect(app.items.map((item) => item.id)).toEqual(['second@example.com']);
+    expect(app.suggestionsState.status).toBe('ready');
+  });
+
+  it('restores the unlocked workspace after a transition fails', async () => {
+    const getState = vi.fn(async () => ({ ok: true, data: { state: 'unlocked' } } as Res));
+    const app = await mountApp(fakeRequest({ ...UNLOCKED, 'auth.getState': getState }));
+    await settle(app);
+    const listener = enterprisePolicyMessageListener();
+
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    await settle(app);
+
+    expect(app.route.name).toBe('vault');
+    expect(app.items).toEqual([login()]);
+    expect(app.accounts).toEqual([{ email: 'me@x.dev', active: true }]);
+    expect(getState).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let a late unlocked state response override a newer logout notification', async () => {
+    const staleState = deferred<Res>();
+    const getState = vi.fn()
+      .mockResolvedValueOnce({ ok: true, data: { state: 'unlocked' } })
+      .mockImplementationOnce(() => staleState.promise)
+      .mockResolvedValue({ ok: true, data: { state: 'loggedOut' } });
+    const app = await mountApp(fakeRequest({ ...UNLOCKED, 'auth.getState': getState }));
+    await settle(app);
+    const listener = enterprisePolicyMessageListener();
+
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    expect(app.route.name).toBe('login');
+
+    staleState.resolve({ ok: true, data: { state: 'unlocked' } });
+    await settle(app);
+    expect(app.route.name).toBe('login');
+    expect(app.items).toEqual([]);
+    expect(app.accounts).toEqual([]);
+  });
+
+  it('ignores a stale post-switch route read when the destination account is locked externally', async () => {
+    const staleState = deferred<Res>();
+    const getState = vi.fn()
+      .mockResolvedValueOnce({ ok: true, data: { state: 'unlocked' } })
+      .mockImplementationOnce(() => staleState.promise)
+      .mockResolvedValue({ ok: true, data: { state: 'locked' } });
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.getState': getState,
+      'auth.switchAccount': async () => ({ ok: true, data: null }),
+    }));
+    await settle(app);
+    const listener = enterprisePolicyMessageListener();
+    view(app, 'vw-account-menu').dispatchEvent(new CustomEvent('vw-account-action', {
+      detail: { action: 'switch-account', email: 'second@example.com' }, bubbles: true, composed: true,
+    }));
+    await settle(app);
+    expect(getState).toHaveBeenCalledTimes(2);
+
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    expect(app.route.name).toBe('unlock');
+
+    staleState.resolve({ ok: true, data: { state: 'unlocked' } });
+    await settle(app);
+    expect(app.route.name).toBe('unlock');
+    expect(app.items).toEqual([]);
+  });
+
+  it('routes a settled restricted account to its password-change requirement', async () => {
+    const requirement = { schemaVersion: 1 as const, reason: 'adminForcePasswordReset' as const };
+    const getState = vi.fn()
+      .mockResolvedValueOnce({ ok: true, data: { state: 'unlocked' } })
+      .mockResolvedValue({ ok: true, data: { state: 'restricted', restriction: requirement } });
+    const app = await mountApp(fakeRequest({ ...UNLOCKED, 'auth.getState': getState }));
+    await settle(app);
+    const listener = enterprisePolicyMessageListener();
+
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    expect(app.route).toEqual({ name: 'restricted', requirement });
+    expect(app.items).toEqual([]);
+    expect(app.shadowRoot!.querySelector('vw-popup-header')).toBeNull();
+  });
+
+  it('clears a revoked workspace and reports an unavailable session read', async () => {
+    const getState = vi.fn()
+      .mockResolvedValueOnce({ ok: true, data: { state: 'unlocked' } })
+      .mockRejectedValue(new Error('Worker connection lost'));
+    const app = await mountApp(fakeRequest({ ...UNLOCKED, 'auth.getState': getState }));
+    await settle(app);
+    const listener = enterprisePolicyMessageListener();
+
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    expect(app.route).toEqual({ name: 'login', error: t('common.error') });
+    expect(app.items).toEqual([]);
+    expect(app.pending).toBe(false);
+  });
+
+  it('updates an idle unlock screen after an external logout', async () => {
+    const getState = vi.fn()
+      .mockResolvedValueOnce({ ok: true, data: { state: 'locked' } })
+      .mockResolvedValue({ ok: true, data: { state: 'loggedOut' } });
+    const app = await mountApp(fakeRequest({ ...UNLOCKED, 'auth.getState': getState }));
+    const listener = enterprisePolicyMessageListener();
+
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    expect(app.route.name).toBe('login');
+  });
+
+  it.each([
+    { usePin: false, settledState: 'locked', expectedRoute: 'unlock' },
+    { usePin: true, settledState: 'locked', expectedRoute: 'unlock' },
+    { usePin: false, settledState: 'loggedOut', expectedRoute: 'login' },
+    { usePin: true, settledState: 'loggedOut', expectedRoute: 'login' },
+  ] as const)('rejects a stale unlock success after external $settledState (PIN: $usePin)', async ({ usePin, settledState, expectedRoute }) => {
+    let state: SessionState = 'locked';
+    const unlockResponse = deferred<Res>();
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.getState': async () => ({ ok: true, data: { state } }),
+      'auth.unlock': () => unlockResponse.promise,
+      'auth.unlockWithPin': () => unlockResponse.promise,
+    }));
+    const listener = enterprisePolicyMessageListener();
+    view(app, 'vw-auth-views').dispatchEvent(new CustomEvent(
+      usePin ? 'vw-auth-pin-unlock-submit' : 'vw-auth-unlock-submit',
+      { detail: usePin ? { pin: '1234' } : { masterPassword: 'password' } },
+    ));
+
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    state = 'unlocked';
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    expect(app.route.name).toBe('unlock');
+    expect(app.pending).toBe(true);
+
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    state = settledState;
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    expect(app.route.name).toBe(expectedRoute);
+
+    unlockResponse.resolve({ ok: true, data: null });
+    await settle(app);
+    expect(app.route.name).toBe(expectedRoute);
+    expect(app.pending).toBe(false);
+    expect(app.items).toEqual([]);
+    expect(app.accounts).toEqual([]);
+  });
+
+  it.each([false, true])('preserves a failed unlock error after its locked notification (PIN: %s)', async (usePin) => {
+    const unlockResponse = deferred<Res>();
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.getState': async () => ({ ok: true, data: { state: 'locked' } }),
+      'auth.unlock': () => unlockResponse.promise,
+      'auth.unlockWithPin': () => unlockResponse.promise,
+    }));
+    const listener = enterprisePolicyMessageListener();
+    view(app, 'vw-auth-views').dispatchEvent(new CustomEvent(
+      usePin ? 'vw-auth-pin-unlock-submit' : 'vw-auth-unlock-submit',
+      { detail: usePin ? { pin: 'wrong' } : { masterPassword: 'wrong' } },
+    ));
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+
+    unlockResponse.resolve({
+      ok: false,
+      error: { code: usePin ? 'invalid_pin' : 'error', message: 'Incorrect password' },
+    });
+    await settle(app);
+    expect(app.route).toEqual({
+      name: 'unlock',
+      error: usePin ? t('auth.invalidPin') : 'Incorrect password',
+    });
+    expect(app.pending).toBe(false);
+  });
+
+  it('does not cancel an unlock when an ordinary policy refresh still observes the locked state', async () => {
+    const unlockResponse = deferred<Res>();
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.getState': async () => ({ ok: true, data: { state: 'locked' } }),
+      'auth.unlock': () => unlockResponse.promise,
+    }));
+    view(app, 'vw-auth-views').dispatchEvent(new CustomEvent('vw-auth-unlock-submit', {
+      detail: { masterPassword: 'password' },
+    }));
+    enterprisePolicyMessageListener()({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    expect(app.pending).toBe(true);
+
+    unlockResponse.resolve({ ok: true, data: null });
+    await settle(app);
+    expect(app.route.name).toBe('vault');
+    expect(app.pending).toBe(false);
+  });
+
+  it.each([false, true])('rechecks a transient locked observation before completing a successful unlock (PIN: %s)', async (usePin) => {
+    let state: SessionState = 'locked';
+    const unlockResponse = deferred<Res>();
+    const continuationId = '44444444-4444-4444-8444-444444444444';
+    const resume = vi.fn(async () => ({ ok: true as const, data: { status: 'started' as const } }));
+    const close = vi.spyOn(window, 'close').mockImplementation(() => undefined);
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.getState': async () => ({ ok: true, data: { state } }),
+      'auth.unlock': () => unlockResponse.promise,
+      'auth.unlockWithPin': () => unlockResponse.promise,
+      'autofill.continuation.status': async () => ({
+        ok: true,
+        data: { status: 'unlock_required', continuationId, channel: 'keyboard', expiresAt: Date.now() + 30_000 },
+      }),
+      'autofill.continuation.resumeUnlock': resume,
+    }));
+    view(app, 'vw-auth-views').dispatchEvent(new CustomEvent(
+      usePin ? 'vw-auth-pin-unlock-submit' : 'vw-auth-unlock-submit',
+      { detail: usePin ? { pin: '1234' } : { masterPassword: 'password' } },
+    ));
+    const listener = enterprisePolicyMessageListener();
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+
+    expect(resume).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    state = 'unlocked';
+    unlockResponse.resolve({ ok: true, data: null });
+    await settle(app);
+    expect(resume).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    expect(app.pending).toBe(false);
+  });
+
+  it('keeps an external logout after a delayed popup-owned lock reply', async () => {
+    let state: SessionState = 'unlocked';
+    const lockResponse = deferred<Res>();
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.getState': async () => ({ ok: true, data: { state } }),
+      'auth.lock': () => lockResponse.promise,
+    }));
+    const listener = enterprisePolicyMessageListener();
+    view(app, 'vw-popup-header').dispatchEvent(new CustomEvent('vw-lock', {
+      bubbles: true, composed: true,
+    }));
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    state = 'locked';
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    expect(app.route.name).toBe('unlock');
+
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    state = 'loggedOut';
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    expect(app.route.name).toBe('login');
+
+    lockResponse.resolve({ ok: true, data: null });
+    await settle(app);
+    expect(app.route.name).toBe('login');
+    expect(app.pending).toBe(false);
+  });
+
+  it('preserves a newer unlock continuation while an older lock reply settles', async () => {
+    let state: SessionState = 'unlocked';
+    const lockResponse = deferred<Res>();
+    const unlockResponse = deferred<Res>();
+    const continuationId = '33333333-3333-4333-8333-333333333333';
+    const resume = vi.fn(async () => ({ ok: true as const, data: { status: 'started' as const } }));
+    const close = vi.spyOn(window, 'close').mockImplementation(() => undefined);
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.getState': async () => ({ ok: true, data: { state } }),
+      'auth.lock': () => lockResponse.promise,
+      'auth.unlock': () => unlockResponse.promise,
+      'autofill.continuation.resumeUnlock': resume,
+    }));
+    const listener = enterprisePolicyMessageListener();
+    view(app, 'vw-popup-header').dispatchEvent(new CustomEvent('vw-lock', {
+      bubbles: true, composed: true,
+    }));
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    state = 'locked';
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+    (app as unknown as { autofillContinuation: unknown }).autofillContinuation = {
+      status: 'unlock_required', continuationId, channel: 'keyboard', expiresAt: Date.now() + 30_000,
+    };
+    view(app, 'vw-auth-views').dispatchEvent(new CustomEvent('vw-auth-unlock-submit', {
+      detail: { masterPassword: 'password' },
+    }));
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    state = 'unlocked';
+    listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    await settle(app);
+
+    lockResponse.resolve({ ok: true, data: null });
+    await settle(app);
+    expect(app.route.name).toBe('unlock');
+    expect(app.pending).toBe(true);
+    expect(resume).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+
+    unlockResponse.resolve({ ok: true, data: null });
+    await settle(app);
+    expect(resume).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    expect(app.pending).toBe(false);
+  });
+
+  it('preserves the popup-owned lock and unlock flow when both emit lifecycle notifications', async () => {
+    let state: SessionState = 'unlocked';
+    const transition = (next: SessionState): void => {
+      listener({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+      state = next;
+      listener({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
+    };
+    const app = await mountApp(fakeRequest({
+      ...UNLOCKED,
+      'auth.getState': async () => ({ ok: true, data: { state } }),
+      'auth.lock': async () => {
+        transition('locked');
+        return { ok: true, data: null };
+      },
+      'auth.unlock': async () => {
+        transition('unlocked');
+        return { ok: true, data: { state: 'unlocked' } };
+      },
+    }));
+    const listener = enterprisePolicyMessageListener();
+    view(app, 'vw-popup-header').dispatchEvent(new CustomEvent('vw-lock', {
+      bubbles: true, composed: true,
+    }));
+    await settle(app);
+    expect(app.route.name).toBe('unlock');
+
+    view(app, 'vw-auth-views').dispatchEvent(new CustomEvent('vw-auth-unlock-submit', {
+      detail: { masterPassword: 'password' },
+    }));
+    await settle(app);
+    await settle(app);
+    expect(app.route.name).toBe('vault');
+    expect(app.items).toEqual([login()]);
+    expect(app.pending).toBe(false);
+  });
+});
+
 describe('vw-popup-app sync bar', () => {
   it('syncs on demand and refreshes the scheduler-owned successful time', async () => {
     const sync = vi.fn(async () => ({ ok: true as const, data: { items: [login()], folders: [], collections: [], orgPermissions: [] } }));
@@ -5339,11 +5810,16 @@ describe('vw-popup-app scheduler status', () => {
   it('discards a sync-status response from the workspace that was locked', async () => {
     const pendingStatus = deferred<Res>();
     const opened = deferred<Res>();
+    let state: SessionState = 'unlocked';
     const app = await mountApp(fakeRequest({
       ...UNLOCKED,
+      'auth.getState': async () => ({ ok: true, data: { state } }),
       'vault.popupOpened': () => opened.promise,
       'vault.getSyncStatus': () => pendingStatus.promise,
-      'auth.lock': async () => ({ ok: true, data: null }),
+      'auth.lock': async () => {
+        state = 'locked';
+        return { ok: true, data: null };
+      },
     }));
     view(app, 'vw-popup-header').dispatchEvent(new CustomEvent('vw-lock', { bubbles: true, composed: true }));
     await settle(app);
@@ -6434,6 +6910,130 @@ describe('vw-popup-app locked website passkey continuation', () => {
     await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
     expect(close).toHaveBeenCalled();
     close.mockRestore();
+  });
+});
+
+describe('vw-popup-app binary file transport', () => {
+  async function openSends(app: VwPopupApp): Promise<void> {
+    view(app, 'vw-tools-menu').dispatchEvent(new CustomEvent('vw-tool-action', {
+      detail: { action: 'sends' }, bubbles: true, composed: true,
+    }));
+    await settle(app);
+  }
+
+  function createFileSend(app: VwPopupApp, file: File): void {
+    view(app, 'vw-sends-view').dispatchEvent(new CustomEvent('vw-send-create', {
+      detail: { kind: 'file', input: { name: file.name }, fileName: file.name, file },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  it('passes a large selected File to the binary transport without using the whole-file RPC', async () => {
+    const request = vi.fn(fakeRequest(UNLOCKED));
+    const app = await mountApp(request);
+    const transfer = vi.fn<typeof app.uploadBinaryTransfer>().mockResolvedValue({ ok: true, data: null });
+    app.uploadBinaryTransfer = transfer;
+    await openSends(app);
+    const file = new File(['small backing'], 'large.bin');
+    Object.defineProperty(file, 'size', { value: 100 * 1024 * 1024 });
+    const read = vi.spyOn(file, 'arrayBuffer');
+
+    createFileSend(app, file);
+    expect(app.pending).toBe(true);
+    await settle(app);
+
+    expect(transfer).toHaveBeenCalledWith({
+      type: 'sends.createFile', input: { name: 'large.bin' }, fileName: 'large.bin', expectedBytes: 100 * 1024 * 1024,
+    }, file, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(request.mock.calls.some(([message]) => message.type === 'sends.createFile')).toBe(false);
+    expect(read).not.toHaveBeenCalled();
+    expect(app.pending).toBe(false);
+    expect(app.toolStatus?.tone).toBe('success');
+  });
+
+  it('uploads an attachment through the binary transport and refreshes its detail', async () => {
+    const getDetail = vi.fn(async () => ({ ok: true as const, data: { cipher: login() } }));
+    const request = vi.fn(fakeRequest({ ...UNLOCKED, 'vault.getCipherDetail': getDetail }));
+    const app = await mountApp(request);
+    const transfer = vi.fn<typeof app.uploadBinaryTransfer>().mockResolvedValue({
+      ok: true, data: { items: [login()], folders: [], collections: [], orgPermissions: [] },
+    });
+    app.uploadBinaryTransfer = transfer;
+    view(app, 'vw-vault-view').dispatchEvent(new CustomEvent('vw-item-open', {
+      detail: { cipherId: 'c1' }, bubbles: true, composed: true,
+    }));
+    await settle(app);
+    const file = new File(['attachment'], 'note.txt');
+    view(app, 'vw-item-detail').dispatchEvent(new CustomEvent('vw-attachment-add', {
+      detail: { cipherId: 'c1', fileName: file.name, file }, bubbles: true, composed: true,
+    }));
+    await settle(app);
+
+    expect(transfer).toHaveBeenCalledWith({
+      type: 'vault.addAttachment', cipherId: 'c1', fileName: 'note.txt', expectedBytes: file.size,
+    }, file, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(request.mock.calls.some(([message]) => message.type === 'vault.addAttachment')).toBe(false);
+    expect(getDetail).toHaveBeenCalledTimes(2);
+    expect(app.detailStatus?.tone).toBe('success');
+  });
+
+  it('downloads the Blob returned by the attachment transport directly', async () => {
+    const blob = new Blob(['attachment']);
+    const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:attachment');
+    const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    try {
+      const request = vi.fn(fakeRequest({
+        ...UNLOCKED,
+        'vault.getCipherDetail': async () => ({ ok: true, data: { cipher: login() } }),
+      }));
+      const app = await mountApp(request);
+      const transfer = vi.fn<typeof app.downloadBinaryTransfer>().mockResolvedValue({ ok: true, data: { blob, fileName: 'note.txt' } });
+      app.downloadBinaryTransfer = transfer;
+      view(app, 'vw-vault-view').dispatchEvent(new CustomEvent('vw-item-open', {
+        detail: { cipherId: 'c1' }, bubbles: true, composed: true,
+      }));
+      await settle(app);
+      view(app, 'vw-item-detail').dispatchEvent(new CustomEvent('vw-attachment-download', {
+        detail: { cipherId: 'c1', attachmentId: 'attachment-1', fileName: 'note.txt' }, bubbles: true, composed: true,
+      }));
+      await settle(app);
+
+      expect(transfer).toHaveBeenCalledWith({
+        type: 'vault.getAttachment', cipherId: 'c1', attachmentId: 'attachment-1',
+      }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      expect(createUrl).toHaveBeenCalledWith(blob);
+      expect(revokeUrl).toHaveBeenCalledWith('blob:attachment');
+      expect(request.mock.calls.some(([message]) => message.type === 'vault.getAttachment')).toBe(false);
+      expect(app.detailStatus?.tone).toBe('success');
+    } finally {
+      createUrl.mockRestore();
+      revokeUrl.mockRestore();
+      click.mockRestore();
+    }
+  });
+
+  it.each(['disconnect', 'session revoke'] as const)('cancels a file transfer on %s and ignores a late result', async (reason) => {
+    const app = await mountApp(fakeRequest(UNLOCKED));
+    const pending = deferred<Awaited<ReturnType<typeof app.uploadBinaryTransfer>>>();
+    const transfer = vi.fn<typeof app.uploadBinaryTransfer>().mockReturnValue(pending.promise);
+    app.uploadBinaryTransfer = transfer;
+    await openSends(app);
+    createFileSend(app, new File(['content'], 'note.txt'));
+    const signal = transfer.mock.calls[0]?.[2]?.signal;
+    expect(signal?.aborted).toBe(false);
+
+    if (reason === 'disconnect') app.remove();
+    else enterprisePolicyMessageListener()({ type: 'enterprisePolicy.clientChanged', phase: 'revoke' });
+    expect(signal?.aborted).toBe(true);
+    app.pending = true;
+    pending.resolve({ ok: true, data: { send: { url: 'https://stale.example' } } });
+    await settle(app);
+
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(app.pending).toBe(true);
+    expect(app.toolStatus).toBeUndefined();
   });
 });
 

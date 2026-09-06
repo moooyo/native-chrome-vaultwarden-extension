@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { base64ToBytes, fileToBase64, formatTotp, safeWebUrl, triggerDownload } from './utils.js';
+import { base64ToBytes, fileToBase64, formatTotp, safeWebUrl, triggerBlobDownload, triggerDownload } from './utils.js';
 
 describe('safeWebUrl', () => {
   it('returns a normalized url for http and https', () => {
@@ -110,5 +110,17 @@ describe('triggerDownload', () => {
     expect(createSpy).toHaveBeenCalledTimes(1);
     expect(clickSpy).toHaveBeenCalledTimes(1);
     expect(revokeSpy).toHaveBeenCalledWith(created);
+  });
+
+  it('uses an existing Blob and revokes its URL even if clicking fails', () => {
+    const blob = new Blob(['existing']);
+    const createSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:existing');
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => { throw new Error('Download unavailable'); });
+
+    expect(() => triggerBlobDownload(blob, 'file.txt')).toThrow('Download unavailable');
+    expect(createSpy).toHaveBeenCalledWith(blob);
+    expect(revokeSpy).toHaveBeenCalledWith('blob:existing');
+    expect(document.querySelector('a')).toBeNull();
   });
 });

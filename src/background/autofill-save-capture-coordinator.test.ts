@@ -167,6 +167,20 @@ async function activateRuntime(
   expect(activated).toBe(true);
 }
 
+async function runtimeAuthority(
+  coordinator: AutofillSaveCaptureCoordinator,
+  input: AutofillPendingSaveInput = INPUT,
+) {
+  const authority = await coordinator.captureRuntimeAuthority(
+    input.tabId,
+    input.frameId,
+    input.sourceDocumentId,
+    input.runtimeIncarnation,
+  );
+  expect(authority).toBeDefined();
+  return authority!;
+}
+
 async function stageCapture(
   coordinator: AutofillSaveCaptureCoordinator,
   input: AutofillPendingSaveInput = INPUT,
@@ -262,6 +276,139 @@ async function claim(
 }
 
 describe('AutofillSaveCaptureCoordinator', () => {
+  it('asserts a captured runtime without storage reads or clock observations', async () => {
+    const f = fixture();
+    const coordinator = f.make();
+    await activateRuntime(coordinator);
+    const authority = await runtimeAuthority(coordinator);
+    const read = vi.spyOn(f.store, 'get');
+    f.setNow(-1);
+
+    expect(() => authority.assertCurrent()).not.toThrow();
+    expect(() => authority.assertCurrent()).not.toThrow();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['global clear', (coordinator: AutofillSaveCaptureCoordinator) => coordinator.clear()],
+    ['tab clear', (coordinator: AutofillSaveCaptureCoordinator) => coordinator.clearTab(INPUT.tabId)],
+    ['navigation', (coordinator: AutofillSaveCaptureCoordinator) => (
+      coordinator.noteDocumentNavigation(INPUT.tabId, INPUT.frameId, 'replacement-document')
+    )],
+    ['runtime replacement', (coordinator: AutofillSaveCaptureCoordinator) => coordinator.activateRuntime({
+      tabId: INPUT.tabId,
+      frameId: INPUT.frameId,
+      documentId: INPUT.sourceDocumentId,
+      frameUrl: INPUT.sourceUrl,
+      runtimeIncarnation: RUNTIME_B,
+      previousRuntimeIncarnation: RUNTIME_A,
+    })],
+  ] as const)('synchronously revokes runtime authority before %s reaches storage', async (_label, revoke) => {
+    const f = fixture();
+    const coordinator = f.make();
+    await activateRuntime(coordinator);
+    const authority = await runtimeAuthority(coordinator);
+
+    const revoked = revoke(coordinator);
+
+    expect(() => authority.assertCurrent()).toThrow('Save-capture runtime authority changed');
+    await revoked;
+    expect(() => authority.assertCurrent()).toThrow('Save-capture runtime authority changed');
+  });
+
+  it('does not revive an old authority when the same runtime is activated after clear', async () => {
+    const f = fixture();
+    const coordinator = f.make();
+    await activateRuntime(coordinator);
+    const authority = await runtimeAuthority(coordinator);
+    await coordinator.clear();
+    await activateRuntime(coordinator);
+    const replacementAuthority = await runtimeAuthority(coordinator);
+
+    expect(() => authority.assertCurrent()).toThrow('Save-capture runtime authority changed');
+    expect(() => replacementAuthority.assertCurrent()).not.toThrow();
+  });
+
+  it('preserves unrelated frame authority and revokes all children on top-document navigation', async () => {
+    const f = fixture();
+    const coordinator = f.make();
+    const child = { ...INPUT, frameId: 1, sourceDocumentId: 'child-document', runtimeIncarnation: RUNTIME_B };
+    const sibling = { ...INPUT, frameId: 2, sourceDocumentId: 'sibling-document', runtimeIncarnation: RUNTIME_C };
+    await activateRuntime(coordinator);
+    await activateRuntime(coordinator, child);
+    await activateRuntime(coordinator, sibling);
+    const topAuthority = await runtimeAuthority(coordinator);
+    const childAuthority = await runtimeAuthority(coordinator, child);
+    const siblingAuthority = await runtimeAuthority(coordinator, sibling);
+
+    const childNavigation = coordinator.noteDocumentNavigation(INPUT.tabId, child.frameId, 'new-child');
+    expect(() => childAuthority.assertCurrent()).toThrow('Save-capture runtime authority changed');
+    expect(() => topAuthority.assertCurrent()).not.toThrow();
+    expect(() => siblingAuthority.assertCurrent()).not.toThrow();
+    await childNavigation;
+    await coordinator.clearTab(INPUT.tabId + 1);
+    expect(() => siblingAuthority.assertCurrent()).not.toThrow();
+
+    const topNavigation = coordinator.noteDocumentNavigation(INPUT.tabId, 0, 'new-top');
+    expect(() => topAuthority.assertCurrent()).toThrow('Save-capture runtime authority changed');
+    expect(() => siblingAuthority.assertCurrent()).toThrow('Save-capture runtime authority changed');
+    await topNavigation;
+  });
+
+  it.each(['reading', 'queued'] as const)(
+    'rejects a runtime observation when clear overtakes its %s acquisition',
+    async (phase) => {
+      const f = fixture();
+      const coordinator = f.make();
+      await activateRuntime(coordinator);
+      const readEntered = deferred();
+      const releaseRead = deferred();
+      const read = f.store.get.bind(f.store);
+      let intercepted = false;
+      vi.spyOn(f.store, 'get').mockImplementation(async <T>(key: string): Promise<T | undefined> => {
+        const value = await read<T>(key);
+        if (key === AUTOFILL_SAVE_CAPTURE_NETWORK_STORAGE_KEY && !intercepted) {
+          intercepted = true;
+          readEntered.resolve();
+          await releaseRead.promise;
+        }
+        return value;
+      });
+      const capture = () => coordinator.captureRuntimeAuthority(
+        INPUT.tabId, INPUT.frameId, INPUT.sourceDocumentId, INPUT.runtimeIncarnation,
+      );
+      const preceding = phase === 'queued' ? coordinator.reconcile() : undefined;
+      const acquired = phase === 'reading' ? capture() : undefined;
+      await readEntered.promise;
+      const authority = acquired ?? capture();
+      const cleared = coordinator.clear();
+      releaseRead.resolve();
+
+      await expect(authority).resolves.toBeUndefined();
+      await preceding;
+      await cleared;
+    },
+  );
+
+  it.each(['missing', 'corrupt', 'unreadable'] as const)(
+    'revokes old runtime authority when the persisted journal becomes %s',
+    async (failure) => {
+      const f = fixture();
+      const coordinator = f.make();
+      await activateRuntime(coordinator);
+      const authority = await runtimeAuthority(coordinator);
+      if (failure === 'unreadable') {
+        vi.spyOn(f.store, 'get').mockRejectedValueOnce(new Error('journal unavailable'));
+        await expect(coordinator.reconcile()).rejects.toThrow('journal unavailable');
+      } else {
+        await f.store.set(AUTOFILL_SAVE_CAPTURE_NETWORK_STORAGE_KEY, failure === 'missing' ? undefined : {});
+        await coordinator.reconcile();
+      }
+
+      expect(() => authority.assertCurrent()).toThrow('Save-capture runtime authority changed');
+    },
+  );
+
   it('publishes only after one exact native request succeeds and its correlation window closes', async () => {
     const f = fixture();
     const coordinator = f.make();
@@ -1841,13 +1988,30 @@ describe('AutofillSaveCaptureCoordinator', () => {
       sourceDocumentId: 'd'.repeat(1_200),
     };
     await activateRuntime(coordinator, oversizedInput);
+    const authority = await runtimeAuthority(coordinator, oversizedInput);
+    const blockedWriteEntered = deferred();
+    const releaseBlockedWrite = deferred();
+    const write = f.store.set.bind(f.store);
+    vi.spyOn(f.store, 'set').mockImplementation(async (key: string, value: unknown): Promise<void> => {
+      if (key === AUTOFILL_SAVE_CAPTURE_NETWORK_STORAGE_KEY
+          && (value as { runtimeFenceUntil?: number }).runtimeFenceUntil! > f.now()) {
+        blockedWriteEntered.resolve();
+        await releaseBlockedWrite.promise;
+      }
+      await write(key, value);
+    });
 
-    await expect(coordinator.stage(
+    const staging = coordinator.stage(
       oversizedInput,
       CREDENTIALS,
       userKey(),
       { kind: 'formless' },
-    )).rejects.toThrow(/capacity/);
+    );
+    await blockedWriteEntered.promise;
+    expect(() => authority.assertCurrent()).toThrow('Save-capture runtime authority changed');
+    const rejected = expect(staging).rejects.toThrow(/capacity/);
+    releaseBlockedWrite.resolve();
+    await rejected;
 
     const journal = f.store.peek(AUTOFILL_SAVE_CAPTURE_NETWORK_STORAGE_KEY) as {
       schemaVersion: number;

@@ -235,6 +235,10 @@ export class SessionManager {
 
   /** Run one-way session-storage migration before the background worker accepts requests. */
   async initialize(): Promise<void> {
+    await this.runAccountRegistryMutation(() => this.initializeWithinRegistryMutation());
+  }
+
+  private async initializeWithinRegistryMutation(): Promise<void> {
     await this.clearLegacySessionSecrets();
     const auth = await this.getActiveAuth();
     const stored = await this.deps.sessionStore.get<unknown>(SESSION_SECRETS_KEY);
@@ -247,7 +251,9 @@ export class SessionManager {
         || secrets.owner !== auth.email
         || secrets.sessionBindingId !== auth.sessionBindingId
       ) {
-        if (auth?.restriction || auth?.sessionBindingId) await this.clearActiveSessionBinding();
+        if (auth?.restriction || auth?.sessionBindingId) {
+          await this.clearActiveSessionBindingWithinRegistryMutation();
+        }
         await this.deps.sessionStore.remove(SESSION_SECRETS_KEY);
       }
     } finally {
@@ -708,10 +714,17 @@ export class SessionManager {
         registry.storedAccounts[account.email] = storedAccount;
         registry.sessionTokens[tokenBindingId] = sessionAuthTokens(account, storedAccount);
       }
-      if (moved.length === 0 && reclassified.length === 0) {
+      const activeAccount = active ? registry.storedAccounts[active.email] : undefined;
+      // An older worker may have restored the pre-migration local copy while locking. Repair only
+      // that exact credential generation; unrelated inconsistencies still fail closed at startup.
+      const repairActiveCopy = active && activeAccount
+        && isLocalBackedAuth(active)
+        && isSessionBackedAuth(activeAccount)
+        && storedAuthMatchesTokenLease(active, activeAccount)
+        && samePersistedAuth(active, registry.accounts[active.email]!);
+      if (moved.length === 0 && reclassified.length === 0 && !repairActiveCopy) {
         return Object.freeze({ moved: Object.freeze([]), reclassified: Object.freeze([]) });
       }
-      const activeAccount = active ? registry.storedAccounts[active.email] : undefined;
       const nextActive = activeAccount
         ? withStoredSessionBinding(activeAccount, active?.sessionBindingId)
         : undefined;
@@ -829,11 +842,16 @@ export class SessionManager {
   }
 
   async lock(): Promise<void> {
+    await this.runAccountRegistryMutation(() => this.lockWithinRegistryMutation());
+  }
+
+  /** Lock without re-entering the registry queue when an account mutation already owns it. */
+  private async lockWithinRegistryMutation(): Promise<void> {
     const auth = await this.getActiveAuth();
     if (auth?.sessionBindingId) {
       // Revoke the local half first. A reader that already loaded the bundle will fail its final
       // active-auth check even if this operation is interrupted before session storage is cleared.
-      await this.clearActiveSessionBinding();
+      await this.clearActiveSessionBindingWithinRegistryMutation();
     }
     await this.deps.sessionStore.remove(SESSION_SECRETS_KEY);
     await this.clearLegacySessionSecrets();
@@ -904,7 +922,7 @@ export class SessionManager {
     await this.mutateAccountRegistry(async (registry) => {
       const target = registry.storedAccounts[email];
       if (!target) throw new Error('unknown account');
-      await this.lock();
+      await this.lockWithinRegistryMutation();
       await this.deps.localStore.set(AUTH_KEY, stripStoredSessionBinding(target));
     });
   }
@@ -918,7 +936,7 @@ export class SessionManager {
       delete registry.accounts[email];
       delete registry.storedAccounts[email];
       if (wasActive) {
-        await this.lock();
+        await this.lockWithinRegistryMutation();
         await this.removePinProtectedUserKey(email);
         await this.persistAccountsAndActivate(registry);
       } else {
@@ -1347,7 +1365,7 @@ export class SessionManager {
     );
   }
 
-  private async clearActiveSessionBinding(): Promise<void> {
+  private async clearActiveSessionBindingWithinRegistryMutation(): Promise<void> {
     const raw = await this.deps.localStore.get<unknown>(AUTH_KEY);
     if (raw === undefined || raw === null) return;
     const active = parseStoredPersistedAuth(raw);
@@ -1464,7 +1482,7 @@ export class SessionManager {
   private async logoutWithinRegistryMutation(
     registry: AccountRegistrySnapshot,
   ): Promise<void> {
-    await this.lock();
+    await this.lockWithinRegistryMutation();
     const active = (await this.getPersistedAuth())?.email;
     if (active) {
       await this.removePinProtectedUserKey(active);
@@ -1886,12 +1904,14 @@ export class SessionManager {
   async lockIfCurrentSessionBinding(
     expected: { readonly email: string; readonly sessionBindingId: string },
   ): Promise<boolean> {
-    const active = await this.getActiveAuth();
-    if (active?.email !== expected.email || active.sessionBindingId !== expected.sessionBindingId) {
-      return false;
-    }
-    await this.lock();
-    return true;
+    return this.runAccountRegistryMutation(async () => {
+      const active = await this.getActiveAuth();
+      if (active?.email !== expected.email || active.sessionBindingId !== expected.sessionBindingId) {
+        return false;
+      }
+      await this.lockWithinRegistryMutation();
+      return true;
+    });
   }
 
   /**

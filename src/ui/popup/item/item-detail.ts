@@ -42,7 +42,7 @@ import type {
   TotpSnapshot,
   VaultMode,
 } from '../types.js';
-import { fileToBase64, safeWebUrl } from '../utils.js';
+import { safeWebUrl } from '../utils.js';
 import '../../components/dialog.js';
 import '../../components/status-message.js';
 import '../../components/totp-meter.js';
@@ -660,12 +660,14 @@ export class VwItemDetail extends LitElement {
     this.localStatus = undefined;
     this.requestUpdate();
     try {
-      const dataB64 = await fileToBase64(file, MAX_ATTACHMENT_FILE_BYTES);
+      if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > MAX_ATTACHMENT_FILE_BYTES) {
+        throw new RangeError('The attachment exceeds the allowed size.');
+      }
       if (!this.isCurrent(context)) return;
       this.dispatch<AttachmentAddDetail>('vw-attachment-add', {
         cipherId: context.cipherId,
         fileName: file.name,
-        dataB64,
+        file,
       });
     } catch {
       if (this.isCurrent(context)) {

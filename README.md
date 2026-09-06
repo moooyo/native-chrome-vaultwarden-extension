@@ -87,7 +87,12 @@ npm test               # unit tests (vitest)
 npm run build          # dev build with sourcemaps
 npm run test:ui        # smoke the built extension in real Chromium (0 console errors)
 npm run verify:autofill-browser # BFCache, closed-shadow, and autofill browser gate (no backend)
+npm run verify:binary-transport-browser # large files, backpressure, and revocation (isolated backend fixture)
 ```
+
+See [Architecture and security boundaries](docs/architecture.md) before changing session storage,
+secret-response handling, or cross-context file transfers. Run verification on the environment
+required by `AGENTS.md`.
 
 Live / end-to-end checks (`test/live/`, `npm run verify:e2e`, `npm run seed:testvault`) need a
 Vaultwarden test server you configure yourself via `MIYU_SERVER` / `MIYU_EMAIL` / `MIYU_PASSWORD`.

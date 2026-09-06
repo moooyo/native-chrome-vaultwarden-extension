@@ -1,4 +1,4 @@
-import { LitElement, css, html, nothing } from 'lit';
+import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import browser from 'webextension-polyfill';
 import { sendRequest } from '../../messaging/protocol.js';
 import { WEBSITE_PASSKEY_SCRIPT_MATCHES } from '../../background/website-passkey-script-manager.js';
@@ -30,6 +30,7 @@ import type { AsyncState } from '../components/async-state.js';
 import { initLocale, t } from '../i18n/index.js';
 import { initAppearance } from '../theme.js';
 import { initPrefs } from '../prefs.js';
+import { uploadBinaryTransfer } from '../binary-transfer-client.js';
 import './options-shell.js';
 import type { OptionsNavItem } from './options-shell.js';
 import './sections/connection-section.js';
@@ -181,6 +182,7 @@ function normalizeLoadedSettings(data: unknown): LoadedSettings {
 function createDefaultDeps(): OptionsDeps {
   return {
     request: sendRequest,
+    uploadBinaryTransfer,
     getCommands: () => browser.commands.getAll(),
     async openShortcutSettings() {
       await browser.tabs.create({ url: 'chrome://extensions/shortcuts' });
@@ -442,6 +444,7 @@ export class VwOptionsApp extends LitElement {
   private transferPending = false;
   private recoveryEpoch = 0;
   private sendStatusEpoch = 0;
+  private readonly binaryTransferControllers = new Set<AbortController>();
   private sessionState: SessionState = 'locked';
   private sessionEpoch = 0;
   private sessionRefreshSeq = 0;
@@ -516,6 +519,10 @@ export class VwOptionsApp extends LitElement {
     this.applySessionState('locked');
   }
 
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has('locked') && this.locked) this.abortBinaryTransfers();
+  }
+
   private readonly handleWindowFocus = (): void => {
     this.scheduleSessionAndAccountRefresh();
     void this.refreshSettings();
@@ -574,6 +581,7 @@ export class VwOptionsApp extends LitElement {
     if (changed) {
       this.sessionState = state;
       this.sessionEpoch += 1;
+      this.abortBinaryTransfers();
     }
     this.locked = state !== 'unlocked';
     if (state === 'unlocked') {
@@ -633,6 +641,7 @@ export class VwOptionsApp extends LitElement {
   }
 
   private clearSessionSensitiveState(): void {
+    this.abortBinaryTransfers();
     this.sendStatusEpoch += 1;
     this.sendsState = { status: 'idle' };
     this.sendStatus = undefined;
@@ -1137,12 +1146,19 @@ export class VwOptionsApp extends LitElement {
     this.sendStatusEpoch += 1;
     this.pending = true;
     this.sendStatus = undefined;
+    const detail = event.detail;
+    const controller = detail.kind === 'file' ? new AbortController() : undefined;
+    if (controller) this.binaryTransferControllers.add(controller);
     try {
-      const detail = event.detail;
       const response = detail.kind === 'text'
         ? await this.deps.request({ type: 'sends.createText', input: detail.input })
-        : await this.deps.request({ type: 'sends.createFile', input: detail.input, dataB64: detail.dataB64, fileName: detail.fileName });
-      if (!this.isCurrentUnlockedEpoch(epoch)) return;
+        : await (this.deps.uploadBinaryTransfer ?? uploadBinaryTransfer)({
+          type: 'sends.createFile',
+          input: detail.input,
+          fileName: detail.fileName,
+          expectedBytes: detail.file.size,
+        }, detail.file, { signal: controller!.signal });
+      if (controller?.signal.aborted || !this.isCurrentUnlockedEpoch(epoch)) return;
       if (!response.ok) {
         this.sendStatus = { message: response.error.message, tone: 'danger' };
         return;
@@ -1150,7 +1166,7 @@ export class VwOptionsApp extends LitElement {
       const send = (response.data as { send?: SendSummary } | null)?.send;
       if (send) {
         const copied = await this.copyToClipboard(send.url);
-        if (!this.isCurrentUnlockedEpoch(epoch)) return;
+        if (controller?.signal.aborted || !this.isCurrentUnlockedEpoch(epoch)) return;
         this.sendStatus = copied
           ? { message: t('send.createdCopied'), tone: 'success' }
           : { message: t('send.createdCopyFailed'), tone: 'warning' };
@@ -1159,8 +1175,15 @@ export class VwOptionsApp extends LitElement {
       }
       await this.loadSends();
     } finally {
-      this.pending = false;
+      if (!controller || this.binaryTransferControllers.delete(controller)) this.pending = false;
     }
+  }
+
+  private abortBinaryTransfers(): void {
+    const controllers = [...this.binaryTransferControllers];
+    this.binaryTransferControllers.clear();
+    for (const controller of controllers) controller.abort();
+    if (controllers.length > 0) this.pending = false;
   }
 
   private async handleSendDelete(event: CustomEvent<SendDeleteDetail>): Promise<void> {

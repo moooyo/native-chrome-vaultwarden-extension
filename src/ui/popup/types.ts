@@ -335,11 +335,11 @@ export interface AttachmentRefDetail {
   fileName: string;
 }
 
-/** `vw-attachment-add` detail: a chosen file already read to base64 by the detail component. */
+/** `vw-attachment-add` detail: the selected file, read in bounded slices by the root. */
 export interface AttachmentAddDetail {
   cipherId: string;
   fileName: string;
-  dataB64: string;
+  file: File;
 }
 
 /** The status banner the root drives on the detail (copy/reveal/attachment feedback). */
@@ -412,11 +412,10 @@ export interface HealthEntry {
  *  `idle` = not checked yet; `loading` = check in flight; `ready` carries the per-id breach counts. */
 export type PwnedState = AsyncState<ReadonlyMap<string, number>>;
 
-/** `vw-send-create` detail: a text or file Send the root creates. The file variant carries the
- *  already-read base64 bytes so the root only performs the worker request. */
+/** `vw-send-create` detail: a text Send or a file streamed by the root over a dedicated Port. */
 export type SendCreateDetail =
   | { kind: 'text'; input: SendInput }
-  | { kind: 'file'; input: SendInput; dataB64: string; fileName: string };
+  | { kind: 'file'; input: SendInput; file: File; fileName: string };
 
 /** `vw-send-update` detail: an edit to an existing Send the root performs. */
 export interface SendUpdateDetail {

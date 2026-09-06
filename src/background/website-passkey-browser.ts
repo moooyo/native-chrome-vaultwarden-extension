@@ -4,6 +4,7 @@ import {
   parseWebsitePasskeyConfigChangedAck,
 } from '../messaging/website-passkey-port.js';
 import { VAULT_TRANSFER_PORT_NAME } from '../messaging/vault-transfer-port.js';
+import { BINARY_TRANSFER_PORT_NAME } from '../messaging/binary-transfer-port.js';
 import type { WebsitePasskeyScriptState } from './website-passkey-script-manager.js';
 
 const MAIN_SCRIPT_FILE = 'content/page-webauthn.js';
@@ -389,6 +390,7 @@ export interface BackgroundPortDispatcherDependencies<Port extends BackgroundDis
   readonly extensionBaseUrl: string;
   readonly extensionId: string;
   readonly vaultTransferHandler: BackgroundPortHandler<Port>;
+  readonly binaryTransferHandler: BackgroundPortHandler<Port>;
   readonly websitePasskeyHandler: BackgroundPortHandler<Port>;
 }
 
@@ -398,6 +400,14 @@ export function createBackgroundPortDispatcher<Port extends BackgroundDispatchab
 ): (port: Port) => void {
   return (port) => {
     try {
+      if (port.name === BINARY_TRANSFER_PORT_NAME) {
+        dependencies.binaryTransferHandler.handle(
+          port,
+          dependencies.extensionBaseUrl,
+          dependencies.extensionId,
+        );
+        return;
+      }
       if (port.name === VAULT_TRANSFER_PORT_NAME) {
         dependencies.vaultTransferHandler.handle(
           port,

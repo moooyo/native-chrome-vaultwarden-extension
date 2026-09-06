@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { BINARY_TRANSFER_PORT_NAME } from '../messaging/binary-transfer-port.js';
 import { VAULT_TRANSFER_PORT_NAME } from '../messaging/vault-transfer-port.js';
 import {
   WEBSITE_PASSKEY_CONFIG_CHANGED_MESSAGE,
@@ -517,6 +518,9 @@ describe('createBackgroundPortDispatcher', () => {
   }
 
   function createDispatcher() {
+    const binaryTransferHandler = {
+      handle: vi.fn((_port: ReturnType<typeof createPort>) => true),
+    };
     const vaultTransferHandler = {
       handle: vi.fn((_port: ReturnType<typeof createPort>) => true),
     };
@@ -528,17 +532,20 @@ describe('createBackgroundPortDispatcher', () => {
       extensionId: 'extension-id',
       vaultTransferHandler,
       websitePasskeyHandler,
+      binaryTransferHandler,
     });
-    return { dispatch, vaultTransferHandler, websitePasskeyHandler };
+    return { dispatch, vaultTransferHandler, websitePasskeyHandler, binaryTransferHandler };
   }
 
   it('routes each exact Port name only to its owning handler', () => {
     const fixture = createDispatcher();
     const transfer = createPort(VAULT_TRANSFER_PORT_NAME);
     const passkey = createPort(WEBSITE_PASSKEY_PORT_NAME);
+    const binary = createPort(BINARY_TRANSFER_PORT_NAME);
 
     fixture.dispatch(transfer);
     fixture.dispatch(passkey);
+    fixture.dispatch(binary);
 
     expect(fixture.vaultTransferHandler.handle).toHaveBeenCalledOnce();
     expect(fixture.vaultTransferHandler.handle).toHaveBeenCalledWith(
@@ -554,6 +561,11 @@ describe('createBackgroundPortDispatcher', () => {
     );
     expect(transfer.disconnect).not.toHaveBeenCalled();
     expect(passkey.disconnect).not.toHaveBeenCalled();
+    expect(fixture.binaryTransferHandler.handle).toHaveBeenCalledOnce();
+    expect(fixture.binaryTransferHandler.handle).toHaveBeenCalledWith(
+      binary, 'chrome-extension://extension-id/', 'extension-id',
+    );
+    expect(binary.disconnect).not.toHaveBeenCalled();
   });
 
   it('disconnects an unknown Port exactly once without showing it to either handler', () => {
@@ -565,6 +577,7 @@ describe('createBackgroundPortDispatcher', () => {
     expect(unknown.disconnect).toHaveBeenCalledOnce();
     expect(fixture.vaultTransferHandler.handle).not.toHaveBeenCalled();
     expect(fixture.websitePasskeyHandler.handle).not.toHaveBeenCalled();
+    expect(fixture.binaryTransferHandler.handle).not.toHaveBeenCalled();
   });
 
   it('contains a matching handler throw and disconnects the affected Port', () => {

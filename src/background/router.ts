@@ -67,7 +67,10 @@ import type {
   AutofillPendingSaveDocumentContext,
   AutofillPendingSaveStore,
 } from './autofill-pending-save-store.js';
-import type { AutofillSaveCaptureCoordinator } from './autofill-save-capture-coordinator.js';
+import type {
+  AutofillSaveCaptureCoordinator,
+  AutofillSaveCaptureRuntimeAuthority,
+} from './autofill-save-capture-coordinator.js';
 import type {
   AutofillKeyboardGrantRegistry,
   KeyboardGrant,
@@ -188,6 +191,7 @@ export interface RouterDeps {
     AutofillSaveCaptureCoordinator,
     | 'activateRuntime'
     | 'isRuntimeCurrent'
+    | 'captureRuntimeAuthority'
     | 'stage'
     | 'stageUsername'
     | 'consumeUsername'
@@ -1742,16 +1746,18 @@ export function createRouter(deps: RouterDeps) {
       let committedSecretMutation = false;
       try {
         let contentRuntimeIncarnation: string | undefined;
+        let contentRuntimeAuthority: AutofillSaveCaptureRuntimeAuthority | undefined;
         if (RUNTIME_BOUND_AUTOFILL_REQUESTS.has(request.type)) {
           const caller = requireContent(context);
           if (!caller.documentId || !deps.saveCaptureCoordinator) throw deniedAutofillIntent();
           contentRuntimeIncarnation = runtimeIncarnationProperty(request);
-          if (!(await deps.saveCaptureCoordinator.isRuntimeCurrent(
+          contentRuntimeAuthority = await deps.saveCaptureCoordinator.captureRuntimeAuthority(
             caller.tabId,
             caller.frameId,
             caller.documentId,
             contentRuntimeIncarnation,
-          ))) throw deniedAutofillIntent();
+          );
+          if (!contentRuntimeAuthority) throw deniedAutofillIntent();
         }
         if (request.type === 'auth.requestPasswordHint') {
           requirePopupDocument(context);
@@ -4327,28 +4333,24 @@ export function createRouter(deps: RouterDeps) {
           (responseFinalAssert ?? (() => deps.sessionGate.assert(responseSessionLease!)))();
           for (const assertVaultCurrent of vaultFinalAuthorities) assertVaultCurrent();
         };
-        const assertContentRuntimeCurrent = async (): Promise<void> => {
-          if (!contentRuntimeIncarnation || context.kind !== 'content' || !context.documentId) return;
-          if (!deps.saveCaptureCoordinator || !(await deps.saveCaptureCoordinator.isRuntimeCurrent(
-            context.tabId,
-            context.frameId,
-            context.documentId,
-            contentRuntimeIncarnation,
-          ))) throw deniedAutofillIntent();
-        };
-        await assertContentRuntimeCurrent();
+        // Finish asynchronous cleanup before the final release checkpoint. Runtime authority is
+        // synchronously revocable, so neither the checkpoint nor cleanup can make an earlier
+        // document observation authorize a response after runtime replacement or session lock.
+        await deps.vaultTimeout?.settlePendingAction?.();
         if (response.ok && responseReleaseLease && deps.vaultReleaseGate) {
           const releaseProof = await deps.vaultReleaseGate.checkpoint(responseReleaseLease);
           deps.vaultReleaseGate.assertAuthorities(
             releaseProof,
-            assertResponseCurrent,
+            () => {
+              assertResponseCurrent();
+              contentRuntimeAuthority?.assertCurrent();
+            },
           );
           deps.vaultReleaseGate.assert(releaseProof);
-        } else if (responseSessionLease) {
-          assertResponseCurrent();
+        } else {
+          if (responseSessionLease) assertResponseCurrent();
+          contentRuntimeAuthority?.assertCurrent();
         }
-        await assertContentRuntimeCurrent();
-        await deps.vaultTimeout?.settlePendingAction?.();
         return response;
       } catch (err) {
         let caught = err;

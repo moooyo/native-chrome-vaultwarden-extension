@@ -21,6 +21,7 @@ import type {
   VaultTransferFile,
 } from './vault-transfer-client.js';
 import type { VaultTransferExportTarget } from '../../core/vault/vault-transfer-target.js';
+import type { uploadBinaryTransfer } from '../binary-transfer-client.js';
 
 /** The worker request function every options surface is injected with; never called directly by
  *  the section components — only `VwOptionsApp` performs requests. */
@@ -59,6 +60,7 @@ export interface OptionsVaultTransferClient {
  */
 export interface OptionsDeps {
   request: OptionsRequest;
+  uploadBinaryTransfer?: typeof uploadBinaryTransfer;
   requestOrigins(origins: string[]): Promise<boolean>;
   createVaultTransferClient(): OptionsVaultTransferClient;
   extensionVersion(): string;
@@ -129,10 +131,10 @@ export interface ChangePasswordDetail {
   masterPasswordHint: string;
 }
 
-/** `vw-send-create`: a text or file Send the root creates (file variant carries the read bytes). */
+/** `vw-send-create`: a text or file Send the root creates (file bytes are read by the transfer client). */
 export type SendCreateDetail =
   | { kind: 'text'; input: import('../../core/vault/sends.js').SendInput }
-  | { kind: 'file'; input: import('../../core/vault/sends.js').SendInput; dataB64: string; fileName: string };
+  | { kind: 'file'; input: import('../../core/vault/sends.js').SendInput; file: File; fileName: string };
 
 /** `vw-send-delete`: the Send to delete. */
 export interface SendDeleteDetail {

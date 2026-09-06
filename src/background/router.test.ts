@@ -357,6 +357,121 @@ function createTestStore(): AtomicKeyValueStore {
   };
 }
 
+async function realReleaseBoundaryFixture() {
+  const { SessionGate } = await import('./session-gate.js');
+  const { VaultReleaseGate } = await import('./vault-release-gate.js');
+  const { VaultTimeoutController } = await import('./vault-timeout-controller.js');
+  const { VaultTimeoutStateStore } = await import('./vault-timeout-state.js');
+  const { AutofillSaveCaptureCoordinator } = await import('./autofill-save-capture-coordinator.js');
+  const { SessionManager } = await import('../core/session/session-manager.js');
+  const { AuthService } = await import('../core/session/auth-service.js');
+  const localStore = createTestStore();
+  const sessionStore = createTestStore();
+  const session = new SessionManager({ localStore, sessionStore });
+  await session.saveUnlocked({
+    email: 'user@example.com',
+    accessToken: 'synthetic-access',
+    refreshToken: 'synthetic-refresh',
+    expiresAt: 999_999,
+    protectedKey: 'synthetic-protected-key',
+    kdf: 0,
+    kdfIterations: 5_000,
+    userKey: { encKey: new Uint8Array(32), macKey: new Uint8Array(32) },
+  });
+  const sessionGate = new SessionGate('unlocked');
+  const networkStore = createTestStore();
+  const pendingSaves = new AutofillPendingSaveStore({ store: networkStore });
+  const coordinator = new AutofillSaveCaptureCoordinator({
+    store: networkStore,
+    captures: pendingSaves,
+    loadUserKey: async () => undefined,
+    now: () => 1_000,
+  });
+  expect(await coordinator.activateRuntime({
+    tabId: CONTENT_CONTEXT.tabId,
+    frameId: CONTENT_CONTEXT.frameId,
+    documentId: CONTENT_CONTEXT.documentId,
+    frameUrl: CONTENT_CONTEXT.url,
+    runtimeIncarnation: TEST_RUNTIME_INCARNATION,
+  })).toBe(true);
+  const stateStore = new VaultTimeoutStateStore({ localStore, sessionStore });
+  await stateStore.initializeBrowserSession();
+  const transitionEvents: Array<{ phase: string; state?: string }> = [];
+  const auth = new AuthService({
+    api: {} as never,
+    session,
+    sessionGate,
+    onSessionTransition: (event) => {
+      transitionEvents.push(event);
+      if (event.phase === 'start') timeout.transitionStarted();
+      sessionGate.handleTransition(event);
+    },
+    onSerializedSessionTransition: async (event) => {
+      if (event.phase === 'start') {
+        await Promise.allSettled([pendingSaves.clear(), coordinator.clear()]);
+      } else {
+        await timeout.transitionSettled(event.succeeded, event.state);
+      }
+    },
+  });
+  const timeout: InstanceType<typeof VaultTimeoutController> = new VaultTimeoutController({
+    state: stateStore,
+    alarms: { create: async () => {}, clear: async () => true },
+    getContext: async () => {
+      const active = await session.getActiveAuth();
+      return {
+        state: await session.getState(),
+        accountKey: 'https://vault.example/\nuser@example.com',
+        email: 'user@example.com',
+        ...(active?.sessionBindingId ? { sessionBindingId: active.sessionBindingId } : {}),
+      };
+    },
+    getConfig: async () => ({
+      lockTimeout: '1', onIdleAction: 'lock', idleSeconds: 60,
+      lockOnSystemLock: true, logoutOnBrowserClose: false,
+      closeLogoutActionProvenance: null, closeLogoutTimeoutProvenance: null,
+      mode: 'local', managed: false, failClosed: false,
+    }),
+    applyAction: async (expected, action) => {
+      const active = await session.getActiveAuth();
+      if (active?.email !== expected.email || active.sessionBindingId !== expected.sessionBindingId) return;
+      expect(action).toBe('lock');
+      await auth.lock();
+    },
+    now: () => 1_000,
+    monotonicNow: () => 1_000,
+  });
+  await timeout.initialize();
+  sessionGate.setPreflight(() => timeout.preflight());
+  const releaseGate = new VaultReleaseGate(timeout, sessionGate);
+  const settings = intentSettings();
+  settings.getAutofillSettings = vi.fn(async () => ({ ...DEFAULT_AUTOFILL_SETTINGS, pageLoadFill: true }));
+  const vaultRead = vi.fn(async () => ({ username: 'user', password: 'synthetic-release-secret' }));
+  const router = createRouter({
+    auth: { getState: () => session.getState() },
+    settings,
+    sessionGate,
+    vaultReleaseGate: releaseGate,
+    vaultTimeout: timeout,
+    getSessionBindingId: async () => (await session.getActiveAuth())?.sessionBindingId,
+    saveCaptureCoordinator: {
+      captureRuntimeAuthority: coordinator.captureRuntimeAuthority.bind(coordinator),
+      isRuntimeCurrent: coordinator.isRuntimeCurrent.bind(coordinator),
+    },
+    vault: {
+      findAutofillCandidates: vi.fn(async () => [{
+        id: 'login-1', name: 'Example', matchedUri: CONTENT_CONTEXT.url, matchType: 0 as const, favorite: false,
+      }]),
+      getAutofillLoginData: vaultRead,
+    },
+  });
+  const token = intentId(await router.handle({ type: 'autofill.issuePageLoadIntent' }, CONTENT_CONTEXT));
+  return {
+    router, token, auth, session, sessionStore, networkStore, coordinator, timeout,
+    releaseGate, vaultRead, transitionEvents,
+  };
+}
+
 function createRouter(deps: TestRouterDeps) {
   const sessionGate = deps.sessionGate ?? ACTIVE_SESSION_GATE;
   const accountGate = deps.accountGate ?? ACTIVE_ACCOUNT_GATE;
@@ -398,6 +513,11 @@ function createRouter(deps: TestRouterDeps) {
       _documentId: string,
       runtimeIncarnation: string,
     ) => runtimeIncarnation === TEST_RUNTIME_INCARNATION),
+    captureRuntimeAuthority: async (...args) => (
+      await saveCaptureCoordinator.isRuntimeCurrent(...args)
+        ? Object.freeze({ assertCurrent: () => {} })
+        : undefined
+    ),
     stage: async (
       input: Parameters<NonNullable<RouterDeps['saveCaptureCoordinator']>['stage']>[0],
       credentials: Parameters<NonNullable<RouterDeps['saveCaptureCoordinator']>['stage']>[1],
@@ -3479,6 +3599,202 @@ describe('router', () => {
     });
     expect(vaultReleaseGate.assert).not.toHaveBeenCalled();
   });
+
+  it('withholds a revealed password when a pending timeout action locks the session', async () => {
+    const { SessionGate } = await import('./session-gate.js');
+    const { VaultReleaseGate } = await import('./vault-release-gate.js');
+    const sessionGate = new SessionGate('unlocked');
+    const releaseGate = new VaultReleaseGate({
+      captureRelease: () => ({} as never),
+      checkpointRelease: async () => ({} as never),
+      assertRelease: () => {},
+    }, sessionGate);
+    let releaseAction!: () => void;
+    const action = new Promise<void>((resolve) => { releaseAction = resolve; });
+    const settlePendingAction = vi.fn(() => action);
+    const router = createRouter({
+      auth: {},
+      settings: intentSettings(),
+      sessionGate,
+      vaultReleaseGate: releaseGate,
+      vaultTimeout: {
+        captureActivity: () => undefined,
+        recordActivity: async () => {},
+        settlePendingAction,
+      },
+      vault: { getField: async () => 'synthetic-secret' },
+    });
+    const response = router.handle({ type: 'vault.getField', id: 'cipher-1', field: 'password' });
+    await vi.waitFor(() => expect(settlePendingAction).toHaveBeenCalledOnce());
+    sessionGate.handleTransition({ phase: 'start', transitionId: 1, reason: 'lock', identityChanged: false });
+    sessionGate.handleTransition({
+      phase: 'settled', transitionId: 1, reason: 'lock', identityChanged: false,
+      state: 'locked', succeeded: true,
+    });
+    releaseAction();
+    await expect(response).resolves.toMatchObject({ ok: false, error: { code: 'locked' } });
+  });
+
+  it('rechecks the original runtime authority after the final durable checkpoint', async () => {
+    let current = true;
+    let releaseCheckpoint!: () => void;
+    const checkpointPending = new Promise<void>((resolve) => { releaseCheckpoint = resolve; });
+    const checkpoint = vi.fn(async () => { await checkpointPending; return {} as never; });
+    const assert = vi.fn();
+    const router = createRouter({
+      auth: {}, settings: intentSettings(),
+      vaultReleaseGate: {
+        capture: () => ({} as never), checkpoint,
+        assertAuthorities: (_proof, authorities) => authorities(), assert,
+      },
+      saveCaptureCoordinator: {
+        captureRuntimeAuthority: async () => ({ assertCurrent: () => {
+          if (!current) throw new AppError('denied', 'Runtime replaced');
+        } }),
+      },
+      vault: {
+        findAutofillCandidates: async () => [{
+          id: '1', name: 'Example', matchedUri: CONTENT_CONTEXT.url, matchType: 0, favorite: false,
+        }],
+        getInteractiveAutofillLoginData: async () => ({
+          login: { username: 'user', password: 'synthetic-secret' }, customAssignments: [],
+        }),
+      },
+    });
+    const issued = await router.handle(loginIntentRequest(), CONTENT_CONTEXT);
+    const response = router.handle({
+      type: 'autofill.redeemLoginIntent', intentId: intentId(issued),
+    }, CONTENT_CONTEXT);
+    await vi.waitFor(() => expect(checkpoint).toHaveBeenCalledOnce());
+    current = false;
+    releaseCheckpoint();
+    await expect(response).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
+    expect(assert).not.toHaveBeenCalled();
+  });
+
+  it('releases real page-load data once without asynchronous runtime or timeout work after the final fence', async () => {
+    const f = await realReleaseBoundaryFixture();
+    let released = false;
+    const lateOperations: string[] = [];
+    const read = f.networkStore.get.bind(f.networkStore);
+    const settle = f.timeout.settlePendingAction.bind(f.timeout);
+    const finalAssert = f.releaseGate.assert.bind(f.releaseGate);
+    vi.spyOn(f.networkStore, 'get').mockImplementation(async <T>(key: string): Promise<T | undefined> => {
+      if (released) lateOperations.push('runtime storage read');
+      return read<T>(key);
+    });
+    vi.spyOn(f.timeout, 'settlePendingAction').mockImplementation(async () => {
+      if (released) lateOperations.push('timeout settlement');
+      await settle();
+    });
+    const checkpoint = vi.spyOn(f.releaseGate, 'checkpoint');
+    const assert = vi.spyOn(f.releaseGate, 'assert').mockImplementation((proof) => {
+      finalAssert(proof);
+      released = true;
+    });
+
+    await expect(f.router.handle({
+      type: 'autofill.redeemPageLoadIntent', intentId: f.token,
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({
+      ok: true,
+      data: { login: { username: 'user', password: 'synthetic-release-secret' } },
+    });
+
+    expect(checkpoint).toHaveBeenCalledOnce();
+    expect(assert).toHaveBeenCalledOnce();
+    expect(lateOperations).toEqual([]);
+    expect(f.vaultRead).toHaveBeenCalledOnce();
+    await expect(f.session.getState()).resolves.toBe('unlocked');
+  });
+
+  it('withholds page-load data when a real system lock overtakes the admitted runtime journal read', async () => {
+    const f = await realReleaseBoundaryFixture();
+    const { AUTOFILL_SAVE_CAPTURE_NETWORK_STORAGE_KEY } = await import('./autofill-save-capture-coordinator.js');
+    let readEntered = false;
+    let releaseRead!: () => void;
+    const delayedRead = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const read = f.networkStore.get.bind(f.networkStore);
+    vi.spyOn(f.networkStore, 'get').mockImplementation(async <T>(key: string): Promise<T | undefined> => {
+      const value = await read<T>(key);
+      if (key === AUTOFILL_SAVE_CAPTURE_NETWORK_STORAGE_KEY && !readEntered) {
+        readEntered = true;
+        await delayedRead;
+      }
+      return value;
+    });
+    const assert = vi.spyOn(f.releaseGate, 'assert');
+    const response = f.router.handle({
+      type: 'autofill.redeemPageLoadIntent', intentId: f.token,
+    }, CONTENT_CONTEXT);
+    let systemLock: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => expect(readEntered).toBe(true));
+      systemLock = f.timeout.handleSystemLocked();
+      await vi.waitFor(() => expect(f.transitionEvents).toContainEqual(expect.objectContaining({ phase: 'start' })));
+    } finally {
+      releaseRead();
+    }
+
+    await expect(response).resolves.toMatchObject({ ok: false });
+    await systemLock;
+    await expect(f.session.getState()).resolves.toBe('locked');
+    expect(f.transitionEvents).toEqual([
+      expect.objectContaining({ phase: 'start' }),
+      expect.objectContaining({ phase: 'settled', state: 'locked' }),
+    ]);
+    expect(f.vaultRead).not.toHaveBeenCalled();
+    expect(assert).not.toHaveBeenCalled();
+  });
+
+  it.each(['session lock', 'runtime replacement'] as const)(
+    'withholds real page-load data when %s crosses the durable checkpoint storage write',
+    async (revocation) => {
+      const f = await realReleaseBoundaryFixture();
+      let writeEntered = false;
+      let releaseWrite!: () => void;
+      const delayedWrite = new Promise<void>((resolve) => { releaseWrite = resolve; });
+      const write = f.sessionStore.set.bind(f.sessionStore);
+      vi.spyOn(f.sessionStore, 'set').mockImplementation(async (key, value) => {
+        if (key === 'vaultTimeoutActivity' && !writeEntered) {
+          writeEntered = true;
+          await delayedWrite;
+        }
+        await write(key, value);
+      });
+      const assert = vi.spyOn(f.releaseGate, 'assert');
+      const response = f.router.handle({
+        type: 'autofill.redeemPageLoadIntent', intentId: f.token,
+      }, CONTENT_CONTEXT);
+      let locked: Promise<void> | undefined;
+      try {
+        await vi.waitFor(() => expect(writeEntered).toBe(true));
+        expect(f.vaultRead).toHaveBeenCalledOnce();
+        if (revocation === 'session lock') {
+          locked = f.auth.lock();
+          expect(f.transitionEvents).toContainEqual(expect.objectContaining({ phase: 'start' }));
+        } else {
+          await expect(f.coordinator.activateRuntime({
+            tabId: CONTENT_CONTEXT.tabId,
+            frameId: CONTENT_CONTEXT.frameId,
+            documentId: CONTENT_CONTEXT.documentId,
+            frameUrl: CONTENT_CONTEXT.url,
+            runtimeIncarnation: NEXT_RUNTIME_INCARNATION,
+            previousRuntimeIncarnation: TEST_RUNTIME_INCARNATION,
+          })).resolves.toBe(true);
+        }
+      } finally {
+        releaseWrite();
+      }
+
+      await expect(response).resolves.toMatchObject({
+        ok: false,
+        error: { code: revocation === 'session lock' ? 'locked' : 'denied' },
+      });
+      await locked;
+      expect(assert).not.toHaveBeenCalled();
+      await expect(f.session.getState()).resolves.toBe(revocation === 'session lock' ? 'locked' : 'unlocked');
+    },
+  );
 
   it('auth.completeFido2 rejects a child-frame relay before touching broker or browser state', async () => {
     const matchPasswordCaller = vi.fn(() => PASSWORD_FIDO_OWNER);

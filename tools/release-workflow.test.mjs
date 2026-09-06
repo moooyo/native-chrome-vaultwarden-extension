@@ -55,11 +55,12 @@ describe('release workflow', () => {
         'npm test',
         'npm run build:prod',
         'xvfb-run --auto-servernum npm run verify:render',
+        'xvfb-run --auto-servernum npm run verify:binary-transport-browser',
         'npm run release:prepare -- --tag "$RELEASE_TAG"',
       ]),
     );
     const prepareIndex = steps.findIndex((step) => step.id === 'release');
-    for (const gate of ['Lint', 'Type-check', 'Test', 'Build production extension', 'Chromium render smoke']) {
+    for (const gate of ['Lint', 'Type-check', 'Test', 'Build production extension', 'Chromium render smoke', 'Chromium binary transport gate']) {
       expect(steps.findIndex((step) => step.name === gate)).toBeLessThan(prepareIndex);
     }
   });

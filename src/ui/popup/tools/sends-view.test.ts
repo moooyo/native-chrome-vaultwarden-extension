@@ -194,7 +194,7 @@ describe('vw-sends-view create', () => {
     { label: 'zero', size: 0 },
     { label: 'limit - 1', size: MAX_FILE_BYTES - 1 },
     { label: 'limit', size: MAX_FILE_BYTES },
-  ])('reads a file Send at $label bytes', async ({ size }) => {
+  ])('forwards a file Send at $label bytes without reading it', async ({ size }) => {
     const el = await mount();
     await openCreate(el);
     q<HTMLButtonElement>(el, '[data-mode-file]').click();
@@ -211,7 +211,7 @@ describe('vw-sends-view create', () => {
     await new Promise((resolve) => setTimeout(resolve));
     await el.updateComplete;
 
-    expect(read).toHaveBeenCalledOnce();
+    expect(read).not.toHaveBeenCalled();
     expect(created).toHaveBeenCalledOnce();
   });
 
@@ -255,7 +255,7 @@ describe('vw-sends-view create', () => {
     },
   );
 
-  it('emits a file Send create with base64 bytes for a valid file', async () => {
+  it('emits the selected File for bounded transfer without encoding it', async () => {
     const el = await mount();
     await openCreate(el);
     q<HTMLButtonElement>(el, '[data-mode-file]').click();
@@ -265,15 +265,18 @@ describe('vw-sends-view create', () => {
     });
     const fileInput = q<HTMLInputElement>(el, '[data-file]');
     const file = new File(['hi'], 'note.txt');
+    const read = vi.spyOn(file, 'arrayBuffer');
     Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
     q<HTMLButtonElement>(el, '[data-create]').click();
     const detail = await detailPromise;
     expect(detail.kind).toBe('file');
     expect((detail as { fileName: string }).fileName).toBe('note.txt');
-    expect((detail as { dataB64: string }).dataB64).toBe(btoa('hi'));
+    expect((detail as { file: File }).file).toBe(file);
+    expect(read).not.toHaveBeenCalled();
+    expect(detail).not.toHaveProperty('dataB64');
   });
 
-  it('enters the encoding state synchronously when a file create starts', async () => {
+  it('hands file creation to the root synchronously without entering an encoding phase', async () => {
     const el = await mount();
     await openCreate(el);
     const busy: boolean[] = [];
@@ -283,15 +286,12 @@ describe('vw-sends-view create', () => {
     const fileInput = q<HTMLInputElement>(el, '[data-file]');
     const file = new File(['hi'], 'note.txt');
     Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
-    // The base64 encode runs on the popup main thread; the busy flag must be set before the first
-    // await so the button can disable / show a spinner rather than appear frozen.
+    const created = vi.fn();
+    el.addEventListener('vw-send-create', created);
     q<HTMLButtonElement>(el, '[data-create]').click();
-    expect(el.encoding).toBe(true);
-    // Let the encode + emit settle; the flag clears once the bytes are ready.
-    await new Promise((r) => setTimeout(r));
-    await el.updateComplete;
+    expect(created).toHaveBeenCalledOnce();
     expect(el.encoding).toBe(false);
-    expect(busy).toEqual([true, false]);
+    expect(busy).toEqual([]);
   });
 
   it('disables the create button and shows a spinner while encoding', async () => {

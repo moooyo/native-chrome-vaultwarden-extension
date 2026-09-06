@@ -37,6 +37,7 @@ import { decryptToBytes, encryptToText, decryptToText } from '../crypto/encstrin
 import { unwrapSymmetricKey } from '../crypto/keys.js';
 import { base64UrlToBytes, base64ToBytes, bytesToBase64, bytesToBase64Url, bytesToHex, bytesToUtf8, utf8ToBytes } from '../crypto/encoding.js';
 import { decryptAttachmentKey, decryptAttachmentFile, encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
+import { assertLegacyFileMessageBudget, base64EncodedLength } from './file-transfer-limits.js';
 import { buildPasswordHealthReport, type PasswordHealthEntry, type PasswordHealthInput } from './password-health.js';
 import { pwnedCount } from './pwned.js';
 import { buildExportJson, buildEncryptedExportJson, parseImport } from './vault-io.js';
@@ -621,6 +622,7 @@ export interface PasskeyCreateOptions {
 
 export class VaultService {
   private cacheMutationTail: Promise<void> = Promise.resolve();
+  private readonly derivedRebuilds = new Map<string, Promise<DerivedVaultSnapshot>>();
   private passkeyAssertionTail: Promise<void> = Promise.resolve();
   private cacheEpoch = 0;
   private policyPublicationFence: symbol | undefined;
@@ -1083,11 +1085,57 @@ export class VaultService {
     accountLease: AccountLease,
     assertAccountCurrent: () => void,
   ): Promise<DerivedVaultSnapshot> {
-    const userKey = await this.deps.session.loadUserKey();
-    if (!userKey) throw new AppError('locked', 'Vault is locked');
     const activeAuth = await this.deps.session.getActiveAuth();
     if (!activeAuth?.sessionBindingId) throw new AppError('locked', 'Vault is locked');
     const sessionBindingId = activeAuth.sessionBindingId;
+    const assertCurrent = (): void => {
+      this.assertIdentityEpoch(identityEpoch);
+      this.deps.sessionGate.assert(sessionLease);
+      assertAccountCurrent();
+      this.assertPolicyForSource(policyLease, source, accountLease);
+    };
+    assertCurrent();
+    const rebuildKey = JSON.stringify([
+      source.identity,
+      source.rawGeneration,
+      identityEpoch,
+      sessionBindingId,
+      sessionLease.generation,
+      accountLease.serverGeneration,
+      accountLease.accountGeneration,
+      policyLease.generation,
+    ]);
+    let pending = this.derivedRebuilds.get(rebuildKey);
+    if (!pending) {
+      pending = this.buildDerivedSnapshot(
+        response, identityEpoch, source, sessionLease, policyLease, accountLease,
+        assertAccountCurrent, sessionBindingId,
+      );
+      this.derivedRebuilds.set(rebuildKey, pending);
+    }
+    try {
+      const snapshot = await pending;
+      // Each waiter retains its own authorization fence even when the decryption work is shared.
+      assertCurrent();
+      return snapshot;
+    } finally {
+      // Keep only in-flight work: quota fallback must not become a second plaintext cache.
+      if (this.derivedRebuilds.get(rebuildKey) === pending) this.derivedRebuilds.delete(rebuildKey);
+    }
+  }
+
+  private async buildDerivedSnapshot(
+    response: SyncResponse,
+    identityEpoch: number,
+    source: RawVaultEnvelope,
+    sessionLease: SessionLease,
+    policyLease: PolicyLease,
+    accountLease: AccountLease,
+    assertAccountCurrent: () => void,
+    sessionBindingId: string,
+  ): Promise<DerivedVaultSnapshot> {
+    const userKey = await this.deps.session.loadUserKey();
+    if (!userKey) throw new AppError('locked', 'Vault is locked');
     this.deps.sessionGate.assert(sessionLease);
     assertAccountCurrent();
     this.assertPolicyForSource(policyLease, source, accountLease);
@@ -3536,8 +3584,7 @@ export class VaultService {
     }, { cache: true, ...(bindFinalAuthority ? { bindFinalAuthority } : {}) });
   }
 
-  /** Create a file Send: encrypt the file in the worker (EncArrayBuffer), upload via v2, return it
-   *  decrypted with its access URL. The plaintext file never leaves the worker. */
+  /** Compatibility adapter for small legacy messages. New UI transfers use bounded Port chunks. */
   async createFileSend(
     input: SendInput,
     dataB64: string,
@@ -3545,14 +3592,38 @@ export class VaultService {
     serverUrl: string,
     bindFinalAuthority?: VaultFinalAuthorityBinder,
   ): Promise<SendSummary> {
+    assertLegacyFileMessageBudget({ type: 'sends.createFile', input, dataB64: '', fileName }, dataB64.length);
+    const fileBytes = base64ToBytes(dataB64);
+    try {
+      return await this.createFileSendBytes(input, fileBytes, fileName, serverUrl, bindFinalAuthority);
+    } finally {
+      fileBytes.fill(0);
+    }
+  }
+
+  /** Encrypt a borrowed file buffer in the worker and upload it through the existing mutation gate. */
+  async createFileSendBytes(
+    input: SendInput,
+    fileBytes: Uint8Array,
+    fileName: string,
+    serverUrl: string,
+    bindFinalAuthority?: VaultFinalAuthorityBinder,
+    assertTransferCurrent: () => void = () => undefined,
+  ): Promise<SendSummary> {
+    assertTransferCurrent();
+    if (!(fileBytes instanceof Uint8Array) || fileBytes.byteLength > 100 * 1024 * 1024) {
+      throw new AppError('error', 'Send file exceeds this client\'s size limit.');
+    }
     return this.runVaultMutation('send.createFile', async ({
       operation, remote, remoteOnce, reconcile,
     }) => {
+    assertTransferCurrent();
     const now = (this.deps.now ?? Date.now)();
-    const fileBytes = base64ToBytes(dataB64);
-    const { request, encryptedFile, encryptedFileName } = await buildFileSendRequest(
+    const { request, sendKey, encryptedFile, encryptedFileName } = await buildFileSendRequest(
       input, fileName, fileBytes, operation.userKey, { now: () => now },
     );
+    try {
+    assertTransferCurrent();
     this.enforceSendWritePolicy(
       operation.policyLease,
       request,
@@ -3563,16 +3634,21 @@ export class VaultService {
     let created: Awaited<ReturnType<ApiClient['createSendFile']>> | undefined;
     try {
       const { url } = await remote(
-        (accessToken) => operation.api.createSendFile(accessToken, request),
+        (accessToken) => {
+          assertTransferCurrent();
+          return operation.api.createSendFile(accessToken, request);
+        },
         (value) => { created = value; },
       );
-      const upload = (accessToken: string) => operation.api.uploadSendFileData(
-        accessToken, url, encryptedFile, encryptedFileName,
-      );
+      const upload = (accessToken: string) => {
+        assertTransferCurrent();
+        return operation.api.uploadSendFileData(accessToken, url, encryptedFile, encryptedFileName);
+      };
       // Absolute upload URLs may target a CDN without a bearer token. Keep that external response on
       // the single-attempt path; relative API uploads are rebuildable authenticated requests.
       if (/^https?:\/\//iu.test(url)) await remoteOnce(() => upload(operation.token));
       else await remote(upload);
+      assertTransferCurrent();
     } catch (err) {
       // The Send record exists but holds no blob — delete the orphan, then surface the original error.
       try {
@@ -3591,6 +3667,10 @@ export class VaultService {
     const decrypted = await decryptSend(created.sendResponse, operation.userKey, serverUrl);
     await reconcile(() => this.syncAfterMutation(operation));
     return decrypted;
+    } finally {
+      sendKey.fill(0);
+      encryptedFile.fill(0);
+    }
     }, { cache: true, ...(bindFinalAuthority ? { bindFinalAuthority } : {}) });
   }
 
@@ -4173,6 +4253,24 @@ export class VaultService {
     masterPassword?: string,
     bindFinalAuthority?: VaultFinalAuthorityBinder,
   ): Promise<{ fileName: string; dataB64: string }> {
+    const result = await this.getAttachmentBytes(cipherId, attachmentId, masterPassword, bindFinalAuthority);
+    try {
+      assertLegacyFileMessageBudget({ ok: true, data: { fileName: result.fileName, dataB64: '' } }, base64EncodedLength(result.bytes.byteLength));
+      return { fileName: result.fileName, dataB64: bytesToBase64(result.bytes) };
+    } finally {
+      result.bytes.fill(0);
+    }
+  }
+
+  /** Return caller-owned plaintext bytes for a bounded, release-gated Port download. */
+  async getAttachmentBytes(
+    cipherId: string,
+    attachmentId: string,
+    masterPassword?: string,
+    bindFinalAuthority?: VaultFinalAuthorityBinder,
+    assertTransferCurrent: () => void = () => undefined,
+  ): Promise<{ fileName: string; bytes: Uint8Array }> {
+    assertTransferCurrent();
     const operation = await this.beginVaultOperation({ cache: true });
     const cache = operation.cacheEnvelope!.response;
     const candidate = cache.ciphers.find((c) => c.id === cipherId);
@@ -4213,15 +4311,20 @@ export class VaultService {
       );
       await operation.assertCacheCurrent();
       operation.assertCurrent();
+      assertTransferCurrent();
       encrypted = await operation.api.downloadAttachment(downloadUrl, operation.token);
+      assertTransferCurrent();
       plaintext = await decryptAttachmentFile(encrypted, attachmentKey);
       const fileName = decrypted.attachments?.find((a) => a.id === attachmentId)?.fileName ?? 'attachment';
       await operation.assertCacheCurrent();
       operation.assertCurrent();
+      assertTransferCurrent();
       this.bindOperationFinalAuthority(operation, bindFinalAuthority, () => {
         this.assertCipherPolicyAllowed(operation.policyLease, cipher);
       });
-      return { fileName, dataB64: bytesToBase64(plaintext) };
+      const bytes = plaintext;
+      plaintext = undefined;
+      return { fileName, bytes };
     } finally {
       encrypted?.fill(0);
       plaintext?.fill(0);
@@ -4256,12 +4359,36 @@ export class VaultService {
     dataB64: string,
     masterPassword?: string,
   ): Promise<VaultListing> {
+    assertLegacyFileMessageBudget({ type: 'vault.addAttachment', cipherId, fileName, dataB64: '', ...(masterPassword === undefined ? {} : { masterPassword }) }, dataB64.length);
+    const plaintext = parseAttachmentInput(fileName, dataB64);
+    try {
+      return await this.addAttachmentBytes(cipherId, fileName, plaintext, masterPassword);
+    } finally {
+      plaintext.fill(0);
+    }
+  }
+
+  /** Borrow a staged file buffer while preserving attachment authorization and compensation. */
+  async addAttachmentBytes(
+    cipherId: string,
+    fileName: string,
+    fileBytes: Uint8Array,
+    masterPassword?: string,
+    bindFinalAuthority?: VaultFinalAuthorityBinder,
+    assertTransferCurrent: () => void = () => undefined,
+  ): Promise<VaultListing> {
+    assertTransferCurrent();
+    assertAttachmentFileName(fileName);
+    if (!(fileBytes instanceof Uint8Array) || fileBytes.byteLength > MAX_ATTACHMENT_PLAINTEXT_BYTES) {
+      throw new AppError('error', 'Attachment exceeds this client\'s size limit.');
+    }
     const result = await this.runVaultMutation(
       'attachment.create',
       async (runtime): Promise<
         | { readonly status: 'committed'; readonly listing: VaultListing }
         | { readonly status: 'rolled_back'; readonly error: unknown }
       > => {
+        assertTransferCurrent();
         const { operation, reconcile } = runtime;
         const cache = operation.cacheEnvelope!.response;
         const candidate = cache.ciphers.find((cipher) => cipher.id === cipherId);
@@ -4282,26 +4409,26 @@ export class VaultService {
         await this.assertRepromptCleared(decrypted, masterPassword, operation.assertCurrent);
         assertAttachmentFileNameAvailable(decrypted.attachments, fileName);
 
-        let plaintext: Uint8Array | undefined;
         let encrypted: Uint8Array | undefined;
         let cipherKey: SymmetricKey | undefined;
         let attachmentKey: SymmetricKey | undefined;
         try {
-          plaintext = parseAttachmentInput(fileName, dataB64);
+          assertTransferCurrent();
           cipherKey = await this.cipherFieldKey(cipher, operation.userKey, cache.profile);
           attachmentKey = generateAttachmentKey();
           const wrappedKey = await wrapAttachmentKey(attachmentKey, cipherKey);
-          encrypted = await encryptAttachmentFile(plaintext, attachmentKey);
+          encrypted = await encryptAttachmentFile(fileBytes, attachmentKey);
           const encryptedFileName = await encryptToText(fileName, cipherKey);
           await operation.assertCacheCurrent();
           assertAttachmentFileNameAvailable(decrypted.attachments, fileName);
           operation.assertLeaseCurrent();
+          assertTransferCurrent();
 
           const upload = await this.uploadPreparedAttachment(runtime, cipher, {
             wrappedKey,
             encryptedFileName,
             encrypted,
-          });
+          }, assertTransferCurrent);
           if (upload.status === 'rolled_back') return upload;
           const listing = await reconcile(() => this.syncAfterMutation(operation, (response) => {
             assertAttachmentUploadCommitted(
@@ -4315,13 +4442,12 @@ export class VaultService {
           }));
           return { status: 'committed', listing };
         } finally {
-          plaintext?.fill(0);
           encrypted?.fill(0);
           destroySymmetricKey(attachmentKey);
           if (cipher.key) destroySymmetricKey(cipherKey);
         }
       },
-      { cache: true },
+      { cache: true, ...(bindFinalAuthority ? { bindFinalAuthority } : {}) },
     );
     if (result.status === 'rolled_back') throw attachmentUploadFailure(result.error);
     return result.listing;
@@ -4335,26 +4461,32 @@ export class VaultService {
       readonly encryptedFileName: string;
       readonly encrypted: Uint8Array;
     },
+    assertTransferCurrent: () => void = () => undefined,
   ): Promise<PreparedAttachmentUploadResult> {
     const { operation, remote, remoteOnce, reconcile } = runtime;
     let receipt: AttachmentUploadSlotReceipt | undefined;
     try {
       receipt = await remote(
-        (accessToken) => operation.api.createAttachmentUploadSlot(accessToken, cipher.id, {
+        (accessToken) => {
+          assertTransferCurrent();
+          return operation.api.createAttachmentUploadSlot(accessToken, cipher.id, {
           key: prepared.wrappedKey,
           fileName: prepared.encryptedFileName,
           fileSize: prepared.encrypted.byteLength,
           adminRequest: false,
           lastKnownRevisionDate: cipher.revisionDate ?? null,
-        }),
+          });
+        },
         (value) => { receipt = value; },
       );
-      const upload = (accessToken: string) => operation.api.uploadAttachmentSlotData(
-        accessToken, cipher.id, receipt!, prepared.encryptedFileName, prepared.encrypted,
-      );
+      const upload = (accessToken: string) => {
+        assertTransferCurrent();
+        return operation.api.uploadAttachmentSlotData(accessToken, cipher.id, receipt!, prepared.encryptedFileName, prepared.encrypted);
+      };
       if (receipt.fileUploadType === 0) await remote(upload);
       // Type 1 is an Azure signed PUT. Its HTTP status does not describe the account bearer token.
       else await remoteOnce(() => upload(operation.token));
+      assertTransferCurrent();
       return { status: 'uploaded', receipt };
     } catch (error) {
       if (!receipt) throw error;

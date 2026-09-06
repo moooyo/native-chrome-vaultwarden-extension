@@ -182,9 +182,9 @@ describe('vw-send-section', () => {
     expect(el.validationError).toBeTruthy();
   });
 
-  it('disables existing Send actions while a file is encoding', async () => {
+  it('disables existing Send actions while a file upload is pending', async () => {
     const el = await mount();
-    el.encoding = true;
+    el.pending = true;
     await el.updateComplete;
     for (const button of el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.send .icon-btn')) {
       expect(button.disabled).toBe(true);
@@ -324,11 +324,11 @@ describe('vw-send-section unsaved draft protection', () => {
     expect(el.validationError).toBe('Choose a file to share');
   });
 
-  it('ignores a completed file read after lock invalidates the draft', async () => {
-    let finishRead!: (bytes: ArrayBuffer) => void;
-    const read = new Promise<ArrayBuffer>((resolve) => { finishRead = resolve; });
-    const file = new File(['old'], 'old.txt');
-    Object.defineProperty(file, 'arrayBuffer', { value: () => read });
+  it('emits the selected File without reading or encoding it and preserves it after upload failure', async () => {
+    const file = new File(['payload'], 'payload.bin');
+    const readWholeFile = vi.fn(() => { throw new Error('The whole file must not be read'); });
+    Object.defineProperty(file, 'arrayBuffer', { value: readWholeFile });
+    const slice = vi.spyOn(file, 'slice');
     const el = await mount();
     await openForm(el);
     changeKind(el, 'file');
@@ -339,14 +339,83 @@ describe('vw-send-section unsaved draft protection', () => {
     const created = vi.fn();
     el.addEventListener('vw-send-create', created);
     (el.shadowRoot!.querySelector('.form .btn-primary') as HTMLButtonElement).click();
-    expect(el.encoding).toBe(true);
+    expect(created).toHaveBeenCalledOnce();
+    expect(created.mock.calls[0]![0].detail).toEqual({
+      kind: 'file',
+      input: { name: 'payload.bin', deletionHours: 168, expirationHours: 168, hideEmail: false },
+      file,
+      fileName: 'payload.bin',
+    });
+    expect(readWholeFile).not.toHaveBeenCalled();
+    expect(slice).not.toHaveBeenCalled();
 
+    el.pending = true;
+    await el.updateComplete;
+    expect(el.promptForUnsavedEdits()).toBe(false);
+    expect(fileInput.disabled).toBe(true);
+    el.pending = false;
+    el.status = { tone: 'danger', message: 'Upload failed' };
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('.form')).not.toBeNull();
+    expect(fileInput.files?.[0]).toBe(file);
+    (el.shadowRoot!.querySelector('.form .btn-primary') as HTMLButtonElement).click();
+    expect(created).toHaveBeenCalledTimes(2);
+    expect(created.mock.calls[1]![0].detail.file).toBe(file);
+    el.status = { tone: 'success', message: 'Created' };
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('.form')).toBeNull();
+  });
+
+  it.each([
+    { size: 100 * 1024 * 1024, accepted: true },
+    { size: 100 * 1024 * 1024 + 1, accepted: false },
+  ])('preserves the 100 MiB file limit for $size bytes without reading the file', async ({ size, accepted }) => {
+    const file = new File(['payload'], 'payload.bin');
+    Object.defineProperty(file, 'size', { value: size });
+    const readWholeFile = vi.fn(() => { throw new Error('The whole file must not be read'); });
+    Object.defineProperty(file, 'arrayBuffer', { value: readWholeFile });
+    const el = await mount();
+    await openForm(el);
+    changeKind(el, 'file');
+    await el.updateComplete;
+    const fileInput = el.shadowRoot!.querySelector('[data-file]') as HTMLInputElement;
+    Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+    fileInput.dispatchEvent(new Event('change'));
+    const created = vi.fn();
+    el.addEventListener('vw-send-create', created);
+    (el.shadowRoot!.querySelector('.form .btn-primary') as HTMLButtonElement).click();
+
+    expect(created).toHaveBeenCalledTimes(accepted ? 1 : 0);
+    expect(readWholeFile).not.toHaveBeenCalled();
+    if (!accepted) expect(el.validationError).toContain('100 MB');
+  });
+
+  it('clears the selected file when lock invalidates a pending upload draft', async () => {
+    const el = await mount();
+    await openForm(el);
+    changeKind(el, 'file');
+    await el.updateComplete;
+    const fileInput = el.shadowRoot!.querySelector('[data-file]') as HTMLInputElement;
+    Object.defineProperty(fileInput, 'files', { value: [new File(['old'], 'old.txt')], configurable: true });
+    fileInput.dispatchEvent(new Event('change'));
+    const created = vi.fn();
+    el.addEventListener('vw-send-create', created);
+    (el.shadowRoot!.querySelector('.form .btn-primary') as HTMLButtonElement).click();
+    el.pending = true;
+    await el.updateComplete;
     el.locked = true;
     await el.updateComplete;
-    finishRead(new Uint8Array([1, 2, 3]).buffer);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(created).not.toHaveBeenCalled();
     expect(el.shadowRoot!.querySelector('.form')).toBeNull();
+
+    el.pending = false;
+    el.locked = false;
+    await el.updateComplete;
+    await openForm(el);
+    changeKind(el, 'file');
+    await el.updateComplete;
+    (el.shadowRoot!.querySelector('.form .btn-primary') as HTMLButtonElement).click();
+    expect(created).toHaveBeenCalledOnce();
+    expect(el.validationError).toBe('Choose a file to share');
   });
 
   it('does not let a late success for an abandoned submission clear a newer draft', async () => {

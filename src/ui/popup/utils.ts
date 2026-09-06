@@ -46,12 +46,20 @@ export async function fileToBase64(file: Blob, maxBytes?: number): Promise<strin
 
 /** Save decrypted attachment bytes as a file, revoking the object URL once the click is dispatched. */
 export function triggerDownload(dataB64: string, fileName: string): void {
-  const url = URL.createObjectURL(new Blob([base64ToBytes(dataB64) as BlobPart]));
+  triggerBlobDownload(new Blob([base64ToBytes(dataB64) as BlobPart]), fileName);
+}
+
+/** Save a transferred attachment without building another complete byte array or base64 string. */
+export function triggerBlobDownload(blob: Blob, fileName: string): void {
+  const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
+  try {
+    anchor.href = url;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+  } finally {
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
 }

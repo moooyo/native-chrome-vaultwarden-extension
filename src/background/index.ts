@@ -21,6 +21,8 @@ import {
 import { createVaultTransferJournalStore } from '../core/vault/vault-transfer-journal.js';
 import { createBrowserStore, hardenStorageAccessLevels } from '../platform/store.js';
 import { createRouter } from './router.js';
+import { BinaryTransferPortHandler } from './binary-transfer-port-handler.js';
+import { createBinaryTransferProduction } from './binary-transfer-production.js';
 import { createRequestContext, isMessageAllowed } from './sender-guard.js';
 import {
   createSettingsService,
@@ -652,6 +654,8 @@ let clearOwnedClipboardOnSessionTransition = async (): Promise<void> => {};
 let startVaultTimeoutTransition = (): void => {};
 let settleVaultTimeoutTransition = async (_event: SessionTransitionEvent): Promise<void> => {};
 let revokeVaultTransfers = (): void => {};
+let revokeBinaryTransfers = (): void => {};
+let revokeBinaryTransferPolicy = (): void => {};
 let reconcileVaultTransfers = async (): Promise<void> => {};
 let handleVaultNotificationTransition = (_event: SessionTransitionEvent): void => {};
 let clearDeviceLoginApprovalBadge = (): void => {};
@@ -810,6 +814,7 @@ const auth: AuthService = new AuthService({
     sessionGate.handleTransition(event);
     handleToolbarSessionTransition(event);
     if (event.phase === 'start') {
+      revokeBinaryTransfers();
       revokeClientEventAcks();
       revokeAutofillTotpCopies();
       inlineGeneratorTracks.revokeAll();
@@ -1076,35 +1081,38 @@ const vault = new VaultService({
     authorizeOrganizationDataOwnershipTransport(serverCapabilities)
   ),
   authorizeSshCipherType5Write: () => authorizeSshCipherType5Write(serverCapabilities),
-  onPolicySnapshotPublished: () => applyEnterprisePolicySideEffects({
-    applyVaultTimeout: () => vaultTimeout.reconfigure(),
-    invalidateAutofill: async () => {
-      manualAutofillGrants.revokeAll();
-      keyboardGrants.revokeAll();
-      revokeCommandCycles();
-      revokeToolbarMatches();
-      autofillPolicyGate.invalidate();
-      await autofillContinuation.reconcilePolicy();
-    },
-    clearPendingSaves: async () => {
-      await Promise.all([pendingSaves.clear(), saveCaptureCoordinator.clear()]);
-    },
-    clearUsernameStages: () => usernameStages.clear(),
-    enforceSessionPolicy: async () => {
-      await auth.enforceCurrentEnterprisePolicy();
-      await reconcileSsoRequiredCache();
-    },
-    refreshIdleDetection: () => idleLock.applyDetection(),
-    refreshAutofill: async () => {
-      await Promise.all([
-        refreshAutofillClients(),
-        notifyEnterprisePolicyClients('refresh'),
-        refreshToolbarActiveTabs(),
-      ]);
-    },
-    refreshContextMenu: () => refreshContextMenu(),
-    warn: (effect, error) => console.warn('enterprise_policy_side_effect_failed', effect, error),
-  }),
+  onPolicySnapshotPublished: () => {
+    revokeBinaryTransferPolicy();
+    return applyEnterprisePolicySideEffects({
+      applyVaultTimeout: () => vaultTimeout.reconfigure(),
+      invalidateAutofill: async () => {
+        manualAutofillGrants.revokeAll();
+        keyboardGrants.revokeAll();
+        revokeCommandCycles();
+        revokeToolbarMatches();
+        autofillPolicyGate.invalidate();
+        await autofillContinuation.reconcilePolicy();
+      },
+      clearPendingSaves: async () => {
+        await Promise.all([pendingSaves.clear(), saveCaptureCoordinator.clear()]);
+      },
+      clearUsernameStages: () => usernameStages.clear(),
+      enforceSessionPolicy: async () => {
+        await auth.enforceCurrentEnterprisePolicy();
+        await reconcileSsoRequiredCache();
+      },
+      refreshIdleDetection: () => idleLock.applyDetection(),
+      refreshAutofill: async () => {
+        await Promise.all([
+          refreshAutofillClients(),
+          notifyEnterprisePolicyClients('refresh'),
+          refreshToolbarActiveTabs(),
+        ]);
+      },
+      refreshContextMenu: () => refreshContextMenu(),
+      warn: (effect, error) => console.warn('enterprise_policy_side_effect_failed', effect, error),
+    });
+  },
   onSyncSuccess: async (identity) => {
     try {
       await vaultSyncScheduler?.recordSuccessfulSync(identity);
@@ -2745,6 +2753,20 @@ const saveCaptureBrowserRegistered = registerAutofillSaveCaptureBrowserListeners
 );
 if (!saveCaptureBrowserRegistered) console.warn('autofill_save_capture_listener_unavailable');
 const transferReady = createVaultTransferReadiness(securityReady, vaultTransferLifecycle);
+const binaryTransferPortHandler = new BinaryTransferPortHandler({
+  ...createBinaryTransferProduction({
+    sessionGate,
+    accountGate,
+    policyGate: enterprisePolicyGate,
+    settings,
+    timeout: vaultTimeout,
+    vault,
+  }),
+  ready: securityReady.then(() => undefined),
+  releaseGate: vaultReleaseGate,
+});
+revokeBinaryTransfers = () => binaryTransferPortHandler.invalidateAll();
+revokeBinaryTransferPolicy = () => binaryTransferPortHandler.invalidatePolicy();
 const vaultTransferPortHandler = new VaultTransferPortHandler(
   vaultTransferController,
   transferReady,
@@ -2767,6 +2789,7 @@ const backgroundPortDispatcher = createBackgroundPortDispatcher<Runtime.Port>({
   extensionBaseUrl: browser.runtime.getURL(''),
   extensionId: browser.runtime.id,
   vaultTransferHandler: vaultTransferPortHandler as unknown as BackgroundPortHandler<Runtime.Port>,
+  binaryTransferHandler: binaryTransferPortHandler as unknown as BackgroundPortHandler<Runtime.Port>,
   websitePasskeyHandler: websitePasskeyPortHandler as unknown as BackgroundPortHandler<Runtime.Port>,
 });
 browser.runtime.onConnect.addListener(backgroundPortDispatcher);

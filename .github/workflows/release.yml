@@ -89,6 +89,9 @@ jobs:
       - name: Chromium autofill browser gate
         run: xvfb-run --auto-servernum npm run verify:autofill-browser
 
+      - name: Chromium binary transport gate
+        run: xvfb-run --auto-servernum npm run verify:binary-transport-browser
+
       - name: Prepare and verify release assets
         id: release
         run: npm run release:prepare -- --tag "$RELEASE_TAG"

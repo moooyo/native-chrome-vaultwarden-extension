@@ -1230,27 +1230,30 @@ describe('vw-item-detail fields and attachments', () => {
     }));
   });
 
-  it('encodes an attachment and emits the typed add event', async () => {
+  it('forwards the selected attachment without reading the whole file', async () => {
     const el = await mount();
     const add = vi.fn();
     el.addEventListener('vw-attachment-add', add);
     const input = q<HTMLInputElement>(el, '[data-att-file]');
+    const file = new File([new Uint8Array([104, 105])], 'hi.txt');
+    const read = vi.spyOn(file, 'arrayBuffer');
     Object.defineProperty(input, 'files', {
-      value: [new File([new Uint8Array([104, 105])], 'hi.txt')],
+      value: [file],
       configurable: true,
     });
     input.dispatchEvent(new Event('change'));
     await flush(el);
     expect(add).toHaveBeenCalledWith(expect.objectContaining({
-      detail: { cipherId: 'cipher-1', fileName: 'hi.txt', dataB64: btoa('hi') },
+      detail: { cipherId: 'cipher-1', fileName: 'hi.txt', file },
     }));
+    expect(read).not.toHaveBeenCalled();
   });
 
   it.each([
     { label: 'zero', size: 0 },
     { label: 'limit - 1', size: MAX_ATTACHMENT_FILE_BYTES - 1 },
     { label: 'limit', size: MAX_ATTACHMENT_FILE_BYTES },
-  ])('reads an attachment at $label bytes', async ({ size }) => {
+  ])('forwards an attachment at $label bytes without reading it', async ({ size }) => {
     const el = await mount();
     const add = vi.fn();
     el.addEventListener('vw-attachment-add', add);
@@ -1263,7 +1266,7 @@ describe('vw-item-detail fields and attachments', () => {
     input.dispatchEvent(new Event('change'));
     await flush(el);
 
-    expect(read).toHaveBeenCalledOnce();
+    expect(read).not.toHaveBeenCalled();
     expect(add).toHaveBeenCalledOnce();
   });
 

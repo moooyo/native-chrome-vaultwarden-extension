@@ -40,6 +40,8 @@ import { createGeneratorPolicySnapshot } from '../../core/generator/enterprise-p
 
 type Req = Parameters<OptionsRequest>[0];
 type Res = Awaited<ReturnType<OptionsRequest>>;
+type BinaryUpload = NonNullable<OptionsDeps['uploadBinaryTransfer']>;
+type BinaryUploadResult = Awaited<ReturnType<BinaryUpload>>;
 type ReqHandler<K extends Req['type']> = (req: Extract<Req, { type: K }>) => Res | Promise<Res>;
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -176,6 +178,7 @@ function makeDeps(
   });
   return {
     request: (req) => { calls.push(req.type); return wrapped(req); },
+    uploadBinaryTransfer: vi.fn(async () => ({ ok: true as const, data: null })),
     requestOrigins: vi.fn(async () => true),
     createVaultTransferClient: vi.fn(() => transferClient),
     extensionVersion: () => '1.3.0',
@@ -1217,6 +1220,140 @@ describe('vw-options-app', () => {
     expect(calls).toContain('sends.createText');
     expect((navigator.clipboard.writeText as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith('https://s');
     expect(scheduleClear).toHaveBeenCalledWith({ type: 'clipboard.scheduleClear', value: 'https://s' });
+  });
+
+  it('creates a file Send through the binary transfer client without reading the whole file', async () => {
+    const calls: string[] = [];
+    const deps = makeDeps({}, calls);
+    const upload = vi.fn<BinaryUpload>(async () => ({
+      ok: true,
+      data: { send: { url: 'https://file-send' } },
+    }));
+    deps.uploadBinaryTransfer = upload;
+    const app = await mount(deps);
+    const file = new File(['payload'], 'payload.bin');
+    const readWholeFile = vi.fn(() => { throw new Error('The whole file must not be read'); });
+    Object.defineProperty(file, 'arrayBuffer', { value: readWholeFile });
+    const slice = vi.spyOn(file, 'slice');
+    const input = { name: 'Payload', deletionHours: 168 };
+
+    shell(app).dispatchEvent(new CustomEvent('vw-send-create', {
+      detail: { kind: 'file', input, file, fileName: file.name },
+      bubbles: true,
+      composed: true,
+    }));
+    await nextTask();
+
+    expect(upload).toHaveBeenCalledWith({
+      type: 'sends.createFile', input, fileName: file.name, expectedBytes: file.size,
+    }, file, { signal: expect.any(AbortSignal) });
+    expect(upload.mock.calls[0]![2]?.signal?.aborted).toBe(false);
+    expect(readWholeFile).not.toHaveBeenCalled();
+    expect(slice).not.toHaveBeenCalled();
+    expect(calls).not.toContain('sends.createFile');
+    expect(calls.filter((type) => type === 'sends.list')).toHaveLength(2);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://file-send');
+    expect(app.sendStatus?.tone).toBe('success');
+    expect(app.pending).toBe(false);
+  });
+
+  it('reports file transfer failure and releases the pending state without copying a link', async () => {
+    const calls: string[] = [];
+    const deps = makeDeps({}, calls);
+    const result = deferred<BinaryUploadResult>();
+    deps.uploadBinaryTransfer = vi.fn(() => result.promise);
+    const app = await mount(deps);
+    const file = new File(['payload'], 'payload.bin');
+    shell(app).dispatchEvent(new CustomEvent('vw-send-create', {
+      detail: { kind: 'file', input: { name: 'Payload', deletionHours: 168 }, file, fileName: file.name },
+      bubbles: true,
+      composed: true,
+    }));
+    expect(app.pending).toBe(true);
+
+    result.resolve({ ok: false, error: { code: 'file_read', message: 'File could not be read' } });
+    await nextTask();
+    expect(app.pending).toBe(false);
+    expect(app.sendStatus).toEqual({ tone: 'danger', message: 'File could not be read' });
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(calls.filter((type) => type === 'sends.list')).toHaveLength(1);
+  });
+
+  it.each(['keyMaterial', 'account', 'locked', 'disconnected'] as const)(
+    'aborts file upload after %s invalidation and ignores a late result',
+    async (reason) => {
+      let state: 'unlocked' | 'locked' = 'unlocked';
+      const result = deferred<BinaryUploadResult>();
+      const upload = vi.fn<BinaryUpload>(() => result.promise);
+      const deps = makeDeps({ 'auth.getState': async () => ({ ok: true, data: { state } }) });
+      deps.uploadBinaryTransfer = upload;
+      const app = await mount(deps);
+      const file = new File(['payload'], 'payload.bin');
+      shell(app).dispatchEvent(new CustomEvent('vw-send-create', {
+        detail: { kind: 'file', input: { name: 'Payload', deletionHours: 168 }, file, fileName: file.name },
+        bubbles: true,
+        composed: true,
+      }));
+      const signal = upload.mock.calls[0]![2]!.signal!;
+      expect(signal.aborted).toBe(false);
+      expect(app.pending).toBe(true);
+
+      state = 'locked';
+      if (reason === 'locked') {
+        app.locked = true;
+        await app.updateComplete;
+      } else if (reason === 'disconnected') {
+        app.remove();
+      } else {
+        const listener = (deps.subscribeSessionChanges as ReturnType<typeof vi.fn>)
+          .mock.calls[0]![0] as (kind: 'keyMaterial' | 'account') => void;
+        listener(reason);
+      }
+      expect(signal.aborted).toBe(true);
+      expect(app.pending).toBe(false);
+
+      result.resolve({ ok: true, data: { send: { url: 'https://stale-file-send' } } });
+      await nextTask();
+      expect(app.sendStatus).toBeUndefined();
+      expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps a newer upload pending when an aborted upload resolves after an account change', async () => {
+    const first = deferred<BinaryUploadResult>();
+    const second = deferred<BinaryUploadResult>();
+    const upload = vi.fn<BinaryUpload>()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const deps = makeDeps();
+    deps.uploadBinaryTransfer = upload;
+    const app = await mount(deps);
+    const file = new File(['payload'], 'payload.bin');
+    const create = (): void => {
+      shell(app).dispatchEvent(new CustomEvent('vw-send-create', {
+        detail: { kind: 'file', input: { name: 'Payload', deletionHours: 168 }, file, fileName: file.name },
+        bubbles: true,
+        composed: true,
+      }));
+    };
+    create();
+    const listener = (deps.subscribeSessionChanges as ReturnType<typeof vi.fn>)
+      .mock.calls[0]![0] as (kind: 'keyMaterial' | 'account') => void;
+    listener('account');
+    expect(upload.mock.calls[0]![2]?.signal?.aborted).toBe(true);
+    await vi.waitFor(() => expect(app.locked).toBe(false));
+    create();
+    expect(upload).toHaveBeenCalledTimes(2);
+
+    first.resolve({ ok: true, data: { send: { url: 'https://stale-file-send' } } });
+    await nextTask();
+    expect(app.pending).toBe(true);
+    expect(app.sendStatus).toBeUndefined();
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    second.resolve({ ok: true, data: null });
+    await nextTask();
+    expect(app.pending).toBe(false);
+    expect(app.sendStatus?.tone).toBe('success');
   });
 
   it('reports clipboard failure instead of claiming a Send link was copied', async () => {

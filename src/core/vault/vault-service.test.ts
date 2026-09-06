@@ -28,6 +28,7 @@ import { hexToBytes, base64ToBytes, bytesToBase64, bytesToBase64Url, base64UrlTo
 import { hmacSha256 } from '../crypto/primitives.js';
 import { decryptToText, EncStringMacError } from '../crypto/encstring.js';
 import * as encstringNs from '../crypto/encstring.js';
+import * as decryptNs from './decrypt.js';
 import { derToRawSignature } from './fido2.js';
 import { generateFido2Keypair, type GeneratedFido2Keypair } from './fido2-create.js';
 import { decryptAttachmentFile, encryptAttachmentFile, generateAttachmentKey, wrapAttachmentKey } from './attachments.js';
@@ -36,6 +37,7 @@ import { FIELD_VECTOR, URL_VECTOR, USER_KEY_VECTOR, RSA_VECTOR, ORG_KEY_VECTOR }
 import type { AttachmentUploadRequest, CipherBulkShareRequest, CipherRequest, CipherResponse, Fido2CredentialData, SendRequest, SyncResponse } from '../api/types.js';
 import {
   DERIVED_VAULT_CACHE_KEY,
+  MAX_DERIVED_VAULT_CACHE_STORAGE_BYTES,
   RAW_VAULT_CACHE_KEY,
   type RawVaultEnvelope,
 } from './vault-cache-repository.js';
@@ -951,6 +953,21 @@ function pauseNextUserKeyLoad(session: SessionManager): { started: Promise<void>
   return { started, release };
 }
 
+function pauseNextSummaryDecryption() {
+  const original = decryptNs.decryptCipherSummary;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const decryptSummary = vi.spyOn(decryptNs, 'decryptCipherSummary')
+    .mockImplementationOnce(async (...args) => {
+      markStarted();
+      await gate;
+      return original(...args);
+    });
+  return { started, release, decryptSummary };
+}
+
 /** Seeds a personal login cipher (id `opts.id`) that already carries one encrypted fido2Credential at
  *  `opts.rpId`, plus a password/uri, and syncs so the raw CipherResponse is cached. Returns the service
  *  and a snapshot of the fixture's own EncStrings to compare the PUT request against verbatim. */
@@ -1562,6 +1579,161 @@ describe('VaultService', () => {
     await expect(localStore.get('vaultSummaries')).resolves.toBeUndefined();
     await expect(sessionStore.get(DERIVED_VAULT_CACHE_KEY)).resolves.toBeUndefined();
     await expect(service.listItems()).resolves.toEqual(synced);
+  });
+
+  it.each(['quota', 'oversized'] as const)(
+    'shares in-flight summary decryption across eight readers after a %s cache fallback',
+    async (fallback) => {
+      const response = makeSync();
+      if (fallback === 'oversized') {
+        response.domains = {
+          globalEquivalentDomains: [{
+            type: 0,
+            domains: ['x'.repeat(MAX_DERIVED_VAULT_CACHE_STORAGE_BYTES)],
+            excluded: true,
+          }],
+        };
+      }
+      const { service, sessionStore } = await makeService(response, {
+        rejectDerivedWrites: fallback === 'quota',
+      });
+      const expected = await service.sync();
+      const decryptSummary = vi.spyOn(decryptNs, 'decryptCipherSummary');
+      try {
+        const listings = await Promise.all(Array.from({ length: 8 }, () => service.listItems()));
+
+        expect(decryptSummary).toHaveBeenCalledTimes(1);
+        for (const listing of listings) {
+          expect(listing).toEqual(expected);
+          expect(listing.items[0]).not.toHaveProperty('password');
+        }
+        await expect(sessionStore.get(DERIVED_VAULT_CACHE_KEY)).resolves.toBeUndefined();
+        // Finished work is released: the fallback intentionally retains no second plaintext cache.
+        await expect(service.listItems()).resolves.toEqual(expected);
+        expect(decryptSummary).toHaveBeenCalledTimes(2);
+      } finally {
+        decryptSummary.mockRestore();
+      }
+    },
+  );
+
+  it('allows a fresh rebuild after a shared rebuild fails', async () => {
+    const { service, session } = await makeService();
+    const expected = await service.sync();
+    await service.purgeDecryptedCaches();
+    const privateKeyLoad = vi.spyOn(session, 'loadPrivateKey')
+      .mockRejectedValueOnce(new Error('temporary key storage failure'));
+
+    const failed = await Promise.allSettled(Array.from({ length: 8 }, () => service.listItems()));
+
+    expect(failed).toHaveLength(8);
+    for (const result of failed) {
+      expect(result).toMatchObject({
+        status: 'rejected',
+        reason: { message: 'temporary key storage failure' },
+      });
+    }
+    expect(privateKeyLoad).toHaveBeenCalledTimes(1);
+    await expect(service.listItems()).resolves.toEqual(expected);
+    expect(privateKeyLoad).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['session', 'account', 'identity', 'policy'] as const)(
+    'rejects every shared rebuild waiter when the %s authority changes',
+    async (authority) => {
+      let generation = 0;
+      let epoch = 0;
+      const accountGate = new AccountLeaseGate();
+      accountGate.initialize({ serverUrl: 'https://vault.example', accountIdentity: 'u@example.com' });
+      const { service, policyGate, sessionStore } = await makeService(makeSync(), {
+        accountGate,
+        getIdentityEpoch: () => epoch,
+        sessionGate: {
+          capture: () => ({ generation }),
+          assert: (lease) => {
+            if (lease.generation !== generation) throw new AppError('locked', 'Vault session changed');
+          },
+        },
+      });
+      await service.sync();
+      await service.purgeDecryptedCaches();
+      const paused = pauseNextSummaryDecryption();
+      const pending = Promise.allSettled(Array.from({ length: 8 }, () => service.listItems()));
+      try {
+        await paused.started;
+        if (authority === 'session') generation++;
+        else if (authority === 'account') accountGate.beginAccountTransition();
+        else if (authority === 'identity') epoch++;
+        else policyGate.invalidate();
+        paused.release();
+
+        for (const result of await pending) expect(result.status).toBe('rejected');
+        expect(paused.decryptSummary).toHaveBeenCalledTimes(1);
+        await expect(sessionStore.get(DERIVED_VAULT_CACHE_KEY)).resolves.toBeUndefined();
+      } finally {
+        paused.release();
+        paused.decryptSummary.mockRestore();
+      }
+    },
+  );
+
+  it('rebuilds in a new unlocked session without joining the previous session task', async () => {
+    let generation = 0;
+    const { service, session } = await makeService(makeSync(), {
+      sessionGate: {
+        capture: () => ({ generation }),
+        assert: (lease) => {
+          if (lease.generation !== generation) throw new AppError('locked', 'Vault session changed');
+        },
+      },
+    });
+    const expected = await service.sync();
+    await service.purgeDecryptedCaches();
+    const paused = pauseNextSummaryDecryption();
+    const previous = Promise.allSettled([service.listItems()]);
+    try {
+      await paused.started;
+      generation++;
+      await session.lock();
+      await session.saveUnlocked({
+        email: 'u@example.com', accessToken: 'access', refreshToken: 'refresh', expiresAt: 999999,
+        protectedKey: USER_KEY_VECTOR.akey, kdf: 0, kdfIterations: 5000,
+        userKey: symmetricKeyFromBytes(hexToBytes(USER_KEY_VECTOR.userKeyHex)),
+      });
+
+      await expect(service.listItems()).resolves.toEqual(expected);
+      expect(paused.decryptSummary).toHaveBeenCalledTimes(2);
+      paused.release();
+      expect((await previous)[0]?.status).toBe('rejected');
+      await expect(service.listItems()).resolves.toEqual(expected);
+    } finally {
+      paused.release();
+      paused.decryptSummary.mockRestore();
+    }
+  });
+
+  it('keeps a replacement raw generation separate from a pending rebuild', async () => {
+    const { service, api } = await makeService();
+    await service.sync();
+    await service.purgeDecryptedCaches();
+    const replacement = makeSync();
+    replacement.ciphers[0]!.name = await encUnder('Updated item', testUserKey);
+    const paused = pauseNextSummaryDecryption();
+    const previous = Promise.allSettled([service.listItems()]);
+    try {
+      await paused.started;
+      stubApi(api).sync = vi.fn(async () => replacement);
+
+      const current = await service.sync();
+      expect(current.items[0]?.name).toBe('Updated item');
+      expect(paused.decryptSummary).toHaveBeenCalledTimes(2);
+      paused.release();
+      expect((await previous)[0]?.status).toBe('rejected');
+      await expect(service.listItems()).resolves.toEqual(current);
+    } finally {
+      paused.release();
+      paused.decryptSummary.mockRestore();
+    }
   });
 
   it('eagerly removes legacy local derived caches during worker initialization', async () => {
@@ -3505,6 +3677,43 @@ describe('VaultService', () => {
       expect(blob.every((byte) => byte === 0)).toBe(true);
     });
 
+    it('getAttachmentBytes transfers plaintext ownership with a final authorization fence', async () => {
+      const { sync, blob } = await syncWithAttachment();
+      const { service, api } = await makeService(sync);
+      vi.mocked(api.downloadAttachment).mockResolvedValue(blob);
+      await service.sync();
+      const authorities: Array<() => void> = [];
+      const result = await service.getAttachmentBytes('cipher-1', 'att-1', undefined, (assertCurrent) => authorities.push(assertCurrent));
+      expect(new TextDecoder().decode(result.bytes)).toBe('secret-file-contents');
+      expect(result.fileName).toBe('report.pdf');
+      expect(authorities).toHaveLength(1);
+      expect(() => authorities[0]!()).not.toThrow();
+      expect(blob.every((byte) => byte === 0)).toBe(true);
+      result.bytes.fill(0);
+    });
+
+    it('rejects an oversized legacy attachment response before base64 encoding and clears its bytes', async () => {
+      const { service } = await makeService();
+      const bytes = new Uint8Array(48 * 1024 * 1024).fill(73);
+      vi.spyOn(service, 'getAttachmentBytes').mockResolvedValue({ fileName: 'large.bin', bytes });
+      await expect(service.getAttachment('cipher-1', 'att-1')).rejects.toThrow('chunked file transfer');
+      expect(bytes.every((value) => value === 0)).toBe(true);
+    });
+
+    it('discards a downloaded attachment after its owning transfer is cancelled', async () => {
+      const { sync, blob } = await syncWithAttachment();
+      const { service, api } = await makeService(sync);
+      let live = true;
+      vi.mocked(api.downloadAttachment).mockImplementation(async () => { live = false; return blob; });
+      await service.sync();
+      const bind = vi.fn();
+      await expect(service.getAttachmentBytes('cipher-1', 'att-1', undefined, bind, () => {
+        if (!live) throw new Error('transfer cancelled');
+      })).rejects.toThrow('transfer cancelled');
+      expect(bind).not.toHaveBeenCalled();
+      expect(blob.every((byte) => byte === 0)).toBe(true);
+    });
+
     it('decrypts a personal legacy attachment directly with the UserKey', async () => {
       const plain = new TextEncoder().encode('legacy-personal-contents');
       const blob = await encryptAttachmentFile(plain, testUserKey);
@@ -3825,6 +4034,26 @@ describe('VaultService', () => {
       expect(api.sync).toHaveBeenCalled();
     });
 
+    it('addAttachmentBytes preserves the borrowed buffer and binds final authority', async () => {
+      const { service, api } = await makeService();
+      await service.sync();
+      const bytes = Uint8Array.of(1, 2, 3);
+      const bind = vi.fn();
+      await service.addAttachmentBytes('cipher-1', 'bytes.bin', bytes, undefined, bind);
+      expect(bytes).toEqual(Uint8Array.of(1, 2, 3));
+      expect(bind).toHaveBeenCalledOnce();
+      expect(api.uploadAttachmentSlotData).toHaveBeenCalledOnce();
+    });
+
+    it('does not allocate an attachment slot for a cancelled transfer', async () => {
+      const { service, api } = await makeService();
+      await service.sync();
+      await expect(service.addAttachmentBytes('cipher-1', 'cancel.bin', Uint8Array.of(1), undefined, undefined, () => {
+        throw new Error('transfer cancelled');
+      })).rejects.toThrow('transfer cancelled');
+      expect(api.createAttachmentUploadSlot).not.toHaveBeenCalled();
+    });
+
     it('rejects an exact duplicate of a decrypted attachment file name before remote I/O', async () => {
       const { sync } = await syncWithAttachment();
       const { service, api } = await makeService(sync);
@@ -4113,6 +4342,42 @@ describe('VaultService', () => {
       expect(summary.fileName).toBe('secret.pdf');
       expect(summary.url).toContain('/#/send/acc1/');
     });
+
+    it('createFileSendBytes borrows plaintext and wipes its encrypted upload buffer', async () => {
+      const { service, api } = await makeServiceWithRaw();
+      stubApi(api).createSendFile = vi.fn(async (_t: string, req: { file: { fileName: string } }) => ({ url: '/sends/s1/file/f1', sendResponse: { ...req, id: 's1', accessId: 'acc1', file: { id: 'f1', fileName: req.file.fileName, sizeName: '3 Bytes' } } }));
+      stubApi(api).uploadSendFileData = vi.fn(async () => {});
+      const bytes = Uint8Array.of(1, 2, 3);
+      const bind = vi.fn();
+      const summary = await service.createFileSendBytes({ name: 'Doc', deletionDays: 7 }, bytes, 'secret.pdf', 'http://localhost:8080', bind);
+      expect(summary.fileName).toBe('secret.pdf');
+      expect(bytes).toEqual(Uint8Array.of(1, 2, 3));
+      expect(bind).toHaveBeenCalledOnce();
+      const uploaded = vi.mocked(api.uploadSendFileData).mock.calls[0]![2];
+      expect(uploaded.every((value) => value === 0)).toBe(true);
+    });
+
+    it('does not create a Send for a cancelled transfer', async () => {
+      const { service, api } = await makeServiceWithRaw();
+      stubApi(api).createSendFile = vi.fn();
+      await expect(service.createFileSendBytes({ name: 'Doc' }, Uint8Array.of(1), 'cancel.bin', 'http://localhost:8080', undefined, () => {
+        throw new Error('transfer cancelled');
+      })).rejects.toThrow('transfer cancelled');
+      expect(api.createSendFile).not.toHaveBeenCalled();
+    });
+
+    it('keeps file Sends above the legacy JSON budget available through the byte entry point', async () => {
+      const { service, api } = await makeServiceWithRaw();
+      stubApi(api).createSendFile = vi.fn(async (_t: string, req: { file: { fileName: string } }) => ({ url: '/sends/s1/file/f1', sendResponse: { ...req, id: 's1', accessId: 'acc1', file: { id: 'f1', fileName: req.file.fileName, sizeName: '48 MiB' } } }));
+      stubApi(api).uploadSendFileData = vi.fn(async () => {});
+      const bytes = new Uint8Array(48 * 1024 * 1024);
+      const summary = await service.createFileSendBytes({ name: 'Large', deletionDays: 7 }, bytes, 'large.bin', 'http://localhost:8080');
+      expect(summary.fileName).toBe('large.bin');
+      expect(api.uploadSendFileData).toHaveBeenCalledOnce();
+      const encrypted = vi.mocked(api.uploadSendFileData).mock.calls[0]![2];
+      expect(encrypted.byteLength).toBeGreaterThan(bytes.byteLength);
+      expect(encrypted.every((value) => value === 0)).toBe(true);
+    }, 60_000);
 
     it('createFileSend deletes the orphan send if the blob upload fails', async () => {
       const { service, api } = await makeServiceWithRaw();
