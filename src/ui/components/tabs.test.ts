@@ -81,6 +81,19 @@ describe('vw-tabs', () => {
     expect(otherButton.tabIndex).toBe(-1);
   });
 
+  it('keeps the tablist reachable when its previous selection is no longer available', async () => {
+    const tabs = await mountTabs();
+    tabs.selected = 'removed-tab';
+    await tabs.updateComplete;
+    const buttons = Array.from(tabs.shadowRoot!.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    expect(buttons.map((button) => button.tabIndex)).toEqual([0, -1]);
+    buttons[0]!.focus();
+    tabs.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    await tabs.updateComplete;
+    expect(tabs.selected).toBe('all');
+    expect(tabs.shadowRoot!.activeElement).toBe(buttons[1]);
+  });
+
   it('selects a tab on click and dispatches a composed, bubbling vw-tab-change event', async () => {
     const tabs = await mountTabs();
     const changed = vi.fn();

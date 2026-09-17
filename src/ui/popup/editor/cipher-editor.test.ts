@@ -117,11 +117,12 @@ function editorSaveDetail(el: VwCipherEditor): Promise<EditorSaveDetail> {
   });
 }
 
-it('lays out a scroll region under a header with back + save controls', async () => {
+it('keeps save and feedback outside the scrolling draft', async () => {
   const el = await mount(ctx());
   expect(el.shadowRoot!.querySelector('[data-scroll]')).not.toBeNull();
   expect(el.shadowRoot!.querySelector('[data-back]')).not.toBeNull();
-  expect(el.shadowRoot!.querySelector('[data-save]')).not.toBeNull();
+  expect(el.shadowRoot!.querySelector('.action-bar [data-save]')).not.toBeNull();
+  expect(el.shadowRoot!.querySelector('[data-scroll] [data-save]')).toBeNull();
 });
 
 describe('vw-cipher-editor login', () => {
@@ -689,6 +690,34 @@ describe('vw-cipher-editor custom fields', () => {
 
 describe('vw-cipher-editor create destination', () => {
   afterEach(() => document.body.replaceChildren());
+
+  it('keeps one draft when navigating and collapsing advanced fields', async () => {
+    const el = await mount(ctx({ input: { type: 1, name: 'Single draft' } }));
+    await setInput(el, '[data-username]', 'alice');
+    q<HTMLButtonElement>(el, '[data-section-jump="websites"]').click();
+    await el.updateComplete;
+    expect(q<HTMLDetailsElement>(el, '#websites').open).toBe(true);
+    await setInput(el, '[data-uri="0"]', 'https://example.com');
+    const websites = q<HTMLDetailsElement>(el, '#websites');
+    websites.open = false;
+    websites.dispatchEvent(new Event('toggle'));
+    q<HTMLButtonElement>(el, '[data-section-jump="essentials"]').click();
+    await el.updateComplete;
+    expect((await saveDetail(el)).login).toEqual(expect.objectContaining({
+      username: 'alice',
+      uris: [{ uri: 'https://example.com' }],
+    }));
+  });
+
+  it('opens an invalid custom field group while keeping validation beside save', async () => {
+    const el = await mount(ctx({ input: { type: 1, name: 'Invalid field' } }));
+    q<HTMLButtonElement>(el, '[data-add-field]').click();
+    await el.updateComplete;
+    q<HTMLButtonElement>(el, '[data-save]').click();
+    await el.updateComplete;
+    expect(q<HTMLDetailsElement>(el, '#custom-fields').open).toBe(true);
+    expect(el.shadowRoot!.querySelector('.action-bar vw-status-message')).not.toBeNull();
+  });
 
   const writable = (id: string, name: string, organizationId: string, assigned?: boolean): CollectionSummary => ({
     id,

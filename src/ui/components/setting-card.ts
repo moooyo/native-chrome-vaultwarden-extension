@@ -36,34 +36,36 @@ export class VwSettingCard extends LitElement {
       :host { display: block; }
       .card {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
-        gap: 14px;
+        gap: 12px 20px;
         min-height:var(--vw-setting-row-min, 68px);
         padding:var(--vw-setting-row-padding-block, 13px) 16px;
         background: var(--vw-card);
         border:1px solid var(--vw-line-1);
-        border-radius:16px;
+        border-radius:var(--vw-radius-card);
       }
       .card.stacked { flex-direction: column; align-items: stretch; gap: var(--vw-setting-stack-gap, 12px); }
       .card.danger { border-color: var(--vw-danger-border); }
-      .text { flex: 1; min-width: 0; }
-      .title { font-size:13px; font-weight:400; color:var(--vw-ink); }
-      .title.strong { font-weight:500; }
+      .text { flex: 1 1 180px; min-width: 0; }
+      .card.stacked .text { flex-basis: auto; }
+      .title { font-size:13px; font-weight:500; color:var(--vw-ink); line-height:1.5; }
+      .title.strong { font-weight:600; }
       .title.danger { color: var(--vw-danger); font-weight: 600; }
-      .desc { margin-top:2px; font-size:11.5px; color:var(--vw-text-2); line-height:1.5; }
-      .control { flex: none; display: inline-flex; align-items: center; gap: 8px; }
+      .desc { margin-top:4px; font-size:12px; color:var(--vw-text-2); line-height:1.7; overflow-wrap:anywhere; }
+      .control { flex: 0 1 auto; min-width: 0; max-width: 100%; display: inline-flex; align-items: center; gap: 8px; }
       .card.stacked .control { flex: 1; }
     `,
   ];
 
   protected override render() {
     return html`
-      <div class="card ${this.danger ? 'danger' : ''} ${this.stacked ? 'stacked' : ''}">
+      <div class="card ${this.danger ? 'danger' : ''} ${this.stacked ? 'stacked' : ''}" part="card">
         <div class="text">
-          <div class="title ${this.emphasized ? 'strong' : ''} ${this.danger ? 'danger' : ''}">${this.heading}</div>
-          ${this.description ? html`<div class="desc">${this.description}</div>` : nothing}
+          <div class="title ${this.emphasized ? 'strong' : ''} ${this.danger ? 'danger' : ''}" part="title">${this.heading}</div>
+          ${this.description ? html`<div class="desc" part="description">${this.description}</div>` : nothing}
         </div>
-        <div class="control"><slot></slot></div>
+        <div class="control" part="control"><slot></slot></div>
       </div>
     `;
   }

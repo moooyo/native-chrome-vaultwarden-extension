@@ -35,190 +35,39 @@ export class VwHealthView extends LitElement {
     themeTokens,
     controlStyles,
     css`
-      :host {
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
-        flex: 1;
-      }
-      .head {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 14px;
-        flex: none;
-      }
-      .head h1 {
-        margin: 0;
-        font-size: 14px;
-        font-weight: 600;
-        color: var(--vw-ink);
-      }
-      .content {
-        flex: 1;
-        min-height: 0;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        padding: 2px 14px 14px;
-        scrollbar-width: thin;
-        scrollbar-color: var(--vw-scrollbar) transparent;
-      }
-      .content::-webkit-scrollbar {
-        width: 8px;
-      }
-      .content::-webkit-scrollbar-thumb {
-        background: var(--vw-scrollbar);
-        border-radius: 4px;
-        border: 2px solid transparent;
-        background-clip: content-box;
-      }
-      .summary {
-        padding: 4px 2px 8px;
-      }
-      .summary-title {
-        color: var(--vw-ink);
-        font-size: 13.5px;
-        font-weight: 600;
-      }
-      .summary-desc {
-        margin-top: 3px;
-        color: var(--vw-text-2);
-        font-size: 11.5px;
-        line-height: 1.45;
-      }
-
-      .row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        width: 100%;
-        padding: 10px 12px;
-        border: 1px solid var(--vw-line-1);
-        border-radius: var(--vw-radius-card);
-        background: var(--vw-card);
-        color: var(--vw-ink);
-        font-family: inherit;
-        text-align: left;
-        cursor: pointer;
-        transition: background-color var(--vw-dur-fast), border-color var(--vw-dur-fast);
-      }
-      .row:hover {
-        background: var(--vw-row-hover);
-      }
-      .row-icon {
-        width: 30px;
-        height: 30px;
-        border-radius: var(--vw-radius-control);
-        display: grid;
-        place-items: center;
-        flex: none;
-      }
-      .row-icon.warn {
-        color: var(--vw-strength-mid);
-        background: var(--vw-fill);
-      }
-      .row-icon.danger {
-        color: var(--vw-danger);
-        background: var(--vw-danger-10);
-      }
-      .row-icon svg {
-        width: 16px;
-        height: 16px;
-      }
-      .meta {
-        flex: 1;
-        min-width: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-      }
-      .name {
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--vw-ink);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .chips {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px;
-      }
-      .chip {
-        display: inline-flex;
-        align-items: center;
-        font-size: 11px;
-        font-weight: 600;
-        padding: 1px 8px;
-        border-radius: var(--vw-radius-chip);
-        border: 1px solid transparent;
-      }
-      .chip.warn {
-        color: var(--vw-strength-mid);
-        border-color: var(--vw-strength-mid);
-      }
-      .chip.danger {
-        color: var(--vw-danger);
-        border-color: var(--vw-danger-border);
-        background: var(--vw-danger-10);
-      }
-      .chip.ok {
-        color: var(--vw-teal-text);
-        border-color: var(--vw-teal-25);
-        background: var(--vw-teal-10);
-      }
-      .chip.unknown {
-        color: var(--vw-text-2);
-        border-color: var(--vw-line-1);
-        background: var(--vw-fill);
-      }
-      .chev {
-        width: 14px;
-        height: 14px;
-        color: var(--vw-chevron);
-        flex: none;
-        display: inline-flex;
-      }
-      .chev svg {
-        width: 14px;
-        height: 14px;
-      }
-
-      .check {
-        width: 100%;
-        margin-top: 4px;
-      }
-      .check svg {
-        width: 16px;
-        height: 16px;
-      }
-
-      .empty {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 12px;
-        padding: 44px 20px;
-        text-align: center;
-      }
-      .empty-icon {
-        color: var(--vw-teal-text);
-        display: inline-flex;
-      }
-      .empty-icon svg {
-        width: 44px;
-        height: 44px;
-      }
-      .empty-text {
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--vw-text-2);
-      }
+      :host { display:flex; flex-direction:column; min-height:0; flex:1; }
+      .head { display:flex; align-items:center; gap:8px; padding:12px 16px; flex:none; }
+      .head h1 { margin:0; font-size:18px; font-weight:600; color:var(--vw-ink); }
+      .content { display:flex; flex-direction:column; flex:1; min-height:0; overflow-y:auto; gap:16px; padding:4px 16px 18px; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--vw-scrollbar) transparent; }
+      .summary { padding:4px 0 8px; }
+      .summary-title { color:var(--vw-ink); font-size:15px; font-weight:600; }
+      .summary-desc { margin-top:7px; color:var(--vw-text-2); font-size:12px; line-height:1.7; }
+      .rows { border-top:1px solid var(--vw-line-1); }
+      .row { appearance:none; display:flex; align-items:center; gap:12px; width:100%; padding:14px 6px; border:0; border-bottom:1px solid var(--vw-line-1); border-radius:0; background:var(--vw-card); color:var(--vw-ink); font-family:inherit; text-align:left; cursor:pointer; transition:background-color var(--vw-dur-fast); }
+      .row:hover { background:var(--vw-row-hover); }
+      .row:focus-visible { outline-offset:-2px; }
+      .row-icon { display:grid; place-items:center; width:32px; height:32px; border-radius:var(--vw-radius-control); flex:none; }
+      .row-icon.warn { color:var(--vw-strength-mid); background:var(--vw-fill-2); }
+      .row-icon.danger { color:var(--vw-danger); background:var(--vw-danger-10); }
+      .row-icon.unknown { color:var(--vw-text-3); background:var(--vw-fill); }
+      .row-icon svg { width:16px; height:16px; }
+      .meta { display:flex; flex-direction:column; flex:1; min-width:0; gap:5px; }
+      .name { font-size:13px; font-weight:500; color:var(--vw-ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .chips { display:flex; flex-wrap:wrap; gap:5px; }
+      .chip { display:inline-flex; align-items:center; font-size:11px; font-weight:500; padding:2px 7px; border-radius:var(--vw-radius-chip); border:1px solid transparent; }
+      .chip.warn { color:var(--vw-strength-mid); background:var(--vw-fill-2); }
+      .chip.danger { color:var(--vw-danger); border-color:var(--vw-danger-border); background:var(--vw-danger-10); }
+      .chip.ok { color:var(--vw-strength-strong); background:var(--vw-fill-2); }
+      .chip.unknown { color:var(--vw-text-2); background:var(--vw-fill); }
+      .chev { display:inline-flex; width:14px; height:14px; color:var(--vw-chevron); flex:none; }
+      .chev svg { width:14px; height:14px; }
+      .check { width:100%; margin-top:4px; }
+      .check svg { width:16px; height:16px; }
+      .empty { display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; gap:14px; padding:40px 20px; text-align:center; }
+      .empty-icon { color:var(--vw-teal-text); display:inline-flex; }
+      .empty-icon svg { width:38px; height:38px; }
+      .empty-text { font-size:14px; font-weight:500; line-height:1.7; color:var(--vw-text-2); }
+      @media(prefers-reduced-motion:reduce) { .row { transition:none; } }
     `,
   ];
 
@@ -264,10 +113,11 @@ export class VwHealthView extends LitElement {
 
   private renderRow(entry: HealthEntry) {
     const pwnedCount = this.pwned.status === 'ready' ? this.pwned.data.get(entry.id) : undefined;
-    const severity = pwnedCount && pwnedCount > 0 ? 'danger' : 'warn';
+    const breached = (pwnedCount ?? 0) > 0;
+    const severity = breached ? 'danger' : entry.weak || entry.reuseCount > 1 ? 'warn' : 'unknown';
     return html`
       <button type="button" class="row" data-entry=${entry.id} @click=${() => this.open(entry.id)}>
-        <span class="row-icon ${severity}">${uiIcon('alert')}</span>
+        <span class="row-icon ${severity}">${uiIcon(severity === 'unknown' ? 'shield' : 'alert')}</span>
         <span class="meta">
           <span class="name">${entry.name}</span>
           ${this.renderChips(entry)}
@@ -279,12 +129,16 @@ export class VwHealthView extends LitElement {
 
   private renderReady(entries: HealthEntry[]) {
     const pwned = this.pwned;
+    const priority = (entry: HealthEntry): number => {
+      const exposed = pwned.status === 'ready' && (pwned.data.get(entry.id) ?? 0) > 0;
+      return exposed ? 3 : entry.weak || entry.reuseCount > 1 ? 2 : 1;
+    };
     const visibleEntries = entries.filter((entry) => {
       const breachUnknown = pwned.status === 'error'
         || (pwned.status === 'ready' && !pwned.data.has(entry.id));
       const breachCount = pwned.status === 'ready' ? pwned.data.get(entry.id) : undefined;
       return entry.weak || entry.reuseCount > 1 || breachUnknown || (breachCount ?? 0) > 0;
-    });
+    }).sort((a, b) => priority(b) - priority(a));
     const unknownCount = pwned.status === 'error'
       ? entries.length
       : pwned.status === 'ready'
@@ -301,7 +155,7 @@ export class VwHealthView extends LitElement {
         <div class="summary-desc">${summaryDescription}</div>
       </div>
       ${visibleEntries.length > 0
-        ? visibleEntries.map((entry) => this.renderRow(entry))
+        ? html`<div class="rows">${visibleEntries.map((entry) => this.renderRow(entry))}</div>`
         : html`
           <div class="empty" data-empty>
             <span class="empty-icon">${uiIcon('checkCircle')}</span>

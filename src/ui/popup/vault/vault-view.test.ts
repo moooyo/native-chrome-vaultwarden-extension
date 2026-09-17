@@ -386,15 +386,42 @@ describe('vw-vault-view', () => {
     expect(open).toHaveBeenCalledWith(expect.objectContaining({ detail: { cipherId: 'identity-1' } }));
   });
 
-  it('caps the row stagger: high-index rows get no animation-delay', async () => {
+  it('renders every list row without a delayed entrance', async () => {
     const items = Array.from({ length: 15 }, (_, i) => login({ id: `c${i}`, name: `Item ${i}` }));
     const el = await mount({ items });
     const rows = el.shadowRoot!.querySelectorAll<HTMLElement>('.row');
     expect(rows).toHaveLength(15);
-    // Early rows still stagger in...
-    expect(rows[0]!.getAttribute('style') ?? '').toContain('animation-delay');
-    // ...but a row past the cap must not carry a (large) animation-delay that would leave it invisible.
-    expect(rows[14]!.getAttribute('style') ?? '').not.toContain('animation-delay');
+    expect([...rows].every((row) => !(row.getAttribute('style') ?? '').includes('animation-delay'))).toBe(true);
+  });
+
+  it('opens workspace details without expanding or loading inline secrets', async () => {
+    const getTotp = vi.fn(async () => ({ ok: true as const, totp: null }));
+    const el = await mount({
+      compactDetails: false,
+      selectedCipherId: 'c1',
+      items: [login({ hasTotp: true })],
+      extras: detailExtras({ getTotp }),
+    });
+    const open = vi.fn();
+    const toggle = vi.fn();
+    el.addEventListener('vw-item-open', open);
+    el.addEventListener('vw-item-toggle', toggle);
+    el.shadowRoot!.querySelector<HTMLButtonElement>('.row-main')!.click();
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ detail: { cipherId: 'c1' } }));
+    expect(toggle).not.toHaveBeenCalled();
+    expect(el.shadowRoot!.querySelector('.card')).toBeNull();
+    expect(el.shadowRoot!.querySelector('.row-main')?.getAttribute('aria-current')).toBe('true');
+    expect(getTotp).not.toHaveBeenCalled();
+  });
+
+  it('shows a copy shortcut only for the item that owns the selected detail loaders', async () => {
+    const el = await mount({
+      selectedCipherId: 'second',
+      items: [login({ id: 'first', name: 'Alpha' }), login({ id: 'second', name: 'Beta' })],
+    });
+    const rows = el.shadowRoot!.querySelectorAll<HTMLElement>('.row');
+    expect(rows[0]!.querySelector('.row-copy')).toBeNull();
+    expect(rows[1]!.querySelector('.row-copy')).not.toBeNull();
   });
 
   it('renders detail feedback owned by the popup root', async () => {

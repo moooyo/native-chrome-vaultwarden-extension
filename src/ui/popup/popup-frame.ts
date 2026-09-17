@@ -27,9 +27,8 @@ export class VwPopupFrame extends LitElement {
         overflow: hidden;
         background: var(--vw-panel);
         color: var(--vw-ink);
-        border: 1px solid var(--vw-line-3);
-        border-radius: var(--vw-radius-panel);
-        box-shadow: var(--vw-popup-shadow);
+        border: 0;
+        border-radius: 0;
       }
     `,
   ];

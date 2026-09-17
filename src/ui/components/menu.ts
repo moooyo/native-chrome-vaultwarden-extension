@@ -3,6 +3,7 @@ import { themeTokens } from './tokens.js';
 import { controlStyles } from './styles.js';
 import { uiIcon, type IconName } from './icon.js';
 import { emit } from './emit.js';
+import { LocalizeController, t } from '../i18n/index.js';
 
 export interface MenuItem {
   id: string;
@@ -22,6 +23,8 @@ export interface MenuItem {
  * removed in disconnectedCallback.
  */
 export class VwMenu extends LitElement {
+  private i18n = new LocalizeController(this);
+
   static override properties = {
     items: { attribute: false },
     open: { type: Boolean },
@@ -38,7 +41,7 @@ export class VwMenu extends LitElement {
     super();
     this.items = [];
     this.open = false;
-    this.label = 'Menu';
+    this.label = '';
   }
 
   static override styles = [
@@ -53,29 +56,39 @@ export class VwMenu extends LitElement {
         flex-direction: column;
         min-width: 210px;
         max-width: min(300px, calc(100vw - 24px));
+        max-height: min(420px, calc(100dvh - 32px));
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
         padding: 6px;
         gap: 2px;
         border: 1px solid var(--vw-line-2);
-        border-radius: var(--vw-radius-card);
+        border-radius: var(--vw-radius-panel);
         background: var(--vw-panel);
         box-shadow: var(--vw-panel-shadow);
       }
       button[role='menuitem'] {
+        appearance: none;
         display: flex;
         align-items: center;
-        gap: 8px;
-        height: 32px;
-        padding: 0 10px;
+        gap: 10px;
+        min-height: 36px;
+        width: 100%;
+        flex-shrink: 0;
+        padding: 8px 10px;
         border: none;
-        border-radius: var(--vw-radius-input);
+        border-radius: var(--vw-radius-small);
         background: transparent;
         color: var(--vw-ink);
         font-family: var(--vw-font-ui);
         font-size: 13px;
+        line-height: 1.5;
         text-align: left;
         cursor: pointer;
+        transition: background-color var(--vw-dur-fast), color var(--vw-dur-fast);
       }
-      button[role='menuitem'].active {
+      button[role='menuitem'].active,
+      button[role='menuitem']:hover:not(:disabled) {
         background: var(--vw-row-hover);
       }
       button[role='menuitem'].tone-danger {
@@ -83,12 +96,17 @@ export class VwMenu extends LitElement {
       }
       button[role='menuitem'][disabled] {
         color: var(--vw-muted);
-        cursor: not-allowed;
+        cursor: default;
       }
+      button[role='menuitem'] span { min-width: 0; overflow-wrap: anywhere; }
+      button[role='menuitem']:focus-visible { outline-offset: -2px; }
       button[role='menuitem'] svg {
         width: 15px;
         height: 15px;
         flex: none;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        button[role='menuitem'] { transition: none; }
       }
     `,
   ];
@@ -243,7 +261,7 @@ export class VwMenu extends LitElement {
       return nothing;
     }
     return html`
-      <div role="menu" aria-label=${this.label} @focusout=${this.handleFocusOut}>
+      <div role="menu" part="menu" aria-label=${this.label || t('common.more')} @focusout=${this.handleFocusOut}>
         ${this.items.map((item, index) => html`
           <button
             type="button"

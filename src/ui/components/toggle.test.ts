@@ -39,4 +39,14 @@ describe('vw-toggle', () => {
     el.shadowRoot!.querySelector('button')!.click();
     expect(fired).not.toHaveBeenCalled();
   });
+
+  it('names the actual switch from the label property and updates it with the setting', async () => {
+    const el = await mount();
+    el.label = 'Clear clipboard';
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('button')!.getAttribute('aria-label')).toBe('Clear clipboard');
+    el.label = 'Copy verification codes';
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('button')!.getAttribute('aria-label')).toBe('Copy verification codes');
+  });
 });

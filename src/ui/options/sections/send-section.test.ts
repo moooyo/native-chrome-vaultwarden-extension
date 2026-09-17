@@ -53,7 +53,7 @@ describe('vw-send-section', () => {
     expect(fired).toHaveBeenCalled();
     const detail = fired.mock.calls[0]![0].detail;
     expect(detail.kind).toBe('text');
-    expect(detail.input).toMatchObject({ deletionHours: 168, expirationHours: 168 });
+    expect(detail.input).toMatchObject({ deletionHours: 336, expirationHours: 168 });
     expect(detail.input.hideEmail).toBe(true);
     expect(detail.input).not.toHaveProperty('maxAccessCount');
   });
@@ -95,7 +95,7 @@ describe('vw-send-section', () => {
     (el.shadowRoot!.querySelector('[data-content]') as HTMLTextAreaElement).value = 'short lived';
     (el.shadowRoot!.querySelector('.form .btn-primary') as HTMLButtonElement).click();
     const detail = fired.mock.calls[0]![0].detail;
-    expect(detail.input).toMatchObject({ deletionHours: 1, expirationHours: 1 });
+    expect(detail.input).toMatchObject({ deletionHours: 336, expirationHours: 1 });
     expect(detail.input).not.toHaveProperty('deletionDays');
   });
 
@@ -136,8 +136,54 @@ describe('vw-send-section', () => {
     const buttons = el.shadowRoot!.querySelectorAll<HTMLButtonElement>('.send .icon-btn');
     buttons[0]!.click();
     buttons[1]!.click();
+    await el.updateComplete;
+    expect(del).not.toHaveBeenCalled();
+    (el.shadowRoot!.querySelector('[data-delete-confirm]') as HTMLButtonElement).click();
     expect(copy).toHaveBeenCalledWith(expect.objectContaining({ detail: { value: 'https://s' } }));
     expect(del).toHaveBeenCalledWith(expect.objectContaining({ detail: { id: 's1' } }));
+  });
+
+  it('keeps access expiration separate from deletion and blocks reversed dates', async () => {
+    const el = await mount();
+    (el.shadowRoot!.querySelector('.intro .btn-primary') as HTMLButtonElement).click();
+    await el.updateComplete;
+    const expiry = el.shadowRoot!.querySelector('[data-expiry]') as HTMLElement & { value: string };
+    const deletion = el.shadowRoot!.querySelector('[data-deletion]') as HTMLElement & { value: string };
+    const created = vi.fn();
+    el.addEventListener('vw-send-create', created);
+    (el.shadowRoot!.querySelector('[data-content]') as HTMLTextAreaElement).value = 'keep until deletion';
+    deletion.value = '24';
+    expect(el.sendFormHasEdits()).toBe(true);
+    (el.shadowRoot!.querySelector('.form .btn-primary') as HTMLButtonElement).click();
+    await el.updateComplete;
+    expect(created).not.toHaveBeenCalled();
+    expect(el.validationError).toBeTruthy();
+    expiry.value = '1';
+    (el.shadowRoot!.querySelector('.form .btn-primary') as HTMLButtonElement).click();
+    expect(created.mock.calls[0]![0].detail.input).toMatchObject({ expirationHours: 1, deletionHours: 24 });
+  });
+
+  it('cancels a named deletion without emitting and restores focus', async () => {
+    const el = await mount();
+    const deleted = vi.fn();
+    el.addEventListener('vw-send-delete', deleted);
+    const trigger = el.shadowRoot!.querySelector('[data-delete]') as HTMLButtonElement;
+    trigger.click();
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('.delete-confirm')?.textContent).toContain('交接凭据');
+    (el.shadowRoot!.querySelector('[data-delete-cancel]') as HTMLButtonElement).click();
+    await el.updateComplete;
+    expect(deleted).not.toHaveBeenCalled();
+    expect(el.shadowRoot!.activeElement).toBe(trigger);
+  });
+
+  it('places disabled and access-limited Sends in the ended group', async () => {
+    const el = await mount({ sends: { status: 'ready', data: [send(), send({ id: 'disabled', disabled: true }), send({ id: 'limited', accessCount: 5 })] } });
+    const active = el.shadowRoot!.querySelector('[aria-labelledby="send-active-title"]');
+    const ended = el.shadowRoot!.querySelector('[aria-labelledby="send-ended-title"]');
+    expect(active?.querySelectorAll('[data-send]')).toHaveLength(1);
+    expect(ended?.querySelectorAll('[data-send]')).toHaveLength(2);
+    expect(ended?.textContent).toContain('Access limit reached');
   });
 
   it('keeps the form and entered text after a failed create request', async () => {
@@ -342,7 +388,7 @@ describe('vw-send-section unsaved draft protection', () => {
     expect(created).toHaveBeenCalledOnce();
     expect(created.mock.calls[0]![0].detail).toEqual({
       kind: 'file',
-      input: { name: 'payload.bin', deletionHours: 168, expirationHours: 168, hideEmail: false },
+      input: { name: 'payload.bin', deletionHours: 336, expirationHours: 168, hideEmail: false },
       file,
       fileName: 'payload.bin',
     });

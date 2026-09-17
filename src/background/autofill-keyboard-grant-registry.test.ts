@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AutofillKeyboardGrantRegistry,
+  type KeyboardGrantBinding,
   type KeyboardGrantIssue,
 } from './autofill-keyboard-grant-registry.js';
+import type { ContentStructuredAutofillTarget } from '../messaging/protocol.js';
 import {
   EMPTY_LOGIN_CUSTOM_PLAN,
   EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
@@ -224,6 +226,87 @@ describe('AutofillKeyboardGrantRegistry', () => {
         },
       },
     }))).toThrow('runtime');
+  });
+
+  it.each([
+    { kind: 'card', roles: ['number', 'exp', 'code'], selectedRoles: ['number', 'exp'] },
+    { kind: 'identity', roles: ['fullName', 'email', 'phone'], selectedRoles: ['fullName', 'email'] },
+  ] as const)('preserves a frozen $kind selection through candidate reads and grant consumption', (selection) => {
+    const { registry } = harness();
+    const roles = [...selection.roles];
+    const selectedRoles = [...selection.selectedRoles];
+    const structuredTarget = {
+      kind: selection.kind,
+      runtimeIncarnation: FRAME_RUNTIME_INCARNATION,
+      formId: 'selected-form',
+      generation: 5,
+      roles,
+      selectedRoles,
+    } as ContentStructuredAutofillTarget;
+    const binding: KeyboardGrantBinding = { purpose: selection.kind, structuredTarget };
+    const expectedBinding = structuredClone(binding);
+    const token = registry.issueGrant(loginGrant({ binding }));
+    roles.pop();
+    selectedRoles.pop();
+
+    const authorized = registry.authorizeGrant(token, CONTEXT);
+    const authorizedBinding = authorized?.binding;
+    expect(authorizedBinding).toEqual(expectedBinding);
+    expect(authorizedBinding).not.toBe(binding);
+    expect(Object.isFrozen(authorizedBinding)).toBe(true);
+    if (authorizedBinding?.purpose !== 'card' && authorizedBinding?.purpose !== 'identity') {
+      throw new Error('Expected a structured keyboard grant');
+    }
+    expect(authorizedBinding.structuredTarget).not.toBe(structuredTarget);
+    expect(authorizedBinding.structuredTarget.roles).not.toBe(roles);
+    expect(authorizedBinding.structuredTarget.selectedRoles).not.toBe(selectedRoles);
+    expect(Object.isFrozen(authorizedBinding.structuredTarget)).toBe(true);
+    expect(Object.isFrozen(authorizedBinding.structuredTarget.roles)).toBe(true);
+    expect(Object.isFrozen(authorizedBinding.structuredTarget.selectedRoles)).toBe(true);
+    expect(JSON.stringify(authorizedBinding)).toContain(`"selectedRoles":${JSON.stringify(selection.selectedRoles)}`);
+    expect(registry.authorizeGrant(token, CONTEXT)?.binding).toEqual(expectedBinding);
+    expect(registry.consumeGrant(token, CONTEXT)?.binding).toEqual(expectedBinding);
+    expect(registry.consumeGrant(token, CONTEXT)).toBeUndefined();
+  });
+
+  it.each([false, true])('retains all-fields keyboard authority with an explicit selection: %s', (explicitSelection) => {
+    const { registry } = harness();
+    const roles = ['number', 'exp', 'code'] as const;
+    const binding: KeyboardGrantBinding = {
+      purpose: 'card',
+      structuredTarget: {
+        kind: 'card', runtimeIncarnation: FRAME_RUNTIME_INCARNATION,
+        formId: 'all-fields-form', generation: 5, roles,
+        ...(explicitSelection ? { selectedRoles: roles } : {}),
+      },
+    };
+    const token = registry.issueGrant(loginGrant({ binding }));
+
+    expect(registry.authorizeGrant(token, CONTEXT)?.binding).toEqual(binding);
+    expect(registry.consumeGrant(token, CONTEXT)?.binding).toEqual(binding);
+  });
+
+  it.each([
+    ['empty', 'card', ['number', 'exp', 'code'], []],
+    ['duplicate', 'card', ['number', 'exp', 'code'], ['number', 'number']],
+    ['noncanonical order', 'card', ['number', 'exp', 'code'], ['code', 'number']],
+    ['unknown role', 'card', ['number', 'exp', 'code'], ['ssn']],
+    ['cross-kind role', 'card', ['number', 'exp', 'code'], ['email']],
+    ['missing form role', 'card', ['number', 'exp', 'code'], ['cardholderName']],
+    ['expiration backing field', 'card', ['number', 'exp', 'code'], ['expMonth']],
+    ['name backing field', 'identity', ['fullName', 'email'], ['firstName']],
+    ['cross-kind card role', 'identity', ['fullName', 'email'], ['number']],
+    ['explicit undefined', 'card', ['number', 'exp', 'code'], undefined],
+    ['non-array', 'card', ['number', 'exp', 'code'], 'number'],
+  ] as const)('refuses a keyboard grant with a selected %s', (_label, kind, roles, selectedRoles) => {
+    const { registry } = harness();
+    const structuredTarget = {
+      kind, runtimeIncarnation: FRAME_RUNTIME_INCARNATION,
+      formId: 'selected-form', generation: 5, roles, selectedRoles,
+    } as unknown as ContentStructuredAutofillTarget;
+
+    expect(() => registry.issueGrant(loginGrant({ binding: { purpose: kind, structuredTarget } })))
+      .toThrow();
   });
 
   it('treats lease-validator exceptions as a consumed failure', () => {

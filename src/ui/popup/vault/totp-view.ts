@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing, svg } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
+import { uiIcon } from '../../components/icon.js';
 import { tileColor, tileInitial } from '../../components/tile-color.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import type { TotpListEntry } from '../../../core/vault/models.js';
@@ -42,8 +43,8 @@ export class VwTotpView extends LitElement {
     themeTokens,
     css`
       :host { display:flex; flex-direction:column; min-height:0; flex:1; }
-      .view-head { display:flex; align-items:center; min-height:44px; padding:4px 14px 0; }
-      .view-title { display:flex; align-items:center; gap:7px; flex:1; color:var(--vw-ink); font-size:12.5px; font-weight:500; }
+      .view-head { display:flex; align-items:center; min-height:52px; padding:6px 16px; border-bottom:1px solid var(--vw-line-1); }
+      .view-title { display:flex; align-items:center; gap:7px; flex:1; color:var(--vw-ink); font-size:14px; font-weight:600; }
       .view-title svg { width:17px; height:17px; color:var(--p); }
       .back { height:30px; padding:0 10px; border:0; border-radius:15px; background:transparent; color:var(--p); font:500 11.5px/1 var(--vw-font-ui); cursor:pointer; }
       .back:hover { background:var(--vw-icon-hover); }
@@ -54,8 +55,8 @@ export class VwTotpView extends LitElement {
 
       .row {
         display:flex; align-items:center; gap:10px; width:100%; min-height:var(--vw-totp-row-min, 50px); padding:var(--vw-totp-row-padding-block, 7px) 8px;
-        border:0; border-radius:12px; background:transparent; color:inherit;
-        cursor:pointer; text-align:left; font:inherit; animation:mvStag .24s ease-out both;
+        appearance:none; border:0; border-radius:8px; background:transparent; color:inherit;
+        cursor:pointer; text-align:left; font:inherit; transition:background-color var(--vw-dur-fast);
       }
       .row:hover { background: var(--vw-row-hover); }
       .row:focus-visible { outline: none; box-shadow: var(--vw-focus); }
@@ -70,16 +71,19 @@ export class VwTotpView extends LitElement {
         color:var(--p); font-variant-numeric:tabular-nums; flex:none;
       }
       .row:hover .code { color: var(--vw-accent); }
+      .copy-hint { display:inline-flex; width:15px; color:var(--vw-muted); }
+      .copy-hint svg { width:15px; height:15px; }
 
       .countdown { display:flex; align-items:center; gap:5px; flex:none; }
       .ring { flex:none; width:20px; height:20px; transform:rotate(-90deg); }
       .ring-track { fill:none; stroke:var(--vw-track); stroke-width:2.5; }
       .ring-arc { fill:none; stroke:var(--p); stroke-width:2.5; stroke-linecap:round; transition:stroke-dashoffset 1s linear, stroke .3s; }
       .seconds { width:22px; color:var(--vw-muted); font:400 10.5px/1 var(--vw-font-ui); font-variant-numeric:tabular-nums; }
-      .row.urgent .ring-arc { stroke: #e0a400; }
-      .row.urgent .seconds { color:#b06000; }
+      .row.urgent .ring-arc { stroke:var(--vw-sync-amber); }
+      .row.urgent .seconds { color:var(--vw-sync-amber); }
 
       .empty { padding: 48px 20px; text-align: center; color: var(--vw-muted); font-size: 12.5px; }
+      @media (prefers-reduced-motion:reduce) { .row, .ring-arc { transition:none; } }
     `,
   ];
 
@@ -138,6 +142,7 @@ export class VwTotpView extends LitElement {
           ${entry.username ? html`<span class="user">${entry.username}</span>` : nothing}
         </span>
         <span class="code">${this.grouped(entry.code)}</span>
+        <span class="copy-hint" aria-hidden="true">${uiIcon('copy')}</span>
         <span class="countdown">
           <svg class="ring" viewBox="0 0 20 20" aria-hidden="true">
             <circle class="ring-track" cx="10" cy="10" r=${RING_R}></circle>

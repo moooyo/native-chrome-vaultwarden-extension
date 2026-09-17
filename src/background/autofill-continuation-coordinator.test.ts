@@ -367,6 +367,87 @@ describe('AutofillContinuationCoordinator', () => {
     })).toBeUndefined();
   });
 
+  it('preserves a keyboard selection in the durable confirmation and one-time resumed proof', async () => {
+    const h = harness();
+    h.setState('unlocked');
+    const binding = {
+      purpose: 'card' as const,
+      structuredTarget: {
+        kind: 'card' as const,
+        runtimeIncarnation: FRAME_RUNTIME,
+        formId: 'card-form',
+        generation: 3,
+        roles: ['number', 'exp', 'code'] as const,
+        selectedRoles: ['number'] as const,
+      },
+    };
+    const continuationId = await h.coordinator.stageKeyboardReprompt({
+      ...h.keyboardGrant(), purpose: 'card', binding,
+    }, 'card-1');
+    expect((await h.store.read())?.action).toMatchObject({
+      kind: 'keyboard_reprompt', binding: { roles: ['number', 'exp', 'code'], selectedRoles: ['number'] },
+    });
+    const status = await h.coordinator.status('popup-doc');
+    if (status.status !== 'reprompt_required') throw new Error('expected continuation');
+    h.setVerified(true);
+    await h.coordinator.authorizeReprompt('popup-doc', continuationId, 'right');
+    h.setPopupOpen(false);
+    await vi.advanceTimersByTimeAsync(30);
+    await vi.waitFor(() => expect(h.sendToDocument.mock.calls.some(([, , , command]) => (
+      command.type === 'autofill.resumeKeyboardReprompt'
+    ))).toBe(true));
+
+    const caller = {
+      tabId: 7, frameId: 2, documentId: 'frame-doc', runtimeIncarnation: FRAME_RUNTIME, url: h.source.frameUrl,
+    };
+    expect((await h.coordinator.redeemKeyboardReprompt(continuationId, caller))?.binding).toEqual(binding);
+    expect(await h.coordinator.redeemKeyboardReprompt(continuationId, caller)).toBeUndefined();
+  });
+
+  it.each(['removed', 'widened'] as const)(
+    'withholds a keyboard proof when the durable selection was %s after staging',
+    async (change) => {
+      const h = harness();
+      h.setState('unlocked');
+      const continuationId = await h.coordinator.stageKeyboardReprompt({
+        ...h.keyboardGrant(),
+        purpose: 'card',
+        binding: {
+          purpose: 'card',
+          structuredTarget: {
+            kind: 'card', runtimeIncarnation: FRAME_RUNTIME, formId: 'card-form', generation: 3,
+            roles: ['number', 'exp', 'code'], selectedRoles: ['number'],
+          },
+        },
+      }, 'card-1');
+      const status = await h.coordinator.status('popup-doc');
+      if (status.status !== 'reprompt_required') throw new Error('expected continuation');
+      const envelope = await h.store.read();
+      if (!envelope || envelope.action.kind !== 'keyboard_reprompt'
+          || envelope.action.binding.purpose !== 'card') throw new Error('expected card binding');
+      const { selectedRoles, ...fullBinding } = envelope.action.binding;
+      expect(selectedRoles).toEqual(['number']);
+      await h.store.put({
+        ...envelope,
+        action: {
+          ...envelope.action,
+          binding: change === 'removed' ? fullBinding : { ...fullBinding, selectedRoles: fullBinding.roles },
+        },
+      });
+      h.setVerified(true);
+      await h.coordinator.authorizeReprompt('popup-doc', continuationId, 'right');
+      h.setPopupOpen(false);
+      await vi.advanceTimersByTimeAsync(30);
+
+      expect(h.sendToDocument.mock.calls.some(([, , , command]) => (
+        command.type === 'autofill.resumeKeyboardReprompt'
+      ))).toBe(false);
+      expect(await h.coordinator.redeemKeyboardReprompt(continuationId, {
+        tabId: 7, frameId: 2, documentId: 'frame-doc', runtimeIncarnation: FRAME_RUNTIME, url: h.source.frameUrl,
+      })).toBeUndefined();
+    },
+  );
+
   it('consumes a keyboard proof before rejecting a noncanonical runtime', async () => {
     const h = harness();
     h.setState('unlocked');

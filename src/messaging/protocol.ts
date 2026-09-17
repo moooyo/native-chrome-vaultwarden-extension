@@ -571,11 +571,15 @@ interface ContentStructuredAutofillTargetBase {
 export interface ContentCardAutofillTarget extends ContentStructuredAutofillTargetBase {
   kind: 'card';
   roles: readonly CardFillRole[];
+  /** Explicit user-selected canonical subset; `roles` still binds the complete form structure. */
+  selectedRoles?: readonly CardFillRole[];
 }
 
 export interface ContentIdentityAutofillTarget extends ContentStructuredAutofillTargetBase {
   kind: 'identity';
   roles: readonly IdentityFillRole[];
+  /** Explicit user-selected canonical subset; `roles` still binds the complete form structure. */
+  selectedRoles?: readonly IdentityFillRole[];
 }
 
 /** Content-provided metadata that is bound into a one-time intent and re-inspected by the worker. */
@@ -612,11 +616,15 @@ export interface TabLoginSuggestionTarget extends TabSuggestionTargetBase {
 export interface TabCardSuggestionTarget extends TabSuggestionTargetBase {
   kind: 'card';
   roles: readonly CardFillRole[];
+  /** Optional narrowing of the release; it never replaces the inspected structural roles. */
+  selectedRoles?: readonly CardFillRole[];
 }
 
 export interface TabIdentitySuggestionTarget extends TabSuggestionTargetBase {
   kind: 'identity';
   roles: readonly IdentityFillRole[];
+  /** Optional narrowing of the release; it never replaces the inspected structural roles. */
+  selectedRoles?: readonly IdentityFillRole[];
 }
 
 export type TabSuggestionTarget =
@@ -760,6 +768,8 @@ export type FrameAutofillMessage =
       kind: 'card';
       formId: string;
       roles: readonly CardFillRole[];
+      /** Only these roles may receive data when an explicit subset was selected. */
+      selectedRoles?: readonly CardFillRole[];
       expectedFrameUrl: string;
       expectedRuntimeIncarnation: string;
       expectedGeneration: number;
@@ -770,6 +780,8 @@ export type FrameAutofillMessage =
       kind: 'identity';
       formId: string;
       roles: readonly IdentityFillRole[];
+      /** Only these roles may receive data when an explicit subset was selected. */
+      selectedRoles?: readonly IdentityFillRole[];
       expectedFrameUrl: string;
       expectedRuntimeIncarnation: string;
       expectedGeneration: number;

@@ -96,6 +96,30 @@ describe('autofill popover factory', () => {
     expect(root.innerHTML).not.toContain('cipher-secret-id');
   });
 
+  it('invalidates a retirement receipt when the same panel is reopened', () => {
+    const anchor = document.getElementById('pass') as HTMLElement;
+    const popover = createAutofillPopover({ anchor, onOpen: vi.fn(), onSelect: vi.fn() });
+    const receiptCurrent = popover.showFilled();
+    expect(typeof receiptCurrent === 'function' && receiptCurrent()).toBe(true);
+    popover.open();
+    expect(typeof receiptCurrent === 'function' && receiptCurrent()).toBe(false);
+  });
+
+  it('dismisses a status surface only on a trusted Escape key', () => {
+    const anchor = document.getElementById('pass') as HTMLElement;
+    const onDismiss = vi.fn();
+    const popover = createAutofillPopover({ anchor, onOpen: vi.fn(), onSelect: vi.fn(), onDismiss });
+    popover.showStatus('Locked');
+    const box = popover.root.querySelector<HTMLElement>('.box')!;
+    box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(onDismiss).not.toHaveBeenCalled();
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'isTrusted', { value: true });
+    box.dispatchEvent(event);
+    expect(onDismiss).toHaveBeenCalledWith('escape');
+    expect(popover.root.querySelector('.box')).toBeNull();
+  });
+
   it('keeps the page field focused when candidates arrive from an automatic field open', () => {
     const anchor = document.getElementById('pass') as HTMLElement;
     const popover = createAutofillPopover({

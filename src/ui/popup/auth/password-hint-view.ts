@@ -3,6 +3,7 @@ import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { themeTokens } from '../../components/tokens.js';
 import { LocalizeController, t } from '../../i18n/index.js';
+import { authIdentityStyles, renderAuthIdentity, type AuthIdentityDisplay } from './auth-identity.js';
 import '../../components/logo.js';
 import '../../components/status-message.js';
 
@@ -26,6 +27,7 @@ export class VwPasswordHintView extends LitElement {
     error: { attribute: false },
     status: { attribute: false },
     message: { attribute: false },
+    identity: { attribute: false },
     draftEmail: { state: true },
     localError: { state: true },
   };
@@ -35,6 +37,7 @@ export class VwPasswordHintView extends LitElement {
   declare error: string | undefined;
   declare status: PasswordHintStatus | undefined;
   declare message: string | undefined;
+  declare identity: AuthIdentityDisplay | undefined;
   private declare draftEmail: string;
   private declare localError: string | undefined;
 
@@ -48,11 +51,12 @@ export class VwPasswordHintView extends LitElement {
     this.error = undefined;
     this.status = undefined;
     this.message = undefined;
+    this.identity = undefined;
     this.draftEmail = '';
     this.localError = undefined;
   }
 
-  static override styles = [themeTokens, controlStyles, css`
+  static override styles = [themeTokens, controlStyles, authIdentityStyles, css`
     :host {
       display: flex;
       flex: 1;
@@ -69,50 +73,59 @@ export class VwPasswordHintView extends LitElement {
       min-width: 0;
       min-height: 0;
       flex-direction: column;
-      gap: 18px;
-      padding: 26px 28px;
+      gap: 20px;
+      padding: 24px 28px;
       overflow-x: hidden;
       overflow-y: auto;
       color: var(--vw-ink);
       box-sizing: border-box;
+      animation: hint-enter 160ms ease-out;
     }
     .head {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    .brand {
+      display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
+      color: var(--vw-ink);
+      font-size: 14px;
+      font-weight: 600;
     }
     .head-copy { min-width: 0; }
     h1, p { margin: 0; }
     h1 {
       overflow-wrap: anywhere;
-      font-size: 16px;
+      font-size: 22px;
       font-weight: 600;
-      letter-spacing: 0;
-      line-height: 1.3;
+      letter-spacing: -0.025em;
+      line-height: 1.35;
     }
     .description {
-      margin-top: 4px;
+      margin-top: 8px;
       color: var(--vw-muted);
-      font-size: 12px;
-      line-height: 1.45;
+      font-size: 13px;
+      line-height: 1.55;
       overflow-wrap: anywhere;
     }
     form {
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 16px;
       min-width: 0;
     }
     .field {
       display: flex;
       min-width: 0;
       flex-direction: column;
-      gap: 6px;
+      gap: 7px;
     }
     .field-label {
-      color: var(--vw-muted);
+      color: var(--vw-text-2);
       font-size: 12px;
+      font-weight: 500;
     }
     .input[aria-invalid='true'] { border-color: var(--vw-danger-border); }
     .actions {
@@ -131,6 +144,13 @@ export class VwPasswordHintView extends LitElement {
       min-width: 0;
       overflow-wrap: anywhere;
       word-break: break-word;
+    }
+    @keyframes hint-enter {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .surface { animation: none; }
     }
     @media (max-width: 340px) {
       .surface { padding-right: 16px; padding-left: 16px; }
@@ -220,12 +240,13 @@ export class VwPasswordHintView extends LitElement {
     return html`
       <section class="surface" aria-labelledby="password-hint-title" aria-busy=${this.pending ? 'true' : 'false'}>
         <div class="head">
-          <vw-logo variant="header"></vw-logo>
+          <div class="brand"><vw-logo variant="header"></vw-logo><span>${t('common.brand')}</span></div>
           <div class="head-copy">
             <h1 id="password-hint-title">${t('auth.passwordHint.title')}</h1>
             <p id="password-hint-description" class="description">${t('auth.passwordHint.description')}</p>
           </div>
         </div>
+        ${renderAuthIdentity(this.identity)}
         <form novalidate @submit=${(event: SubmitEvent) => { event.preventDefault(); this.submit(); }}>
           <label class="field" for="password-hint-email">
             <span class="field-label">${t('auth.passwordHint.email')}</span>

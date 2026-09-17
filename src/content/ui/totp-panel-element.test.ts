@@ -99,6 +99,31 @@ describe('totp panel surface', () => {
     expect(root.querySelector('.status')!.getAttribute('aria-atomic')).toBe('true');
   });
 
+  it('uses the actual code period for the countdown and disables expired-code actions', () => {
+    const root = mount({ period: 60, remaining: 15 });
+    const arc = root.querySelector('.cd-arc')!;
+    const circumference = Number(arc.getAttribute('stroke-dasharray'));
+    expect(Number(arc.getAttribute('stroke-dashoffset'))).toBeCloseTo(circumference * .75, 1);
+    const expired = mount({ code: '', remaining: 0 });
+    expect(expired.querySelector<HTMLButtonElement>('.btn-primary')!.disabled).toBe(true);
+    expect(expired.querySelector<HTMLButtonElement>('.icon-btn')!.disabled).toBe(true);
+  });
+
+  it('moves candidate focus on trusted arrow keys and leaves untrusted events inert', () => {
+    const root = mount({ view: 'candidates', candidates: [
+      { key: 'candidate-0', name: 'Forge', username: 'ada@example.com', reprompt: false },
+      { key: 'candidate-1', name: 'Forge', username: 'grace@example.com', reprompt: false },
+    ] });
+    const rows = root.querySelectorAll<HTMLButtonElement>('.candidate');
+    rows[0]!.focus();
+    rows[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    expect(document.activeElement).toBe(rows[0]);
+    const event = new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'isTrusted', { value: true });
+    rows[0]!.dispatchEvent(event);
+    expect(document.activeElement).toBe(rows[1]);
+  });
+
   it('renders same-name candidates with usernames, overflow, and trusted selection', () => {
     const onSelect = vi.fn();
     const root = mount({

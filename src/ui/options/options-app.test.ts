@@ -1083,6 +1083,49 @@ describe('vw-options-app', () => {
     expect(app.securityStatus).toEqual({ message: 'latest timeout failed', tone: 'danger' });
   });
 
+  it('keeps the effective timeout after a failed save and updates it only after a successful retry', async () => {
+    const first = deferred<Res>();
+    const retry = deferred<Res>();
+    let callCount = 0;
+    const app = await mount(makeDeps({
+      'settings.save': () => (++callCount === 1 ? first.promise : retry.promise),
+    }));
+    app.selected = 'security';
+    await app.updateComplete;
+    const section = app.shadowRoot!.querySelector('vw-security-section')!;
+    await section.updateComplete;
+
+    shell(app).dispatchEvent(new CustomEvent('vw-lock-timeout-save', {
+      detail: { lockTimeout: '30' }, bubbles: true, composed: true,
+    }));
+    await app.updateComplete;
+    await section.updateComplete;
+    expect(app.securityFeedback.lockTimeout?.state).toBe('saving');
+    expect(app.effectiveSecuritySettings?.lockTimeout).toBe('15');
+    expect(section.shadowRoot!.querySelector('[data-save-field="lockTimeout"]')!.textContent)
+      .toContain(t('options.save.effective', { value: t('options.lock.15m') }));
+
+    first.resolve({ ok: false, error: { code: 'error', message: 'timeout save failed' } });
+    await nextTask();
+    await section.updateComplete;
+    expect(app.settings?.lockTimeout).toBe('30');
+    expect(app.effectiveSecuritySettings?.lockTimeout).toBe('15');
+    expect(app.securityFeedback.lockTimeout).toEqual({ state: 'error', message: 'timeout save failed' });
+    const retryButton = section.shadowRoot!.querySelector<HTMLButtonElement>('[data-retry-setting="lockTimeout"]')!;
+    expect(retryButton).not.toBeNull();
+    retryButton.click();
+    expect(callCount).toBe(2);
+    expect(app.securityFeedback.lockTimeout?.state).toBe('saving');
+    expect(app.effectiveSecuritySettings?.lockTimeout).toBe('15');
+
+    retry.resolve({ ok: true, data: null });
+    await nextTask();
+    await section.updateComplete;
+    expect(app.effectiveSecuritySettings?.lockTimeout).toBe('30');
+    expect(app.securityFeedback.lockTimeout?.state).toBe('saved');
+    expect(section.shadowRoot!.querySelector('[data-retry-setting="lockTimeout"]')).toBeNull();
+  });
+
   it('ignores a forged legacy never timeout while settings are locally managed', async () => {
     const requests: Array<Extract<Req, { type: 'settings.save' }>> = [];
     const app = await mount(makeDeps({
@@ -1165,6 +1208,10 @@ describe('vw-options-app', () => {
     expect(requests.map(({ onIdleAction, clipboardClearSeconds }) => ({ onIdleAction, clipboardClearSeconds })))
       .toEqual([{ onIdleAction: 'logout', clipboardClearSeconds: '60' }]);
     expect(app.settings).toMatchObject({ onIdleAction: 'logout', clipboardClearSeconds: '120' });
+    expect(app.securityFeedback).toMatchObject({
+      onIdleAction: { state: 'saving' }, clipboardClearSeconds: { state: 'saving' },
+    });
+    expect(app.effectiveSecuritySettings).toMatchObject({ onIdleAction: 'lock', clipboardClearSeconds: '60' });
 
     first.resolve({ ok: false, error: { code: 'error', message: 'obsolete failure' } });
     await nextTask();
@@ -1175,10 +1222,19 @@ describe('vw-options-app', () => {
       ]);
     expect(app.securityStatus).toBeUndefined();
 
+    expect(app.securityFeedback).toMatchObject({
+      onIdleAction: { state: 'saving' }, clipboardClearSeconds: { state: 'saving' },
+    });
+    expect(app.effectiveSecuritySettings).toMatchObject({ onIdleAction: 'lock', clipboardClearSeconds: '60' });
+
     second.resolve({ ok: true, data: null });
     await nextTask();
     expect(app.settings).toMatchObject({ onIdleAction: 'logout', clipboardClearSeconds: '120' });
     expect(app.securityStatus).toBeUndefined();
+    expect(app.securityFeedback).toMatchObject({
+      onIdleAction: { state: 'saved' }, clipboardClearSeconds: { state: 'saved' },
+    });
+    expect(app.effectiveSecuritySettings).toMatchObject({ onIdleAction: 'logout', clipboardClearSeconds: '120' });
   });
 
   it('reports only the latest security snapshot failure', async () => {

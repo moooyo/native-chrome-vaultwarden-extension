@@ -124,6 +124,9 @@ describe('vw-item-detail presentation and events', () => {
     expect(q(el, '.type').textContent).toBe('Login');
     expect(q(el, '.body')).toBeTruthy();
     expect(el.shadowRoot?.querySelector('.card')).toBeNull();
+    expect(q(el, '[data-section="credentials"] [data-copy-password]')).toBeTruthy();
+    expect(q(el, '[data-section="websites"] [data-uri]')).toBeTruthy();
+    expect(q(el, '.body').contains(q(el, '[data-fill]'))).toBe(false);
   });
 
   it('offers clone for active and archived editable items and emits a typed direct intent', async () => {
@@ -991,6 +994,9 @@ describe('vw-item-detail fields and attachments', () => {
     const dialog = await settleDialog(el);
     expect(dialog.heading).toBe('Delete passkey');
     expect(dialog.textContent).toContain('GitHub');
+    expect(q(el, '[data-confirmation-item]').textContent).toBe('GitHub');
+    expect(q(el, '[data-confirmation-owner]').textContent).toBe('Personal vault');
+    expect(q(el, '[data-confirmation-target]').textContent).toBe('GitHub');
     q<HTMLButtonElement>(el, '[data-confirm-passkey]').click();
     await flush(el);
 
@@ -1130,6 +1136,8 @@ describe('vw-item-detail fields and attachments', () => {
     q<HTMLButtonElement>(el, '[data-att-delete]').click();
     await settleDialog(el);
     expect(el.shadowRoot?.querySelector('vw-dialog')).toBeTruthy();
+    expect(q(el, '[data-confirmation-item]').textContent).toBe('GitHub');
+    expect(q(el, '[data-confirmation-target]').textContent).toBe('notes.txt');
     expect(remove).not.toHaveBeenCalled();
     q<HTMLButtonElement>(el, '[data-confirm-delete]').click();
     await flush(el);
@@ -1458,6 +1466,45 @@ describe('vw-item-detail lifecycle modes', () => {
     expect(closed).toHaveBeenCalledWith(expect.objectContaining({ detail: { reason: 'confirm' } }));
     expect(remove).toHaveBeenCalledWith(expect.objectContaining({
       detail: { cipherId: 'cipher-1', permanent: false },
+    }));
+  });
+
+  it('keeps an organization card and its owner in the deletion confirmation', async () => {
+    const item = summary({
+      id: 'card-finance',
+      name: 'Travel card',
+      type: 3,
+      uris: [],
+      loginUris: [],
+      organizationId: 'organization-finance',
+      access: {
+        edit: true,
+        viewPassword: true,
+        delete: true,
+        restore: true,
+        autofillTotp: false,
+        viewTotp: false,
+      },
+    });
+    const el = await mount({
+      summary: item,
+      cipher: detail(item, { card: { brand: 'Visa' } }),
+      presentationMetadata: { organizations: [{ id: 'organization-finance', name: 'Finance team' }] },
+    });
+    const remove = vi.fn();
+    el.addEventListener('vw-delete-item', remove);
+
+    q<HTMLButtonElement>(el, '[data-delete]').click();
+    const dialog = await settleDialog(el);
+
+    expect(q(el, '[data-confirmation-item]').textContent).toBe('Travel card');
+    expect(q(el, '[data-confirmation-owner]').textContent).toBe('Finance team');
+    expect(dialog.textContent).not.toContain('GitHub');
+    expect(dialog.innerHTML).not.toContain('organization-finance');
+    q<HTMLButtonElement>(el, '[data-confirm-delete]').click();
+    await flush(el);
+    expect(remove).toHaveBeenCalledWith(expect.objectContaining({
+      detail: { cipherId: 'card-finance', permanent: false },
     }));
   });
 

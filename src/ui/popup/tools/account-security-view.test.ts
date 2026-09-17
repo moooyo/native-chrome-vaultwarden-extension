@@ -34,6 +34,7 @@ function q<T extends Element>(el: VwAccountSecurityView, sel: string): T {
 
 function set(el: VwAccountSecurityView, sel: string, value: string): void {
   q<HTMLInputElement>(el, sel).value = value;
+  q<HTMLInputElement>(el, sel).dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 /** Own shadow text plus every child status-message's `.message` property (which lives in that
@@ -346,7 +347,7 @@ describe('vw-account-security-view key rotation', () => {
     expect(el.shadowRoot!.querySelector('[data-rotate-confirm]')).toBeTruthy();
   });
 
-  it('requires the master password to confirm rotation', async () => {
+  it('keeps rotation disabled without both a password and explicit consent', async () => {
     const el = await mount();
     q<HTMLButtonElement>(el, '[data-rotate]').click();
     await el.updateComplete;
@@ -355,10 +356,20 @@ describe('vw-account-security-view key rotation', () => {
     q<HTMLButtonElement>(el, '[data-rotate-confirm]').click();
     await el.updateComplete;
     expect(rotated).not.toHaveBeenCalled();
-    expect(text(el)).toContain('请输入当前主密码');
-    const input = q<HTMLInputElement>(el, '[data-rotate-current]');
-    expect(input.getAttribute('aria-invalid')).toBe('true');
-    expect(input.getAttribute('aria-describedby')).toBe('account-security-validation-error');
+    expect(q<HTMLButtonElement>(el, '[data-rotate-confirm]').disabled).toBe(true);
+    set(el, '[data-rotate-current]', 'masterpw');
+    await el.updateComplete;
+    expect(q<HTMLButtonElement>(el, '[data-rotate-confirm]').disabled).toBe(true);
+    const consent = q<HTMLInputElement>(el, '[data-rotate-consent]');
+    consent.checked = true;
+    consent.dispatchEvent(new Event('change', { bubbles: true }));
+    await el.updateComplete;
+    expect(q<HTMLButtonElement>(el, '[data-rotate-confirm]').disabled).toBe(false);
+    consent.checked = false;
+    consent.dispatchEvent(new Event('change', { bubbles: true }));
+    await el.updateComplete;
+    expect(q<HTMLButtonElement>(el, '[data-rotate-confirm]').disabled).toBe(true);
+    expect(rotated).not.toHaveBeenCalled();
   });
 
   it('returns to the main view when rotation is cancelled', async () => {
@@ -378,7 +389,39 @@ describe('vw-account-security-view key rotation', () => {
     const rotated = vi.fn();
     el.addEventListener('vw-rotate-key', (e) => rotated((e as CustomEvent<RotateKeyDetail>).detail));
     set(el, '[data-rotate-current]', 'masterpw');
+    const consent = q<HTMLInputElement>(el, '[data-rotate-consent]');
+    consent.checked = true;
+    consent.dispatchEvent(new Event('change', { bubbles: true }));
+    await el.updateComplete;
     q<HTMLButtonElement>(el, '[data-rotate-confirm]').click();
     expect(rotated).toHaveBeenCalledWith({ masterPassword: 'masterpw' });
+    expect(q<HTMLInputElement>(el, '[data-rotate-current]').value).toBe('');
+    q<HTMLButtonElement>(el, '[data-rotate-confirm]').click();
+    expect(rotated).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects whitespace and clears consent when the active account changes', async () => {
+    const el = await mount();
+    el.identity = { email: 'first@example.com', server: 'https://vault.example.com' };
+    await el.updateComplete;
+    q<HTMLButtonElement>(el, '[data-rotate]').click();
+    await el.updateComplete;
+    const consent = q<HTMLInputElement>(el, '[data-rotate-consent]');
+    consent.checked = true;
+    consent.dispatchEvent(new Event('change', { bubbles: true }));
+    set(el, '[data-rotate-current]', '   ');
+    await el.updateComplete;
+    expect(q<HTMLButtonElement>(el, '[data-rotate-confirm]').disabled).toBe(true);
+    set(el, '[data-rotate-current]', 'masterpw');
+    await el.updateComplete;
+    const previousInput = q<HTMLInputElement>(el, '[data-rotate-current]');
+    el.identity = { email: 'second@example.com', server: 'https://vault.example.com' };
+    await el.updateComplete;
+    expect(previousInput.value).toBe('');
+    expect(el.view).toBe('main');
+    q<HTMLButtonElement>(el, '[data-rotate]').click();
+    await el.updateComplete;
+    expect(q<HTMLInputElement>(el, '[data-rotate-consent]').checked).toBe(false);
+    expect(q<HTMLButtonElement>(el, '[data-rotate-confirm]').disabled).toBe(true);
   });
 });

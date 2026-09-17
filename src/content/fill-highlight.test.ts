@@ -18,6 +18,18 @@ describe('flashFill (mvFill)', () => {
     const opts = animate.mock.calls[0]![1] as KeyframeAnimationOptions;
     expect(opts).toMatchObject({ duration: 600, delay: 130, easing: 'ease-out' });
   });
+
+  it('cancels the previous highlight before animating the same field again', () => {
+    const input = document.createElement('input');
+    const first = { cancel: vi.fn(), finished: new Promise<void>(() => undefined) };
+    const second = { cancel: vi.fn(), finished: Promise.resolve() };
+    const animate = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    (input as unknown as { animate: unknown }).animate = animate;
+    flashFill(input);
+    flashFill(input);
+    expect(first.cancel).toHaveBeenCalledOnce();
+    expect(animate).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('flashFillCheck (mvPop corner badge)', () => {

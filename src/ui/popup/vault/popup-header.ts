@@ -5,7 +5,7 @@ import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import '../../components/logo.js';
 
-/** Compact Chrome-style identity and security bar from the new popup handoff. */
+/** Compact identity, workspace, and security actions for quick access. */
 export class VwPopupHeader extends LitElement {
   static override properties = {
     busy: { type: Boolean },
@@ -28,14 +28,15 @@ export class VwPopupHeader extends LitElement {
         display:flex;
         align-items:center;
         gap:9px;
-        height:50px;
-        padding:0 14px;
+        height:52px;
+        padding:0 16px;
         border-bottom:1px solid var(--vw-line-1);
         background:var(--vw-panel);
       }
-      .brand { font-size:14px; font-weight:500; color:var(--vw-ink); letter-spacing:.01em; }
+      .brand { font-size:15px; font-weight:600; color:var(--vw-ink); }
       .spacer { flex:1; }
       button {
+        appearance:none;
         display:inline-flex;
         align-items:center;
         justify-content:center;
@@ -44,17 +45,21 @@ export class VwPopupHeader extends LitElement {
         color:var(--vw-text-2);
         cursor:pointer;
         font:inherit;
+        padding:0;
+        flex-shrink:0;
+        transition:background-color var(--vw-dur-fast),color var(--vw-dur-fast);
       }
-      button:hover { background:var(--vw-icon-hover); }
-      button:disabled { opacity:.5; cursor:default; }
-      button:focus-visible { outline:none; box-shadow:var(--vw-focus); }
+      button:hover:not(:disabled) { background:var(--vw-icon-hover); }
+      button:disabled { color:var(--vw-disabled-fg); cursor:default; }
+      button:focus-visible { outline:2px solid var(--vw-accent); outline-offset:2px; }
       .icon {
         width:32px;
         height:32px;
-        border-radius:16px;
+        border-radius:var(--vw-radius-control);
       }
       .icon svg { width:17px; height:17px; }
       .control-slot { display:inline-flex; align-items:center; }
+      @media(prefers-reduced-motion:reduce) { button { transition:none; } }
     `,
   ];
 
@@ -68,8 +73,11 @@ export class VwPopupHeader extends LitElement {
         <vw-logo variant="header"></vw-logo>
         <span class="brand">${t('common.brand')}</span>
         <span class="spacer"></span>
+        <button type="button" class="icon" data-open-workspace title=${t('workspace.open')} aria-label=${t('workspace.open')} ?disabled=${this.busy} @click=${() => this.fire('vw-open-workspace')}>
+          ${uiIcon('globe')}
+        </button>
         <span class="control-slot"><slot name="tools"></slot></span>
-        <button type="button" class="icon" title=${t('popup.lock')} aria-label=${t('popup.lock')} ?disabled=${this.busy} @click=${() => this.fire('vw-lock')}>
+        <button type="button" class="icon" data-lock title=${t('popup.lock')} aria-label=${t('popup.lock')} ?disabled=${this.busy} @click=${() => this.fire('vw-lock')}>
           ${uiIcon('lock')}
         </button>
         <span class="control-slot"><slot name="account"></slot></span>

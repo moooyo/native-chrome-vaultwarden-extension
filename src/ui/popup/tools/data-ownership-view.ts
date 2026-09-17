@@ -4,6 +4,7 @@ import { uiIcon } from '../../components/icon.js';
 import { controlStyles } from '../../components/styles.js';
 import { themeTokens } from '../../components/tokens.js';
 import { LocalizeController, t } from '../../i18n/index.js';
+import { authIdentityStyles, renderAuthIdentity, type AuthIdentityDisplay } from '../auth/auth-identity.js';
 import '../../components/status-message.js';
 
 export interface DataOwnershipMigrationModel {
@@ -40,14 +41,18 @@ export class VwDataOwnershipView extends LitElement {
     pending: { type: Boolean },
     error: { type: String },
     reconciliation: { attribute: false },
+    identity: { attribute: false },
     confirmingLeave: { state: true },
+    actionLocked: { state: true },
   };
 
   declare model: DataOwnershipMigrationModel | undefined;
   declare pending: boolean;
   declare error: string | undefined;
   declare reconciliation: DataOwnershipReconciliationModel | undefined;
+  declare identity: AuthIdentityDisplay | undefined;
   private declare confirmingLeave: boolean;
+  private declare actionLocked: boolean;
   private leaveTarget: {
     readonly organizationId: string;
     readonly organizationName: string;
@@ -62,32 +67,36 @@ export class VwDataOwnershipView extends LitElement {
     this.pending = false;
     this.error = undefined;
     this.reconciliation = undefined;
+    this.identity = undefined;
     this.confirmingLeave = false;
+    this.actionLocked = false;
     this.leaveTarget = undefined;
   }
 
   static override styles = [
     themeTokens,
     controlStyles,
+    authIdentityStyles,
     css`
-      :host { display:flex; flex:1; min-height:0; background:var(--vw-panel); }
-      .view { display:flex; flex:1; min-height:0; flex-direction:column; }
-      .head { display:flex; align-items:center; gap:9px; min-height:48px; padding:8px 14px; border-bottom:1px solid var(--vw-line-1); }
+      :host { display:flex; flex:1; min-width:0; min-height:0; background:var(--vw-panel); color:var(--vw-ink); }
+      .view { display:flex; flex:1; min-width:0; min-height:0; flex-direction:column; }
+      .head { display:flex; align-items:center; gap:10px; min-height:52px; padding:10px 18px; border-bottom:1px solid var(--vw-line-1); }
       .head svg { width:17px; height:17px; color:var(--vw-teal-text); }
-      h1 { margin:0; font-size:14px; font-weight:600; letter-spacing:0; }
-      .body { display:flex; flex:1; min-height:0; flex-direction:column; gap:13px; padding:16px; overflow-y:auto; }
+      h1 { margin:0; font-size:18px; font-weight:600; line-height:1.4; letter-spacing:-0.015em; }
+      .body { display:flex; flex:1; min-width:0; min-height:0; flex-direction:column; gap:16px; padding:18px; overflow-y:auto; }
       p { margin:0; color:var(--vw-text-2); font-size:12.5px; line-height:1.55; }
-      dl { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:7px 12px; margin:0; padding:11px 12px; border-top:1px solid var(--vw-line-1); border-bottom:1px solid var(--vw-line-1); }
-      dt { color:var(--vw-muted); font-size:11px; }
-      dd { min-width:0; margin:0; overflow-wrap:anywhere; color:var(--vw-ink); font-size:12px; font-weight:600; }
-      form { display:flex; flex-direction:column; gap:11px; }
-      .field { display:flex; flex-direction:column; gap:5px; }
-      .label { color:var(--vw-muted); font-size:11px; }
-      .input { min-height:34px; padding:0 10px; border:1px solid var(--vw-line-2); border-radius:var(--vw-radius-input); background:var(--vw-fill-2); color:var(--vw-ink); font:12px var(--vw-font-ui); }
+      .destination { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:9px 12px; margin:0; padding:14px 0; border-top:1px solid var(--vw-line-1); border-bottom:1px solid var(--vw-line-1); }
+      .destination dt { color:var(--vw-muted); font-size:12px; }
+      .destination dd { min-width:0; margin:0; overflow-wrap:anywhere; color:var(--vw-ink); font-size:12px; font-weight:600; }
+      form { display:flex; flex-direction:column; gap:16px; min-width:0; }
+      .field { display:flex; flex-direction:column; gap:7px; min-width:0; }
+      .label { color:var(--vw-text-2); font-size:12px; font-weight:500; }
+      .input { min-height:40px; padding:0 12px; border:1px solid var(--vw-line-2); border-radius:var(--vw-radius-input); background:var(--vw-panel); color:var(--vw-ink); font:13px var(--vw-font-ui); }
       .input:focus { outline:none; border-color:var(--vw-accent); box-shadow:var(--vw-focus); }
       .actions { display:flex; gap:8px; }
       .actions .btn { flex:1; min-width:0; }
       vw-status-message { width:100%; }
+      @media (max-width:340px) { .actions { flex-direction:column; } }
     `,
   ];
 
@@ -97,6 +106,10 @@ export class VwDataOwnershipView extends LitElement {
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
+    if ((changed.has('pending') && !this.pending) || changed.has('error')
+        || changed.has('model') || changed.has('reconciliation')) {
+      this.actionLocked = false;
+    }
     if (!changed.has('model')) return;
     const previous = changed.get('model') as DataOwnershipMigrationModel | undefined;
     if (previous?.organizationId !== this.model?.organizationId
@@ -115,12 +128,13 @@ export class VwDataOwnershipView extends LitElement {
   }
 
   private submit(): void {
-    if (this.pending || !this.model?.migrationAvailable || !this.model.collectionId
+    if (this.pending || this.actionLocked || !this.model?.migrationAvailable || !this.model.collectionId
         || !this.model.migrateAuthorizationId) return;
     const password = this.renderRoot.querySelector<HTMLInputElement>('[data-master-password]');
     if (!password?.value) return;
     const masterPassword = password.value;
     password.value = '';
+    this.actionLocked = true;
     emit<DataOwnershipMigrationSubmitDetail>(this, 'vw-data-ownership-migrate', {
       masterPassword,
       organizationId: this.model.organizationId,
@@ -130,7 +144,8 @@ export class VwDataOwnershipView extends LitElement {
   }
 
   private requestLeave(): void {
-    if (this.pending || !this.model) return;
+    if (this.pending || this.actionLocked || !this.model) return;
+    this.scrubPassword();
     this.leaveTarget = {
       organizationId: this.model.organizationId,
       organizationName: this.model.organizationName,
@@ -140,54 +155,76 @@ export class VwDataOwnershipView extends LitElement {
   }
 
   private cancelLeave(): void {
-    if (this.pending) return;
+    if (this.pending || this.actionLocked) return;
     this.confirmingLeave = false;
     this.leaveTarget = undefined;
   }
 
+  private confirmLeave(): void {
+    const target = this.leaveTarget;
+    const model = this.model;
+    if (this.pending || this.actionLocked || !this.confirmingLeave || !target || !model
+        || target.organizationId !== model.organizationId
+        || target.authorizationId !== model.leaveAuthorizationId) return;
+    this.actionLocked = true;
+    emit<DataOwnershipLeaveDetail>(this, 'vw-data-ownership-leave', {
+      organizationId: target.organizationId,
+      authorizationId: target.authorizationId,
+    });
+  }
+
+  private retry(): void {
+    if (this.pending || this.actionLocked) return;
+    this.actionLocked = true;
+    emit(this, 'vw-data-ownership-retry');
+  }
+
   protected override render() {
     const model = this.model;
+    const leaveTarget = this.confirmingLeave ? this.leaveTarget : undefined;
+    const disabled = this.pending || this.actionLocked;
     return html`
-      <section class="view">
+      <section class="view" aria-busy=${disabled ? 'true' : 'false'}>
         <header class="head">${uiIcon('shield')}<h1>${t('dataOwnership.title')}</h1></header>
         <main class="body">
+          ${renderAuthIdentity(this.identity)}
           ${model
             ? html`
-                <p>${model.migrationAvailable
+                ${leaveTarget ? nothing : html`<p>${model.migrationAvailable
                   ? t('dataOwnership.description', { count: model.personalItemCount })
-                  : t('dataOwnership.blockedDescription', { count: model.personalItemCount })}</p>
-                <dl>
-                  <dt>${t('dataOwnership.organization')}</dt><dd>${model.organizationName}</dd>
-                  ${model.collectionName
+                  : t('dataOwnership.blockedDescription', { count: model.personalItemCount })}</p>`}
+                <dl class="destination">
+                  <dt>${t('dataOwnership.organization')}</dt><dd>${leaveTarget?.organizationName ?? model.organizationName}</dd>
+                  ${!leaveTarget && model.collectionName
                     ? html`<dt>${t('dataOwnership.collection')}</dt><dd>${model.collectionName}</dd>`
                     : nothing}
                 </dl>
                 ${this.error
                   ? html`<vw-status-message tone="danger" .icon=${'alert'} .message=${this.error}></vw-status-message>`
                   : nothing}
-                ${this.confirmingLeave && this.leaveTarget
+                ${leaveTarget
                   ? html`
-                      <vw-status-message tone="danger" .icon=${'alert'} .message=${t('dataOwnership.leaveWarning', { organization: this.leaveTarget.organizationName })}></vw-status-message>
+                      <vw-status-message tone="danger" .icon=${'alert'} .message=${t('dataOwnership.leaveWarning', { organization: leaveTarget.organizationName })}></vw-status-message>
                       <div class="actions">
-                        <button type="button" class="btn outline" ?disabled=${this.pending} @click=${this.cancelLeave}>${t('common.back')}</button>
-                        <button type="button" class="btn danger" ?disabled=${this.pending} @click=${() => emit<DataOwnershipLeaveDetail>(this, 'vw-data-ownership-leave', { organizationId: this.leaveTarget!.organizationId, authorizationId: this.leaveTarget!.authorizationId })}>${t('dataOwnership.confirmLeave')}</button>
+                        <button type="button" class="btn outline" ?disabled=${disabled} @click=${this.cancelLeave}>${t('common.back')}</button>
+                        <button type="button" class="btn danger" data-confirm-leave ?disabled=${disabled} @click=${this.confirmLeave}>${t('dataOwnership.confirmLeave')}</button>
                       </div>
                     `
                   : model.migrationAvailable
                     ? html`<form @submit=${(event: Event) => { event.preventDefault(); this.submit(); }}>
                         <label class="field">
                           <span class="label">${t('auth.masterPassword')}</span>
-                          <input class="input" data-master-password type="password" autocomplete="current-password" required ?disabled=${this.pending} />
+                          <input class="input" data-master-password type="password" autocomplete="current-password" required ?disabled=${disabled} />
                         </label>
                         <div class="actions">
-                          <button type="button" class="btn danger" ?disabled=${this.pending} @click=${this.requestLeave}>${t('dataOwnership.leave')}</button>
-                          <button type="submit" class="btn primary" ?disabled=${this.pending}>${t('dataOwnership.migrate')}</button>
+                          <button type="button" class="btn danger" ?disabled=${disabled} @click=${this.requestLeave}>${t('dataOwnership.leave')}</button>
+                          <button type="submit" class="btn primary" ?disabled=${disabled}>${t('dataOwnership.migrate')}</button>
                         </div>
                       </form>`
                     : html`
                         <vw-status-message tone="warning" .icon=${'alert'} .message=${t('dataOwnership.unavailable')}></vw-status-message>
                         <div class="actions">
-                          <button type="button" class="btn danger" ?disabled=${this.pending} @click=${this.requestLeave}>${t('dataOwnership.leave')}</button>
+                          <button type="button" class="btn danger" ?disabled=${disabled} @click=${this.requestLeave}>${t('dataOwnership.leave')}</button>
                         </div>
                       `}
               `
@@ -199,7 +236,7 @@ export class VwDataOwnershipView extends LitElement {
                   ? html`<vw-status-message tone="danger" .icon=${'alert'} .message=${this.error}></vw-status-message>`
                   : nothing}
                 <div class="actions">
-                  <button type="button" class="btn outline" data-full-sync ?disabled=${this.pending} @click=${() => emit(this, 'vw-data-ownership-retry')}>${this.reconciliation
+                  <button type="button" class="btn outline" data-full-sync ?disabled=${disabled} @click=${this.retry}>${this.reconciliation
                     ? t('dataOwnership.fullSync')
                     : t('common.retry')}</button>
                 </div>

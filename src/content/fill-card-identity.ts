@@ -1,13 +1,17 @@
 import type { CardFillData, IdentityFillData } from '../messaging/protocol.js';
 import { isFillableField, type DetectedFillForm, type FillFieldElement } from './field-detection.js';
 import type { CardRole, IdentityRole } from './field-map.js';
-import { nativeSetValue, setElementValue } from './native-set-value.js';
+import { nativeSetValue } from './native-set-value.js';
 import { createStagedFillCommit, type StagedFillCommit } from './staged-fill.js';
+import type { StructuredFieldWrite } from './structured-fill-undo.js';
+
+type WriteObserver = (write: StructuredFieldWrite) => void;
 
 export function fillCardForm(
   form: DetectedFillForm,
   data: CardFillData,
   staged: StagedFillCommit = createStagedFillCommit(),
+  onWrite?: WriteObserver,
 ): boolean {
   let filled = false;
   const set = (role: CardRole, value: string | undefined, candidates?: string[]) => {
@@ -15,8 +19,8 @@ export function fillCardForm(
     const el = form.fields.get(role);
     if (!el) return;
     const write = role === 'expMonth' && el instanceof HTMLSelectElement
-      ? () => setExpiryMonthSelect(el, value, candidates ?? expiryCandidates(role, value))
-      : () => setFieldValue(el, value, candidates ?? expiryCandidates(role, value));
+      ? () => setExpiryMonthSelect(el, value, candidates ?? expiryCandidates(role, value), onWrite)
+      : () => setFieldValue(el, value, candidates ?? expiryCandidates(role, value), onWrite);
     if (staged.write(write)) filled = true;
   };
   set('cardholderName', data.cardholderName);
@@ -28,7 +32,7 @@ export function fillCardForm(
   const expEl = form.fields.get('exp');
   if (!staged.stale && expEl && data.expMonth && data.expYear) {
     const candidates = combinedExpiryCandidates(expEl, data.expMonth, data.expYear);
-    if (candidates.length > 0 && staged.write(() => setFieldValue(expEl, candidates[0]!, candidates))) {
+    if (candidates.length > 0 && staged.write(() => setFieldValue(expEl, candidates[0]!, candidates, onWrite))) {
       filled = true;
     }
   }
@@ -39,12 +43,13 @@ export function fillIdentityForm(
   form: DetectedFillForm,
   data: IdentityFillData,
   staged: StagedFillCommit = createStagedFillCommit(),
+  onWrite?: WriteObserver,
 ): boolean {
   let filled = false;
   const set = (role: IdentityRole, value: string | undefined) => {
     if (!value || staged.stale) return;
     const el = form.fields.get(role);
-    if (el && staged.write(() => setFieldValue(el, value))) filled = true;
+    if (el && staged.write(() => setFieldValue(el, value, [value], onWrite))) filled = true;
   };
   set('title', data.title);
   set('firstName', data.firstName);
@@ -64,12 +69,12 @@ export function fillIdentityForm(
   const addressEl = form.fields.get('address');
   if (!staged.stale && addressEl) {
     const address = combinedAddressValue(addressEl, data);
-    if (address && staged.write(() => setFieldValue(addressEl, address))) filled = true;
+    if (address && staged.write(() => setFieldValue(addressEl, address, [address], onWrite))) filled = true;
   }
   const fullEl = form.fields.get('fullName');
   if (!staged.stale && fullEl) {
     const full = [data.firstName, data.middleName, data.lastName].filter(Boolean).join(' ');
-    if (full && staged.write(() => setFieldValue(fullEl, full))) filled = true;
+    if (full && staged.write(() => setFieldValue(fullEl, full, [full], onWrite))) filled = true;
   }
   return filled;
 }
@@ -180,10 +185,10 @@ function brandCandidates(value: string): string[] {
   return dedupe([value, ...(aliases[normalized] ?? [])]);
 }
 
-function setFieldValue(el: FillFieldElement, value: string, candidates: string[] = [value]): boolean {
+function setFieldValue(el: FillFieldElement, value: string, candidates: string[] = [value], onWrite?: WriteObserver): boolean {
   if (!isFillableField(el)) return false;
-  if (el instanceof HTMLSelectElement) return setSelectValue(el, candidates);
-  setElementValue(el, value);
+  if (el instanceof HTMLSelectElement) return setSelectValue(el, candidates, onWrite);
+  commitValue(el, value, onWrite);
   return true;
 }
 
@@ -211,7 +216,7 @@ function dedupe(values: string[]): string[] {
   return [...new Set(values)];
 }
 
-function setSelectValue(select: HTMLSelectElement, candidates: string[]): boolean {
+function setSelectValue(select: HTMLSelectElement, candidates: string[], onWrite?: WriteObserver): boolean {
   const options = Array.from(select.options);
   for (const candidate of candidates) {
     const target = candidate.trim().toLowerCase();
@@ -219,7 +224,7 @@ function setSelectValue(select: HTMLSelectElement, candidates: string[]): boolea
       (o) => o.value.trim().toLowerCase() === target || o.text.trim().toLowerCase() === target,
     );
     if (!option) continue;
-    return commitSelectOption(select, option);
+    return commitSelectOption(select, option, onWrite);
   }
   return false;
 }
@@ -228,6 +233,7 @@ function setExpiryMonthSelect(
   select: HTMLSelectElement,
   value: string,
   candidates: string[],
+  onWrite?: WriteObserver,
 ): boolean {
   const month = Number(value.trim());
   if (Number.isInteger(month) && month >= 1 && month <= 12) {
@@ -237,15 +243,21 @@ function setExpiryMonthSelect(
         && new Set(values).size === 12
         && values.every((candidate) => candidate >= 0 && candidate <= 11)) {
       const option = numericOptions.find((candidate) => Number(candidate.value.trim()) === month - 1);
-      if (option) return commitSelectOption(select, option);
+      if (option) return commitSelectOption(select, option, onWrite);
     }
   }
-  return setSelectValue(select, candidates);
+  return setSelectValue(select, candidates, onWrite);
 }
 
-function commitSelectOption(select: HTMLSelectElement, option: HTMLOptionElement): true {
-  nativeSetValue(select, option.value);
-  select.dispatchEvent(new Event('input', { bubbles: true }));
-  select.dispatchEvent(new Event('change', { bubbles: true }));
+function commitSelectOption(select: HTMLSelectElement, option: HTMLOptionElement, onWrite?: WriteObserver): true {
+  commitValue(select, option.value, onWrite);
   return true;
+}
+
+function commitValue(element: FillFieldElement, value: string, onWrite?: WriteObserver): void {
+  const before = element.value;
+  nativeSetValue(element, value);
+  onWrite?.({ element, before, written: element.value });
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+  element.dispatchEvent(new Event('change', { bubbles: true }));
 }

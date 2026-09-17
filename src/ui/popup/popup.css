@@ -17,7 +17,7 @@ body {
   height: 600px;
   max-height: 100%;
   overflow: hidden;
-  font-family: 'Roboto', 'Segoe UI', system-ui, sans-serif;
+  font-family: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
   background: #ffffff;
 }
 
@@ -26,3 +26,5 @@ body {
 }
 
 #app { display: block; width: 100%; height: 100%; }
+
+html.workspace, body.workspace { width: 100%; height: 100%; max-width: none; max-height: none; }

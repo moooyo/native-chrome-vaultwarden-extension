@@ -2,6 +2,8 @@ import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
 import { LocalizeController, t } from '../../i18n/index.js';
+import { uiIcon } from '../../components/icon.js';
+import { settingsSectionStyles } from './section-styles.js';
 import '../../components/setting-card.js';
 import '../../components/select-menu.js';
 import '../../components/status-message.js';
@@ -69,6 +71,8 @@ export class VwAutofillSection extends LitElement {
     shortcut: { type: String },
     pending: { type: Boolean },
     status: { attribute: false },
+    activeTab: { state: true },
+    lastSaveGroup: { state: true },
   };
 
   declare defaultUriMatchStrategy: UriMatchStrategySetting;
@@ -96,6 +100,9 @@ export class VwAutofillSection extends LitElement {
   declare shortcut: string;
   declare pending: boolean;
   declare status: SectionStatus | undefined;
+  private declare activeTab: 'fill' | 'rules' | 'passkeys' | 'http';
+  private declare lastSaveGroup: 'policy' | 'badge' | 'passkeys' | 'http' | undefined;
+  private retrySave: (() => void) | undefined;
 
   private i18n = new LocalizeController(this);
   private blockedDomainsDraft: string | undefined;
@@ -138,12 +145,21 @@ export class VwAutofillSection extends LitElement {
     this.shortcut = '';
     this.pending = false;
     this.status = undefined;
+    this.activeTab = 'fill';
   }
 
   static override styles = [
     themeTokens,
+    settingsSectionStyles,
     css`
-      :host { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+      vw-setting-card[hidden], .policy-warning[hidden], vw-status-message[hidden] { display:none; }
+      .settings-sheet > vw-setting-card + vw-setting-card { border-top:0; }
+      .settings-sheet vw-setting-card::part(card) { border-bottom:1px solid var(--vw-line-1); }
+      .settings-sheet vw-setting-card:last-of-type::part(card) { border-bottom:0; }
+      .policy-warning, .settings-sheet > vw-status-message { margin:16px 24px; }
+      .feedback-strip { position:sticky; top:0; z-index:2; padding:10px 0 2px; background:var(--vw-options-bg); }
+      .feedback-strip .save-feedback { margin-bottom:10px; }
+      .empty-origin-note { padding:0 24px 16px; color:var(--vw-muted); font-size:12px; line-height:1.6; }
       .domain-editor { display: flex; flex-direction: column; gap: 10px; width: 100%; min-width: 0; }
       textarea {
         box-sizing: border-box;
@@ -238,7 +254,7 @@ export class VwAutofillSection extends LitElement {
   }
 
   private emitPolicy(overrides: Partial<AutofillSaveDetail>): void {
-    emit<AutofillSaveDetail>(this, 'vw-autofill-save', {
+    const detail: AutofillSaveDetail = {
       defaultUriMatchStrategy: this.defaultUriMatchStrategy,
       inlineSuggestions: this.inlineSuggestions,
       pageLoadFill: this.pageLoadFill,
@@ -249,7 +265,10 @@ export class VwAutofillSection extends LitElement {
       savePromptExcludedDomains: [...this.savePromptExcludedDomains],
       blockedDomains: [...this.blockedDomains],
       ...overrides,
-    });
+    };
+    this.lastSaveGroup = 'policy';
+    this.retrySave = () => emit<AutofillSaveDetail>(this, 'vw-autofill-save', detail);
+    this.retrySave();
   }
 
   private onBlockedDomainsInput(event: Event): void {
@@ -306,11 +325,14 @@ export class VwAutofillSection extends LitElement {
   }
 
   private emitWebsitePasskeySettings(overrides: Partial<WebsitePasskeySaveDetail>): void {
-    emit<WebsitePasskeySaveDetail>(this, 'vw-website-passkey-save', {
+    const detail: WebsitePasskeySaveDetail = {
       enabled: this.websitePasskeyEnabled,
       excludedDomains: [...this.websitePasskeyExcludedDomains],
       ...overrides,
-    });
+    };
+    this.lastSaveGroup = 'passkeys';
+    this.retrySave = () => emit<WebsitePasskeySaveDetail>(this, 'vw-website-passkey-save', detail);
+    this.retrySave();
   }
 
   private onWebsitePasskeyDomainsInput(event: Event): void {
@@ -333,11 +355,15 @@ export class VwAutofillSection extends LitElement {
   }
 
   private emitHttpAuthSettings(overrides: Partial<HttpAuthSaveDetail>): void {
-    emit<HttpAuthSaveDetail>(this, 'vw-http-auth-save', {
+    const detail: HttpAuthSaveDetail = {
       enabled: this.httpAuthEnabled,
       allowedOrigins: [...this.httpAuthAllowedOrigins],
       ...overrides,
-    });
+    };
+    if (detail.enabled && detail.allowedOrigins.length === 0) return;
+    this.lastSaveGroup = 'http';
+    this.retrySave = () => emit<HttpAuthSaveDetail>(this, 'vw-http-auth-save', detail);
+    this.retrySave();
   }
 
   private onHttpAuthOriginsInput(event: Event): void {
@@ -421,9 +447,47 @@ export class VwAutofillSection extends LitElement {
     }
   }
 
+  private renderSaveFeedback() {
+    const saving = this.lastSaveGroup === 'passkeys' ? this.websitePasskeyPending
+      : this.lastSaveGroup === 'http' ? this.httpAuthPending : this.pending;
+    const state = saving && this.lastSaveGroup ? 'saving'
+      : this.status?.tone === 'danger' ? 'error'
+        : this.status?.tone === 'success' ? 'saved' : 'idle';
+    return html`<div class="feedback-strip"><div class="save-feedback" data-state=${state} role="status" aria-live="polite">
+      ${state !== 'idle' ? html`<span class="save-mark" aria-hidden="true">${state === 'saved' ? uiIcon('check') : state === 'error' ? uiIcon('alert') : nothing}</span>` : nothing}
+      <span class="save-copy">${state === 'saving' ? t('options.save.saving') : this.status?.message ?? t('options.save.automatic')}</span>
+      ${state === 'error' && this.retrySave ? html`<button type="button" class="retry-save" data-retry-save @click=${() => this.retrySave?.()}>${t('common.retry')}</button>` : nothing}
+      ${this.status?.tone === 'warning' && this.status.message === t('options.save.refreshFailed') ? html`<button type="button" class="retry-save" data-refresh-settings ?disabled=${this.pending} @click=${() => emit(this, 'vw-settings-refresh')}>${t('common.retry')}</button>` : nothing}
+    </div></div>`;
+  }
+
+  private onTabKey(event: KeyboardEvent): void {
+    const tabs = ['fill', 'rules', 'passkeys', 'http'] as const;
+    const index = tabs.indexOf(this.activeTab);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+      : event.key === 'ArrowRight' ? (index + 1) % tabs.length
+        : event.key === 'ArrowLeft' ? (index - 1 + tabs.length) % tabs.length : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    this.activeTab = tabs[next]!;
+    void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLButtonElement>(`[data-tab="${this.activeTab}"]`)?.focus());
+  }
+
   protected override render() {
+    const tabs = [
+      { id: 'fill', label: t('options.autofill.tabFill') },
+      { id: 'rules', label: t('options.autofill.tabRules') },
+      { id: 'passkeys', label: t('options.autofill.tabPasskeys') },
+      { id: 'http', label: 'HTTP Auth' },
+    ] as const;
     return html`
-      <vw-setting-card heading=${t('options.autofill.matchTitle')} description=${t('options.autofill.matchDesc')}>
+      <nav class="section-tabs" role="tablist" aria-label=${t('options.autofill.title')}>
+        ${tabs.map((tab) => html`<button type="button" id=${`tab-${tab.id}`} data-tab=${tab.id} role="tab" aria-selected=${this.activeTab === tab.id ? 'true' : 'false'} aria-controls="settings-panel" tabindex=${this.activeTab === tab.id ? 0 : -1} @click=${() => { this.activeTab = tab.id; }} @keydown=${this.onTabKey}>${tab.label}</button>`)}
+      </nav>
+      <p class="section-note">${t('options.save.browserScope')}</p>
+      ${this.renderSaveFeedback()}
+      <div class="settings-sheet" id="settings-panel" role="tabpanel" aria-labelledby=${`tab-${this.activeTab}`}>
+      <vw-setting-card ?hidden=${this.activeTab !== 'rules'} heading=${t('options.autofill.matchTitle')} description=${t('options.autofill.matchDesc')}>
         <vw-select
           data-strategy
           .options=${strategyOptions()}
@@ -439,6 +503,7 @@ export class VwAutofillSection extends LitElement {
       ${this.uriMatchDefaultManaged
         ? html`<vw-status-message
             data-uri-match-managed
+            ?hidden=${this.activeTab !== 'rules'}
             tone=${this.uriMatchDefaultMalformed ? 'danger' : 'info'}
             .message=${this.uriMatchDefaultMalformed
               ? t('options.autofill.matchManagedMalformed')
@@ -447,14 +512,16 @@ export class VwAutofillSection extends LitElement {
         : this.uriMatchDefaultMalformed
           ? html`<vw-status-message
               data-uri-match-malformed
+              ?hidden=${this.activeTab !== 'rules'}
               tone="danger"
               .message=${t('options.autofill.matchMalformed')}
             ></vw-status-message>`
           : nothing}
 
-      <vw-setting-card heading=${t('options.autofill.inline')} description=${t('options.autofill.inlineDesc')}>
+      <vw-setting-card ?hidden=${this.activeTab !== 'fill'} heading=${t('options.autofill.inline')} description=${t('options.autofill.inlineDesc')}>
         <vw-toggle
           data-inline
+          .label=${t('options.autofill.inline')}
           .checked=${this.inlineSuggestions}
           .disabled=${this.pending}
           @vw-toggle-change=${(event: CustomEvent<{ checked: boolean }>) => this.emitPolicy({ inlineSuggestions: event.detail.checked })}
@@ -462,24 +529,30 @@ export class VwAutofillSection extends LitElement {
       </vw-setting-card>
 
       <vw-setting-card
+        ?hidden=${this.activeTab !== 'fill'}
         heading=${t('options.autofill.toolbarCount')}
         description=${t('options.autofill.toolbarCountDesc')}
       >
         <vw-toggle
           data-toolbar-count
+          .label=${t('options.autofill.toolbarCount')}
           .checked=${this.showMatchingLoginCount}
           .disabled=${this.pending}
           @vw-toggle-change=${(event: CustomEvent<{ checked: boolean }>) => {
-            emit<ToolbarBadgeSaveDetail>(this, 'vw-toolbar-badge-save', {
+            this.lastSaveGroup = 'badge';
+            const detail: ToolbarBadgeSaveDetail = {
               showMatchingLoginCount: event.detail.checked,
-            });
+            };
+            this.retrySave = () => emit<ToolbarBadgeSaveDetail>(this, 'vw-toolbar-badge-save', detail);
+            this.retrySave();
           }}
         ></vw-toggle>
       </vw-setting-card>
 
-      <vw-setting-card heading=${t('options.autofill.pageLoad')} description=${t('options.autofill.pageLoadDesc')}>
+      <vw-setting-card ?hidden=${this.activeTab !== 'fill'} heading=${t('options.autofill.pageLoad')} description=${t('options.autofill.pageLoadDesc')}>
         <vw-toggle
           data-page-load
+          .label=${t('options.autofill.pageLoad')}
           .checked=${this.pageLoadFill || this.activateAutofillManaged}
           .disabled=${this.pending || this.activateAutofillManaged}
           ?inert=${this.pending || this.activateAutofillManaged}
@@ -491,17 +564,20 @@ export class VwAutofillSection extends LitElement {
       ${this.activateAutofillManaged
         ? html`<vw-status-message
             data-page-load-managed
+            ?hidden=${this.activeTab !== 'fill'}
             tone="info"
             .message=${t('options.autofill.pageLoadManaged')}
           ></vw-status-message>`
         : nothing}
 
       <vw-setting-card
+        ?hidden=${this.activeTab !== 'fill'}
         heading=${t('options.autofill.pageLoadDefault')}
         description=${t('options.autofill.pageLoadDefaultDesc')}
       >
         <vw-toggle
           data-page-load-default
+          .label=${t('options.autofill.pageLoadDefault')}
           .checked=${this.pageLoadFillDefault}
           .disabled=${this.pending}
           @vw-toggle-change=${(event: CustomEvent<{ checked: boolean }>) => this.emitPolicy({
@@ -511,11 +587,13 @@ export class VwAutofillSection extends LitElement {
       </vw-setting-card>
 
       <vw-setting-card
+        ?hidden=${this.activeTab !== 'fill'}
         heading=${t('options.autofill.autoCopyTotp')}
         description=${t('options.autofill.autoCopyTotpDesc')}
       >
         <vw-toggle
           data-auto-copy-totp
+          .label=${t('options.autofill.autoCopyTotp')}
           .checked=${this.autoCopyTotp}
           .disabled=${this.pending}
           @vw-toggle-change=${(event: CustomEvent<{ checked: boolean }>) => this.emitPolicy({
@@ -524,18 +602,20 @@ export class VwAutofillSection extends LitElement {
         ></vw-toggle>
       </vw-setting-card>
 
-      <vw-setting-card heading=${t('options.autofill.savePrompt')} description=${t('options.autofill.savePromptDesc')}>
+      <vw-setting-card ?hidden=${this.activeTab !== 'fill'} heading=${t('options.autofill.savePrompt')} description=${t('options.autofill.savePromptDesc')}>
         <vw-toggle
           data-save-prompt
+          .label=${t('options.autofill.savePrompt')}
           .checked=${this.savePromptEnabled}
           .disabled=${this.pending}
           @vw-toggle-change=${(event: CustomEvent<{ checked: boolean }>) => this.emitPolicy({ savePromptEnabled: event.detail.checked })}
         ></vw-toggle>
       </vw-setting-card>
 
-      <vw-setting-card heading=${t('options.autofill.updatePrompt')} description=${t('options.autofill.updatePromptDesc')}>
+      <vw-setting-card ?hidden=${this.activeTab !== 'fill'} heading=${t('options.autofill.updatePrompt')} description=${t('options.autofill.updatePromptDesc')}>
         <vw-toggle
           data-update-prompt
+          .label=${t('options.autofill.updatePrompt')}
           .checked=${this.updatePromptEnabled}
           .disabled=${this.pending}
           @vw-toggle-change=${(event: CustomEvent<{ checked: boolean }>) => this.emitPolicy({ updatePromptEnabled: event.detail.checked })}
@@ -544,6 +624,7 @@ export class VwAutofillSection extends LitElement {
 
       <vw-setting-card
         stacked
+        ?hidden=${this.activeTab !== 'rules'}
         heading=${t('options.autofill.savePromptExcludedDomains')}
         description=${t('options.autofill.savePromptExcludedDomainsDesc')}
       >
@@ -571,21 +652,27 @@ export class VwAutofillSection extends LitElement {
       </vw-setting-card>
 
       <vw-setting-card
+        ?hidden=${this.activeTab !== 'http'}
         heading=${t('options.autofill.httpAuth')}
         description=${t('options.autofill.httpAuthDesc')}
       >
         <vw-toggle
           data-http-auth
+          .label=${t('options.autofill.httpAuth')}
           .checked=${this.httpAuthEnabled}
-          .disabled=${this.httpAuthPending}
+          .disabled=${this.httpAuthPending || (!this.httpAuthEnabled && this.httpAuthAllowedOrigins.length === 0)}
           @vw-toggle-change=${(event: CustomEvent<{ checked: boolean }>) => this.emitHttpAuthSettings({
             enabled: event.detail.checked,
           })}
         ></vw-toggle>
       </vw-setting-card>
 
+      ${this.activeTab === 'http' && !this.httpAuthEnabled && this.httpAuthAllowedOrigins.length === 0
+        ? html`<p class="empty-origin-note" data-http-auth-empty-hint>${t('options.autofill.httpAuthNeedsOrigin')}</p>` : nothing}
+
       <vw-setting-card
         stacked
+        ?hidden=${this.activeTab !== 'http'}
         heading=${t('options.autofill.httpAuthOrigins')}
         description=${t('options.autofill.httpAuthOriginsDesc')}
       >
@@ -616,7 +703,7 @@ export class VwAutofillSection extends LitElement {
 
       ${!this.httpAuthPolicyValid
         ? html`
-            <div class="policy-warning" data-http-auth-policy-warning role="status">
+            <div class="policy-warning" ?hidden=${this.activeTab !== 'http'} data-http-auth-policy-warning role="status">
               <span>${t('options.autofill.invalidHttpAuthPolicy')}</span>
               <button
                 type="button"
@@ -630,11 +717,13 @@ export class VwAutofillSection extends LitElement {
         : nothing}
 
       <vw-setting-card
+        ?hidden=${this.activeTab !== 'passkeys'}
         heading=${t('options.autofill.websitePasskeys')}
         description=${t('options.autofill.websitePasskeysDesc')}
       >
         <vw-toggle
           data-website-passkeys
+          .label=${t('options.autofill.websitePasskeys')}
           .checked=${this.websitePasskeyEnabled}
           .disabled=${this.websitePasskeyPending}
           @vw-toggle-change=${(event: CustomEvent<{ checked: boolean }>) => this.emitWebsitePasskeySettings({
@@ -645,6 +734,7 @@ export class VwAutofillSection extends LitElement {
 
       <vw-setting-card
         stacked
+        ?hidden=${this.activeTab !== 'passkeys'}
         heading=${t('options.autofill.websitePasskeyExcludedDomains')}
         description=${t('options.autofill.websitePasskeyExcludedDomainsDesc')}
       >
@@ -675,7 +765,7 @@ export class VwAutofillSection extends LitElement {
 
       ${!this.websitePasskeyPolicyValid
         ? html`
-            <div class="policy-warning" data-website-passkey-policy-warning role="status">
+            <div class="policy-warning" ?hidden=${this.activeTab !== 'passkeys'} data-website-passkey-policy-warning role="status">
               <span>${t('options.autofill.invalidWebsitePasskeyPolicy')}</span>
             </div>
           `
@@ -683,6 +773,7 @@ export class VwAutofillSection extends LitElement {
 
       <vw-setting-card
         stacked
+        ?hidden=${this.activeTab !== 'rules'}
         heading=${t('options.autofill.blockedDomains')}
         description=${t('options.autofill.blockedDomainsDesc')}
       >
@@ -711,7 +802,7 @@ export class VwAutofillSection extends LitElement {
 
       ${!this.autofillPolicyValid
         ? html`
-            <div class="policy-warning" data-policy-warning role="status">
+            <div class="policy-warning" ?hidden=${this.activeTab !== 'fill' && this.activeTab !== 'rules'} data-policy-warning role="status">
               <span>${t('options.autofill.invalidPolicy')}</span>
               <button
                 type="button"
@@ -724,7 +815,7 @@ export class VwAutofillSection extends LitElement {
           `
         : nothing}
 
-      <vw-setting-card heading=${t('options.autofill.shortcut')} description=${t('options.autofill.shortcutDesc')}>
+      <vw-setting-card ?hidden=${this.activeTab !== 'fill'} heading=${t('options.autofill.shortcut')} description=${t('options.autofill.shortcutDesc')}>
         <div class="shortcut">
           <span class="keychip" data-shortcut>${this.shortcut || t('options.autofill.unassigned')}</span>
           <button type="button" class="btn-outline" data-shortcut-change ?disabled=${this.pending} @click=${() => emit(this, 'vw-shortcut-change')}>
@@ -732,10 +823,7 @@ export class VwAutofillSection extends LitElement {
           </button>
         </div>
       </vw-setting-card>
-
-      ${this.status
-        ? html`<vw-status-message data-status .tone=${this.status.tone} .message=${this.status.message}></vw-status-message>`
-        : nothing}
+      </div>
     `;
   }
 

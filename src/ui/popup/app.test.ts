@@ -161,6 +161,7 @@ function fakeBrowser(over: Partial<PopupBrowser> = {}): PopupBrowser {
     getActiveTabUrl: over.getActiveTabUrl ?? (async () => 'https://active.example/path'),
     captureVisibleTab: over.captureVisibleTab ?? (async () => 'data:image/png;base64,AA=='),
     openOptions: over.openOptions ?? (async () => {}),
+    openWorkspace: over.openWorkspace ?? (async () => {}),
     openReceive: over.openReceive ?? (async () => {}),
     openUrl: over.openUrl ?? (async () => {}),
   };
@@ -2451,12 +2452,11 @@ describe('vw-popup-app unlocked navigation', () => {
 
   it('revokes a cached generator policy before an extension-wide refresh settles', async () => {
     const refreshed = deferred<Res>();
-    let reads = 0;
+    let refreshing = false;
     const app = await mountApp(fakeRequest({
       ...UNLOCKED,
       'settings.get': () => {
-        reads += 1;
-        return reads === 1
+        return !refreshing
           ? Promise.resolve({ ok: true, data: { generator: createGeneratorPolicySnapshot(null, 7) } } as Res)
           : refreshed.promise;
       },
@@ -2467,6 +2467,7 @@ describe('vw-popup-app unlocked navigation', () => {
     await settle(app);
     expect(app.generatorPolicy.revision).toBe(7);
 
+    refreshing = true;
     enterprisePolicyMessageListener()({ type: 'enterprisePolicy.clientChanged', phase: 'refresh' });
     await app.updateComplete;
     expect(app.generatorPolicy).toBe(UNAVAILABLE_GENERATOR_POLICY_SNAPSHOT);
@@ -2520,6 +2521,31 @@ describe('vw-popup-app unlocked navigation', () => {
     expect(window.confirm).toHaveBeenCalledWith(t('auth.logoutConfirm'));
     expect(logout).toHaveBeenCalledOnce();
     expect(app.route.name).toBe('unlock');
+  });
+
+  it('opens the full workspace through the browser seam', async () => {
+    const openWorkspace = vi.fn(async () => {});
+    const app = await mountApp(fakeRequest(UNLOCKED), fakeBrowser({ openWorkspace }));
+    view(app, 'vw-popup-header').dispatchEvent(new CustomEvent('vw-open-workspace', { bubbles: true, composed: true }));
+    await settle(app);
+    expect(openWorkspace).toHaveBeenCalledOnce();
+  });
+
+  it('uses independent list and detail panes in the full workspace', async () => {
+    const app = await mountApp(fakeRequest(UNLOCKED));
+    app.workspace = true;
+    await settle(app);
+    const list = view(app, 'vw-vault-view') as HTMLElement & { compactDetails: boolean };
+    expect(list.compactDetails).toBe(false);
+    expect(app.shadowRoot?.querySelector('.workspace-empty')).not.toBeNull();
+    const first = app.items[0];
+    expect(first).toBeDefined();
+    list.dispatchEvent(new CustomEvent('vw-item-open', { detail: { cipherId: first!.id }, bubbles: true, composed: true }));
+    await settle(app);
+    expect(app.selectedCipherId).toBe(first!.id);
+    expect(app.shadowRoot?.querySelector('.workspace-columns.has-detail')).not.toBeNull();
+    expect(app.shadowRoot?.querySelector('.workspace-list vw-vault-view')).not.toBeNull();
+    expect(app.shadowRoot?.querySelector('.workspace-detail vw-item-detail')).not.toBeNull();
   });
 
   it('routes an unlocked fallback account back into its workspace after logout', async () => {

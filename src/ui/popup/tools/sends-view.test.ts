@@ -151,7 +151,7 @@ describe('vw-sends-view create', () => {
     expect(Array.from(deletion.options, (option) => option.value)).toEqual([
       '1', '24', '48', '72', '168', '336', '720',
     ]);
-    expect(deletion.value).toBe('168');
+    expect(deletion.value).toBe('336');
 
     await setValue(el, '[data-deletion]', '1');
     await setValue(el, '[data-expiry]', '1');
@@ -213,6 +213,23 @@ describe('vw-sends-view create', () => {
 
     expect(read).not.toHaveBeenCalled();
     expect(created).toHaveBeenCalledOnce();
+  });
+
+  it('blocks access expiration after deletion without discarding the draft', async () => {
+    const el = await mount();
+    await openCreate(el);
+    await setValue(el, '[data-text]', 'retain this text');
+    await setValue(el, '[data-deletion]', '24');
+    const created = vi.fn();
+    el.addEventListener('vw-send-create', created);
+    q<HTMLButtonElement>(el, '[data-create]').click();
+    await el.updateComplete;
+    expect(created).not.toHaveBeenCalled();
+    expect(el.validationError).toBeTruthy();
+    expect(q<HTMLTextAreaElement>(el, '[data-text]').value).toBe('retain this text');
+    await setValue(el, '[data-expiry]', '1');
+    q<HTMLButtonElement>(el, '[data-create]').click();
+    expect(created.mock.calls[0]![0].detail.input).toMatchObject({ expirationHours: 1, deletionHours: 24 });
   });
 
   it('rejects a file Send at limit + 1 before reading or emitting', async () => {
@@ -429,6 +446,22 @@ describe('vw-sends-view edit password modes', () => {
     });
   });
 
+  it('checks a changed access deadline against the retained deletion date', async () => {
+    const el = await mount();
+    await openEdit(el, send({ deletionDate: new Date(Date.now() + 24 * 3_600_000).toISOString() }));
+    const updated = vi.fn();
+    el.addEventListener('vw-send-update', updated);
+    await setValue(el, '[data-e-expiry]', '168');
+    q<HTMLButtonElement>(el, '[data-save]').click();
+    await el.updateComplete;
+    expect(updated).not.toHaveBeenCalled();
+    expect(el.validationError).toBeTruthy();
+    expect(q<HTMLSelectElement>(el, '[data-e-expiry]').value).toBe('168');
+    await setValue(el, '[data-e-deletion]', '336');
+    q<HTMLButtonElement>(el, '[data-save]').click();
+    expect(updated.mock.calls[0]![0].detail.input).toMatchObject({ expirationHours: 168, deletionHours: 336 });
+  });
+
   it('round-trips editable private notes and omits them when decryption failed', async () => {
     const el = await mount();
     await openEdit(el, send({ notes: 'original note' }));
@@ -504,6 +537,18 @@ describe('vw-sends-view unsaved draft protection', () => {
   afterEach(() => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
+  });
+
+  it('separates ended links from active links without losing their management actions', async () => {
+    const el = await mount();
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    el.sends = { status: 'ready', data: [send({ id: 'active', deletionDate: future }), send({ id: 'limited', deletionDate: future, accessCount: 5, maxAccessCount: 5 })] };
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('[aria-labelledby="active-sends-title"] [data-send]')?.getAttribute('data-send')).toBe('active');
+    const ended = el.shadowRoot!.querySelector('[aria-labelledby="ended-sends-title"]');
+    expect(ended?.querySelector('[data-send]')?.getAttribute('data-send')).toBe('limited');
+    expect(ended?.querySelector('[data-edit]')).not.toBeNull();
+    expect(ended?.textContent).toContain('Access limit reached');
   });
 
   async function openEditForDraft(el: VwSendsView, value = send({ passwordProtected: true, notes: 'note' })): Promise<void> {

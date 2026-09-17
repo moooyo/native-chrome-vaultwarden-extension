@@ -1,9 +1,9 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from './tokens.js';
 import { emit } from './emit.js';
 
 /**
- * `vw-toggle` — the MiYu switch. 40×20 by default, 36×19 in the `sm` variant (Send access-password).
+ * `vw-toggle` is a 40×22 switch, with a 36×20 compact variant.
  * Emits `vw-toggle-change` with `{ checked }` on user toggle. Accessible: `role="switch"`, keyboard
  * operable via Space/Enter.
  */
@@ -12,17 +12,20 @@ export class VwToggle extends LitElement {
     checked: { type: Boolean, reflect: true },
     disabled: { type: Boolean, reflect: true },
     size: { type: String },
+    label: { type: String },
   };
 
   declare checked: boolean;
   declare disabled: boolean;
   declare size: 'md' | 'sm';
+  declare label: string;
 
   constructor() {
     super();
     this.checked = false;
     this.disabled = false;
     this.size = 'md';
+    this.label = '';
   }
 
   static override styles = [
@@ -30,34 +33,36 @@ export class VwToggle extends LitElement {
     css`
       :host { display: inline-flex; }
       button {
+        appearance: none;
         position: relative;
         width: 40px;
-        height: 24px;
+        height: 22px;
         padding: 0;
-        border: none;
-        border: 1px solid var(--otl);
-        border-radius: 12px;
+        border: 1px solid transparent;
+        border-radius: 11px;
         background: var(--vw-toggle-off);
         cursor: pointer;
         transition: background-color var(--vw-dur-fast);
       }
-      button.sm { width:36px; height:22px; }
+      button.sm { width:36px; height:20px; }
       button[aria-checked='true'] { border-color:transparent; background:var(--vw-toggle-on); }
-      button:disabled { opacity: 0.5; cursor: default; }
+      button:disabled { opacity: 0.6; cursor: default; }
       .knob {
         position: absolute;
-        top: 3px;
-        left: 3px;
+        top: 2px;
+        left: 2px;
         width: 16px;
         height: 16px;
         border-radius: 50%;
-        background: var(--otl);
+        background: #fff;
         box-shadow: var(--vw-knob-shadow);
-        transition: left var(--vw-dur-fast);
+        transition: transform var(--vw-dur-fast) var(--vw-ease);
       }
       button.sm .knob { width:14px; height:14px; }
-      button[aria-checked='true'] .knob { left:19px; background:#fff; }
-      button:focus-visible { outline: none; box-shadow: var(--vw-focus); }
+      button[aria-checked='true'] .knob { transform:translateX(18px); }
+      button.sm[aria-checked='true'] .knob { transform:translateX(16px); }
+      button:focus-visible { outline: 2px solid var(--vw-accent); outline-offset: 3px; }
+      @media (prefers-reduced-motion: reduce) { button, .knob { transition: none; } }
     `,
   ];
 
@@ -75,6 +80,7 @@ export class VwToggle extends LitElement {
         role="switch"
         class=${this.size === 'sm' ? 'sm' : ''}
         aria-checked=${this.checked ? 'true' : 'false'}
+        aria-label=${this.label || this.getAttribute('aria-label') || nothing}
         ?disabled=${this.disabled}
         @click=${this.toggle}
       >

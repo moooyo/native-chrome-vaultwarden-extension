@@ -1,6 +1,7 @@
 import { html, nothing, svg, type TemplateResult } from 'lit';
 import { uiIcon } from '../../ui/components/icon.js';
 import { SIDE_PANEL_CSS, sideWrap } from './side-panel.js';
+import { INLINE_SURFACE_CSS } from './surface-theme.js';
 
 export interface PopoverCandidate {
   id: string;
@@ -26,6 +27,8 @@ export interface PopoverState {
   /** Login autofill (design 2c) mounts to the RIGHT of the focused field with a connector and shows the
    *  match list directly (no click-to-open trigger). Card/identity keep the compact trigger popover. */
   sidePanel: boolean;
+  /** Current frame host, displayed as plain text; never used to authorize a fill. */
+  siteLabel?: string;
 }
 
 export type PopoverDismissReason = 'escape' | 'tab';
@@ -66,130 +69,51 @@ const STAR = svg`<path d="M12 4l2.3 4.7 5.2.8-3.7 3.6.9 5.1L12 15.8 7.3 18.3l.9-
  * arbitrary host pages it cannot use the extension's `--vw-*` tokens, so the MiYu palette is defined
  * locally on `:host` (the surface host div) with a `prefers-color-scheme: dark` override.
  */
-export const POPOVER_STYLES = `
-    :host { all: initial; }
-    :host {
-      --mi-panel: #fff;
-      --mi-ink:#1f1f1f;
-      --mi-muted:#747775;
-      --mi-faint:#80868b;
-      --mi-teal:#0b57d0;
-      --mi-teal-text:#0b57d0;
-      --mi-teal-10:rgba(11,87,208,.1);
-      --mi-teal-20:rgba(11,87,208,.2);
-      --mi-line:#c4c7c5;
-      --mi-fill:#f0f4f9;
-      --mi-row-hover:rgba(31,31,31,.07);
-      --mi-shadow:0 8px 28px rgba(0,0,0,.2);
-    }
-    * { box-sizing: border-box; }
-    .box {
-      font:400 14px/1.4 "Roboto", "Segoe UI", system-ui, sans-serif;
-      color: var(--mi-ink);
-      background: var(--mi-panel);
-      border:1px solid var(--mi-line);
-      border-radius: 14px;
-      box-shadow: var(--mi-shadow);
-      width:236px;
-      min-width:236px;
-      max-width:236px;
-      overflow: hidden;
-      animation:mvFly .22s cubic-bezier(.2,.9,.3,1);
-    }
-    @keyframes mvFly { from { opacity:0; transform:translateX(-12px); } to { opacity:1; transform:translateX(0); } }
-
-    /* Brand header row */
-    .head { display: flex; align-items: center; gap: 7px; padding: 10px 13px 7px; }
-    .brand { font-size: 11.5px; font-weight: 600; letter-spacing: .01em; color: var(--mi-teal-text); }
-    .head .meta { margin-left: auto; font-size: 10.5px; color: var(--mi-faint); }
-
-    /* Concentric-circle mini logo on a moss-green block (identical in light + dark). */
-    .logo { display:grid; place-items:center; width:16px; height:16px; border-radius:5px; background:#0b57d0; flex:none; }
-    .logo svg { width:11px; height:11px; fill:#fff; stroke:none; }
-    .glyph { position: relative; width: 8px; height: 8px; }
-    .ring { position: absolute; inset: 0; border: 1.5px solid #fff; border-radius: 50%; }
-    .dot { position: absolute; left: 3px; top: 3px; width: 2px; height: 2px; border-radius: 50%; background: #fff; }
-
-    /* Collapsed trigger */
-    .trigger { display: flex; align-items: center; gap: 7px; width: 100%; font: inherit; text-align: left; border: 0; background: transparent; padding: 9px 12px; cursor: pointer; color: inherit; }
-    .trigger:hover { background: var(--mi-row-hover); }
-    .trigger .chev { margin-left: auto; display: grid; place-items: center; color: var(--mi-faint); }
-    .trigger .chev svg { width: 16px; height: 16px; }
-
-    /* Candidate list */
-    .list { padding: 0 6px 8px; display: block; }
-    .list.scrollable { max-height: 264px; overflow-y: auto; }
-    button.candidate {
-      display: flex; align-items: center; gap: 9px;
-      font: inherit; width: 100%; text-align: left;
-      border: 0; background: transparent;
-      padding: 8px; border-radius: 10px; cursor: pointer; color: inherit;
-      animation: mvStag .3s ease-out both;
-    }
-    @keyframes mvStag { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
-    button.candidate:hover { background: var(--mi-row-hover); }
-    button.candidate:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--mi-teal); }
-    button.candidate[aria-selected="true"] { background: var(--mi-row-hover); box-shadow: inset 0 0 0 2px var(--mi-teal); }
-    .list:focus { outline: none; }
-    .tile { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: 9px; color: #fff; font-weight: 700; font-size: 13px; text-transform: uppercase; }
-    .meta-col { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
-    .title { display: flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 600; color: var(--mi-ink); }
-    .title .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .star { width: 11px; height: 11px; color: #E0A400; flex: none; }
-    .sub { font-size: 11px; color: var(--mi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .fill { flex: none; font-size: 11px; font-weight: 600; color: var(--mi-teal-text); }
-    button.candidate:hover .fill { color: var(--mi-teal); }
-
-    /* Status / info bar (locked hint, empty state) */
-    .status { display: flex; align-items: center; gap: 10px; margin: 8px; padding: 11px 13px; border-radius: 12px; background: var(--mi-fill); }
-    .status-ico { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--mi-panel); color: var(--mi-teal-text); flex: none; }
-    .status-ico svg { width: 14px; height: 14px; }
-    .status-msg { font-size: 12.5px; font-weight: 600; color: var(--mi-ink); }
-    svg { stroke-width: 1.8; }
-
-    /* Filled confirmation (design 2c) */
-    .filled { display: flex; align-items: center; gap: 8px; padding: 10px 13px 13px; }
-    .badge { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 14px; background: var(--mi-teal-10); border: 1px solid var(--mi-teal-20); color: var(--mi-teal-text); font-size: 11.5px; font-weight: 600; animation: mvPop .3s ease-out both; }
-    .badge svg { width: 12px; height: 12px; stroke-width: 2.4; }
-    @keyframes mvPop { 0% { transform: scale(.4); opacity: 0; } 65% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
-
-    @media (prefers-color-scheme: dark) {
-      :host {
-        --mi-panel:#1f1f1f;
-        --mi-ink:#e3e3e3;
-        --mi-muted:#c4c7c5;
-        --mi-faint:#8e918f;
-        --mi-teal:#a8c7fa;
-        --mi-teal-text:#a8c7fa;
-        --mi-teal-10:rgba(168,199,250,.14);
-        --mi-teal-20:rgba(168,199,250,.24);
-        --mi-line:#47494c;
-        --mi-fill:#242526;
-        --mi-row-hover:rgba(227,227,227,.09);
-        --mi-shadow:0 8px 28px rgba(0,0,0,.5);
-      }
-    }
-    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
-  ` + SIDE_PANEL_CSS + `
-    .side .box { width:236px; min-width:236px; max-width:236px; }
-  `;
-
+export const POPOVER_STYLES = INLINE_SURFACE_CSS + SIDE_PANEL_CSS + `
+  .trigger { display:flex; align-items:center; gap:8px; width:100%; padding:10px 14px; border:0; background:transparent; text-align:left; }
+  .trigger:hover { background:var(--mi-row-hover); }
+  .trigger .chev { display:grid; place-items:center; color:var(--mi-faint); margin-left:auto; }
+  .list { display:block; margin:5px; padding:0; outline:none; }
+  .list.scrollable { max-height:300px; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; }
+  button.candidate { display:flex; align-items:center; gap:10px; width:100%; min-height:62px; padding:9px; border:0; border-radius:8px; background:transparent; text-align:left; }
+  button.candidate:hover { background:var(--mi-row-hover); }
+  button.candidate[aria-selected="true"] { background:var(--mi-teal-10); box-shadow:inset 0 0 0 1px var(--mi-teal-20); }
+  .list:focus-visible { outline:2px solid var(--mi-teal); outline-offset:0; border-radius:8px; }
+  .tile { display:grid; place-items:center; width:30px; height:30px; flex:none; border-radius:8px; background:var(--mi-fill); color:var(--mi-muted); font-weight:600; font-size:13px; }
+  button.candidate[aria-selected="true"] .tile { color:var(--mi-teal-text); }
+  .meta-col { min-width:0; flex:1; display:flex; flex-direction:column; gap:3px; }
+  .title { display:flex; align-items:center; gap:5px; font-size:14px; font-weight:500; }
+  .title .t { overflow-wrap:anywhere; line-height:1.4; }
+  .star { width:11px; height:11px; color:#a87527; flex:none; }
+  .sub { color:var(--mi-muted); font-size:12px; overflow-wrap:anywhere; }
+  .fill { flex:none; padding:4px 7px; border-radius:5px; font-size:12px; color:var(--mi-muted); }
+  button.candidate[aria-selected="true"] .fill { background:var(--mi-ink-btn); color:var(--mi-ink-btn-fg); }
+  .verify-note { display:inline-flex; align-items:center; gap:3px; color:var(--mi-faint); font-size:11px; }
+  .verify-note svg { width:12px; height:12px; }
+  .keyboard-hint { white-space:nowrap; }
+`;
 /** Render the popover surface for the given state. The page cannot forge the privileged clicks: each
  *  handler bails unless `event.isTrusted`. Login (2c) renders as a right-mounted side panel with a
  *  connector; card/identity render as the compact trigger popover. */
 export function renderPopover(state: PopoverState, handlers: PopoverHandlers): TemplateResult {
   // The login side panel rests hidden (nothing rendered, host collapses to 0×0) until focus opens it.
   if (state.view === 'hidden') return html``;
-  const box = html`<div class="box">${renderBody(state, handlers)}</div>`;
+  const box = html`<div class="box" @keydown=${(event: KeyboardEvent) => {
+    if (event.isTrusted && event.key === 'Escape' && !event.defaultPrevented) {
+      event.preventDefault();
+      event.stopPropagation();
+      handlers.onDismiss?.('escape');
+    }
+  }}>${renderBody(state, handlers)}</div>`;
   return state.sidePanel ? sideWrap(box) : box;
 }
 
 function renderBody(state: PopoverState, handlers: PopoverHandlers): TemplateResult {
   if (state.view === 'filled') {
-    return renderFilled();
+    return html`${renderHeader(state, handlers)}${renderFilled(state.kind)}`;
   }
   if (state.view === 'status') {
-    return renderStatus(state.statusMessage);
+    return html`${renderHeader(state, handlers)}${renderStatus(state.statusMessage)}`;
   }
   if (state.view === 'list') {
     return renderList(state, handlers);
@@ -204,20 +128,24 @@ function renderBody(state: PopoverState, handlers: PopoverHandlers): TemplateRes
 }
 
 /** Post-fill confirmation shown in the login side panel: a 已填充 badge (design 2c). */
-function renderFilled(): TemplateResult {
+function renderFilled(kind: PopoverKind): TemplateResult {
   return html`
     <div class="filled" role="status" aria-live="polite" aria-atomic="true">
-      <span class="badge">${uiIcon('check')}已填充</span>
+      <span class="badge">${uiIcon('check')}${kind === 'card' ? '银行卡信息已填入' : kind === 'identity' ? '身份资料已填入' : '登录信息已填入'}</span>
     </div>
+    <div class="panel-footer receipt-note">请在网站继续操作 · 此提示将自动关闭</div>
   `;
 }
 
-function renderHeader(state: PopoverState): TemplateResult {
+function renderHeader(state: PopoverState, handlers: PopoverHandlers): TemplateResult {
   return html`
     <div class="head">
       ${logoGlyph()}
-      <span class="brand">密屿</span>
+      <span class="brand">${state.siteLabel || '密屿'}</span>
       <span class="meta">${headerMeta(state)}</span>
+      <button type="button" class="panel-close" aria-label="关闭密屿填充建议" @click=${(event: MouseEvent) => {
+        if (event.isTrusted) handlers.onDismiss?.('escape');
+      }}>${uiIcon('close')}</button>
     </div>
   `;
 }
@@ -240,12 +168,12 @@ function renderStatus(message: string): TemplateResult {
 
 function renderList(state: PopoverState, handlers: PopoverHandlers): TemplateResult {
   if (state.candidates.length === 0) {
-    return html`${renderHeader(state)}${renderStatus(EMPTY_STATES[state.kind])}`;
+    return html`${renderHeader(state, handlers)}${renderStatus(EMPTY_STATES[state.kind])}`;
   }
   const scrollable = state.candidates.length > SCROLL_THRESHOLD;
   const activeIndex = normalizedActiveIndex(state.activeIndex, state.candidates.length);
   return html`
-    ${renderHeader(state)}
+    ${renderHeader(state, handlers)}
     <div
       class="list ${scrollable ? 'scrollable' : ''}"
       role="listbox"
@@ -255,8 +183,9 @@ function renderList(state: PopoverState, handlers: PopoverHandlers): TemplateRes
       tabindex="0"
       @keydown=${(event: KeyboardEvent) => handleListKeydown(event, state, handlers)}
     >
-      ${state.candidates.map((candidate, index) => renderCandidate(candidate, index, activeIndex, handlers))}
+      ${state.candidates.map((candidate, index) => renderCandidate(candidate, index, activeIndex, handlers, state.kind))}
     </div>
+    <div class="panel-footer"><span>密屿 · 选择后填入</span><span class="keyboard-hint">↑↓ 选择 · Enter 填充</span></div>
   `;
 }
 
@@ -265,6 +194,7 @@ function renderCandidate(
   index: number,
   activeIndex: number,
   handlers: PopoverHandlers,
+  kind: PopoverKind,
 ): TemplateResult {
   return html`
     <button
@@ -274,18 +204,18 @@ function renderCandidate(
       role="option"
       aria-selected=${index === activeIndex ? 'true' : 'false'}
       tabindex="-1"
-      style="animation-delay:${index * 60}ms"
       @click=${(event: MouseEvent) => { if (event.isTrusted) handlers.onSelect?.(candidate.id); }}
     >
-      <span class="tile" aria-hidden="true" style="background:${tileColor(candidate.name)}">${monogramLetter(candidate.name)}</span>
+      <span class="tile" aria-hidden="true">${monogramLetter(candidate.name)}</span>
       <span class="meta-col">
         <span class="title">
           ${candidate.favorite
             ? svg`<svg class="star" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">${STAR}</svg>`
             : nothing}
-          <span class="t">${candidate.name}</span>
+          <span class="t">${kind === 'login' && candidate.sub ? candidate.sub : candidate.name}</span>
         </span>
-        <span class="sub">${candidate.sub ?? ''}</span>
+        <span class="sub">${kind === 'login' && candidate.sub ? candidate.name : candidate.sub ?? ''}</span>
+        ${candidate.reprompt ? html`<span class="verify-note">${uiIcon('lock')}填充前需要验证</span>` : nothing}
       </span>
       <span class="fill">填充</span>
     </button>
@@ -349,7 +279,7 @@ function optionDomId(index: number): string {
   return `vw-autofill-option-${index}`;
 }
 
-/** The 密屿 concentric-circle glyph on its moss-green block — pure static markup, no page data. */
+/** The brand key glyph on a blue tile uses static markup and contains no page data. */
 function logoGlyph(): TemplateResult {
   return html`<span class="logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 15.5a5.5 5.5 0 1 1 4.9-8H22v4h-2v2h-3v2h-4.6a5.5 5.5 0 0 1-4.9 3Zm0-3.5a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg></span>`;
 }
@@ -359,12 +289,3 @@ function monogramLetter(name: string): string {
   return match ? match[0]!.toUpperCase() : '•';
 }
 
-/** Deterministic tile color derived from the item name (never from its id), so the same item
- *  always gets the same hue without leaking any identifier into the DOM. */
-function tileColor(name: string): string {
-  let hash = 0;
-  for (let index = 0; index < name.length; index += 1) {
-    hash = (hash * 31 + name.charCodeAt(index)) >>> 0;
-  }
-  return `hsl(${hash % 360} 52% 42%)`;
-}

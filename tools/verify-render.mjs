@@ -45,6 +45,7 @@ try {
 
   const pages = [
     { name: 'popup', url: `chrome-extension://${extId}/ui/popup/popup.html`, expect: '密屿' },
+    { name: 'workspace', url: `chrome-extension://${extId}/ui/popup/popup.html?workspace=1`, expect: '密屿' },
     { name: 'options', url: `chrome-extension://${extId}/ui/options/options.html`, expect: '设置' },
     { name: 'receive', url: `chrome-extension://${extId}/ui/receive/receive.html`, expect: '接收' },
   ];

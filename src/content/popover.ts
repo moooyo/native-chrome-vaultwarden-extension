@@ -30,7 +30,7 @@ export interface AutofillPopover {
   showStatus(message: string): void;
   showCandidates(candidates: PopoverCandidate[]): void;
   /** Show the post-fill 已填充 confirmation (login side panel, design 2c). */
-  showFilled(): void;
+  showFilled(): (() => boolean) | void;
   /** Collapse the side panel back to nothing (dismiss-on-click-away); reopens on the next focus. */
   hide(): void;
   remove(): void;
@@ -62,6 +62,7 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
     candidates: options.candidates ?? [],
     activeIndex: -1,
     sidePanel,
+    siteLabel: window.location.hostname,
   };
   const surface = mountRenderSurface(POPOVER_STYLES);
   const host = surface.host;
@@ -76,6 +77,7 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
   let requestedListFocusOwner: Element | null = null;
   let suppressedOpenAnchor: HTMLElement | null = null;
   let tabDismissTimer: number | undefined;
+  let viewRevision = 0;
   const place = sidePanel ? repositionSidePanel : reposition;
   const focusList = (): void => {
     const list = surface.root.querySelector<HTMLElement>('[role="listbox"]');
@@ -108,6 +110,7 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
     tabDismissTimer = undefined;
   };
   const dismiss = (reason: PopoverDismissReason): void => {
+    viewRevision += 1;
     clearTabDismiss();
     state.view = 'hidden';
     state.activeIndex = -1;
@@ -148,6 +151,7 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
     element: host,
     root: surface.root,
     open(nextAnchor?: HTMLElement, openOptions?: { focusList?: boolean }) {
+      viewRevision += 1;
       const openingAnchor = nextAnchor ?? anchor;
       if (suppressedOpenAnchor === openingAnchor) {
         suppressedOpenAnchor = null;
@@ -160,6 +164,7 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
       options.onOpen();
     },
     showStatus(message: string) {
+      viewRevision += 1;
       requestedListFocus = false;
       requestedListFocusOwner = null;
       state.statusMessage = message;
@@ -168,6 +173,7 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
       draw();
     },
     showCandidates(candidates: PopoverCandidate[]) {
+      viewRevision += 1;
       const hadSurfaceFocus = surface.root.activeElement !== null;
       const honorRequestedFocus = requestedListFocus && document.activeElement === requestedListFocusOwner;
       requestedListFocus = false;
@@ -179,13 +185,16 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
       if (candidates.length > 0 && (hadSurfaceFocus || honorRequestedFocus)) focusList();
     },
     showFilled() {
+      const receiptRevision = ++viewRevision;
       requestedListFocus = false;
       requestedListFocusOwner = null;
       state.view = 'filled';
       state.activeIndex = -1;
       draw();
+      return () => state.view === 'filled' && receiptRevision === viewRevision;
     },
     hide() {
+      viewRevision += 1;
       clearTabDismiss();
       requestedListFocus = false;
       requestedListFocusOwner = null;
@@ -194,6 +203,7 @@ export function createAutofillPopover(options: AutofillPopoverOptions): Autofill
       draw();
     },
     remove() {
+      viewRevision += 1;
       clearTabDismiss();
       surface.remove();
     },

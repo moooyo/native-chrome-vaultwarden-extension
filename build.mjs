@@ -11,7 +11,7 @@ async function copyStatic() {
   await mkdir(join(outdir, 'ui'), { recursive: true });
   await cp('src/icons', join(outdir, 'icons'), { recursive: true });
   await mkdir(join(outdir, 'ui', 'fonts'), { recursive: true });
-  await cp('src/ui/fonts/fonts.css', join(outdir, 'ui', 'fonts', 'fonts.css'));
+  await cp('src/ui/fonts', join(outdir, 'ui', 'fonts'), { recursive: true });
   const fontFiles = [
     ['@fontsource/roboto', 'roboto-latin-400-normal.woff2'],
     ['@fontsource/roboto', 'roboto-latin-500-normal.woff2'],

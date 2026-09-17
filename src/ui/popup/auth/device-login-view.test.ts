@@ -413,6 +413,16 @@ describe('vw-device-login-view approver list', () => {
 });
 
 describe('vw-device-login-view approver detail', () => {
+  it('retains the vault account and server on the final device decision', async () => {
+    const element = await mount(approverDetail());
+    element.identity = { email: 'owner@example.net', server: 'https://vault.example.net' };
+    await element.updateComplete;
+    const identity = element.shadowRoot!.querySelector('[data-auth-identity]')!;
+    expect(identity.textContent).toContain('owner@example.net');
+    expect(identity.textContent).toContain('https://vault.example.net');
+    expect(button(element, 'approve').disabled).toBe(false);
+  });
+
   it('shows the same numbered phrase plus device, IP, country, and creation metadata', async () => {
     const requesterView = await mount(requester());
     const detailView = await mount(approverDetail());
@@ -522,7 +532,6 @@ describe('vw-device-login-view narrow layout contract', () => {
     expect(cssText).toContain('overflow-y: auto');
     expect(cssText).toMatch(/@media\s*\(max-width:\s*340px\)/);
     expect(cssText).toMatch(/\.fingerprint-panel\s*\{[^}]*border-radius:\s*8px/s);
-    expect(cssText).toMatch(/\.request-row\s*\{[^}]*border-radius:\s*8px/s);
     expect(cssText).not.toMatch(/\b\d+(?:\.\d+)?v(?:w|h|min|max)\b/);
 
     for (const width of [320, 372]) {

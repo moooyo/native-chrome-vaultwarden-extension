@@ -36,31 +36,44 @@ export class VwTabs extends LitElement {
     css`
       [role='tablist'] {
         display: flex;
-        gap: 4px;
-        border-bottom:1px solid var(--vw-line-1);
+        gap: 20px;
+        overflow-x: auto;
+        scrollbar-width: thin;
+        border-bottom:1px solid var(--vw-line-2);
       }
       button[role='tab'] {
+        appearance: none;
         display: inline-flex;
         align-items: center;
+        flex: none;
         gap: 6px;
-        height: 32px;
-        padding: 0 10px;
+        min-height: 40px;
+        padding: 8px 2px;
         border: none;
         border-bottom: 2px solid transparent;
         background: transparent;
-        color: var(--vw-muted);
+        color: var(--vw-text-3);
         font-family: var(--vw-font-ui);
         font-size: 13px;
+        font-weight: 500;
+        white-space: nowrap;
         cursor: pointer;
+        transition: color var(--vw-dur-fast), border-color var(--vw-dur-fast);
       }
       button[role='tab'][aria-selected='true'] {
         color:var(--p);
         border-bottom-color:var(--p);
+        font-weight: 600;
       }
+      button[role='tab']:hover { color: var(--vw-accent); }
+      button[role='tab']:focus-visible { outline-offset: -3px; }
       .count {
         color: inherit;
-        opacity: 0.7;
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        opacity: 0.8;
       }
+      @media (prefers-reduced-motion: reduce) { button[role='tab'] { transition: none; } }
     `,
   ];
 
@@ -139,7 +152,7 @@ export class VwTabs extends LitElement {
               type="button"
               role="tab"
               aria-selected=${isSelected ? 'true' : 'false'}
-              tabindex=${isSelected ? '0' : '-1'}
+              tabindex=${index === this.currentIndex() ? '0' : '-1'}
               @click=${() => this.selectByIndex(index)}
             >
               <span>${tab.label}</span>

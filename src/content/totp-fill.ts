@@ -17,7 +17,7 @@ export interface TotpPanel {
   element: HTMLElement;
   root: ShadowRoot;
   /** Refresh the item + live one-time code + remaining seconds. */
-  update(data: { itemName: string; itemUser: string; code: string; remaining: number }): void;
+  update(data: { itemName: string; itemUser: string; code: string; remaining: number; period?: number }): void;
   showCandidates(data: {
     candidates: readonly TotpPanelCandidate[];
     overflowCount: number;
@@ -31,6 +31,7 @@ export interface TotpPanel {
 
 export interface TotpPanelOptions {
   anchor: HTMLElement;
+  onDismiss?(): void;
   onSelect(candidateKey: string): void;
   onChooseOther(): void;
   onFill(): void;
@@ -49,8 +50,14 @@ export function createTotpPanel(options: TotpPanelOptions): TotpPanel {
     code: '',
     remaining: 30,
     statusMessage: '',
+    siteLabel: window.location.hostname,
+    period: 30,
   };
   const handlers: TotpPanelHandlers = {
+    onDismiss: () => {
+      options.onDismiss?.();
+      surface.remove();
+    },
     onSelect: options.onSelect,
     onChooseOther: options.onChooseOther,
     onFill: options.onFill,
@@ -88,6 +95,7 @@ export function createTotpPanel(options: TotpPanelOptions): TotpPanel {
       state.itemUser = data.itemUser;
       state.code = data.code;
       state.remaining = data.remaining;
+      state.period = data.period ?? 30;
       draw();
     },
     showFilled() {

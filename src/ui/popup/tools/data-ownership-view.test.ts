@@ -96,6 +96,41 @@ describe('vw-data-ownership-view', () => {
     expect(element.shadowRoot!.querySelectorAll('button')).toHaveLength(1);
   });
 
+  it('emits one leave request before the host reports pending', async () => {
+    const element = await mount();
+    const leave = vi.fn();
+    element.addEventListener('vw-data-ownership-leave', leave);
+    element.shadowRoot!.querySelector<HTMLButtonElement>('button[type="button"]')!.click();
+    await element.updateComplete;
+    const confirm = element.shadowRoot!.querySelector<HTMLButtonElement>('[data-confirm-leave]')!;
+
+    confirm.click();
+    confirm.click();
+
+    expect(leave).toHaveBeenCalledTimes(1);
+    await element.updateComplete;
+    expect(confirm.disabled).toBe(true);
+  });
+
+  it('rejects an old leave confirmation immediately after its authorization changes', async () => {
+    const element = await mount();
+    const leave = vi.fn();
+    element.addEventListener('vw-data-ownership-leave', leave);
+    element.shadowRoot!.querySelector<HTMLButtonElement>('button[type="button"]')!.click();
+    await element.updateComplete;
+    const confirm = element.shadowRoot!.querySelector<HTMLButtonElement>('[data-confirm-leave]')!;
+
+    element.model = {
+      ...element.model!,
+      leaveAuthorizationId: '66666666-6666-4666-8666-666666666666',
+    };
+    confirm.click();
+
+    expect(leave).not.toHaveBeenCalled();
+    await element.updateComplete;
+    expect(element.shadowRoot!.querySelector('[data-confirm-leave]')).toBeNull();
+  });
+
   it('scrubs password and cancels leave confirmation when an authorization changes', async () => {
     const element = await mount();
     const password = element.shadowRoot!.querySelector<HTMLInputElement>('[data-master-password]')!;

@@ -212,9 +212,11 @@ function isSameParsedSend(left: ParsedSendUrl, right: ParsedSendUrl): boolean {
 export class VwReceiveApp extends LitElement {
   static override properties = {
     state: { attribute: false },
+    textFeedback: { state: true },
   };
 
   declare state: ReceiveState;
+  declare textFeedback: 'copied' | 'error' | undefined;
 
   /** Injectable dependency seam; defaults to the real `webextension-polyfill`/DOM implementation. */
   deps: ReceiveDeps = createDefaultDeps();
@@ -233,15 +235,20 @@ export class VwReceiveApp extends LitElement {
   private requestEpoch = 0;
   private activeRequest: AbortController | undefined;
   private resendTimer: ReturnType<typeof setTimeout> | undefined;
+  private feedbackTimer: ReturnType<typeof setTimeout> | undefined;
+  private activeServer = '';
 
   constructor() {
     super();
     this.state = { status: 'idle' };
+    this.textFeedback = undefined;
+    this.activeServer = '';
   }
 
   override disconnectedCallback(): void {
     this.invalidateRequest();
     this.clearResendTimer();
+    if (this.feedbackTimer !== undefined) clearTimeout(this.feedbackTimer);
     super.disconnectedCallback();
     void this.releaseTemporaryOrigins();
   }
@@ -265,30 +272,29 @@ export class VwReceiveApp extends LitElement {
       }
       .card {
         width: 100%;
-        max-width: 420px;
+        max-width: 496px;
         background: var(--vw-card);
         border: 1px solid var(--vw-card-border);
         border-radius: var(--vw-radius-panel);
         box-shadow: var(--vw-card-shadow);
-        padding: 28px 28px 26px;
+        padding: 32px;
       }
       .brand {
         display: flex;
         flex-direction: column;
-        align-items: center;
-        text-align: center;
-        gap: 4px;
-        margin-bottom: 22px;
+        align-items: flex-start;
+        gap: 8px;
+        margin-bottom: 28px;
       }
       .brand h1 {
-        margin: 8px 0 0;
-        font-size: 20px;
+        margin: 12px 0 0;
+        font-size: 24px;
         font-weight: 600;
         color: var(--vw-ink);
       }
       .brand p {
         margin: 2px 0 0;
-        font-size: 12.5px;
+        font-size: 13px;
         color: var(--vw-muted);
         line-height: 1.5;
       }
@@ -303,10 +309,9 @@ export class VwReceiveApp extends LitElement {
         gap: 6px;
       }
       .field-label {
-        font-size: 11px;
+        font-size: 12px;
         font-weight: 600;
-        letter-spacing: 0.03em;
-        color: var(--vw-faint);
+        color: var(--vw-text-2);
       }
       .btn.block {
         width: 100%;
@@ -314,10 +319,10 @@ export class VwReceiveApp extends LitElement {
       .result {
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 16px;
       }
       .send-name {
-        font-size: 14px;
+        font-size: 18px;
         font-weight: 600;
         color: var(--vw-ink);
       }
@@ -357,17 +362,35 @@ export class VwReceiveApp extends LitElement {
         color: var(--vw-ink);
         word-break: break-word;
       }
+      .origin { display: flex; align-items: center; gap: 7px; color: var(--vw-muted); font-size: 12px; overflow-wrap: anywhere; }
+      .origin svg { width: 14px; height: 14px; flex: none; }
+      .link-entry { padding-bottom: 16px; border-bottom: 1px solid var(--vw-line-1); }
+      .link-entry summary { color: var(--vw-text-2); font-size: 12px; cursor: pointer; }
+      .link-entry[open] summary { margin-bottom: 12px; }
+      .result-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+      .field-hint, .download-hint { margin: 0; color: var(--vw-muted); font-size: 12px; line-height: 1.6; }
+      .otp { letter-spacing: .16em; font-size: 20px; font-variant-numeric: tabular-nums; }
+      .link-entry summary:focus-visible { outline: 2px solid var(--vw-accent); outline-offset: 4px; }
+      .card { animation: receiveEnter 160ms ease-out; }
+      @keyframes receiveEnter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+      @media (prefers-reduced-motion: reduce) { .card { animation: none; } }
+      @media (max-width: 520px) { .card { padding: 24px 20px; } .page { align-items: flex-start; padding-top: 24px; } }
+      [hidden] { display: none !important; }
     `,
   ];
 
   protected override updated(changed: PropertyValues<this>): void {
     if (!changed.has('state')) return;
+    const previous = changed.get('state') as ReceiveState | undefined;
     if (this.state.status === 'passwordRequired') {
       this.renderRoot.querySelector<HTMLInputElement>('[data-password]')?.focus();
     } else if (this.state.status === 'emailRequired') {
       this.renderRoot.querySelector<HTMLInputElement>('[data-email]')?.focus();
     } else if (this.state.status === 'otpRequired') {
       this.renderRoot.querySelector<HTMLInputElement>('[data-otp]')?.focus();
+    } else if ((this.state.status === 'textReady' || this.state.status === 'fileReady')
+      && previous?.status !== this.state.status) {
+      this.renderRoot.querySelector<HTMLElement>('[data-result-heading]')?.focus();
     }
   }
 
@@ -445,10 +468,12 @@ export class VwReceiveApp extends LitElement {
     const delay = Math.max(0, availableAt - Date.now());
     this.resendTimer = setTimeout(() => {
       this.resendTimer = undefined;
-      if (this.linkGeneration === linkGeneration && this.state.status === 'otpRequired') {
+      if (this.isConnected && this.linkGeneration === linkGeneration && this.state.status === 'otpRequired'
+        && this.state.resendAvailableAt === availableAt) {
         this.requestUpdate();
+        if (Date.now() < availableAt) this.scheduleResendRefresh(availableAt, linkGeneration);
       }
-    }, delay + 1);
+    }, Math.min(delay + 1, 1_000));
   }
 
   private onLinkInput(): void {
@@ -456,6 +481,8 @@ export class VwReceiveApp extends LitElement {
     this.clearResendTimer();
     this.linkGeneration += 1;
     this.state = { status: 'idle' };
+    this.textFeedback = undefined;
+    this.activeServer = '';
     void this.releaseTemporaryOrigins();
   }
 
@@ -479,6 +506,7 @@ export class VwReceiveApp extends LitElement {
     } catch {
       this.invalidateRequest();
       this.clearResendTimer();
+      this.activeServer = '';
       void this.releaseTemporaryOrigins();
       this.state = { status: 'error', message: sendErrorMessage('invalid_link') };
       return;
@@ -555,6 +583,8 @@ export class VwReceiveApp extends LitElement {
     previousResendAvailableAt?: number,
   ): Promise<void> {
     const request = this.beginRequest();
+    this.activeServer = hostOf(parsed.serverUrl);
+    this.textFeedback = undefined;
     void this.releaseTemporaryOrigins(parsed.endpoints.originPatterns);
     this.state = { status: 'accessing', linkGeneration };
 
@@ -682,6 +712,30 @@ export class VwReceiveApp extends LitElement {
   private onRevealText(): void {
     if (this.state.status !== 'textReady' || !this.state.send.hidden || this.state.revealed) return;
     this.state = { ...this.state, revealed: true };
+    void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLButtonElement>('[data-copy-text]')?.focus());
+  }
+
+  private onHideText(): void {
+    if (this.state.status !== 'textReady' || !this.state.send.hidden) return;
+    this.state = { ...this.state, revealed: false };
+    this.textFeedback = undefined;
+    void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLButtonElement>('[data-reveal-text]')?.focus());
+  }
+
+  private async onCopyText(): Promise<void> {
+    if (this.state.status !== 'textReady' || (this.state.send.hidden && !this.state.revealed)) return;
+    const state = this.state;
+    try {
+      if (this.deps.writeClipboard) await this.deps.writeClipboard(state.send.text ?? '');
+      else await navigator.clipboard.writeText(state.send.text ?? '');
+      if (!this.isConnected || this.state !== state) return;
+      this.textFeedback = 'copied';
+    } catch {
+      if (!this.isConnected || this.state !== state) return;
+      this.textFeedback = 'error';
+    }
+    if (this.feedbackTimer !== undefined) clearTimeout(this.feedbackTimer);
+    this.feedbackTimer = setTimeout(() => { this.textFeedback = undefined; }, 3_000);
   }
 
   private async onDownload(): Promise<void> {
@@ -768,7 +822,7 @@ export class VwReceiveApp extends LitElement {
       this.deps.download(bytes, send.fileName ?? 'download');
       await this.releaseTemporaryOrigins();
       if (!this.requestIsCurrent(linkGeneration, request.epoch)) return;
-      this.state = clearPendingDownload(ready);
+      this.state = { ...clearPendingDownload(ready), message: t('receive.downloadStarted'), messageTone: 'success' };
     } catch (err) {
       if (!this.requestIsCurrent(linkGeneration, request.epoch)) return;
       if (isSendAccessError(err) && err.code === 'authorization_rejected') {
@@ -793,10 +847,18 @@ export class VwReceiveApp extends LitElement {
         const showText = !send.hidden || revealed;
         return html`
           <div class="result">
-            <div class="send-name">${send.name}</div>
+            <div class="send-name" data-result-heading tabindex="-1">${send.name}</div>
             ${showText
-              ? html`<div class="send-text" data-send-text>${send.text ?? ''}</div>`
+              ? html`<div class="send-text" data-send-text>${send.text ?? ''}</div>
+                  <div class="result-actions">
+                    <button type="button" class="btn primary" data-copy-text @click=${() => void this.onCopyText()}>
+                      ${uiIcon(this.textFeedback === 'copied' ? 'check' : 'copy')}<span>${t(this.textFeedback === 'copied' ? 'common.copied' : 'receive.copyText')}</span>
+                    </button>
+                    ${send.hidden ? html`<button type="button" class="btn outline" data-hide-text @click=${() => this.onHideText()}>${uiIcon('eyeOff')}<span>${t('receive.hideText')}</span></button>` : nothing}
+                  </div>
+                  ${this.textFeedback === 'error' ? html`<vw-status-message tone="danger" .message=${t('receive.copyFailed')}></vw-status-message>` : nothing}`
               : html`
+                  <p class="field-hint">${t('receive.hiddenTextHint')}</p>
                   <button
                     type="button"
                     class="btn outline block"
@@ -809,11 +871,13 @@ export class VwReceiveApp extends LitElement {
           </div>
         `;
       }
-      case 'fileReady': {
-        const { send } = this.state;
+      case 'fileReady':
+      case 'downloading': {
+        const downloading = this.state.status === 'downloading';
+        const { send } = this.state.status === 'downloading' ? this.state.ready : this.state;
         return html`
           <div class="result">
-            <div class="send-name">${send.name}</div>
+            <div class="send-name" data-result-heading tabindex="-1">${send.name}</div>
             <div class="send-file">
               <span class="file-icon">${uiIcon('file')}</span>
               <span class="file-meta">${send.fileName ?? 'file'}${send.sizeName ? ` · ${send.sizeName}` : ''}</span>
@@ -822,10 +886,12 @@ export class VwReceiveApp extends LitElement {
               type="button"
               class="btn primary block"
               data-download
+              ?disabled=${downloading}
               @click=${() => void this.onDownload()}
             >
-              ${uiIcon('file')}<span>${this.i18n.t('receive.download')}</span>
+              ${uiIcon('file')}<span>${this.i18n.t(downloading ? 'receive.loading' : 'receive.download')}</span>
             </button>
+            <p class="download-hint">${t('receive.downloadHint')}</p>
           </div>
         `;
       }
@@ -851,7 +917,7 @@ export class VwReceiveApp extends LitElement {
         return this.state.message
           ? html`<vw-status-message
               .tone=${this.state.messageTone ?? 'danger'}
-              .icon=${this.state.messageTone === 'info' ? undefined : 'alert'}
+              .icon=${this.state.messageTone === 'success' ? 'checkCircle' : this.state.messageTone === 'info' ? undefined : 'alert'}
               .message=${this.state.message}
             ></vw-status-message>`
           : nothing;
@@ -864,7 +930,12 @@ export class VwReceiveApp extends LitElement {
 
   protected override render() {
     const busy = this.state.status === 'accessing' || this.state.status === 'downloading';
+    const ready = this.state.status === 'textReady' || this.state.status === 'fileReady' || this.state.status === 'downloading';
     const emailState = this.state.status === 'emailRequired' || this.state.status === 'otpRequired';
+    const server = 'parsed' in this.state ? hostOf(this.state.parsed.serverUrl)
+      : this.state.status === 'downloading' ? hostOf(this.state.ready.parsed.serverUrl) : this.activeServer;
+    const resendSeconds = this.state.status === 'otpRequired'
+      ? Math.max(0, Math.ceil((this.state.resendAvailableAt - Date.now()) / 1_000)) : 0;
     const accessLabel = this.state.status === 'accessing'
       ? this.i18n.t('receive.loading')
       : this.state.status === 'emailRequired'
@@ -876,11 +947,14 @@ export class VwReceiveApp extends LitElement {
       <div class="page">
         <section class="card" data-task-column>
           <header class="brand" data-page-heading>
-            <vw-logo variant="hero"></vw-logo>
+            <vw-logo variant="sidebar"></vw-logo>
             <h1>${this.i18n.t('receive.title')}</h1>
             <p>${this.i18n.t('receive.subtitle')}</p>
+            ${server ? html`<span class="origin" data-server-context>${uiIcon('globe')}<span>${server}</span></span>` : nothing}
           </header>
           <div class="form">
+            <details class="link-entry" .open=${this.state.status === 'idle' || this.state.status === 'error'}>
+              <summary>${t('receive.linkLabel')}</summary>
             <label class="field">
               <span class="field-label">${this.i18n.t('receive.linkLabel')}</span>
               <input
@@ -890,13 +964,17 @@ export class VwReceiveApp extends LitElement {
                 placeholder="https://vault.example/#/send/…/…"
                 ?disabled=${busy}
                 @input=${() => this.onLinkInput()}
+                @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter') { event.preventDefault(); void this.onAccess(); } }}
               />
             </label>
+            </details>
             ${this.state.status === 'passwordRequired'
               ? html`
                   <label class="field">
                     <span class="field-label">${this.i18n.t('receive.password')}</span>
-                    <input class="input" data-password type="password" autocomplete="off" />
+                    <input class="input" data-password type="password" autocomplete="off"
+                      @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter') { event.preventDefault(); void this.onAccess(); } }} />
+                    <span class="field-hint">${t('receive.passwordHint')}</span>
                   </label>
                 `
               : nothing}
@@ -912,6 +990,7 @@ export class VwReceiveApp extends LitElement {
                       autocomplete="email"
                       .value=${this.state.status === 'otpRequired' ? this.state.email : ''}
                       @input=${() => this.onEmailInput()}
+                      @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter') { event.preventDefault(); void this.onAccess(); } }}
                     />
                   </label>
                 `
@@ -921,17 +1000,18 @@ export class VwReceiveApp extends LitElement {
                   <label class="field">
                     <span class="field-label">${this.i18n.t('receive.verificationCode')}</span>
                     <input
-                      class="input mono"
+                      class="input mono otp"
                       data-otp
                       type="text"
                       maxlength="256"
                       inputmode="numeric"
                       autocomplete="one-time-code"
+                      @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter') { event.preventDefault(); void this.onAccess(); } }}
                     />
                   </label>
                 `
               : nothing}
-            <button type="button" class="btn primary block" data-access ?disabled=${busy} @click=${() => void this.onAccess()}>
+            <button type="button" class="btn primary block" data-access ?hidden=${ready} ?disabled=${busy} @click=${() => void this.onAccess()}>
               ${uiIcon(this.state.status === 'accessing' ? 'refresh' : emailState ? 'mail' : 'unlock')}<span>${accessLabel}</span>
             </button>
             ${this.state.status === 'otpRequired'
@@ -943,7 +1023,7 @@ export class VwReceiveApp extends LitElement {
                     ?disabled=${this.state.resending || Date.now() < this.state.resendAvailableAt}
                     @click=${() => void this.onResend()}
                   >
-                    ${uiIcon('refresh')}<span>${this.i18n.t('receive.resendCode')}</span>
+                    ${uiIcon('refresh')}<span>${resendSeconds > 0 ? t('receive.resendCountdown', { seconds: resendSeconds }) : this.i18n.t('receive.resendCode')}</span>
                   </button>
                 `
               : nothing}

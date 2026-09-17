@@ -63,6 +63,18 @@ afterEach(() => {
 });
 
 describe('vw-website-passkey-view get ceremony', () => {
+  it('distinguishes the vault account and server from the website identity', async () => {
+    const element = await mount(getModel());
+    element.identity = { email: 'vault-owner@example.net', server: 'https://vault.example.net', owner: 'Personal vault' };
+    await element.updateComplete;
+    const identity = element.shadowRoot!.querySelector('[data-auth-identity]')!;
+    expect(identity.textContent).toContain('vault-owner@example.net');
+    expect(identity.textContent).toContain('https://vault.example.net');
+    expect(identity.textContent).not.toContain('alice@example.com');
+    expect(element.shadowRoot!.querySelector('.source')!.textContent).toContain('https://login.example.com');
+    expect(choices(element)[0]!.textContent).toContain('alice@example.com');
+  });
+
   it('shows source and account display data but requires an explicit click even for one candidate', async () => {
     const element = await mount(getModel());
     const approved = vi.fn();

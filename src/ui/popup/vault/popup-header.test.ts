@@ -33,7 +33,7 @@ describe('vw-popup-header', () => {
     const el = await mount();
     expect(el.shadowRoot?.querySelector('vw-logo')).not.toBeNull();
     expect(el.shadowRoot?.textContent).toContain('密屿');
-    expect(buttons(el)).toHaveLength(1);
+    expect(buttons(el)).toHaveLength(2);
     expect(el.shadowRoot?.querySelector('slot[name="tools"]')).not.toBeNull();
     expect(el.shadowRoot?.querySelector('slot[name="account"]')).not.toBeNull();
     expect(el.shadowRoot?.textContent).not.toContain('86');
@@ -43,7 +43,20 @@ describe('vw-popup-header', () => {
     const el = await mount();
     const fired = vi.fn();
     el.addEventListener('vw-lock', fired);
-    buttons(el)[0]!.click();
+    el.shadowRoot!.querySelector<HTMLButtonElement>('[data-lock]')!.click();
     expect(fired).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the full workspace through a composed event and respects the busy state', async () => {
+    const el = await mount();
+    const opened = vi.fn();
+    el.addEventListener('vw-open-workspace', opened);
+    const button = el.shadowRoot!.querySelector<HTMLButtonElement>('[data-open-workspace]')!;
+    button.click();
+    expect(opened).toHaveBeenCalledWith(expect.objectContaining({ bubbles: true, composed: true }));
+    el.busy = true;
+    await el.updateComplete;
+    button.click();
+    expect(opened).toHaveBeenCalledOnce();
   });
 });

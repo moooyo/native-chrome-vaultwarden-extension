@@ -102,17 +102,22 @@ export function fillTotpCode(
   return true;
 }
 
-/** Clear the same target shape used for a prior TOTP fill without expanding to a new group. */
+/** Clear unchanged values from a prior TOTP fill without expanding to a new group or erasing edits. */
 export function clearTotpCode(input: HTMLInputElement, code: string): boolean {
   const binding = totpFillReceipts.get(input);
   totpFillReceipts.delete(input);
   if (!binding || binding.code !== code || !totpBindingCurrent(input, binding)) return false;
-  for (const target of binding.inputs) {
+  const writtenValues = binding.inputs.length === 1 ? [binding.code] : Array.from(binding.code);
+  let cleared = false;
+  for (const [index, target] of binding.inputs.entries()) {
     if (!totpBindingCurrent(input, binding)) return false;
+    // A later user edit, including edits triggered by an earlier undo event, owns this field now.
+    if (target.value !== writtenValues[index]) continue;
     setInputValue(target, '');
+    cleared = true;
     if (!totpBindingCurrent(input, binding)) return false;
   }
-  return true;
+  return cleared;
 }
 
 function sameInputs(first: readonly HTMLInputElement[], second: readonly HTMLInputElement[]): boolean {

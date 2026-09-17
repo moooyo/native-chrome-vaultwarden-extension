@@ -136,6 +136,26 @@ describe('generate panel surface', () => {
     expect(root.querySelector('.undo')).toBeNull();
   });
 
+  it('switches generation modes only through trusted actions and preserves managed rules', () => {
+    const onMode = vi.fn();
+    const root = mount({}, { onMode });
+    const phrase = root.querySelectorAll('.mode-switch button')[1]!;
+    phrase.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onMode).not.toHaveBeenCalled();
+    trustedClick(phrase);
+    expect(onMode).toHaveBeenCalledWith('passphrase');
+    const managed = mount({ managed: true }, { onMode });
+    trustedClick(managed.querySelectorAll('.mode-switch button')[1]!);
+    expect(onMode).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps advanced rules collapsed while leaving the generated result and use action visible', () => {
+    const root = mount();
+    expect(root.querySelector<HTMLDetailsElement>('.rules')!.open).toBe(false);
+    expect(root.querySelector('.rules .use')).toBeNull();
+    expect(root.querySelector('.value-actions .use')).not.toBeNull();
+  });
+
   it('explains that persistence follows the website submission', () => {
     const root = mount();
     expect(root.querySelector('.foot')!.textContent).toContain('网站提交时询问是否保存');

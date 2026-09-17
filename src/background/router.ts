@@ -114,7 +114,7 @@ import {
   parseLoginCustomTargetPlan,
   type LoginCustomTargetPlan,
 } from '../core/vault/login-custom-fields.js';
-import { normalizeFillRoles } from '../core/vault/fill-roles.js';
+import { normalizeFillRoles, type FillKind, type FillRole } from '../core/vault/fill-roles.js';
 import {
   WEBSITE_PASSKEY_POPUP_PATH,
   type WebsitePasskeyCoordinator,
@@ -4406,7 +4406,7 @@ function parseContentStructuredAutofillTarget(value: unknown): ContentStructured
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   if (Object.keys(record).some((key) => ![
-    'kind', 'runtimeIncarnation', 'formId', 'generation', 'roles',
+    'kind', 'runtimeIncarnation', 'formId', 'generation', 'roles', 'selectedRoles',
   ].includes(key))) return undefined;
   const kind = record.kind;
   if (kind !== 'card' && kind !== 'identity') return undefined;
@@ -4425,24 +4425,46 @@ function parseContentStructuredAutofillTarget(value: unknown): ContentStructured
     const roles = normalizeFillRoles('card', unsafeRoles);
     if (!roles || roles.length !== unsafeRoles.length
         || roles.some((role, index) => role !== unsafeRoles[index])) return undefined;
+    const selectedRoles = 'selectedRoles' in record
+      ? parseSelectedStructuredRoles(kind, record.selectedRoles, roles)
+      : undefined;
+    if ('selectedRoles' in record && !selectedRoles) return undefined;
     return Object.freeze({
       kind,
       runtimeIncarnation: record.runtimeIncarnation as string,
       formId: record.formId,
       generation: record.generation as number,
       roles: Object.freeze([...roles]),
+      ...(selectedRoles === undefined ? {} : { selectedRoles }),
     });
   }
   const roles = normalizeFillRoles('identity', unsafeRoles);
   if (!roles || roles.length !== unsafeRoles.length
       || roles.some((role, index) => role !== unsafeRoles[index])) return undefined;
+  const selectedRoles = 'selectedRoles' in record
+    ? parseSelectedStructuredRoles(kind, record.selectedRoles, roles)
+    : undefined;
+  if ('selectedRoles' in record && !selectedRoles) return undefined;
   return Object.freeze({
     kind,
     runtimeIncarnation: record.runtimeIncarnation as string,
     formId: record.formId,
     generation: record.generation as number,
     roles: Object.freeze([...roles]),
+    ...(selectedRoles === undefined ? {} : { selectedRoles }),
   });
+}
+
+function parseSelectedStructuredRoles<Role extends FillRole>(
+  kind: FillKind,
+  value: unknown,
+  roles: readonly Role[],
+): readonly Role[] | undefined {
+  const selected = normalizeFillRoles(kind, value);
+  if (!Array.isArray(value) || !selected || selected.length !== value.length
+      || selected.some((role, index) => role !== value[index]
+        || !roles.some((structuralRole) => structuralRole === role))) return undefined;
+  return Object.freeze(roles.filter((role) => selected.includes(role)));
 }
 
 /** Pick a deterministic purpose so even malformed redemptions consume any supplied capability. */

@@ -282,6 +282,59 @@ describe('vw-data-section delete', () => {
   });
 });
 
+describe('vw-data-section import progress and results', () => {
+  afterEach(() => document.body.replaceChildren());
+
+  it('keeps the requested import password usable while export remains unavailable', async () => {
+    const el = await mount(false);
+    el.awaitingImportPassword = true;
+    await el.updateComplete;
+    expect(q<HTMLInputElement>(el, '[data-import-pwd]').closest('[inert]')).toBeNull();
+    expect(q<HTMLButtonElement>(el, '[data-import-go]').disabled).toBe(false);
+    expect(q<HTMLButtonElement>(el, '[data-export]').disabled).toBe(true);
+  });
+
+  it('derives terminal headings and counts from the current authoritative import result', async () => {
+    const el = await mount(false);
+    el.importResult = {
+      version: 1, type: 'import.result', phase: 'completed',
+      transferId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', status: 'partial',
+      counts: { committed: 119, rejected: 2, skipped: 5, outcomeUnknown: 1 },
+      mustSyncBeforeRetry: true,
+    };
+    await el.updateComplete;
+    expect(q<HTMLElement>(el, '[data-import-result]').getAttribute('heading')).toBe('核对未知导入结果');
+    expect(q(el, '[data-result-committed]').textContent).toBe('119');
+    el.importResult = { ...el.importResult, status: 'completed',
+      counts: { committed: 7, rejected: 0, skipped: 0, outcomeUnknown: 0 }, mustSyncBeforeRetry: false };
+    await el.updateComplete;
+    expect(q<HTMLElement>(el, '[data-import-result]').getAttribute('heading')).toBe('导入完成');
+    expect(q(el, '[data-result-committed]').textContent).toBe('7');
+    expect(q(el, '[data-result-unknown]').textContent).toBe('0');
+  });
+
+  it('offers sync and preserves uncertain recovery records without retrying writes', async () => {
+    const el = await mount(false);
+    el.recoveryStatus = clearableRecovery;
+    await el.updateComplete;
+    const sync = vi.fn();
+    const clear = vi.fn();
+    el.addEventListener('vw-transfer-recovery-sync', sync);
+    el.addEventListener('vw-transfer-recovery-clear', clear);
+    q<HTMLButtonElement>(el, '[data-recovery-sync]').click();
+    expect(sync).toHaveBeenCalledOnce();
+    const confirmation = q<HTMLInputElement>(el, '[data-recovery-confirm]');
+    confirmation.checked = true;
+    confirmation.dispatchEvent(new Event('change', { bubbles: true }));
+    await el.updateComplete;
+    q<HTMLButtonElement>(el, '[data-recovery-keep]').click();
+    await el.updateComplete;
+    expect(clear).not.toHaveBeenCalled();
+    expect(q<HTMLInputElement>(el, '[data-recovery-confirm]').checked).toBe(false);
+    expect(q<HTMLButtonElement>(el, '[data-import]').disabled).toBe(true);
+  });
+});
+
 describe('vw-data-section transfer recovery', () => {
   afterEach(() => {
     document.body.replaceChildren();

@@ -71,7 +71,9 @@ describe('createSaveBar', () => {
     expect(remove).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(0);
     expect(container.textContent).toContain('已保存到密屿');
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(remove).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(remove).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
@@ -89,6 +91,18 @@ describe('createSaveBar', () => {
     expect(container.querySelector('[role="alert"]')!.textContent).toContain('无法确认保存结果');
     expect(container.querySelector('#vw-save-act')).toBeNull();
     expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('cancels retirement when the bar is explicitly removed', async () => {
+    vi.useFakeTimers();
+    const bar = createSaveBar({ message: 'Save?', actionLabel: 'Save', onAction: async () => true });
+    const { container, remove } = state.surfaces[0]!;
+    trustedClick(container.querySelector('#vw-save-act'));
+    await vi.advanceTimersByTimeAsync(0);
+    bar.remove();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(remove).toHaveBeenCalledOnce();
+    vi.useRealTimers();
   });
 
   it('runs onDismiss then removes the bar on a trusted dismiss click', () => {

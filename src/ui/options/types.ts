@@ -113,6 +113,14 @@ export interface SectionStatus {
   tone: StatusTone;
 }
 
+export interface SettingSaveFeedback {
+  state: 'saving' | 'saved' | 'error';
+  message?: string;
+}
+
+export type SecuritySettingField = 'lockTimeout' | 'onIdleAction' | 'clipboardClearSeconds';
+export type SecuritySaveFeedback = Partial<Record<SecuritySettingField, SettingSaveFeedback>>;
+
 /** The rail sections, in display order. */
 export type OptionsSectionId =
   | 'account'

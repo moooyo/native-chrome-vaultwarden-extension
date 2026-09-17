@@ -1,23 +1,17 @@
 /**
- * Deterministic avatar/tile styling for vault items. The design uses hand-picked brand colors for
- * its demo data; real items get a stable color derived from a seed (item id or name) so the same
- * item always renders the same tile. Pure — no globals, safe in any context.
+ * Deterministic avatar/tile styling for vault items. Blue and slate tones keep personal items
+ * within the vault palette; initials provide identification without implying item risk or status.
+ * A seed keeps each item stable. Pure — no globals, safe in any context.
  */
 
-/** A curated set of saturated tile backgrounds (white text sits on all of them at AA). */
+/** Muted blue and slate backgrounds with enough contrast for small white initials. */
 const TILE_COLORS: readonly string[] = [
-  '#0B6BC2', // blue
-  '#0F7B4F', // green
-  '#7C5CBF', // violet
-  '#C2571A', // orange
-  '#B4275E', // magenta
-  '#3B6EA5', // steel
-  '#946B00', // amber
-  '#0B57D0', // Google blue
-  '#5C5C5C', // graphite
-  '#B23B3B', // red
-  '#2E7D6B', // pine
-  '#6D4AA6', // grape
+  '#315D8E',
+  '#3B6389',
+  '#456984',
+  '#426282',
+  '#536A80',
+  '#365F95',
 ];
 
 /** Stable non-cryptographic hash (djb2) → index into the palette. */

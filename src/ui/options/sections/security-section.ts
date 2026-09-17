@@ -2,6 +2,8 @@ import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
 import { LocalizeController, t } from '../../i18n/index.js';
+import { uiIcon } from '../../components/icon.js';
+import { settingsSectionStyles } from './section-styles.js';
 import '../../components/setting-card.js';
 import '../../components/select-menu.js';
 import '../../components/status-message.js';
@@ -23,6 +25,8 @@ import type {
   LockTimeoutSaveDetail,
   SecuritySaveDetail,
   SectionStatus,
+  SecuritySaveFeedback,
+  SecuritySettingField,
 } from '../types.js';
 import type { EffectiveVaultTimeoutMode } from '../../../background/vault-timeout-policy.js';
 import {
@@ -90,6 +94,10 @@ export class VwSecuritySection extends LitElement {
     locked: { type: Boolean },
     pending: { type: Boolean },
     status: { attribute: false },
+    saveFeedback: { attribute: false },
+    effectiveLockTimeout: { attribute: false },
+    effectiveOnIdleAction: { attribute: false },
+    effectiveClipboardClearSeconds: { attribute: false },
     passwordError: { state: true },
     passwordErrorField: { state: true },
     timeoutSelection: { state: true },
@@ -107,6 +115,10 @@ export class VwSecuritySection extends LitElement {
   declare locked: boolean;
   declare pending: boolean;
   declare status: SectionStatus | undefined;
+  declare saveFeedback: SecuritySaveFeedback;
+  declare effectiveLockTimeout: LockTimeoutSetting | undefined;
+  declare effectiveOnIdleAction: OnIdleAction | undefined;
+  declare effectiveClipboardClearSeconds: ClipboardClearSetting | undefined;
   declare passwordError: string | undefined;
   private declare passwordErrorField: 'newPassword' | 'confirmPassword' | 'hint' | undefined;
   private declare timeoutSelection: LockTimeoutOption;
@@ -127,6 +139,7 @@ export class VwSecuritySection extends LitElement {
     this.locked = true;
     this.pending = false;
     this.status = undefined;
+    this.saveFeedback = {};
     this.passwordError = undefined;
     this.passwordErrorField = undefined;
     this.timeoutSelection = '15';
@@ -137,9 +150,11 @@ export class VwSecuritySection extends LitElement {
 
   static override styles = [
     themeTokens,
+    settingsSectionStyles,
     css`
-      :host { display: flex; flex-direction: column; gap: 8px; }
-      .selects { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+      .selects { display:grid; grid-template-columns:1fr 1fr; gap:20px; width:100%; }
+      .selects vw-select { align-self:flex-start; }
+      .control-stack .save-feedback { margin:0; }
       .custom-timeout { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; width: min(100%, 340px); }
       .custom-timeout label { grid-column: 1 / 3; color: var(--vw-muted); font-size: 12px; }
       .custom-input { min-width: 0; height: 40px; padding: 0 11px; border: 1px solid var(--vw-line-3); border-radius: var(--vw-radius-input); background: var(--vw-card); color: var(--vw-ink); font-family: var(--vw-font-ui); font-size: 13px; }
@@ -150,13 +165,14 @@ export class VwSecuritySection extends LitElement {
       .custom-error { color: var(--vw-danger); overflow-wrap: anywhere; }
 
       /* Inline change-password form */
-      .pw-form { display: flex; flex-direction: column; gap: 8px; width: 100%; }
-      .pw-input { width: 100%; height: 32px; padding: 0 11px; border: 1px solid var(--vw-line-3); border-radius: var(--vw-radius-input); background: var(--vw-card); color: var(--vw-ink); font-family: var(--vw-font-ui); font-size: 13px; }
+      .pw-form { display: flex; flex-direction: column; gap: 16px; width: 100%; }
+      .pw-field { display:flex; flex-direction:column; gap:7px; font-size:13px; font-weight:500; }
+      .pw-input { width: 100%; box-sizing:border-box; height: 40px; padding: 0 11px; border: 1px solid var(--vw-line-3); border-radius: var(--vw-radius-input); background: var(--vw-card); color: var(--vw-ink); font-family: var(--vw-font-ui); font-size: 13px; }
       .pw-input::placeholder { color: var(--vw-placeholder); }
       .pw-input:focus { outline: none; border-color: var(--vw-accent); box-shadow: var(--vw-focus); }
       .pw-input[aria-invalid='true'] { border-color: var(--vw-danger-border); }
 
-      .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; padding: 0 14px; border: 1px solid transparent; border-radius: var(--vw-radius-input); font-family: var(--vw-font-ui); font-size: 12.5px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: background-color var(--vw-dur-fast); align-self: flex-start; }
+      .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 0 14px; border: 1px solid transparent; border-radius: var(--vw-radius-input); font-family: var(--vw-font-ui); font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: background-color var(--vw-dur-fast); align-self: flex-start; }
       .btn:disabled { opacity: 0.5; cursor: default; }
       .btn:focus-visible { outline: none; box-shadow: var(--vw-focus); }
       .btn.ink { background: var(--vw-primary-bg); color: var(--vw-primary-fg); }
@@ -165,6 +181,11 @@ export class VwSecuritySection extends LitElement {
       .pw-error { margin: 0; font-size: 11.5px; color: var(--vw-danger); }
       .status { margin-top: 6px; }
       .managed-value { font-size: 12.5px; color: var(--vw-ink); }
+      .password-details { border-top:1px solid var(--vw-line-1); }
+      .password-details summary { padding:22px 24px; cursor:pointer; font-size:14px; font-weight:600; }
+      .password-details summary:focus-visible { outline:none; box-shadow:var(--vw-focus); }
+      .password-details[open] summary { padding-bottom:0; }
+      @media(max-width:600px) { .selects { grid-template-columns:1fr; } }
     `,
   ];
 
@@ -300,9 +321,33 @@ export class VwSecuritySection extends LitElement {
       : nothing;
   }
 
+  private renderSaveFeedback(field: SecuritySettingField) {
+    const feedback = this.saveFeedback[field];
+    const effective = field === 'lockTimeout'
+      ? this.effectiveLockTimeout && lockTimeoutLabel(this.effectiveLockTimeout)
+      : field === 'onIdleAction'
+        ? this.effectiveOnIdleAction && (this.effectiveOnIdleAction === 'logout' ? t('auth.logout') : t('popup.lock'))
+        : this.effectiveClipboardClearSeconds && clipboardLabel(this.effectiveClipboardClearSeconds);
+    return html`
+      <div class="save-feedback" data-save-field=${field} data-state=${feedback?.state ?? 'idle'} role="status" aria-live="polite">
+        ${feedback ? html`<span class="save-mark" aria-hidden="true">${feedback.state === 'saved' ? uiIcon('check') : feedback.state === 'error' ? uiIcon('alert') : nothing}</span>` : nothing}
+        <span class="save-copy">${feedback?.message ?? t(feedback?.state === 'saving' ? 'options.save.saving' : feedback?.state === 'saved' ? 'options.save.saved' : 'options.save.automatic')}
+          ${effective && (feedback?.state === 'error' || feedback?.state === 'saving') ? html`<span class="save-effective">${t('options.save.effective', { value: effective })}</span>` : nothing}
+        </span>
+        ${feedback?.state === 'error' ? html`<button type="button" class="retry-save" data-retry-setting=${field} @click=${() => {
+          if (field === 'lockTimeout' && isSelectableLockTimeoutSetting(this.lockTimeout)) {
+            emit<LockTimeoutSaveDetail>(this, 'vw-lock-timeout-save', { lockTimeout: this.lockTimeout });
+          } else this.emitSecurity();
+        }}>${t('common.retry')}</button>` : nothing}
+      </div>
+    `;
+  }
+
   protected override render() {
     return html`
-      <vw-setting-card heading=${t('options.security.autoLock')} description=${t('options.security.autoLockDesc')}>
+      <p class="section-note">${t('options.save.browserScope')}</p>
+      <div class="settings-sheet">
+      <vw-setting-card stacked heading=${t('options.security.autoLock')} description=${t('options.security.autoLockDesc')}>
         ${this.timeoutManaged
           ? html`
               <div class="managed-value" data-timeout-value>${this.managedTimeoutLabel()} · ${this.onIdleAction === 'logout' ? t('auth.logout') : t('popup.lock')}</div>
@@ -310,6 +355,8 @@ export class VwSecuritySection extends LitElement {
             `
           : html`
               <div class="selects">
+                <div class="control-stack">
+                <span class="control-caption">${t('options.security.timeoutLabel')}</span>
                 <vw-select
                   data-lock-select
                   .options=${this.lockOptions()}
@@ -317,13 +364,19 @@ export class VwSecuritySection extends LitElement {
                   .label=${t('options.security.autoLock')}
                   @vw-select-change=${(e: CustomEvent<{ value: string }>) => this.onLockTimeoutChange(e.detail.value)}
                 ></vw-select>
+                ${this.renderSaveFeedback('lockTimeout')}
+                </div>
+                <div class="control-stack">
+                <span class="control-caption">${t('options.security.idleLabel')}</span>
                 <vw-select
                   data-idle-select
                   .options=${this.idleOptions()}
                   .value=${this.onIdleAction}
-                  .label=${t('options.security.autoLock')}
+                  .label=${t('options.security.idleLabel')}
                   @vw-select-change=${(e: CustomEvent<{ value: string }>) => this.onIdleChange(e.detail.value)}
                 ></vw-select>
+                ${this.renderSaveFeedback('onIdleAction')}
+                </div>
               </div>
               ${this.timeoutSelection === CUSTOM_TIMEOUT_OPTION
                 ? html`
@@ -365,6 +418,7 @@ export class VwSecuritySection extends LitElement {
         : html`<vw-status-message data-pin-managed tone="info" .message=${t('options.security.pinManaged')}></vw-status-message>`}
 
       <vw-setting-card heading=${t('options.security.clipboard')} description=${t('options.security.clipboardDesc')}>
+        <div class="control-stack">
         <vw-select
           data-clip-select
           .options=${this.clipboardOptions()}
@@ -372,14 +426,19 @@ export class VwSecuritySection extends LitElement {
           .label=${t('options.security.clipboard')}
           @vw-select-change=${(e: CustomEvent<{ value: string }>) => this.onClipboardChange(e.detail.value)}
         ></vw-select>
+        ${this.renderSaveFeedback('clipboardClearSeconds')}
+        </div>
       </vw-setting-card>
 
       <vw-setting-card emphasized heading=${t('options.security.lockNow')} description=${t('options.security.lockNowDesc')}>
         <button type="button" class="btn ink" data-lock-now ?disabled=${this.locked || this.pending} @click=${() => emit(this, 'vw-lock-now')}>${t('popup.lock')}</button>
       </vw-setting-card>
 
-      <vw-setting-card stacked heading=${t('options.security.masterPassword')} description=${t('options.security.masterPasswordDesc')}>
+      <details class="password-details">
+      <summary>${t('options.security.masterPassword')}</summary>
+      <vw-setting-card stacked description=${t('options.security.masterPasswordDesc')}>
         <div class="pw-form">
+          <label class="pw-field">${t('security.currentPassword')}
           <input
             class="pw-input"
             data-current-password
@@ -389,6 +448,8 @@ export class VwSecuritySection extends LitElement {
             aria-label=${t('security.currentPassword')}
             ?disabled=${this.locked || this.pending}
           />
+          </label>
+          <label class="pw-field">${t('security.newPassword')}
           <input
             class="pw-input"
             data-new-password
@@ -400,6 +461,8 @@ export class VwSecuritySection extends LitElement {
             aria-describedby=${this.passwordErrorField === 'newPassword' ? 'password-change-error' : nothing}
             ?disabled=${this.locked || this.pending}
           />
+          </label>
+          <label class="pw-field">${t('security.confirmPassword')}
           <input
             class="pw-input"
             data-confirm-password
@@ -411,6 +474,8 @@ export class VwSecuritySection extends LitElement {
             aria-describedby=${this.passwordErrorField === 'confirmPassword' ? 'password-change-error' : nothing}
             ?disabled=${this.locked || this.pending}
           />
+          </label>
+          <label class="pw-field">${t('security.masterPasswordHint')}
           <input
             class="pw-input"
             data-master-password-hint
@@ -423,12 +488,15 @@ export class VwSecuritySection extends LitElement {
             aria-describedby=${this.passwordErrorField === 'hint' ? 'password-change-error' : nothing}
             ?disabled=${this.locked || this.pending}
           />
+          </label>
           ${this.passwordError ? html`<p id="password-change-error" class="pw-error" role="alert">${this.passwordError}</p>` : nothing}
           <button type="button" class="btn ink" data-change-password ?disabled=${this.locked || this.pending} @click=${() => this.changePassword()}>
             ${t('options.security.changePassword')}
           </button>
         </div>
       </vw-setting-card>
+      </details>
+      </div>
 
       ${this.renderStatus()}
     `;

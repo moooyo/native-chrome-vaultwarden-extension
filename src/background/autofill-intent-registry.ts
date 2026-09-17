@@ -2,7 +2,7 @@ import type {
   AutofillSecretPurpose,
   ContentStructuredAutofillTarget,
 } from '../messaging/protocol.js';
-import { normalizeFillRoles } from '../core/vault/fill-roles.js';
+import { normalizeFillRoles, type FillKind, type FillRole } from '../core/vault/fill-roles.js';
 import {
   isLoginCustomPlanDigest,
   parseLoginCustomTargetPlan,
@@ -446,24 +446,46 @@ function canonicalizeStructuredTarget(
     const roles = normalizeFillRoles('card', value.roles);
     if (!roles || roles.length !== value.roles.length
         || roles.some((role, index) => role !== value.roles[index])) return undefined;
+    const selectedRoles = 'selectedRoles' in value
+      ? canonicalizeSelectedRoles(value.kind, value.selectedRoles, roles)
+      : undefined;
+    if ('selectedRoles' in value && !selectedRoles) return undefined;
     return Object.freeze({
       kind: value.kind,
       runtimeIncarnation: value.runtimeIncarnation,
       formId: value.formId,
       generation: value.generation,
       roles: Object.freeze([...roles]),
+      ...(selectedRoles === undefined ? {} : { selectedRoles }),
     });
   }
   const roles = normalizeFillRoles('identity', value.roles);
   if (!roles || roles.length !== value.roles.length
       || roles.some((role, index) => role !== value.roles[index])) return undefined;
+  const selectedRoles = 'selectedRoles' in value
+    ? canonicalizeSelectedRoles(value.kind, value.selectedRoles, roles)
+    : undefined;
+  if ('selectedRoles' in value && !selectedRoles) return undefined;
   return Object.freeze({
     kind: value.kind,
     runtimeIncarnation: value.runtimeIncarnation,
     formId: value.formId,
     generation: value.generation,
     roles: Object.freeze([...roles]),
+    ...(selectedRoles === undefined ? {} : { selectedRoles }),
   });
+}
+
+function canonicalizeSelectedRoles<Role extends FillRole>(
+  kind: FillKind,
+  value: unknown,
+  roles: readonly Role[],
+): readonly Role[] | undefined {
+  const selected = normalizeFillRoles(kind, value);
+  if (!Array.isArray(value) || !selected || selected.length !== value.length
+      || selected.some((role, index) => role !== value[index]
+        || !roles.some((structuralRole) => structuralRole === role))) return undefined;
+  return Object.freeze(roles.filter((role) => selected.includes(role)));
 }
 
 function equalStructuredTarget(
@@ -476,7 +498,11 @@ function equalStructuredTarget(
     && first.formId === second.formId
     && first.generation === second.generation
     && first.roles.length === second.roles.length
-    && first.roles.every((role, index) => role === second.roles[index]);
+    && first.roles.every((role, index) => role === second.roles[index])
+    && (first.selectedRoles === undefined || second.selectedRoles === undefined
+      ? first.selectedRoles === second.selectedRoles
+      : first.selectedRoles.length === second.selectedRoles.length
+        && first.selectedRoles.every((role, index) => role === second.selectedRoles?.[index]));
 }
 
 function assertBrowserContext(value: {

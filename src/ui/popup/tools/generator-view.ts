@@ -1,10 +1,12 @@
 import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
+import { controlStyles } from '../../components/styles.js';
 import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
 import '../../components/toggle.js';
 import '../../components/segmented.js';
-import { LocalizeController, t } from '../../i18n/index.js';
+import '../../components/dialog.js';
+import { getLocale, LocalizeController, t } from '../../i18n/index.js';
 import {
   generatePassword,
   DEFAULT_PASSWORD_OPTIONS,
@@ -168,6 +170,7 @@ export class VwGeneratorView extends LitElement {
     plusAddressEmail: { state: true },
     catchAllDomain: { state: true },
     validationMessage: { state: true },
+    historyClearOpen: { state: true },
   };
 
   declare history: readonly GeneratorHistoryEntry[];
@@ -200,6 +203,7 @@ export class VwGeneratorView extends LitElement {
   declare plusAddressEmail: string;
   declare catchAllDomain: string;
   declare validationMessage: string;
+  declare historyClearOpen: boolean;
 
   private i18n = new LocalizeController(this);
   private unsubscribePrefs: (() => void) | undefined;
@@ -237,6 +241,7 @@ export class VwGeneratorView extends LitElement {
     this.plusAddressEmail = '';
     this.catchAllDomain = '';
     this.validationMessage = '';
+    this.historyClearOpen = false;
   }
 
   override connectedCallback(): void {
@@ -253,296 +258,80 @@ export class VwGeneratorView extends LitElement {
 
   static override styles = [
     themeTokens,
+    controlStyles,
     css`
-      :host {
-        display: block;
-        height: 100%;
-        min-height: 0;
-      }
-      .wrap {
-        box-sizing: border-box;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        height: 100%;
-        overflow-y: auto;
-        padding: 12px 14px;
-        animation: mvIn 0.2s ease-out;
-      }
-      .head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-      }
-      .head h1 {
-        margin: 0;
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--vw-ink);
-      }
-      .close {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 26px;
-        height: 26px;
-        padding: 0;
-        border: none;
-        border-radius: var(--vw-radius-small);
-        background: transparent;
-        color: var(--vw-text-2);
-        cursor: pointer;
-        transition: background-color var(--vw-dur-fast);
-      }
-      .close:hover {
-        background: var(--vw-icon-hover);
-      }
-      .close:focus-visible {
-        outline: none;
-        box-shadow: var(--vw-focus);
-      }
-      .close svg {
-        width: 15px;
-        height: 15px;
-      }
-      .result {
-        background: var(--vw-fill-2);
-        border: 1px solid var(--vw-line-1);
-        border-radius: var(--vw-radius-card);
-        padding: 12px;
-      }
-      .password {
-        font-family: var(--vw-font-mono);
-        font-size: 13.5px;
-        line-height: 1.6;
-        word-break: break-all;
-        min-height: 44px;
-        color: var(--vw-ink);
-      }
-      .password .digit {
-        color: var(--vw-gen-digit);
-      }
-      .password .symbol {
-        color: var(--vw-gen-symbol);
-      }
-      .strength {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-top: 10px;
-      }
-      .track {
-        flex: 1;
-        height: 4px;
-        border-radius: 2px;
-        background: var(--vw-track);
-        overflow: hidden;
-      }
-      .fill {
-        height: 100%;
-        border-radius: 2px;
-        transition: width var(--vw-dur), background-color var(--vw-dur);
-      }
-      .strength-label {
-        font-size: 11.5px;
-        font-weight: 600;
-        white-space: nowrap;
-      }
-      .length-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-      }
-      .length-label {
-        font-size: 13px;
-        color: var(--vw-text-4);
-      }
-      .length-pill {
-        font-size: 11.5px;
-        font-weight: 600;
-        color: var(--vw-teal-text);
-        background: var(--vw-teal-10);
-        border-radius: 6px;
-        padding: 2px 8px;
-      }
-      .username-context {
-        display: flex;
-        flex-direction: column;
-        gap: 5px;
-      }
-      .field-label {
-        font-size: 12px;
-        font-weight: 600;
-        color: var(--vw-text-3);
-      }
-      .text-input {
-        width: 100%;
-        box-sizing: border-box;
-        height: 34px;
-        padding: 0 10px;
-        border: 1px solid var(--vw-line-3);
-        border-radius: var(--vw-radius-control);
-        background: var(--vw-card);
-        color: var(--vw-ink);
-        font: 13px/1 var(--vw-font-ui);
-      }
-      .text-input:focus-visible {
-        outline: none;
-        box-shadow: var(--vw-focus);
-      }
-      .text-input[aria-invalid='true'] {
-        border-color: var(--vw-danger-border);
-      }
-      .hint,
-      .validation {
-        font-size: 11.5px;
-        line-height: 1.45;
-      }
-      .hint {
-        color: var(--vw-text-2);
-      }
-      .validation {
-        color: var(--vw-danger);
-      }
-      input[type='range'] {
-        width: 100%;
-        margin: 0;
-        accent-color: var(--vw-accent);
-        cursor: pointer;
-      }
-      .toggles {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-      .toggle-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-      }
-      .toggle-row span {
-        font-size: 13px;
-        color: var(--vw-text-4);
-      }
-      .minimums {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-      }
-      .minimum-control {
-        display: flex;
-        min-width: 0;
-        flex-direction: column;
-        gap: 5px;
-        color: var(--vw-text-4);
-        font-size: 12px;
-      }
-      .minimum-control input {
-        box-sizing: border-box;
-        width: 100%;
-        height: 34px;
-        padding: 0 9px;
-        border: 1px solid var(--vw-line-3);
-        border-radius: var(--vw-radius-control);
-        background: var(--vw-card);
-        color: var(--vw-ink);
-        font: 12px/1 var(--vw-font-mono);
-      }
-      .minimum-control input:focus-visible {
-        outline: none;
-        box-shadow: var(--vw-focus);
-      }
-      .minimum-control input:disabled {
-        opacity: 0.55;
-      }
-      .username-checkbox {
-        width: 18px;
-        height: 18px;
-        margin: 0;
-        accent-color: var(--vw-accent);
-        cursor: pointer;
-      }
-      .username-size {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-      .actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      .copy {
-        flex: 1;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 7px;
-        height: 34px;
-        border: none;
-        border-radius: var(--vw-radius-control);
-        background: var(--vw-primary-bg);
-        color: var(--vw-primary-fg);
-        font-family: var(--vw-font-ui);
-        font-size: 13px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: background-color var(--vw-dur-fast);
-      }
-      .copy:not(:disabled):hover {
-        background: var(--vw-primary-bg-hover);
-      }
-      .history { border-top:1px solid var(--vw-line-1); padding-top:10px; }
+      :host { display:block; height:100%; min-height:0; }
+      .wrap { display:flex; flex-direction:column; gap:17px; height:100%; overflow-y:auto; padding:16px; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--vw-scrollbar) transparent; }
+      .head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+      .head h1 { margin:0; font-size:18px; font-weight:600; color:var(--vw-ink); }
+      .close { display:grid; place-items:center; width:30px; height:30px; padding:0; border:0; border-radius:var(--vw-radius-control); background:transparent; color:var(--vw-text-2); cursor:pointer; transition:background-color var(--vw-dur-fast); }
+      .close:hover { background:var(--vw-icon-hover); }
+      .close svg { width:15px; height:15px; }
+      .result { background:var(--vw-fill); border-radius:var(--vw-radius-control); padding:18px 16px; }
+      .password { min-height:52px; font:22px/1.65 var(--vw-font-mono); color:var(--vw-ink); word-break:break-all; user-select:all; }
+      .password.compact { font-size:17px; }
+      .password[data-output-mode='memorable'] { word-break:normal; overflow-wrap:anywhere; }
+      .password[data-output-mode='pin'] { letter-spacing:.1em; }
+      .password .digit { color:var(--vw-gen-digit); }
+      .password .symbol { color:var(--vw-gen-symbol); }
+      .strength { display:flex; align-items:center; gap:8px; margin-top:14px; }
+      .track { flex:1; height:4px; border-radius:2px; background:var(--vw-track); overflow:hidden; }
+      .fill { height:100%; border-radius:2px; transition:width var(--vw-dur),background-color var(--vw-dur); }
+      .strength-label { font-size:11px; font-weight:500; white-space:nowrap; }
+      .length-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+      .length-label { font-size:13px; color:var(--vw-text-4); }
+      .length-pill { padding:2px 8px; border-radius:var(--vw-radius-chip); background:var(--pc); color:var(--onpc); font:500 12px/1.5 var(--vw-font-mono); }
+      .username-context { display:flex; flex-direction:column; gap:7px; }
+      .field-label { font-size:12px; font-weight:500; color:var(--vw-text-3); }
+      .text-input { width:100%; min-width:0; height:40px; padding:0 11px; border:1px solid var(--vw-line-3); border-radius:var(--vw-radius-control); background:var(--vw-card); color:var(--vw-ink); font:14px/1.5 var(--vw-font-ui); }
+      .text-input[aria-invalid='true'] { border-color:var(--vw-danger); }
+      .hint,.validation { margin:0; font-size:12px; line-height:1.65; }
+      .hint { color:var(--vw-text-2); }
+      .validation { color:var(--vw-danger); }
+      input[type='range'] { width:100%; margin:0; accent-color:var(--vw-accent); cursor:pointer; }
+      .toggles { display:flex; flex-direction:column; }
+      .toggle-row { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:44px; padding:10px 0; border-bottom:1px solid var(--vw-line-1); }
+      .toggle-row span { font-size:13px; color:var(--vw-text-4); }
+      .minimums { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+      .minimum-control { display:flex; min-width:0; flex-direction:column; gap:7px; color:var(--vw-text-2); font-size:12px; }
+      .minimum-control input { width:100%; min-width:0; height:40px; padding:0 11px; border:1px solid var(--vw-line-3); border-radius:var(--vw-radius-control); background:var(--vw-card); color:var(--vw-ink); font:13px/1.5 var(--vw-font-mono); }
+      .minimum-control input:disabled { color:var(--vw-disabled-fg); background:var(--vw-disabled-bg); }
+      .username-checkbox { width:17px; height:17px; margin:0; accent-color:var(--vw-accent); cursor:pointer; }
+      .username-size { display:flex; flex-direction:column; gap:10px; }
+      .actions { display:flex; align-items:center; gap:8px; }
+      .copy { flex:1; display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:38px; padding:8px 12px; border:1px solid transparent; border-radius:var(--vw-radius-control); background:var(--vw-primary-bg); color:var(--vw-primary-fg); font:600 13px/1.5 var(--vw-font-ui); cursor:pointer; transition:background-color var(--vw-dur-fast); }
+      .copy:not(:disabled):hover { background:var(--vw-primary-bg-hover); }
+      .regen { display:grid; place-items:center; width:38px; height:38px; padding:0; border:1px solid var(--vw-line-3); border-radius:var(--vw-radius-control); background:transparent; color:var(--vw-text-2); cursor:pointer; transition:background-color var(--vw-dur-fast); }
+      .regen:not(:disabled):hover { background:var(--vw-row-hover); }
+      .copy:disabled,.regen:disabled { cursor:default; color:var(--vw-disabled-fg); background:var(--vw-disabled-bg); border-color:var(--vw-disabled-border); }
+      .copy svg,.regen svg { width:16px; height:16px; }
+      .rules,.history { border-top:1px solid var(--vw-line-2); }
+      .rules summary,.history summary { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 0; color:var(--vw-text-2); cursor:pointer; font-size:12px; font-weight:500; list-style:none; }
+      .rules summary::-webkit-details-marker,.history summary::-webkit-details-marker { display:none; }
+      .rules summary::after,.history summary::after { content:''; width:6px; height:6px; border:solid var(--vw-chevron); border-width:0 1.5px 1.5px 0; transform:rotate(45deg); margin-right:4px; }
+      .rules[open] summary::after,.history[open] summary::after { transform:rotate(225deg); }
+      .rules summary:hover,.history summary:hover { color:var(--vw-accent); }
+      .rules-body { display:flex; flex-direction:column; gap:16px; padding:0 0 16px; }
       .history-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-      .history-head h2 { margin:0; font-size:12px; font-weight:600; color:var(--vw-text-3); }
-      .history-clear { border:0; background:transparent; color:var(--vw-danger); font:500 11px/1 var(--vw-font-ui); cursor:pointer; }
-      .history-list { display:flex; flex-direction:column; gap:6px; margin-top:8px; max-height:180px; overflow:auto; }
-      .history-item { display:grid; grid-template-columns:minmax(0,1fr) 28px; gap:8px; align-items:center; padding:7px 8px; border-radius:6px; background:var(--vw-fill-2); }
-      .history-value { font:12px/1.45 var(--vw-font-mono); color:var(--vw-ink); overflow-wrap:anywhere; white-space:normal; }
-      .history-meta { margin-top:2px; font-size:10px; color:var(--vw-text-2); }
-      .history-copy { width:28px; height:28px; padding:0; border:0; border-radius:6px; display:grid; place-items:center; background:transparent; color:var(--vw-text-3); cursor:pointer; }
+      .history-head h2 { margin:0; font-size:12px; font-weight:500; color:var(--vw-text-3); }
+      .history-clear { min-height:30px; padding:4px 8px; border:0; border-radius:6px; background:transparent; color:var(--vw-danger); font:500 12px/1.5 var(--vw-font-ui); cursor:pointer; }
+      .history-clear:hover { background:var(--vw-danger-10); }
+      .history-list { display:flex; flex-direction:column; margin-top:8px; }
+      .history-item { display:grid; grid-template-columns:minmax(0,1fr) 30px; gap:12px; align-items:center; padding:12px 0; border-bottom:1px solid var(--vw-line-1); }
+      .history-value { font:12px/1.65 var(--vw-font-mono); color:var(--vw-ink); overflow-wrap:anywhere; white-space:normal; }
+      .history-meta { display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:5px; font-size:11px; color:var(--vw-text-2); }
+      .history-meta time { font-size:10px; color:var(--vw-muted); }
+      .history-copy { width:30px; height:30px; padding:0; border:0; border-radius:6px; display:grid; place-items:center; background:transparent; color:var(--vw-text-3); cursor:pointer; }
       .history-copy:hover { background:var(--vw-row-hover); }
       .history-copy svg { width:14px; height:14px; }
-      .history-empty { margin:8px 0 0; font-size:11px; color:var(--vw-text-2); }
-      .regen {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 34px;
-        height: 34px;
-        padding: 0;
-        border: 1px solid var(--vw-line-3);
-        border-radius: var(--vw-radius-control);
-        background: transparent;
-        color: var(--vw-text-4);
-        cursor: pointer;
-        transition: background-color var(--vw-dur-fast);
-      }
-      .regen:not(:disabled):hover {
-        background: var(--vw-row-hover);
-      }
-      .copy:disabled,
-      .regen:disabled {
-        cursor: default;
-        opacity: 0.5;
-      }
-      .copy:focus-visible,
-      .regen:focus-visible {
-        outline: none;
-        box-shadow: var(--vw-focus);
-      }
-      .copy svg,
-      .regen svg {
-        width: 16px;
-        height: 16px;
-      }
+      .history-empty { margin:8px 0; font-size:12px; color:var(--vw-text-2); }
+      .history>.hint { margin-top:12px; }
+      @media(prefers-reduced-motion:reduce) { .close,.fill,.copy,.regen { transition:none; } }
     `,
   ];
 
   protected override willUpdate(changed: PropertyValues<this>): void {
+    if (changed.has('history') && this.history.length === 0) this.historyClearOpen = false;
     const accountEmailChanged = changed.has('accountEmail');
     if (accountEmailChanged) this.plusAddressEmail = this.accountEmail?.trim() ?? '';
     const policyChanged = changed.has('generatorPolicy');
@@ -835,12 +624,18 @@ export class VwGeneratorView extends LitElement {
   }
 
   private clearHistory(): void {
-    if (this.history.length > 0 && window.confirm(t('gen.historyClearConfirm'))) emit(this, 'vw-history-clear');
+    if (this.history.length > 0) this.historyClearOpen = true;
+  }
+
+  private confirmHistoryClear(): void {
+    if (this.history.length > 0 && this.historyClearOpen) emit(this, 'vw-history-clear');
+    this.historyClearOpen = false;
   }
 
   private renderHistory() {
     return html`
-      <section class="history" aria-label=${t('gen.history')}>
+      <details class="history">
+        <summary>${t('gen.history')}</summary>
         <div class="history-head">
           <h2>${t('gen.history')}</h2>
           ${this.history.length > 0
@@ -851,14 +646,20 @@ export class VwGeneratorView extends LitElement {
           ? html`<div class="history-list">${this.history.map((entry) => html`
               <div class="history-item">
                 <div>
+                  <div class="history-meta"><span>${this.historyLabel(entry.type)}</span><time>${new Date(entry.generatedAt).toLocaleString(getLocale(), { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time></div>
                   <div class="history-value">${entry.value}</div>
-                  <div class="history-meta">${this.historyLabel(entry.type)} · ${new Date(entry.generatedAt).toLocaleString()}</div>
                 </div>
                 <button type="button" class="history-copy" aria-label=${t('gen.historyCopy')} @click=${() => this.copyHistoryEntry(entry)}>${uiIcon('copy')}</button>
               </div>`)}
             </div>`
           : html`<p class="history-empty">${t('gen.historyEmpty')}</p>`}
-      </section>`;
+        <p class="hint">${t('gen.historyReminder')}</p>
+      </details>
+      <vw-dialog .open=${this.historyClearOpen} heading=${t('gen.historyClear')} @vw-dialog-close=${() => { this.historyClearOpen = false; }}>
+        <p>${t('gen.historyClearConfirm')}</p>
+        <button slot="actions" type="button" class="btn outline" data-history-clear-cancel autofocus @click=${() => { this.historyClearOpen = false; }}>${t('common.cancel')}</button>
+        <button slot="actions" type="button" class="btn danger" data-history-clear-confirm @click=${() => this.confirmHistoryClear()}>${t('gen.historyClear')}</button>
+      </vw-dialog>`;
   }
 
   private back(): void {
@@ -1009,6 +810,7 @@ export class VwGeneratorView extends LitElement {
         <span>${label}</span>
         <vw-toggle
           data-toggle=${marker}
+          .label=${label}
           .checked=${this[key]}
           .disabled=${disabled}
           title=${required ? t('gen.policyRequired') : nothing}
@@ -1050,6 +852,7 @@ export class VwGeneratorView extends LitElement {
         <span>${label}</span>
         <vw-toggle
           data-toggle=${marker}
+          .label=${label}
           .checked=${this[key]}
           .disabled=${!this.canConfigurePassphrase() || required}
           title=${required ? t('gen.policyRequired') : nothing}
@@ -1271,6 +1074,29 @@ export class VwGeneratorView extends LitElement {
     `;
   }
 
+  private renderActions(disabledDescription: string | typeof nothing) {
+    return html`
+        <div class="actions">
+          <button
+            type="button"
+            class="copy"
+            data-copy
+            data-select-generated=${this.selectionTarget ? '' : nothing}
+            ?disabled=${!this.current}
+            aria-describedby=${disabledDescription}
+            @click=${() => this.selectionTarget ? this.selectValue() : this.copy()}
+          >
+            ${uiIcon(this.selectionTarget ? 'check' : 'copy')}<span>${this.selectionTarget
+              ? t(this.selectionTarget === 'password' ? 'gen.usePassword' : 'gen.useUsername')
+              : t(this.mode === 'username' ? 'gen.copyUsername' : 'gen.copy')}</span>
+          </button>
+          <button type="button" class="regen" data-regenerate ?disabled=${!this.current} aria-describedby=${disabledDescription} title=${t('gen.regenerate')} aria-label=${t('gen.regenerate')} @click=${() => this.regenerateAndRecord()}>
+            ${uiIcon('refresh')}
+          </button>
+        </div>
+    `;
+  }
+
   protected override render() {
     const strength = this.mode === 'username' ? undefined : this.strength();
     const modes = [
@@ -1300,6 +1126,7 @@ export class VwGeneratorView extends LitElement {
 
         <vw-segmented
           data-mode
+          .label=${t('gen.title')}
           .options=${modes}
           .value=${this.mode}
           @vw-segmented-change=${(e: CustomEvent<{ id: string }>) => this.setMode(e.detail.id as GenMode)}
@@ -1328,7 +1155,7 @@ export class VwGeneratorView extends LitElement {
         ${this.mode === 'username' ? this.renderUsernameContext() : nothing}
 
         <div class="result">
-          <div class="password" data-output>${this.renderPassword()}</div>
+          <div class=${`password ${this.current.length > 48 ? 'compact' : ''}`} data-output data-output-mode=${this.mode}>${this.renderPassword()}</div>
           ${strength
             ? html`
               <div class="strength">
@@ -1339,30 +1166,16 @@ export class VwGeneratorView extends LitElement {
             : nothing}
         </div>
 
+        ${this.renderActions(disabledDescription)}
+
         ${this.renderSizeControl()}
 
-        ${this.renderToggles()}
+        ${this.mode === 'random'
+          ? html`<details class="rules"><summary>${t('gen.advancedRules')}</summary><div class="rules-body">${this.renderToggles()}${this.renderPasswordMinimums()}</div></details>`
+          : this.renderToggles()}
 
-        ${this.renderPasswordMinimums()}
+        <p class="hint">${this.mode === 'pin' ? t('gen.pinPurpose') : t('gen.saveReminder')}</p>
 
-        <div class="actions">
-          <button
-            type="button"
-            class="copy"
-            data-copy
-            data-select-generated=${this.selectionTarget ? '' : nothing}
-            ?disabled=${!this.current}
-            aria-describedby=${disabledDescription}
-            @click=${() => this.selectionTarget ? this.selectValue() : this.copy()}
-          >
-            ${uiIcon(this.selectionTarget ? 'check' : 'copy')}<span>${this.selectionTarget
-              ? t(this.selectionTarget === 'password' ? 'gen.usePassword' : 'gen.useUsername')
-              : t(this.mode === 'username' ? 'gen.copyUsername' : 'gen.copy')}</span>
-          </button>
-          <button type="button" class="regen" data-regenerate ?disabled=${!this.current} aria-describedby=${disabledDescription} title=${t('gen.regenerate')} aria-label=${t('gen.regenerate')} @click=${() => this.regenerateAndRecord()}>
-            ${uiIcon('refresh')}
-          </button>
-        </div>
         ${this.selectionTarget ? nothing : this.renderHistory()}
       </div>
     `;

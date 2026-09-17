@@ -18,6 +18,7 @@ const DOCUMENT_POSITION_FOLLOWING = 4;
 const NODE_FILTER_ACCEPT = 1;
 const NODE_FILTER_REJECT = 2;
 const extensionOwnedRoots = new WeakSet<ShadowRoot>();
+const extensionOwnedSurfaceHosts = new WeakSet<Element>();
 
 /** Attributes that can change whether a control is detectable, classifiable, or fillable. */
 export const COMPOSED_TREE_AUTOFILL_ATTRIBUTE_FILTER = Object.freeze([
@@ -138,6 +139,12 @@ export function registerExtensionOwnedShadowRoot(root: ShadowRoot): void {
     throw new TypeError('extension-owned root must be a ShadowRoot');
   }
   extensionOwnedRoots.add(root);
+  extensionOwnedSurfaceHosts.add(host);
+}
+
+/** Identity-only ownership; page-created attributes and custom element names cannot forge this. */
+export function isExtensionOwnedSurfaceHost(element: Element): boolean {
+  return extensionOwnedSurfaceHosts.has(element);
 }
 
 /**

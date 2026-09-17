@@ -12,6 +12,7 @@ import {
   EMPTY_LOGIN_CUSTOM_PLAN,
   EMPTY_LOGIN_CUSTOM_PLAN_DIGEST,
 } from '../core/vault/login-custom-fields.js';
+import type { ContentStructuredAutofillTarget } from '../messaging/protocol.js';
 
 interface SessionLease {
   readonly generation: number;
@@ -199,6 +200,123 @@ describe('AutofillIntentRegistry', () => {
       policyLease: POLICY,
       structuredTarget,
     });
+  });
+
+  it.each([
+    { kind: 'card', roles: ['number', 'exp', 'code'], selectedRoles: ['number', 'exp'] },
+    { kind: 'identity', roles: ['fullName', 'email', 'phone'], selectedRoles: ['fullName', 'email'] },
+  ] as const)('snapshots and freezes the $kind selection separately from the full form roles', (selection) => {
+    const { registry } = makeHarness();
+    const roles = [...selection.roles];
+    const selectedRoles = [...selection.selectedRoles];
+    const structuredTarget = {
+      kind: selection.kind,
+      runtimeIncarnation: RUNTIME_INCARNATION,
+      formId: 'selected-form',
+      generation: 12,
+      roles,
+      selectedRoles,
+    } as ContentStructuredAutofillTarget;
+    const originalTarget = {
+      ...structuredTarget,
+      roles: [...roles],
+      selectedRoles: [...selectedRoles],
+    } as ContentStructuredAutofillTarget;
+    const token = registry.issue(issue({ purpose: selection.kind, structuredTarget }));
+    roles.pop();
+    selectedRoles.pop();
+
+    const redeemed = registry.redeem(token, redemption({
+      purpose: selection.kind,
+      structuredTarget: originalTarget,
+    }));
+
+    expect(redeemed?.structuredTarget).toEqual(originalTarget);
+    expect(redeemed?.structuredTarget).not.toBe(structuredTarget);
+    expect(redeemed?.structuredTarget?.roles).not.toBe(roles);
+    expect(redeemed?.structuredTarget?.selectedRoles).not.toBe(selectedRoles);
+    expect(Object.isFrozen(redeemed?.structuredTarget)).toBe(true);
+    expect(Object.isFrozen(redeemed?.structuredTarget?.roles)).toBe(true);
+    expect(Object.isFrozen(redeemed?.structuredTarget?.selectedRoles)).toBe(true);
+  });
+
+  it.each([
+    ['removed', undefined],
+    ['widened', ['number', 'exp', 'code']],
+    ['replaced', ['number', 'code']],
+    ['narrowed', ['number']],
+  ] as const)('burns a structured capability when its selected roles are %s', (_label, replacement) => {
+    const { registry } = makeHarness();
+    const structuredTarget: ContentStructuredAutofillTarget = {
+      kind: 'card', runtimeIncarnation: RUNTIME_INCARNATION,
+      formId: 'selected-form', generation: 12,
+      roles: ['number', 'exp', 'code'], selectedRoles: ['number', 'exp'],
+    };
+    const { selectedRoles: _selection, ...fullTarget } = structuredTarget;
+    const changedTarget: ContentStructuredAutofillTarget = replacement === undefined
+      ? fullTarget
+      : { ...fullTarget, selectedRoles: replacement };
+    const token = registry.issue(issue({ purpose: 'card', structuredTarget }));
+
+    expect(registry.redeem(token, redemption({ purpose: 'card', structuredTarget: changedTarget })))
+      .toBeUndefined();
+    expect(registry.redeem(token, redemption({ purpose: 'card', structuredTarget })))
+      .toBeUndefined();
+  });
+
+  it('does not add an explicit selection to an issued all-fields capability', () => {
+    const { registry } = makeHarness();
+    const structuredTarget: ContentStructuredAutofillTarget = {
+      kind: 'card', runtimeIncarnation: RUNTIME_INCARNATION,
+      formId: 'all-fields-form', generation: 12, roles: ['number', 'exp'],
+    };
+    const token = registry.issue(issue({ purpose: 'card', structuredTarget }));
+
+    expect(registry.redeem(token, redemption({
+      purpose: 'card',
+      structuredTarget: { ...structuredTarget, selectedRoles: ['number', 'exp'] },
+    }))).toBeUndefined();
+    expect(registry.redeem(token, redemption({ purpose: 'card', structuredTarget }))).toBeUndefined();
+  });
+
+  it.each([
+    ['empty', []],
+    ['duplicate', ['number', 'number']],
+    ['out of order', ['exp', 'number']],
+    ['unknown', ['number', 'ssn']],
+    ['cross kind', ['email']],
+    ['absent from the form', ['cardholderName']],
+    ['backing field absent from the form', ['expMonth']],
+    ['explicitly undefined', undefined],
+    ['non-array', 'number'],
+  ] as const)('rejects an %s selected-role binding when issuing or redeeming', (_label, selectedRoles) => {
+    const { registry } = makeHarness();
+    const fullTarget: ContentStructuredAutofillTarget = {
+      kind: 'card', runtimeIncarnation: RUNTIME_INCARNATION,
+      formId: 'selected-form', generation: 12, roles: ['number', 'exp', 'code'],
+    };
+    const invalidTarget = { ...fullTarget, selectedRoles } as unknown as ContentStructuredAutofillTarget;
+
+    expect(() => registry.issue(issue({ purpose: 'card', structuredTarget: invalidTarget })))
+      .toThrowError(expect.objectContaining({ code: 'invalid_intent' }));
+
+    const token = registry.issue(issue({ purpose: 'card', structuredTarget: fullTarget }));
+    expect(registry.redeem(token, redemption({ purpose: 'card', structuredTarget: invalidTarget })))
+      .toBeUndefined();
+    expect(registry.redeem(token, redemption({ purpose: 'card', structuredTarget: fullTarget })))
+      .toBeUndefined();
+  });
+
+  it('rejects a selected identity backing field that is only represented by the fullName alias', () => {
+    const { registry } = makeHarness();
+    const structuredTarget: ContentStructuredAutofillTarget = {
+      kind: 'identity', runtimeIncarnation: RUNTIME_INCARNATION,
+      formId: 'identity-form', generation: 12,
+      roles: ['fullName', 'email'], selectedRoles: ['firstName'],
+    };
+
+    expect(() => registry.issue(issue({ purpose: 'identity', structuredTarget })))
+      .toThrowError(expect.objectContaining({ code: 'invalid_intent' }));
   });
 
   it.each([

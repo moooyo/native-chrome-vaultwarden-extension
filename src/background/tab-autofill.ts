@@ -603,23 +603,24 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
           customAssignments: projection.customAssignments,
         };
       } else if (target.kind === 'card') {
+        const selectedRoles = target.selectedRoles ?? target.roles;
         const data = narrowCardData(
           await (repromptAuthorization
             ? deps.getFillData(
                 cipherId,
                 target.kind,
-                target.roles,
+                selectedRoles,
                 assertCurrent,
                 (assertCurrent) => { assertItemAuthority = assertCurrent; },
               )
             : deps.getFillData(
                 cipherId,
                 target.kind,
-                target.roles,
+                selectedRoles,
                 undefined,
                 (assertCurrent) => { assertItemAuthority = assertCurrent; },
               )),
-          target.roles,
+          selectedRoles,
         );
         assertCurrent();
         authorization.assertCurrent();
@@ -628,29 +629,31 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
           kind: target.kind,
           formId: target.formId,
           roles: [...target.roles],
+          ...(target.selectedRoles === undefined ? {} : { selectedRoles: [...target.selectedRoles] }),
           expectedFrameUrl: frame.url,
           expectedRuntimeIncarnation: target.runtimeIncarnation,
           expectedGeneration: target.generation,
           data,
         };
       } else {
+        const selectedRoles = target.selectedRoles ?? target.roles;
         const data = narrowIdentityData(
           await (repromptAuthorization
             ? deps.getFillData(
                 cipherId,
                 target.kind,
-                target.roles,
+                selectedRoles,
                 assertCurrent,
                 (assertCurrent) => { assertItemAuthority = assertCurrent; },
               )
             : deps.getFillData(
                 cipherId,
                 target.kind,
-                target.roles,
+                selectedRoles,
                 undefined,
                 (assertCurrent) => { assertItemAuthority = assertCurrent; },
               )),
-          target.roles,
+          selectedRoles,
         );
         assertCurrent();
         authorization.assertCurrent();
@@ -659,6 +662,7 @@ export function createTabAutofillCoordinator(deps: TabAutofillDeps): TabAutofill
           kind: target.kind,
           formId: target.formId,
           roles: [...target.roles],
+          ...(target.selectedRoles === undefined ? {} : { selectedRoles: [...target.selectedRoles] }),
           expectedFrameUrl: frame.url,
           expectedRuntimeIncarnation: target.runtimeIncarnation,
           expectedGeneration: target.generation,
@@ -957,16 +961,26 @@ function parseTabSuggestionTarget(value: unknown): TabSuggestionTarget | undefin
 
   const base = { frameId, formId, documentId, runtimeIncarnation, generation };
   if (kind === 'login') {
-    if ('roles' in value || !isLoginCustomPlanDigest(value.customPlanDigest)) return undefined;
+    if ('roles' in value || 'selectedRoles' in value || !isLoginCustomPlanDigest(value.customPlanDigest)) return undefined;
     return { ...base, kind, customPlanDigest: value.customPlanDigest };
   }
   if (kind === 'card') {
     const roles = parseCanonicalRoles(kind, value.roles);
-    return roles ? { ...base, kind, roles } : undefined;
+    if (!roles) return undefined;
+    const selectedRoles = 'selectedRoles' in value
+      ? parseSelectedRoles(kind, value.selectedRoles, roles)
+      : undefined;
+    if ('selectedRoles' in value && !selectedRoles) return undefined;
+    return { ...base, kind, roles, ...(selectedRoles === undefined ? {} : { selectedRoles }) };
   }
   if (kind === 'identity') {
     const roles = parseCanonicalRoles(kind, value.roles);
-    return roles ? { ...base, kind, roles } : undefined;
+    if (!roles) return undefined;
+    const selectedRoles = 'selectedRoles' in value
+      ? parseSelectedRoles(kind, value.selectedRoles, roles)
+      : undefined;
+    if ('selectedRoles' in value && !selectedRoles) return undefined;
+    return { ...base, kind, roles, ...(selectedRoles === undefined ? {} : { selectedRoles }) };
   }
   return undefined;
 }
@@ -983,6 +997,7 @@ function tabSuggestionTargetKey(target: TabSuggestionTarget): string {
     target.runtimeIncarnation,
     target.generation,
     purposeBinding,
+    ...(target.kind !== 'login' && target.selectedRoles !== undefined ? [[...target.selectedRoles]] : []),
   ]);
 }
 
@@ -1047,6 +1062,18 @@ function parseCanonicalRoles(kind: FillKind, value: unknown): FillRole[] | undef
     || normalized.some((role, index) => role !== value[index])
   ) return undefined;
   return [...normalized];
+}
+
+function parseSelectedRoles<Role extends FillRole>(
+  kind: FillKind,
+  value: unknown,
+  roles: readonly Role[],
+): readonly Role[] | undefined {
+  const selected = normalizeFillRoles(kind, value);
+  if (!Array.isArray(value) || !selected || selected.length !== value.length
+      || selected.some((role, index) => role !== value[index]
+        || !roles.some((structuralRole) => structuralRole === role))) return undefined;
+  return Object.freeze(roles.filter((role) => selected.includes(role)));
 }
 
 async function inspectionMatchesTarget(inspection: FrameInspection, target: TabSuggestionTarget): Promise<boolean> {

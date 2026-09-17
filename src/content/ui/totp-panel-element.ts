@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from 'lit';
 import { uiIcon } from '../../ui/components/icon.js';
 import { SIDE_PANEL_CSS, sideWrap } from './side-panel.js';
+import { INLINE_SURFACE_CSS } from './surface-theme.js';
 
 // TODO i18n: content-script surfaces are isolated from the extension i18n module, so these
 // user-facing strings are hardcoded in Chinese to match the 密屿/MiYu design.
@@ -26,11 +27,14 @@ export interface TotpPanelState {
   code: string;
   remaining: number;
   statusMessage: string;
+  siteLabel?: string;
+  period?: number;
 }
 
 /** Privileged callbacks. Every click that reaches them is gated on `Event.isTrusted` in the template,
  *  so a page script cannot synthesize a click to fill / copy / undo. */
 export interface TotpPanelHandlers {
+  onDismiss?: () => void;
   onSelect?: (candidateKey: string) => void;
   onChooseOther?: () => void;
   onFill?: () => void;
@@ -44,109 +48,42 @@ export interface TotpPanelHandlers {
  * lives in a closed shadow root on arbitrary host pages it cannot use the extension's `--vw-*` tokens,
  * so the MiYu palette is defined locally on `:host` with a `prefers-color-scheme: dark` override.
  */
-export const TOTP_PANEL_STYLES = `
-    :host { all: initial; }
-    :host {
-      --mi-panel: #fff;
-      --mi-ink:#1f1f1f;
-      --mi-muted:#747775;
-      --mi-faint:#80868b;
-      --mi-teal:#0b57d0;
-      --mi-teal-text:#0b57d0;
-      --mi-teal-10:rgba(11,87,208,.1);
-      --mi-teal-20:rgba(11,87,208,.2);
-      --mi-line:#e9eef6;
-      --mi-line-3:#c4c7c5;
-      --mi-fill-2:#f0f4f9;
-      --mi-row-hover:rgba(31,31,31,.07);
-      --mi-track:#dde3ea;
-      --mi-ink-btn:#0b57d0;
-      --mi-ink-btn-fg: #fff;
-      --mi-shadow:0 8px 28px rgba(0,0,0,.2);
-    }
-    * { box-sizing: border-box; }
-    .box {
-      font:400 14px/1.4 "Roboto", "Segoe UI", system-ui, sans-serif;
-      color: var(--mi-ink); background: var(--mi-panel);
-      border: 1px solid var(--mi-line); border-radius: 14px; box-shadow: var(--mi-shadow);
-      width:236px; overflow:hidden; animation:mvFly .22s cubic-bezier(.2,.9,.3,1);
-    }
-    @keyframes mvFly { from { opacity:0; transform:translateX(-12px); } to { opacity:1; transform:translateX(0); } }
-    .head { display: flex; align-items: center; gap: 7px; padding: 10px 13px 7px; }
-    .brand { font-size: 11.5px; font-weight: 600; letter-spacing: .01em; color: var(--mi-teal-text); }
-    .head .meta { margin-left: auto; font-size: 10.5px; color: var(--mi-faint); }
-    .logo { display:grid; place-items:center; width:16px; height:16px; border-radius:5px; background:#0b57d0; flex:none; }
-    .logo svg { width:11px; height:11px; fill:#fff; stroke:none; }
-    .glyph { position: relative; width: 8px; height: 8px; }
-    .ring { position: absolute; inset: 0; border: 1.5px solid #fff; border-radius: 50%; }
-    .dot { position: absolute; left: 3px; top: 3px; width: 2px; height: 2px; border-radius: 50%; background: #fff; }
-
-    .row { display: flex; align-items: center; gap: 9px; padding: 4px 13px 8px; }
-    .tile { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: 9px; color: #fff; font-weight: 700; font-size: 12px; text-transform: uppercase; }
-    .meta-col { min-width: 0; flex: 1; }
-    .title { font-size: 12.5px; font-weight: 600; color: var(--mi-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .sub { font-size: 11px; color: var(--mi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .candidate-list { display:grid; gap:4px; padding:2px 8px 8px; max-height:240px; overflow:auto; }
-    .candidate { width:100%; display:flex; align-items:center; gap:9px; padding:7px 6px; border:0; border-radius:8px; background:transparent; color:inherit; text-align:left; cursor:pointer; font:inherit; }
-    .candidate:hover, .candidate:focus-visible { background:var(--mi-row-hover); }
-    .candidate[disabled] { cursor:wait; opacity:.68; }
-    .candidate .meta-col { display:block; }
-    .candidate-state { margin-left:auto; color:var(--mi-faint); font-size:10px; flex:none; }
-    .candidate-note { padding:0 13px 9px; color:var(--mi-muted); font-size:11px; }
-    .candidate-error { color:#b3261e; }
-    .change-candidate { border:0; background:none; color:var(--mi-teal-text); padding:0; font:500 10.5px/1.2 "Roboto",sans-serif; cursor:pointer; }
-
-    .code-box { margin: 0 13px; padding: 9px 11px; background: var(--mi-fill-2); border: 1px solid var(--mi-line); border-radius: 10px; display: flex; align-items: center; gap: 9px; }
-    .code { flex:1; display:flex; align-items:baseline; font-family:"Roboto Mono", ui-monospace, monospace; font-weight:500; font-size:18px; color:var(--mi-teal-text); }
-    .code .grp { flex: 1; display: flex; justify-content: space-between; }
-    .code .grp:first-child { margin-right: 0.7em; }
-    .secs { font-size: 10.5px; color: var(--mi-faint); flex: none; }
-    /* Circular countdown: an arc that drains clockwise from the top as the seconds tick down.
-       (Named cd-* to avoid the logo glyph's own .ring/.dot classes.) */
-    .cd-ring { width: 18px; height: 18px; flex: none; }
-    .cd-ring circle { fill: none; }
-    .cd-track { stroke: var(--mi-track); stroke-width: 2.5; }
-    .cd-arc { stroke: var(--mi-teal); stroke-width: 2.5; stroke-linecap: round; transform: rotate(-90deg); transform-origin: center; transform-box: fill-box; transition: stroke-dashoffset 1s linear; }
-
-    .actions { display: flex; gap: 8px; padding: 10px 13px 13px; }
-    .btn-primary { flex:1; height:38px; border:0; border-radius:19px; background:var(--mi-ink-btn); color:var(--mi-ink-btn-fg); font:500 12px/1 "Roboto", system-ui, sans-serif; cursor:pointer; }
-    .btn-primary:hover { background:#0842a0; }
-    .icon-btn { width: 31px; height: 31px; border: 1px solid var(--mi-line-3); border-radius: 9px; background: var(--mi-panel); color: #3F444E; display: grid; place-items: center; cursor: pointer; }
-    .icon-btn:hover { background: var(--mi-row-hover); }
-    .icon-btn svg { width: 14px; height: 14px; }
-    button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--mi-teal); }
-    svg { stroke-width: 1.8; }
-
-    .filled { display: flex; align-items: center; gap: 8px; padding: 10px 13px 13px; }
-    .badge { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 14px; background: var(--mi-teal-10); border: 1px solid var(--mi-teal-20); color: var(--mi-teal-text); font-size: 11.5px; font-weight: 600; animation: mvPop .28s ease-out both; }
-    .badge svg { width: 12px; height: 12px; stroke-width: 2.4; }
-    @keyframes mvPop { 0% { transform: scale(.4); opacity: 0; } 65% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
-    .undo { font-size: 11.5px; color: var(--mi-muted); cursor: pointer; background: none; border: 0; font-family: inherit; }
-    .undo:hover { color: var(--mi-ink); text-decoration: underline; }
-
-    .status { display: flex; align-items: center; gap: 10px; margin: 8px; padding: 11px 13px; border-radius: 12px; background: var(--mi-fill-2); }
-    .status-msg { font-size: 12.5px; font-weight: 600; color: var(--mi-ink); }
-
-    @media (prefers-color-scheme: dark) {
-      :host {
-        --mi-panel:#1f1f1f; --mi-ink:#e3e3e3; --mi-muted:#c4c7c5; --mi-faint:#8e918f;
-        --mi-teal:#a8c7fa; --mi-teal-text:#a8c7fa; --mi-teal-10:rgba(168,199,250,.14); --mi-teal-20:rgba(168,199,250,.24);
-        --mi-line:#2b2c2e; --mi-line-3:#47494c; --mi-fill-2:#242526;
-        --mi-row-hover:rgba(227,227,227,.09); --mi-track:#37393b;
-        --mi-ink-btn:#a8c7fa; --mi-ink-btn-fg:#062e6f; --mi-shadow:0 8px 28px rgba(0,0,0,.5);
-      }
-      .btn-primary:hover { background:#d3e3fd; }
-    }
-    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
-  ` + SIDE_PANEL_CSS;
-
+export const TOTP_PANEL_STYLES = INLINE_SURFACE_CSS + SIDE_PANEL_CSS + `
+  .row { display:flex; align-items:center; gap:10px; padding:16px 16px 12px; }
+  .tile { display:grid; place-items:center; width:30px; height:30px; flex:none; border-radius:8px; color:var(--mi-muted); background:var(--mi-fill); font-weight:600; font-size:13px; }
+  .meta-col { min-width:0; flex:1; display:flex; flex-direction:column; gap:3px; }
+  .title { font-size:14px; font-weight:500; overflow-wrap:anywhere; }
+  .sub { font-size:12px; color:var(--mi-muted); overflow-wrap:anywhere; }
+  .candidate-list { display:grid; gap:2px; margin:5px; max-height:300px; overflow:auto; overscroll-behavior:contain; }
+  .candidate { width:100%; display:flex; align-items:center; gap:10px; min-height:62px; padding:9px; border:0; border-radius:8px; background:transparent; text-align:left; }
+  .candidate:hover { background:var(--mi-row-hover); }
+  .candidate:focus-visible { background:var(--mi-teal-10); outline-offset:-2px; }
+  .candidate-state { margin-left:auto; color:var(--mi-teal-text); font-size:11px; flex:none; }
+  .candidate-note { margin:0; padding:8px 14px; color:var(--mi-muted); font-size:12px; }
+  .candidate-error { color:var(--mi-red); }
+  .change-candidate { border:0; background:transparent; color:var(--mi-teal-text); padding:5px 0; font-size:11px; white-space:nowrap; }
+  .change-candidate:hover { text-decoration:underline; }
+  .code-box { display:flex; align-items:center; gap:9px; margin:0 16px; padding:13px 12px; background:var(--mi-fill); border:1px solid var(--mi-line); border-radius:8px; }
+  .code { flex:1; display:flex; align-items:baseline; gap:10px; font:500 25px/1.3 "Consolas", ui-monospace, monospace; color:var(--mi-ink); font-variant-numeric:tabular-nums; }
+  .code .grp { display:flex; gap:2px; }
+  .secs { color:var(--mi-faint); font-size:11px; font-variant-numeric:tabular-nums; }
+  .cd-ring { width:20px; height:20px; }
+  .cd-ring circle { fill:none; }
+  .cd-track { stroke:var(--mi-track); stroke-width:2.5; }
+  .cd-arc { stroke:var(--mi-teal); stroke-width:2.5; stroke-linecap:round; transform:rotate(-90deg); transform-origin:center; transform-box:fill-box; transition:stroke-dashoffset 1s linear; }
+  .actions { display:flex; align-items:center; gap:8px; padding:14px 16px 16px; }
+  .btn-primary { flex:1; min-height:38px; padding:8px 12px; border:1px solid var(--mi-ink-btn); border-radius:8px; background:var(--mi-ink-btn); color:var(--mi-ink-btn-fg); font-size:13px; font-weight:500; }
+  .btn-primary:hover { background:var(--mi-ink-hover); border-color:var(--mi-ink-hover); }
+  .icon-btn { display:grid; place-items:center; width:38px; height:38px; border:1px solid var(--mi-line-3); border-radius:8px; background:var(--mi-panel); color:var(--mi-muted); }
+  .icon-btn:hover { background:var(--mi-row-hover); }
+  .icon-btn svg { width:16px; height:16px; }
+`;
 function trusted(event: Event, fn: (() => void) | undefined): void {
   if (!event.isTrusted) return;
   fn?.();
 }
 
-/** The code laid out to fill the row: two digit groups pushed to the ends (space-between) so the code
- *  spans the width instead of bunching on the left, each digit evenly boxed. */
+/** Split six-digit codes into two readable groups without changing the actual code value. */
 function codeGroups(code: string): TemplateResult {
   const c = code ?? '';
   if (c.length !== 6) {
@@ -161,28 +98,31 @@ function codeGroups(code: string): TemplateResult {
 /** Render the 2FA panel surface for the given state. The page cannot forge the privileged clicks: each
  *  handler bails unless `event.isTrusted`. */
 export function renderTotpPanel(state: TotpPanelState, handlers: TotpPanelHandlers): TemplateResult {
-  return sideWrap(html`<div class="box">${renderBody(state, handlers)}</div>`);
+  return sideWrap(html`<div class="box" @keydown=${(event: KeyboardEvent) => {
+    if (event.isTrusted && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      handlers.onDismiss?.();
+    }
+  }}><div class="head">${logoGlyph()}<span class="brand">${state.siteLabel || '密屿'}</span><span class="meta">验证码</span>
+    <button type="button" class="panel-close" aria-label="关闭验证码建议" @click=${(event: MouseEvent) => trusted(event, handlers.onDismiss)}>${uiIcon('close')}</button>
+    </div>${renderBody(state, handlers)}</div>`);
 }
 
 function renderBody(state: TotpPanelState, handlers: TotpPanelHandlers): TemplateResult {
   if (state.view === 'status') {
-    return html`<div class="head">${logoGlyph()}<span class="brand">密屿</span></div>
-      <div class="status" role="status" aria-live="polite" aria-atomic="true">
+    return html`<div class="status" role="status" aria-live="polite" aria-atomic="true">
         <span class="status-msg">${state.statusMessage}</span>
       </div>`;
   }
   const matchCount = state.candidates.length + state.overflowCount;
   return html`
-    <div class="head">
-      ${logoGlyph()}<span class="brand">密屿</span>
-      <span class="meta">${matchCount} 个匹配项 · 2FA</span>
-    </div>
     ${state.view === 'candidates' ? renderCandidates(state, handlers) : html`
     <div class="row">
-      <span class="tile" aria-hidden="true" style="background:${tileColor(state.itemName)}">${monogramLetter(state.itemName)}</span>
+      <span class="tile" aria-hidden="true">${monogramLetter(state.itemName)}</span>
       <span class="meta-col">
-        <span class="title">${state.itemName}</span>
-        <span class="sub">${state.itemUser}</span>
+        <span class="title">${state.itemUser || state.itemName}</span>
+        <span class="sub">${state.itemUser ? state.itemName : ''}</span>
       </span>
       ${matchCount > 1 && state.view === 'panel'
         ? html`<button type="button" class="change-candidate" @click=${(e: MouseEvent) => trusted(e, handlers.onChooseOther)}>切换账户</button>`
@@ -195,24 +135,25 @@ function renderBody(state: TotpPanelState, handlers: TotpPanelHandlers): Templat
 
 function renderCandidates(state: TotpPanelState, handlers: TotpPanelHandlers): TemplateResult {
   return html`
-    <div class="candidate-list" role="listbox" aria-label="选择验证码账户">
+    <div class="candidate-list" role="listbox" aria-label="选择验证码账户" @keydown=${handleCandidateKeys}>
       ${state.candidates.map((candidate) => html`
         <button
           type="button"
           class="candidate"
           role="option"
+          aria-selected="false"
           data-candidate-key=${candidate.key}
           ?disabled=${state.loadingKey === candidate.key}
           @click=${(event: MouseEvent) => trusted(event, () => handlers.onSelect?.(candidate.key))}
         >
-          <span class="tile" aria-hidden="true" style="background:${tileColor(candidate.name)}">${monogramLetter(candidate.name)}</span>
+          <span class="tile" aria-hidden="true">${monogramLetter(candidate.name)}</span>
           <span class="meta-col">
-            <span class="title">${candidate.name}</span>
-            <span class="sub">${candidate.username}</span>
+            <span class="title">${candidate.username || candidate.name}</span>
+            <span class="sub">${candidate.username ? candidate.name : ''}</span>
           </span>
           <span class="candidate-state">${state.loadingKey === candidate.key
             ? '加载中…'
-            : candidate.reprompt ? '需验证' : ''}</span>
+            : candidate.reprompt ? '需验证' : '选择'}</span>
         </button>
       `)}
     </div>
@@ -222,13 +163,15 @@ function renderCandidates(state: TotpPanelState, handlers: TotpPanelHandlers): T
     ${state.statusMessage
       ? html`<div class="candidate-note candidate-error" role="status">${state.statusMessage}</div>`
       : nothing}
+    <div class="panel-footer"><span>选择后显示验证码</span><span>↑↓ 选择 · Enter 确认</span></div>
   `;
 }
 
 function renderPanel(state: TotpPanelState, handlers: TotpPanelHandlers): TemplateResult {
   const R = 8;
   const CIRC = 2 * Math.PI * R;
-  const frac = Math.max(0, Math.min(1, state.remaining / 30));
+  const period = state.period && state.period > 0 ? state.period : 30;
+  const frac = Math.max(0, Math.min(1, state.remaining / period));
   const offset = CIRC * (1 - frac);
   return html`
     <div class="code-box">
@@ -240,9 +183,10 @@ function renderPanel(state: TotpPanelState, handlers: TotpPanelHandlers): Templa
       </svg>
     </div>
     <div class="actions">
-      <button type="button" class="btn-primary" @click=${(e: MouseEvent) => trusted(e, handlers.onFill)}>填充验证码</button>
-      <button type="button" class="icon-btn" title="复制验证码" aria-label="复制验证码" @click=${(e: MouseEvent) => trusted(e, handlers.onCopy)}>${uiIcon('copy')}</button>
+      <button type="button" class="btn-primary" ?disabled=${!state.code || state.remaining <= 0} @click=${(e: MouseEvent) => trusted(e, handlers.onFill)}>填充验证码</button>
+      <button type="button" class="icon-btn" title="复制验证码" aria-label="复制验证码" ?disabled=${!state.code || state.remaining <= 0} @click=${(e: MouseEvent) => trusted(e, handlers.onCopy)}>${uiIcon('copy')}</button>
     </div>
+    <div class="panel-footer">${state.code ? '验证码到期后自动更新' : '正在获取新的验证码…'}</div>
   `;
 }
 
@@ -252,6 +196,7 @@ function renderFilled(handlers: TotpPanelHandlers): TemplateResult {
       <span class="badge">${uiIcon('check')}已填充验证码</span>
       ${handlers.onUndo ? html`<button type="button" class="undo" @click=${(e: MouseEvent) => trusted(e, handlers.onUndo)}>撤销</button>` : nothing}
     </div>
+    <div class="panel-footer receipt-note">请在网站继续验证 · 此提示将自动关闭</div>
   `;
 }
 
@@ -264,8 +209,18 @@ function monogramLetter(name: string): string {
   return match ? match[0]!.toUpperCase() : '•';
 }
 
-function tileColor(name: string): string {
-  let hash = 0;
-  for (let index = 0; index < name.length; index += 1) hash = (hash * 31 + name.charCodeAt(index)) >>> 0;
-  return `hsl(${hash % 360} 52% 42%)`;
+function handleCandidateKeys(event: KeyboardEvent): void {
+  if (!event.isTrusted || event.altKey || event.ctrlKey || event.metaKey) return;
+  const list = event.currentTarget as HTMLElement;
+  const rows = [...list.querySelectorAll<HTMLButtonElement>('.candidate:not(:disabled)')];
+  const current = rows.findIndex((row) => row === event.target || row.contains(event.target as Node));
+  if (current < 0 || rows.length === 0) return;
+  const next = event.key === 'ArrowDown' ? (current + 1) % rows.length
+    : event.key === 'ArrowUp' ? (current - 1 + rows.length) % rows.length
+      : event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : -1;
+  if (next < 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  rows[next]?.focus({ preventScroll: true });
+  rows[next]?.scrollIntoView?.({ block: 'nearest' });
 }

@@ -1,4 +1,4 @@
-import { LitElement, css, html, type PropertyValues } from 'lit';
+import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
@@ -60,11 +60,24 @@ export class VwAccountMenu extends LitElement {
       }
       .anchor {
         position: absolute;
-        top: 36px;
+        top: 39px;
         right: 0;
         z-index: 20;
+        width: min(280px, calc(100vw - 32px));
+        border: 1px solid var(--vw-line-2);
+        border-radius: var(--vw-radius-panel);
+        background: var(--vw-panel);
+        box-shadow: var(--vw-panel-shadow);
+        overflow: hidden;
       }
+      .anchor[hidden] { display: none; }
+      .account-context { padding: 13px 15px; border-bottom: 1px solid var(--vw-line-1); }
+      .account-context span { display: block; font-size: 11px; color: var(--vw-text-3); margin-bottom: 4px; }
+      .account-context strong { display: block; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+      vw-menu { display: block; }
+      vw-menu::part(menu) { min-width: 0; max-width: none; max-height:min(420px,calc(100dvh - 148px)); border: 0; border-radius: 0; box-shadow: none; }
       .trigger {
+        appearance: none;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -73,14 +86,17 @@ export class VwAccountMenu extends LitElement {
         padding: 0;
         border: 0;
         border-radius: 50%;
-        background: #7c4dff;
-        color: #fff;
+        background: var(--pc);
+        color: var(--onpc);
+        font: 600 13px/1 var(--vw-font-ui);
         cursor: pointer;
+        transition: background-color var(--vw-dur-fast), color var(--vw-dur-fast);
       }
-      .trigger:hover { filter: brightness(.96); }
-      .trigger:disabled { opacity:.5; cursor:default; }
-      .trigger:focus-visible { outline: none; box-shadow: var(--vw-focus); }
+      .trigger:hover:not(:disabled) { background: var(--vw-teal-18); }
+      .trigger:disabled { color:var(--vw-disabled-fg); background:var(--vw-disabled-bg); cursor:default; }
+      .trigger:focus-visible { outline: 2px solid var(--vw-accent); outline-offset: 2px; }
       .trigger svg { width: 16px; height: 16px; }
+      @media(prefers-reduced-motion:reduce) { .trigger { transition:none; } }
     `,
   ];
 
@@ -162,6 +178,7 @@ export class VwAccountMenu extends LitElement {
   protected override render() {
     const items = this.buildItems().map((item) => ({ ...item, disabled: this.disabled || item.disabled === true }));
     const label = t('popup.account');
+    const activeAccount = this.accounts.find((account) => account.active);
     return html`
       <button
         type="button"
@@ -170,13 +187,14 @@ export class VwAccountMenu extends LitElement {
         aria-haspopup="menu"
         aria-expanded=${this.open ? 'true' : 'false'}
         ?disabled=${this.disabled}
-        title=${label}
-        aria-label=${label}
+        title=${activeAccount ? `${label} · ${activeAccount.email}` : label}
+        aria-label=${activeAccount ? `${label} · ${activeAccount.email}` : label}
         @click=${() => { this.open = !this.open; }}
       >
-        ${uiIcon('user')}
+        ${activeAccount?.email.trim().charAt(0).toUpperCase() || uiIcon('user')}
       </button>
-      <div class="anchor">
+      <div class="anchor" ?hidden=${!this.open}>
+        ${activeAccount ? html`<div class="account-context"><span>${label}</span><strong>${activeAccount.email}</strong></div>` : nothing}
         <vw-menu
           .label=${label}
           .items=${items}

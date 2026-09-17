@@ -41,6 +41,8 @@ export interface GeneratePanel {
 
 export interface GeneratePanelOptions {
   anchor: HTMLElement;
+  onMode?(mode: 'password' | 'passphrase'): void;
+  onDismiss?(): void;
   onUsername(value: string): void;
   onRegenerate(): void;
   onLength(length: number): void;
@@ -78,8 +80,14 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
     managed: false,
     disabledReason: '',
     filledUser: '',
+    siteLabel: window.location.hostname,
   };
   const handlers: GeneratePanelHandlers = {
+    ...(options.onMode ? { onMode: options.onMode } : {}),
+    onDismiss: () => {
+      options.onDismiss?.();
+      surface.remove();
+    },
     onUsername: options.onUsername,
     onRegenerate: options.onRegenerate,
     onLength: options.onLength,
@@ -106,6 +114,7 @@ export function createGeneratePanel(options: GeneratePanelOptions): GeneratePane
     surface.render(renderGeneratePanel(state, handlers));
     repositionSidePanel(host, options.anchor);
   };
+  surface.root.addEventListener('toggle', () => repositionSidePanel(host, options.anchor), true);
   draw();
 
   return {

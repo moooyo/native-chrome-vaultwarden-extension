@@ -67,6 +67,8 @@ import type {
   TabSuggestionsOutcome,
 } from '../../messaging/protocol.js';
 import { themeTokens, paletteTokens } from '../components/tokens.js';
+import { uiIcon } from '../components/icon.js';
+import type { AuthIdentityDisplay } from './auth/auth-identity.js';
 import { getLocale, initLocale, t } from '../i18n/index.js';
 import { initAppearance, AppearanceController } from '../theme.js';
 import { getPrefs, initPrefs, subscribePrefs } from '../prefs.js';
@@ -1286,6 +1288,9 @@ function createDefaultBrowser(): PopupBrowser {
     async openOptions() {
       await browser.runtime.openOptionsPage();
     },
+    async openWorkspace() {
+      await browser.tabs.create({ url: browser.runtime.getURL('ui/popup/popup.html?workspace=1') });
+    },
     async openReceive() {
       await browser.tabs.create({ url: browser.runtime.getURL('ui/receive/receive.html') });
     },
@@ -1383,6 +1388,9 @@ function cloneCipherInput(input: CipherInput): CipherInput {
  */
 export class VwPopupApp extends LitElement {
   static override properties = {
+    workspace: { type: Boolean, reflect: true },
+    displayServer: { state: true },
+    displayEmail: { state: true },
     route: { attribute: false },
     pending: { type: Boolean },
     pinEnabled: { type: Boolean },
@@ -1438,6 +1446,10 @@ export class VwPopupApp extends LitElement {
     dataOwnershipError: { type: String },
   };
 
+  declare workspace: boolean;
+  declare displayServer: string;
+  declare displayEmail: string;
+  private readonly displayIdentities = new Map<string, AuthIdentityDisplay>();
   declare route: PopupRoute;
   declare pending: boolean;
   declare pinEnabled: boolean;
@@ -1663,6 +1675,9 @@ export class VwPopupApp extends LitElement {
     super();
     this.route = { name: 'loading' };
     this.pending = false;
+    this.workspace = false;
+    this.displayServer = '';
+    this.displayEmail = '';
     this.pendingContextMenuCreate = undefined;
     this.lastContextMenuCreateIntentId = undefined;
     this.vaultDataReadyGeneration = undefined;
@@ -1817,6 +1832,26 @@ export class VwPopupApp extends LitElement {
       }
       .vault-shell vw-vault-filters { flex:none; }
       .vault-shell vw-vault-view { flex:1; min-height:0; }
+      .full-workspace{display:grid;grid-template-columns:184px minmax(0,1fr);height:100%;min-height:0;background:var(--vw-panel)}
+      .workspace-sidebar{display:flex;flex-direction:column;gap:22px;padding:22px 12px 14px;border-right:1px solid var(--vw-line-1);background:var(--vw-fill-2);min-height:0;overflow:auto}
+      .workspace-brand{display:flex;align-items:center;gap:9px;padding:0 6px;font-size:17px;font-weight:600}
+      .workspace-account{display:flex;align-items:center;gap:9px;min-width:0;padding:9px 6px;font-size:12px}
+      .workspace-account span{min-width:0;overflow-wrap:anywhere}.workspace-account strong{display:block;font-size:12px;font-weight:500}.workspace-account small{display:block;color:var(--vw-muted);margin-top:5px;font-size:10px}
+      .workspace-sidebar nav{display:flex;flex-direction:column;gap:5px}.workspace-nav{display:flex;align-items:center;gap:10px;min-height:40px;padding:10px;border:0;border-radius:7px;background:transparent;color:var(--vw-text-2);font:inherit;font-size:13px;cursor:pointer;text-align:left}
+      .workspace-nav svg,.workspace-toolbar svg{width:18px;height:18px;flex:none}.workspace-nav:hover{background:var(--vw-row-hover)}.workspace-nav.active{color:var(--vw-accent);background:var(--vw-teal-10);font-weight:600}
+      .workspace-nav:disabled{opacity:.5;cursor:default}.workspace-nav:focus-visible,.workspace-toolbar button:focus-visible{outline:2px solid var(--vw-accent);outline-offset:2px}
+      .workspace-sidebar-footer{margin-top:auto;padding-top:16px;border-top:1px solid var(--vw-line-1)}.workspace-sidebar-footer small{display:block;padding:0 10px 12px;font-size:10px;color:var(--vw-muted);overflow-wrap:anywhere}
+      .workspace-main{display:flex;flex-direction:column;min-width:0;min-height:0}.workspace-toolbar{display:flex;align-items:center;justify-content:space-between;gap:20px;min-height:58px;padding:0 30px;border-bottom:1px solid var(--vw-line-1);font-size:12px;color:var(--vw-muted)}
+      .workspace-toolbar .actions{display:flex;align-items:center;gap:12px}.workspace-toolbar button{display:flex;align-items:center;gap:7px;min-height:34px;padding:7px 10px;border:0;border-radius:7px;background:transparent;color:var(--vw-accent);font:inherit;cursor:pointer}
+      .workspace-toolbar button:disabled{opacity:.5;cursor:default}.workspace-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:28px 32px 22px}.workspace-heading h1{margin:0;font-size:25px;letter-spacing:-.5px;font-weight:600}.workspace-heading p{margin:7px 0 0;font-size:12px;color:var(--vw-muted)}
+      .workspace-new{display:flex;align-items:center;gap:7px;padding:10px 15px;min-height:38px;border:0;border-radius:8px;background:var(--vw-primary-bg);color:var(--vw-primary-fg);font:600 13px var(--vw-font-ui);cursor:pointer}.workspace-new svg{width:17px;height:17px}
+      .workspace-content{display:flex;flex:1;min-height:0;min-width:0;overflow:hidden;padding:0 32px 24px}.workspace-content>*{flex:1;min-height:0;min-width:0}
+      .workspace-columns{display:grid;grid-template-columns:300px minmax(0,1fr);gap:28px;min-height:0}.workspace-list{display:flex;min-height:0;min-width:0;border-right:1px solid var(--vw-line-1);padding-right:14px}.workspace-detail{display:flex;min-height:0;min-width:0;overflow:hidden}.workspace-detail>*{flex:1;min-height:0;min-width:0}
+      .workspace-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px;gap:12px;color:var(--vw-muted)}.workspace-empty svg{width:30px;height:30px;color:var(--vw-accent)}.workspace-empty h2{font-size:18px;color:var(--vw-ink);font-weight:500;margin:0}.workspace-empty p{font-size:13px;max-width:280px;line-height:1.7;margin:0}
+      .workspace-auth{display:flex;flex:1;min-height:0;flex-direction:column;background:var(--vw-fill-2)}.workspace-auth .workspace-brand{height:66px;flex:none;padding:0 36px;border-bottom:1px solid var(--vw-line-1);background:var(--vw-panel)}.workspace-auth-center{display:flex;flex:1;min-height:0;justify-content:center;align-items:safe center;padding:28px;overflow:auto}.workspace-auth-card{display:flex;flex-direction:column;width:470px;max-width:100%;height:690px;max-height:100%;border:1px solid var(--vw-line-1);border-radius:14px;overflow:hidden;background:var(--vw-panel)}
+      @media(max-width:900px){.full-workspace{grid-template-columns:160px minmax(0,1fr)}.workspace-content{padding:0 20px 20px}.workspace-heading{padding:24px 20px 18px}.workspace-columns{grid-template-columns:250px minmax(0,1fr);gap:16px}.workspace-toolbar{padding:0 20px}}
+      @media(max-width:700px){.full-workspace{grid-template-columns:1fr}.workspace-sidebar{display:none}.workspace-columns{grid-template-columns:1fr}.workspace-columns.has-detail .workspace-list{display:none}.workspace-columns:not(.has-detail) .workspace-detail{display:none}.workspace-list{border:0;padding:0}.workspace-toolbar{padding:0 16px}.workspace-heading{padding:20px 16px 14px}.workspace-heading h1{font-size:22px}.workspace-content{padding:0 10px 14px}.workspace-auth-center{padding:16px}.workspace-toolbar .toolbar-label{display:none}}
+      @media(prefers-reduced-motion:no-preference){.workspace-nav,.workspace-toolbar button{transition:background-color 140ms,color 140ms}}
     `,
   ];
 
@@ -2034,11 +2069,13 @@ export class VwPopupApp extends LitElement {
   /** Load persisted UI prefs (so the first paint is themed, localized, and configured), then route. */
   private async bootstrap(): Promise<void> {
     await Promise.all([initLocale(), initAppearance(), initPrefs()]);
+    void this.refreshDisplayIdentity();
     await this.init();
   }
 
   private async bootstrapWebsitePasskey(): Promise<void> {
     await Promise.all([initLocale(), initAppearance()]);
+    void this.refreshDisplayIdentity(true);
     if (!this.isConnected || this.route.name !== 'websitePasskey') return;
     if (this.websitePasskeyQuery.kind !== 'ceremony') {
       this.websitePasskeyModel = this.websitePasskeyErrorModel('', t('websitePasskey.invalidRequest'));
@@ -2426,6 +2463,7 @@ export class VwPopupApp extends LitElement {
       this.deviceCheckEmail = '';
     }
     if (route.name === 'unlock') {
+      void this.refreshDisplayIdentity(true);
       void this.refreshPinStatus();
     } else {
       this.pinEnabled = false;
@@ -4248,6 +4286,7 @@ export class VwPopupApp extends LitElement {
   }
 
   private async loadAccounts(generation = this.workspaceGeneration): Promise<void> {
+    void this.refreshDisplayIdentity();
     const [accounts, pin, remembered] = await Promise.all([
       this.request({ type: 'auth.listAccounts' }),
       this.request({ type: 'auth.pinStatus' }),
@@ -5125,6 +5164,8 @@ export class VwPopupApp extends LitElement {
     this.dataOwnershipCheckPending = false;
     this.accounts = [];
     this.pinAllowed = false;
+    this.displayEmail = '';
+    this.displayIdentities.clear();
     this.pinConfigured = false;
     this.pinRequireMasterPasswordOnRestart = true;
     this.skippedOrgCount = 0;
@@ -5304,6 +5345,44 @@ export class VwPopupApp extends LitElement {
   /** The active account's email, used to prefill the generator's plus-addressed base email. */
   private activeAccountEmail(): string | undefined {
     return (this.accounts.find((account) => account.active) ?? this.accounts[0])?.email;
+  }
+
+  /** Display metadata is never used as an authorization binding. */
+  private async refreshDisplayIdentity(includeAccounts = false): Promise<void> {
+    const generation = this.workspaceGeneration;
+    try {
+      const [response, accounts] = await Promise.all([
+        this.request({ type: 'settings.get' }),
+        includeAccounts ? this.request({ type: 'auth.listAccounts' }) : Promise.resolve(undefined),
+      ]);
+      if (!this.isConnected || generation !== this.workspaceGeneration || !response.ok) return;
+      const value = (response.data as { serverUrl?: unknown } | undefined)?.serverUrl;
+      this.displayServer = typeof value === 'string' ? value : '';
+      if (accounts?.ok) this.displayEmail = ((accounts.data as { accounts?: AccountInfo[] } | undefined)?.accounts ?? []).find(account => account.active)?.email ?? '';
+    } catch {
+      if (generation === this.workspaceGeneration) this.displayServer = '';
+    }
+  }
+
+  private displayIdentity(item?: CipherSummary): AuthIdentityDisplay {
+    const email = this.activeAccountEmail() || this.displayEmail;
+    const owner = item
+      ? item.organizationId
+        ? this.orgPermissions.find(entry => entry.id === item.organizationId)?.name || t('workspace.organization')
+        : t('workspace.personal')
+      : undefined;
+    const key = JSON.stringify([email, this.displayServer, owner]);
+    let identity = this.displayIdentities.get(key);
+    if (!identity) {
+      identity = Object.freeze({ ...(email ? { email } : {}), ...(this.displayServer ? { server: this.displayServer } : {}), ...(owner ? { owner } : {}) });
+      this.displayIdentities.set(key, identity);
+    }
+    return identity;
+  }
+
+  private async openWorkspace(): Promise<void> {
+    if (this.pending || this.sendEncoding || !this.promptForDraftDiscard()) return;
+    await this.browser.openWorkspace?.();
   }
 
   private generatorSurfaceActive(): boolean {
@@ -6929,6 +7008,7 @@ export class VwPopupApp extends LitElement {
     const passwordHintMessage = route.name === 'passwordHint' ? route.message : undefined;
     return html`
       <vw-auth-views
+        .identity=${this.displayIdentity()}
         .mode=${route.name}
         .error=${error}
         .notice=${notice}
@@ -7001,6 +7081,7 @@ export class VwPopupApp extends LitElement {
     if (route.name === 'dataOwnership') {
       return html`
         <vw-popup-header
+          @vw-open-workspace=${() => void this.openWorkspace()}
           .busy=${this.pending || this.syncing}
           @vw-lock=${() => void this.handleAccountAction({ action: 'lock' })}
         >
@@ -7021,6 +7102,7 @@ export class VwPopupApp extends LitElement {
     }
     return html`
       <vw-popup-header
+        @vw-open-workspace=${() => void this.openWorkspace()}
         .busy=${this.pending || this.syncing || this.sendEncoding}
         @vw-lock=${() => void this.handleAccountAction({ action: 'lock' })}
       >
@@ -7138,6 +7220,7 @@ export class VwPopupApp extends LitElement {
               ></vw-vault-filters>
             `}
         <vw-vault-view
+          .compactDetails=${!this.workspace}
           .items=${items}
           .suggestionsState=${suggestionsState}
           .query=${this.query}
@@ -7173,6 +7256,7 @@ export class VwPopupApp extends LitElement {
     return this.deviceLoginRequesterModel
       ? html`
           <vw-device-login-view
+            .identity=${this.displayIdentity()}
             .model=${this.deviceLoginRequesterModel}
             @vw-device-login-check=${() => void this.runDeviceLoginRequesterAction('status', 'pending')}
             @vw-device-login-retry=${() => void this.runDeviceLoginRequesterAction('retry', 'retry_required')}
@@ -7188,6 +7272,7 @@ export class VwPopupApp extends LitElement {
     return this.deviceLoginApprovalModel
       ? html`
           <vw-device-login-view
+            .identity=${this.displayIdentity()}
             .model=${this.deviceLoginApprovalModel}
             @vw-device-login-select=${(event: CustomEvent<DeviceLoginRequestActionDetail>) => void this.handleDeviceLoginApprovalSelect(event.detail)}
             @vw-device-login-approve=${(event: CustomEvent<DeviceLoginRequestActionDetail>) => void this.handleDeviceLoginApprovalDecision(event.detail, true)}
@@ -7332,6 +7417,9 @@ export class VwPopupApp extends LitElement {
       return html`
         <vw-reprompt-gate
           .name=${summary.name}
+          .identity=${this.displayIdentity(summary)}
+          .contextKey=${`${this.workspaceGeneration}:${summary.id}:view`}
+          .actionLabel=${this.repromptFillContinuation || this.autofillContinuation?.status === 'reprompt_required' ? t('workspace.fillProtected') : t('workspace.viewProtected')}
           .pending=${this.pending}
           .error=${this.repromptError}
           @vw-reprompt-submit=${(event: CustomEvent<RepromptSubmitDetail>) => void this.handleReprompt(summary.id, event.detail.password)}
@@ -7421,6 +7509,9 @@ export class VwPopupApp extends LitElement {
         return html`
           <vw-reprompt-gate
             .name=${summary.name}
+            .identity=${this.displayIdentity(summary)}
+            .contextKey=${`${this.workspaceGeneration}:${summary.id}:${route.mode}`}
+            .actionLabel=${t('common.edit')}
             .pending=${this.pending}
             .error=${this.repromptError}
             @vw-reprompt-submit=${(event: CustomEvent<RepromptSubmitDetail>) => void this.handleReprompt(id, event.detail.password)}
@@ -7607,6 +7698,7 @@ export class VwPopupApp extends LitElement {
   private renderAccountSecurity() {
     return html`
       <vw-account-security-view
+        .identity=${this.displayIdentity()}
         .pending=${this.pending}
         .status=${this.toolStatus}
         @vw-change-password=${(event: CustomEvent<ChangePasswordDetail>) => void this.handleChangePassword(event.detail)}
@@ -7620,6 +7712,7 @@ export class VwPopupApp extends LitElement {
   private renderPin() {
     return html`
       <vw-pin-view
+        .identity=${this.displayIdentity()}
         .enabled=${this.pinConfigured}
         .allowed=${this.pinAllowed}
         .requireMasterPasswordOnRestart=${this.pinRequireMasterPasswordOnRestart}
@@ -7635,6 +7728,7 @@ export class VwPopupApp extends LitElement {
   private renderDataOwnership() {
     return html`
       <vw-data-ownership-view
+        .identity=${this.displayIdentity()}
         .model=${this.dataOwnershipModel()}
         .pending=${this.pending}
         .error=${this.dataOwnershipError}
@@ -7657,6 +7751,7 @@ export class VwPopupApp extends LitElement {
         ${this.websitePasskeyModel
           ? html`
               <vw-website-passkey-view
+                .identity=${this.displayIdentity()}
                 .model=${this.websitePasskeyModel}
                 @vw-website-passkey-approve=${(event: CustomEvent<WebsitePasskeyApproveDetail>) => void this.handleWebsitePasskeyApprove(event.detail)}
                 @vw-website-passkey-fallback-once=${(event: CustomEvent<WebsitePasskeyFallbackDetail>) => void this.handleWebsitePasskeyFallback(event.detail, false)}
@@ -7667,6 +7762,58 @@ export class VwPopupApp extends LitElement {
           : this.renderLoading()}
       </vw-popup-frame>
     `;
+  }
+
+  private workspaceTitle(route: PopupRoute): string {
+    switch (route.name) {
+      case 'detail': return this.items.find(item => item.id === route.cipherId)?.name || t('workspace.vault');
+      case 'editor': return route.mode === 'create' ? t('common.add') : t('common.edit');
+      case 'health': return t('workspace.security');
+      case 'sends': return t('send.defaultName');
+      case 'generator': return t('workspace.generator');
+      case 'accountSecurity': case 'pin': case 'deviceLoginApprovals': return t('workspace.account');
+      default: return this.vaultMode === 'archive' ? t('workspace.archive') : this.vaultMode === 'trash' ? t('workspace.trash') : t('workspace.allItems');
+    }
+  }
+
+  private renderWorkspace(route: PopupRoute, isAuth: boolean) {
+    if (isAuth) return html`
+      <div class="workspace-auth">
+        <header class="workspace-brand"><vw-logo variant="header"></vw-logo>${t('common.brand')}</header>
+        <main class="workspace-auth-center"><div class="workspace-auth-card">
+          ${route.name === 'loading' ? this.renderLoading() : route.name === 'deviceLogin' ? this.renderDeviceLoginRequester() : this.renderAuth(route as AuthRoute)}
+        </div></main>
+      </div>`;
+    const constrained = this.isDataOwnershipNavigationConstrained();
+    const disabled = this.pending || this.sendEncoding || constrained;
+    const listing = ['vault', 'detail', 'archive', 'trash'].includes(route.name);
+    return html`
+      <div class="full-workspace">
+        <aside class="workspace-sidebar">
+          <div class="workspace-brand"><vw-logo variant="header"></vw-logo>${t('common.brand')}</div>
+          <div class="workspace-account"><span><strong>${this.activeAccountEmail() || t('workspace.device')}</strong><small>${this.displayServer}</small></span></div>
+          <nav aria-label=${t('workspace.vault')}>
+            <button class="workspace-nav ${listing || route.name === 'editor' ? 'active' : ''}" ?disabled=${disabled} @click=${() => this.userNavigate({ name: 'vault', scope: 'all' })}>${uiIcon('folder')}${t('workspace.vault')}</button>
+            <button class="workspace-nav ${route.name === 'sends' ? 'active' : ''}" ?disabled=${disabled} @click=${() => this.userNavigate({ name: 'sends' })}>${uiIcon('link')}${t('send.defaultName')}</button>
+            <button class="workspace-nav ${route.name === 'health' ? 'active' : ''}" ?disabled=${disabled} @click=${() => this.userNavigate({ name: 'health' })}>${uiIcon('shield')}${t('workspace.security')}</button>
+            <button class="workspace-nav ${route.name === 'accountSecurity' || route.name === 'deviceLoginApprovals' || route.name === 'pin' ? 'active' : ''}" ?disabled=${disabled} @click=${() => this.userNavigate({ name: 'accountSecurity' })}>${uiIcon('user')}${t('workspace.account')}</button>
+            <button class="workspace-nav" ?disabled=${disabled} @click=${() => { if (this.promptForDraftDiscard()) void this.browser.openOptions(); }}>${uiIcon('sliders')}${t('workspace.settings')}</button>
+          </nav>
+          <vw-account-menu .accounts=${this.accounts} .pinEnabled=${this.pinConfigured} .pinAllowed=${this.pinAllowed} .deviceRemembered=${this.vaultDeviceRemembered} .deviceLoginApprovalCount=${this.deviceLoginApprovalCount} .constrained=${constrained} .disabled=${this.pending || this.syncing || this.sendEncoding} @vw-account-action=${(event: CustomEvent<AccountActionDetail>) => void this.handleAccountAction(event.detail)}></vw-account-menu>
+          <div class="workspace-sidebar-footer"><small>${t('workspace.device')}<br>${this.displayServer}</small><button class="workspace-nav" ?disabled=${this.pending || this.sendEncoding} @click=${() => void this.handleAccountAction({ action: 'lock' })}>${uiIcon('lock')}${t('popup.lock')}</button></div>
+        </aside>
+        <div class="workspace-main">
+          <header class="workspace-toolbar"><span>${t('workspace.vault')} / ${this.workspaceTitle(route)}</span><div class="actions">
+            <button ?disabled=${disabled || this.syncing} aria-label=${t('workspace.sync')} @click=${() => void this.handleSync()}>${uiIcon('refresh')}<span class="toolbar-label">${t('workspace.sync')}</span></button>
+            <button ?disabled=${disabled} @click=${() => this.userNavigate({ name: 'generator' })}>${uiIcon('wand')}<span class="toolbar-label">${t('workspace.generator')}</span></button>
+          </div></header>
+          <header class="workspace-heading"><div><h1>${this.workspaceTitle(route)}</h1><p>${this.activeAccountEmail() || ''}${this.displayServer ? ' · ' + this.displayServer : ''}</p></div>${listing ? html`<button class="workspace-new" ?disabled=${disabled} @click=${() => void this.startNewItem()}>${uiIcon('plus')}${t('common.add')}</button>` : nothing}</header>
+          <div class="workspace-content">
+            ${listing ? html`<div class="workspace-columns ${route.name === 'detail' ? 'has-detail' : ''}"><section class="workspace-list" aria-label=${t('workspace.allItems')}>${this.renderVault()}</section><section class="workspace-detail" aria-label=${this.workspaceTitle(route)}>${route.name === 'detail' ? this.renderDetail(route) : html`<div class="workspace-empty">${uiIcon('key')}<h2>${t('workspace.selectItem')}</h2><p>${t('workspace.selectItemHint')}</p></div>`}</section></div>` : this.renderBody(route)}
+          </div>
+        </div>
+      </div>
+      ${this.toastMessage ? html`<vw-toast .message=${this.toastMessage} .offset=${24} @vw-toast-dismiss=${() => { this.toastMessage = ''; }}></vw-toast>` : nothing}`;
   }
 
   protected override render() {
@@ -7686,6 +7833,7 @@ export class VwPopupApp extends LitElement {
       route.name === 'deviceLogin' ||
       route.name === 'restricted' ||
       route.name === 'unlock';
+    if (this.workspace) return this.renderWorkspace(route, isAuth);
     return html`
       <vw-popup-frame>
         ${isAuth

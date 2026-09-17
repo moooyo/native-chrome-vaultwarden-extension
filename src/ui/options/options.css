@@ -6,12 +6,12 @@ html { color-scheme: light dark; }
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: 'Roboto', 'Segoe UI', system-ui, sans-serif;
-  background: #F8FAFD;
+  font-family: 'Instrument Sans', 'Noto Sans SC', 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif;
+  background: #F7FAFF;
 }
 
 @media (prefers-color-scheme: dark) {
-  body { background: #1A1A1A; }
+  body { background: #142337; }
 }
 
 #app { display: block; min-height: 100vh; }

@@ -7,10 +7,15 @@ vi.mock('webextension-polyfill', () => ({
 
 import './appearance-section.js';
 import type { VwAppearanceSection } from './appearance-section.js';
-import { getTheme, getDensity } from '../../theme.js';
+import { getTheme, getDensity, setTheme, setDensity } from '../../theme.js';
 import { getLocale, setLocale } from '../../i18n/index.js';
 
-afterEach(() => { document.body.replaceChildren(); setLocale('zh-CN', false); });
+afterEach(() => {
+  document.body.replaceChildren();
+  setLocale('zh-CN', false);
+  setTheme('light', false);
+  setDensity('comfortable', false);
+});
 
 async function mount(): Promise<VwAppearanceSection> {
   const el = document.createElement('vw-appearance-section') as VwAppearanceSection;
@@ -22,16 +27,19 @@ async function mount(): Promise<VwAppearanceSection> {
 describe('vw-appearance-section', () => {
   it('renders theme, language, and density controls', async () => {
     const el = await mount();
-    expect(el.shadowRoot!.querySelector('vw-segmented')).not.toBeNull();
+    expect(el.shadowRoot!.querySelectorAll('input[type="radio"]')).toHaveLength(3);
     expect(el.shadowRoot!.querySelector('vw-select')).not.toBeNull();
     expect(el.shadowRoot!.querySelector('vw-toggle')).not.toBeNull();
   });
 
   it('applies theme via the appearance module', async () => {
     const el = await mount();
-    el.shadowRoot!.querySelector('vw-segmented')!.dispatchEvent(new CustomEvent('vw-segmented-change', { detail: { id: 'dark' }, bubbles: true, composed: true }));
+    const radio = [...el.shadowRoot!.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find((input) => input.value === 'dark')!;
+    radio.click();
+    await el.updateComplete;
     expect(getTheme()).toBe('dark');
-    el.shadowRoot!.querySelector('vw-segmented')!.dispatchEvent(new CustomEvent('vw-segmented-change', { detail: { id: 'light' }, bubbles: true, composed: true }));
+    expect(radio.checked).toBe(true);
+    expect(el.getAttribute('data-theme')).toBe('dark');
   });
 
   it('switches language via the i18n module', async () => {

@@ -69,6 +69,36 @@ function createEnvelope(store: AutofillContinuationStore, action: AutofillContin
   return store.create({ source: source(tabId), authority, action });
 }
 
+function structuredAction(
+  channel: 'keyboard' | 'command',
+  selection: {
+    kind: 'card' | 'identity';
+    roles: readonly string[];
+    selectedRoles?: unknown;
+  },
+): AutofillContinuationAction {
+  const binding = {
+    runtimeIncarnation: FRAME_RUNTIME,
+    formId: 'selected-form',
+    generation: 5,
+    roles: selection.roles,
+    ...(Object.prototype.hasOwnProperty.call(selection, 'selectedRoles')
+      ? { selectedRoles: selection.selectedRoles }
+      : {}),
+  };
+  return (channel === 'keyboard'
+    ? {
+        kind: 'keyboard_reprompt', cipherId: 'cipher-1',
+        binding: { purpose: selection.kind, ...binding },
+      }
+    : {
+        kind: 'command_fill_reprompt',
+        command: selection.kind === 'card' ? 'autofill-card' : 'autofill-identity',
+        cipherId: 'cipher-1',
+        target: { kind: selection.kind, frameId: 2, documentId: 'frame-doc', ...binding },
+      }) as unknown as AutofillContinuationAction;
+}
+
 describe('AutofillContinuationStore', () => {
   it('persists only URL origins and digests, not path/query/hash data', async () => {
     const backing = createMemoryStore();
@@ -204,6 +234,94 @@ describe('AutofillContinuationStore', () => {
     const raw = JSON.stringify(await backing.get(AUTOFILL_CONTINUATION_STORAGE_KEY));
     expect(raw).toContain('context_copy_reprompt');
     expect(raw).not.toContain('password-value');
+  });
+
+  describe.each(['keyboard', 'command'] as const)('%s structured continuations', (channel) => {
+    it.each([
+      { kind: 'card', roles: ['number', 'exp', 'code'], selectedRoles: ['number', 'exp'] },
+      { kind: 'identity', roles: ['fullName', 'email', 'phone'], selectedRoles: ['fullName', 'email'] },
+    ] as const)('preserves the $kind selection through create, put, read, claim, and take', async (selection) => {
+      const backing = createMemoryStore();
+      const store = new AutofillContinuationStore({ store: backing, now: () => 100 });
+      const roles = [...selection.roles];
+      const selectedRoles = [...selection.selectedRoles];
+      const action = structuredAction(channel, { kind: selection.kind, roles, selectedRoles });
+      const expectedAction = structuredClone(action);
+      const envelope = createEnvelope(store, action);
+      roles.pop();
+      selectedRoles.pop();
+
+      expect(envelope.action).toEqual(expectedAction);
+      expect(envelope.action).not.toBe(action);
+      expect(Object.isFrozen(envelope.action)).toBe(true);
+      const snapshot = envelope.action.kind === 'keyboard_reprompt'
+        ? envelope.action.binding
+        : envelope.action.kind === 'command_fill_reprompt' ? envelope.action.target : undefined;
+      expect(snapshot).toMatchObject({ roles: selection.roles, selectedRoles: selection.selectedRoles });
+      expect(Object.isFrozen(snapshot)).toBe(true);
+      if (!snapshot || !('roles' in snapshot)) throw new Error('Expected structured continuation metadata');
+      expect(snapshot.roles).not.toBe(roles);
+      expect(snapshot.selectedRoles).not.toBe(selectedRoles);
+      expect(Object.isFrozen(snapshot.roles)).toBe(true);
+      expect(Object.isFrozen(snapshot.selectedRoles)).toBe(true);
+
+      await store.put(envelope);
+      const raw = JSON.stringify(await backing.get(AUTOFILL_CONTINUATION_STORAGE_KEY));
+      expect(raw).toContain(`"selectedRoles":${JSON.stringify(selection.selectedRoles)}`);
+      expect((await store.read())?.action).toEqual(expectedAction);
+      expect((await store.claimPopup('popup-doc'))?.action).toEqual(expectedAction);
+      expect((await store.take('popup-doc', envelope.continuationId))?.action).toEqual(expectedAction);
+      expect(await store.take('popup-doc', envelope.continuationId)).toBeUndefined();
+      expect(await backing.get(AUTOFILL_CONTINUATION_STORAGE_KEY)).toMatchObject({ state: 'consumed' });
+    });
+
+    it.each([false, true])('retains full-role authority with an explicit selection: %s', async (explicitSelection) => {
+      const backing = createMemoryStore();
+      const store = new AutofillContinuationStore({ store: backing, now: () => 100 });
+      const roles = ['number', 'exp', 'code'] as const;
+      const action = structuredAction(channel, {
+        kind: 'card', roles, ...(explicitSelection ? { selectedRoles: roles } : {}),
+      });
+      const envelope = createEnvelope(store, action);
+      await store.put(envelope);
+
+      expect((await store.read())?.action).toEqual(action);
+      const raw = JSON.stringify(await backing.get(AUTOFILL_CONTINUATION_STORAGE_KEY));
+      if (explicitSelection) expect(raw).toContain('"selectedRoles":["number","exp","code"]');
+      else expect(raw).not.toContain('selectedRoles');
+      await store.claimPopup('popup-doc');
+      expect((await store.take('popup-doc', envelope.continuationId))?.action).toEqual(action);
+    });
+
+    it.each([
+      ['empty', 'card', ['number', 'exp', 'code'], []],
+      ['duplicate', 'card', ['number', 'exp', 'code'], ['number', 'number']],
+      ['noncanonical order', 'card', ['number', 'exp', 'code'], ['code', 'number']],
+      ['unknown role', 'card', ['number', 'exp', 'code'], ['ssn']],
+      ['cross-kind role', 'card', ['number', 'exp', 'code'], ['email']],
+      ['missing form role', 'card', ['number', 'exp', 'code'], ['cardholderName']],
+      ['expiration backing field', 'card', ['number', 'exp', 'code'], ['expMonth']],
+      ['name backing field', 'identity', ['fullName', 'email'], ['firstName']],
+      ['cross-kind card role', 'identity', ['fullName', 'email'], ['number']],
+      ['explicit undefined', 'card', ['number', 'exp', 'code'], undefined],
+      ['non-array', 'card', ['number', 'exp', 'code'], 'number'],
+    ] as const)('rejects a selected %s at creation, persistence, and storage read', async (_label, kind, roles, selectedRoles) => {
+      const backing = createMemoryStore();
+      const store = new AutofillContinuationStore({ store: backing, now: () => 100 });
+      const action = structuredAction(channel, { kind, roles, selectedRoles });
+      expect(() => createEnvelope(store, action)).toThrow();
+
+      const valid = createEnvelope(store, structuredAction(channel, { kind, roles }));
+      const malformed = { ...valid, action };
+      await expect(store.put(malformed)).rejects.toThrow();
+      expect(await backing.get(AUTOFILL_CONTINUATION_STORAGE_KEY)).toBeUndefined();
+
+      await backing.set(AUTOFILL_CONTINUATION_STORAGE_KEY, { state: 'pending', envelope: malformed });
+      expect(await store.read()).toBeUndefined();
+      expect(await backing.get(AUTOFILL_CONTINUATION_STORAGE_KEY)).toBeUndefined();
+      expect(await store.claimPopup('popup-doc')).toBeUndefined();
+      expect(await store.take('popup-doc', valid.continuationId)).toBeUndefined();
+    });
   });
 
   it('requires lowercase canonical UUID v4 runtime bindings and exact action-source ownership', () => {

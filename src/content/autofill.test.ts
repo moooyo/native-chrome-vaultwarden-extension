@@ -19,6 +19,14 @@ interface FakePopover {
   };
 }
 
+interface FakeStructuredPreview {
+  element: HTMLElement;
+  showError: ReturnType<typeof vi.fn>;
+  showReceipt: ReturnType<typeof vi.fn>;
+  remove: ReturnType<typeof vi.fn>;
+  options: import('./ui/structured-preview-element.js').StructuredPreviewOptions;
+}
+
 interface FakeGeneratePanel {
   element: HTMLElement;
   update: ReturnType<typeof vi.fn>;
@@ -57,6 +65,7 @@ interface FakeTotpPanel {
 const popoverState = vi.hoisted(() => ({
   instances: [] as FakePopover[],
 }));
+const structuredPreviewState = vi.hoisted(() => ({ instances: [] as FakeStructuredPreview[] }));
 
 const generatePanelState = vi.hoisted(() => ({
   instances: [] as FakeGeneratePanel[],
@@ -142,6 +151,7 @@ vi.mock('./totp-fill.js', () => ({
 }));
 
 vi.mock('./popover.js', () => ({
+  reposition: vi.fn(),
   createAutofillPopover: vi.fn((options: FakePopover['options']) => {
     const element = document.createElement('div');
     document.documentElement.append(element);
@@ -157,6 +167,17 @@ vi.mock('./popover.js', () => ({
     };
     popoverState.instances.push(popover);
     return popover;
+  }),
+}));
+
+vi.mock('./ui/structured-preview-element.js', () => ({
+  positionStructuredPreview: vi.fn(),
+  createStructuredPreview: vi.fn((options: FakeStructuredPreview['options']) => {
+    const element = document.createElement('div');
+    document.documentElement.append(element);
+    const preview = { element, options, showError: vi.fn(), showReceipt: vi.fn(), remove: vi.fn(() => element.remove()) };
+    structuredPreviewState.instances.push(preview);
+    return preview;
   }),
 }));
 
@@ -249,6 +270,7 @@ describe('autofill controller', () => {
     document.querySelectorAll('[data-vw-popover-for]').forEach((node) => node.remove());
     document.body.innerHTML = '<form><input type="email"><input type="password"></form>';
     popoverState.instances.length = 0;
+    structuredPreviewState.instances.length = 0;
     generatePanelState.instances.length = 0;
     saveBarState.instances.length = 0;
     totpPanelState.instances.length = 0;
@@ -616,7 +638,7 @@ describe('autofill controller', () => {
     expect(current.showFilled).toHaveBeenCalled();
   });
 
-  it('auto-dismisses the login panel roughly one second after a successful fill', async () => {
+  it('auto-dismisses the login receipt after three seconds', async () => {
     vi.useFakeTimers();
     try {
       vi.mocked(fillLoginForm).mockReturnValue(true);
@@ -635,7 +657,9 @@ describe('autofill controller', () => {
 
       expect(current.showFilled).toHaveBeenCalled();
       expect(current.hide).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(current.hide).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
       expect(current.hide).toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -901,7 +925,15 @@ describe('autofill controller', () => {
         return { ok: true, data: { intentId: 'structured-intent' } } as ResponseMessage;
       }
       if (request.type === 'autofill.redeemStructuredIntent') {
-        return { ok: true, data: { outcome: { status: 'filled' } } } as ResponseMessage;
+        const target = request.target;
+        if (target.kind !== 'card') throw new Error('Unexpected structured target');
+        const outcome = handleFrameAutofillMessage({
+          type: 'autofill.commitStructuredFill', kind: 'card', formId: target.formId,
+          expectedFrameUrl: 'https://shop.example/checkout', expectedGeneration: target.generation,
+          expectedRuntimeIncarnation: target.runtimeIncarnation, roles: target.roles,
+          selectedRoles: target.selectedRoles!, data: { number: '4111' },
+        });
+        return { ok: true, data: { outcome } } as ResponseMessage;
       }
       return { ok: false, error: { code: 'error', message: 'unexpected request' } };
     });
@@ -916,6 +948,10 @@ describe('autofill controller', () => {
 
     card.options.onSelect('card-1');
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(vi.mocked(sendRequest).mock.calls.some(([request]) => request.type === 'autofill.issueStructuredIntent')).toBe(false);
+    const preview = structuredPreviewState.instances.at(-1)!;
+    expect(preview.options.fields).toEqual([{ role: 'number', hasValue: false }, { role: 'code', hasValue: false }]);
+    preview.options.onConfirm(['number']);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const issue = vi.mocked(sendRequest).mock.calls.find(([request]) => request.type === 'autofill.issueStructuredIntent')?.[0];
@@ -927,6 +963,7 @@ describe('autofill controller', () => {
         kind: 'card',
         runtimeIncarnation: currentRuntimeIncarnation(),
         roles: ['number', 'code'],
+        selectedRoles: ['number'],
       },
     });
     expect(redeem).toMatchObject({
@@ -934,8 +971,53 @@ describe('autofill controller', () => {
       intentId: 'structured-intent',
       target: issue && 'target' in issue ? issue.target : undefined,
     });
-    expect(card.showFilled).toHaveBeenCalledOnce();
+    expect(preview.showReceipt).toHaveBeenCalledOnce();
+    expect(document.querySelector<HTMLInputElement>('[autocomplete="cc-csc"]')!.value).toBe('');
     expect(vi.mocked(sendRequest).mock.calls.some(([request]) => request.type === 'clientEvent.ack')).toBe(false);
+  });
+
+  it('does not let a cancelled structured request consume a later review of the same form', async () => {
+    document.body.innerHTML = '<form><input autocomplete="cc-number"><input autocomplete="cc-csc"></form>';
+    let complete: ((response: ResponseMessage) => void) | undefined;
+    let pendingTarget: import('../messaging/protocol.js').ContentStructuredAutofillTarget | undefined;
+    mockContentRequests(async (request) => {
+      if (request.type === 'autofill.getClientConfig') return ENABLED_CLIENT_CONFIG;
+      if (request.type === 'autofill.findStructuredCandidates') return { ok: true, data: [{ id: 'card-1', name: 'Primary card', favorite: false }] } as ResponseMessage;
+      if (request.type === 'autofill.issueStructuredIntent') return { ok: true, data: { intentId: 'structured-intent' } } as ResponseMessage;
+      if (request.type === 'autofill.redeemStructuredIntent') {
+        pendingTarget = request.target;
+        return new Promise<ResponseMessage>((resolve) => { complete = resolve; });
+      }
+      return { ok: false, error: { code: 'error', message: 'unexpected request' } };
+    });
+    await startReady('https://shop.example/checkout');
+    const card = popoverState.instances.find((entry) => entry.options.kind === 'card')!;
+    card.options.onOpen();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    card.options.onSelect('card-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const first = structuredPreviewState.instances.at(-1)!;
+    first.options.onConfirm(['number']);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    first.options.onDismiss();
+    card.options.onSelect('card-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(structuredPreviewState.instances).toHaveLength(1);
+    const target = pendingTarget!;
+    if (target.kind !== 'card') throw new Error('Unexpected structured target');
+    const outcome = handleFrameAutofillMessage({
+      type: 'autofill.commitStructuredFill', kind: 'card', formId: target.formId, roles: target.roles,
+      selectedRoles: target.selectedRoles!, expectedRuntimeIncarnation: target.runtimeIncarnation,
+      expectedFrameUrl: 'https://shop.example/checkout', expectedGeneration: target.generation, data: { number: 'must-not-fill' },
+    });
+    expect(outcome).toEqual({ status: 'target_changed' });
+    complete!({ ok: true, data: { outcome } } as ResponseMessage);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    card.options.onSelect('card-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(structuredPreviewState.instances).toHaveLength(2);
+    expect(document.querySelector<HTMLInputElement>('[autocomplete="cc-number"]')!.value).toBe('');
+    structuredPreviewState.instances.at(-1)!.options.onDismiss();
   });
 
   it('fills generated credentials without saving before the site submits', async () => {
@@ -1539,6 +1621,7 @@ describe('autofill controller', () => {
       itemUser: 'user-1@example.com',
       code: '876543',
       remaining: 15,
+      period: 30,
     });
   });
 

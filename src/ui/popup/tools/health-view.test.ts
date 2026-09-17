@@ -174,6 +174,18 @@ describe('vw-health-view', () => {
     expect(statusText(el)).toContain('1 个条目未能完成检查'); // health.incomplete
   });
 
+  it('prioritizes confirmed exposure before local findings while retaining unknown results', async () => {
+    const el = await mount();
+    await ready(el);
+    el.pwned = { status: 'ready', data: new Map([['b', 7]]) };
+    await el.updateComplete;
+    const rows = [...el.shadowRoot!.querySelectorAll('[data-entry]')];
+    expect(rows.map((row) => row.getAttribute('data-entry'))).toEqual(['b', 'a', 'c']);
+    expect(rows[0]!.querySelector('.row-icon.danger')).not.toBeNull();
+    expect(rows[2]!.querySelector('.row-icon.unknown')).not.toBeNull();
+    expect(rows[2]!.textContent).toContain('泄露状态未知');
+  });
+
   it('surfaces a pwned-check error', async () => {
     const el = await mount();
     await ready(el);

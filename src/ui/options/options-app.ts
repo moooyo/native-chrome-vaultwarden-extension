@@ -67,6 +67,9 @@ import type {
   OptionsVaultTransferClient,
   OptionsSectionId,
   SecuritySaveDetail,
+  SecuritySaveFeedback,
+  SecuritySettingField,
+  SettingSaveFeedback,
   SectionStatus,
   SendCreateDetail,
   SendDeleteDetail,
@@ -94,6 +97,7 @@ interface QueuedLockTimeoutSave {
 interface QueuedSecuritySave {
   revision: number;
   detail: SecuritySaveDetail;
+  fields: SecuritySettingField[];
 }
 
 function normalizeLoadedSettings(data: unknown): LoadedSettings {
@@ -390,11 +394,15 @@ export class VwOptionsApp extends LitElement {
     pending: { type: Boolean },
     awaitingImportPassword: { type: Boolean },
     importPreview: { attribute: false },
+    importResult: { attribute: false },
     transferRecoveryStatus: { attribute: false },
     transferRecoveryPending: { type: Boolean },
     transferRecoveryUnavailable: { type: Boolean },
     connectionStatus: { attribute: false },
     securityStatus: { attribute: false },
+    securityStatusSource: { state: true },
+    securityFeedback: { attribute: false },
+    effectiveSecuritySettings: { attribute: false },
     autofillStatus: { attribute: false },
     websitePasskeyPending: { type: Boolean },
     httpAuthPending: { type: Boolean },
@@ -416,11 +424,15 @@ export class VwOptionsApp extends LitElement {
   declare pending: boolean;
   declare awaitingImportPassword: boolean;
   declare importPreview: SanitizedImportPreviewViewModel | undefined;
+  declare importResult: VaultTransferImportResultMessage | undefined;
   declare transferRecoveryStatus: VaultTransferRecoveryStatus | undefined;
   declare transferRecoveryPending: boolean;
   declare transferRecoveryUnavailable: boolean;
   declare connectionStatus: SectionStatus | undefined;
   declare securityStatus: SectionStatus | undefined;
+  private declare securityStatusSource: 'settings' | 'action';
+  declare securityFeedback: SecuritySaveFeedback;
+  declare effectiveSecuritySettings: Pick<LoadedSettings, SecuritySettingField> | undefined;
   declare autofillStatus: SectionStatus | undefined;
   declare websitePasskeyPending: boolean;
   declare httpAuthPending: boolean;
@@ -453,6 +465,7 @@ export class VwOptionsApp extends LitElement {
   private exportOrganizationsRefreshSeq = 0;
   private unsubscribeSessionChanges: (() => void) | undefined;
   private securityStatusRevision = 0;
+  private securityFieldRevisions: Partial<Record<SecuritySettingField, number>> = {};
   private queuedLockTimeoutSave: QueuedLockTimeoutSave | undefined;
   private lockTimeoutSaveRunning = false;
   private queuedSecuritySave: QueuedSecuritySave | undefined;
@@ -468,11 +481,15 @@ export class VwOptionsApp extends LitElement {
     this.pending = false;
     this.awaitingImportPassword = false;
     this.importPreview = undefined;
+    this.importResult = undefined;
     this.transferRecoveryStatus = undefined;
     this.transferRecoveryPending = false;
     this.transferRecoveryUnavailable = false;
     this.connectionStatus = undefined;
     this.securityStatus = undefined;
+    this.securityStatusSource = 'action';
+    this.securityFeedback = {};
+    this.effectiveSecuritySettings = undefined;
     this.autofillStatus = undefined;
     this.websitePasskeyPending = false;
     this.httpAuthPending = false;
@@ -636,6 +653,11 @@ export class VwOptionsApp extends LitElement {
     }
     if (!this.isConnected || sequence !== this.settingsRefreshSeq || !response.ok) return false;
     this.settings = normalizeLoadedSettings(response.data);
+    this.effectiveSecuritySettings = {
+      lockTimeout: this.settings.lockTimeout,
+      onIdleAction: this.settings.onIdleAction,
+      clipboardClearSeconds: this.settings.clipboardClearSeconds,
+    };
     this.policyRefreshPending = false;
     return true;
   }
@@ -790,6 +812,8 @@ export class VwOptionsApp extends LitElement {
       }
       if (this.settings) this.settings = { ...this.settings, serverUrl };
       this.connectionStatus = { message: t('common.done'), tone: 'success' };
+    } catch {
+      this.connectionStatus = { message: t('common.error'), tone: 'danger' };
     } finally {
       this.pending = false;
     }
@@ -798,6 +822,7 @@ export class VwOptionsApp extends LitElement {
   private async handleSync(): Promise<void> {
     if (this.locked || this.syncing) return;
     this.syncing = true;
+    this.connectionStatus = undefined;
     try {
       const response = await this.deps.request({ type: 'vault.sync' });
       if (response.ok) {
@@ -806,9 +831,17 @@ export class VwOptionsApp extends LitElement {
         if (this.selected === 'data') void this.loadExportOrganizations();
       }
       else this.connectionStatus = { message: response.error.message, tone: 'danger' };
+    } catch {
+      this.connectionStatus = { message: t('common.error'), tone: 'danger' };
     } finally {
       this.syncing = false;
     }
+  }
+
+  private async handleTransferRecoverySync(): Promise<void> {
+    if (this.pending || this.syncing || this.transferRecoveryPending) return;
+    await this.handleSync();
+    await this.refreshVaultTransferRecovery();
   }
 
   // --- security ------------------------------------------------------------------------------
@@ -843,8 +876,12 @@ export class VwOptionsApp extends LitElement {
         this.autofillStatus = { message: response.error.message, tone: 'danger' };
         return;
       }
-      await this.refreshSettings();
-      this.autofillStatus = { message: t('common.done'), tone: 'success' };
+      const refreshed = await this.refreshSettings();
+      this.autofillStatus = refreshed
+        ? { message: t('options.save.saved'), tone: 'success' }
+        : { message: t('options.save.refreshFailed'), tone: 'warning' };
+    } catch {
+      this.autofillStatus = { message: t('common.error'), tone: 'danger' };
     } finally {
       this.pending = false;
     }
@@ -856,6 +893,9 @@ export class VwOptionsApp extends LitElement {
     const revision = ++this.securityStatusRevision;
     const detail = { ...event.detail };
     this.securityStatus = undefined;
+    this.securityStatusSource = 'settings';
+    this.securityFieldRevisions.lockTimeout = revision;
+    this.updateSecurityFeedback(['lockTimeout'], revision, { state: 'saving' });
     if (this.settings) this.settings = { ...this.settings, lockTimeout: detail.lockTimeout };
     this.queuedLockTimeoutSave = { revision, detail };
     void this.flushLockTimeoutSaves();
@@ -874,8 +914,25 @@ export class VwOptionsApp extends LitElement {
         this.autofillStatus = { message: response.error.message, tone: 'danger' };
         return;
       }
-      await this.refreshSettings();
-      this.autofillStatus = { message: t('common.done'), tone: 'success' };
+      const refreshed = await this.refreshSettings();
+      this.autofillStatus = refreshed
+        ? { message: t('options.save.saved'), tone: 'success' }
+        : { message: t('options.save.refreshFailed'), tone: 'warning' };
+    } catch {
+      this.autofillStatus = { message: t('common.error'), tone: 'danger' };
+    } finally {
+      this.pending = false;
+    }
+  }
+
+  private async handleSettingsRefresh(): Promise<void> {
+    if (this.pending) return;
+    this.pending = true;
+    try {
+      const refreshed = await this.refreshSettings();
+      this.autofillStatus = refreshed
+        ? { message: t('options.save.saved'), tone: 'success' }
+        : { message: t('options.save.refreshFailed'), tone: 'warning' };
     } finally {
       this.pending = false;
     }
@@ -937,6 +994,8 @@ export class VwOptionsApp extends LitElement {
         message: t('options.autofill.websitePasskeySaved'),
         tone: 'success',
       };
+    } catch {
+      if (generation === this.websitePasskeyGeneration) this.autofillStatus = { message: t('common.error'), tone: 'danger' };
     } finally {
       if (generation === this.websitePasskeyGeneration) this.websitePasskeyPending = false;
     }
@@ -1002,6 +1061,8 @@ export class VwOptionsApp extends LitElement {
         message: t('options.autofill.httpAuthSaved'),
         tone: 'success',
       };
+    } catch {
+      if (generation === this.httpAuthGeneration) this.autofillStatus = { message: t('common.error'), tone: 'danger' };
     } finally {
       if (generation === this.httpAuthGeneration) this.httpAuthPending = false;
     }
@@ -1016,6 +1077,9 @@ export class VwOptionsApp extends LitElement {
         this.queuedLockTimeoutSave = undefined;
         const serverUrl = this.settings?.serverUrl;
         if (serverUrl === undefined) {
+          this.updateSecurityFeedback(['lockTimeout'], save.revision, {
+            state: 'error', message: t('options.account.serverDesc'),
+          });
           if (save.revision === this.securityStatusRevision) {
             this.securityStatus = { message: t('options.account.serverDesc'), tone: 'danger' };
           }
@@ -1027,11 +1091,20 @@ export class VwOptionsApp extends LitElement {
             serverUrl,
             lockTimeout: save.detail.lockTimeout,
           });
+          if (response.ok && this.effectiveSecuritySettings) {
+            this.effectiveSecuritySettings = { ...this.effectiveSecuritySettings, lockTimeout: save.detail.lockTimeout };
+          }
+          this.updateSecurityFeedback(['lockTimeout'], save.revision, response.ok
+            ? { state: 'saved' }
+            : { state: 'error', message: response.error.message });
           if (save.revision !== this.securityStatusRevision) continue;
           this.securityStatus = response.ok
             ? { message: t('common.done'), tone: 'success' }
             : { message: response.error.message, tone: 'danger' };
         } catch (error) {
+          this.updateSecurityFeedback(['lockTimeout'], save.revision, {
+            state: 'error', message: error instanceof Error ? error.message : t('common.error'),
+          });
           if (save.revision === this.securityStatusRevision) {
             this.securityStatus = {
               message: error instanceof Error ? error.message : t('common.error'),
@@ -1051,6 +1124,14 @@ export class VwOptionsApp extends LitElement {
     const revision = ++this.securityStatusRevision;
     const detail = { ...event.detail };
     this.securityStatus = undefined;
+    this.securityStatusSource = 'settings';
+    const fields = (['onIdleAction', 'clipboardClearSeconds'] as const).filter((field) =>
+      detail[field] !== this.settings?.[field]
+      || this.securityFeedback[field]?.state === 'error'
+      || this.securityFeedback[field]?.state === 'saving',
+    );
+    for (const field of fields) this.securityFieldRevisions[field] = revision;
+    this.updateSecurityFeedback(fields, revision, { state: 'saving' });
     if (this.settings) {
       this.settings = {
         ...this.settings,
@@ -1058,7 +1139,9 @@ export class VwOptionsApp extends LitElement {
         clipboardClearSeconds: detail.clipboardClearSeconds,
       };
     }
-    this.queuedSecuritySave = { revision, detail };
+    this.queuedSecuritySave = {
+      revision, detail, fields: [...new Set([...(this.queuedSecuritySave?.fields ?? []), ...fields])],
+    };
     void this.flushSecuritySaves();
   }
 
@@ -1075,10 +1158,19 @@ export class VwOptionsApp extends LitElement {
             onIdleAction: save.detail.onIdleAction,
             clipboardClearSeconds: save.detail.clipboardClearSeconds,
           });
+          if (response.ok && this.effectiveSecuritySettings) {
+            this.effectiveSecuritySettings = { ...this.effectiveSecuritySettings, ...save.detail };
+          }
+          this.updateSecurityFeedback(save.fields, save.revision, response.ok
+            ? { state: 'saved' }
+            : { state: 'error', message: response.error.message });
           if (save.revision === this.securityStatusRevision && !response.ok) {
             this.securityStatus = { message: response.error.message, tone: 'danger' };
           }
         } catch (error) {
+          this.updateSecurityFeedback(save.fields, save.revision, {
+            state: 'error', message: error instanceof Error ? error.message : t('common.error'),
+          });
           if (save.revision === this.securityStatusRevision) {
             this.securityStatus = {
               message: error instanceof Error ? error.message : t('common.error'),
@@ -1092,11 +1184,20 @@ export class VwOptionsApp extends LitElement {
     }
   }
 
+  private updateSecurityFeedback(fields: SecuritySettingField[], revision: number, feedback: SettingSaveFeedback): void {
+    const next = { ...this.securityFeedback };
+    for (const field of fields) {
+      if ((this.securityFieldRevisions[field] ?? 0) <= revision) next[field] = feedback;
+    }
+    this.securityFeedback = next;
+  }
+
   private async handleChangePassword(event: CustomEvent<ChangePasswordDetail>): Promise<void> {
     if (this.locked || this.pending) return;
     const revision = ++this.securityStatusRevision;
     this.pending = true;
     this.securityStatus = undefined;
+    this.securityStatusSource = 'action';
     try {
       const response = await this.deps.request({
         type: 'auth.changePassword',
@@ -1462,6 +1563,7 @@ export class VwOptionsApp extends LitElement {
       const result = await client.confirm();
       if (!this.isCurrentTransfer(transferEpoch, sessionEpoch)) return;
       this.importPreview = undefined;
+      this.importResult = result;
       this.dataStatus = this.importResultStatus(result);
     } catch {
       if (!this.isCurrentTransfer(transferEpoch, sessionEpoch)) return;
@@ -1543,6 +1645,7 @@ export class VwOptionsApp extends LitElement {
     if (wasTransferPending) this.pending = false;
     this.awaitingImportPassword = false;
     this.importPreview = undefined;
+    this.importResult = undefined;
     this.selectedImportFile = undefined;
   }
 
@@ -1664,6 +1767,7 @@ export class VwOptionsApp extends LitElement {
   private async handleLockNow(): Promise<void> {
     if (this.pending) return;
     const revision = ++this.securityStatusRevision;
+    this.securityStatusSource = 'action';
     this.pending = true;
     try {
       const response = await this.deps.request({ type: 'auth.lock' });
@@ -1699,7 +1803,11 @@ export class VwOptionsApp extends LitElement {
           .pinUnlockAllowed=${this.settings?.enterprisePolicy.pinUnlockAllowed ?? true}
           ?locked=${this.locked}
           ?pending=${this.pending}
-          .status=${this.securityStatus}
+          .status=${this.securityStatusSource === 'action' ? this.securityStatus : undefined}
+          .saveFeedback=${this.securityFeedback}
+          .effectiveLockTimeout=${this.effectiveSecuritySettings?.lockTimeout}
+          .effectiveOnIdleAction=${this.effectiveSecuritySettings?.onIdleAction}
+          .effectiveClipboardClearSeconds=${this.effectiveSecuritySettings?.clipboardClearSeconds}
         ></vw-security-section>`;
       case 'autofill':
         return html`<vw-autofill-section
@@ -1720,13 +1828,13 @@ export class VwOptionsApp extends LitElement {
           .websitePasskeyEnabled=${this.settings?.websitePasskeys.enabled ?? false}
           .websitePasskeyExcludedDomains=${this.settings?.websitePasskeys.excludedDomains ?? []}
           .websitePasskeyPolicyValid=${this.settings?.websitePasskeys.valid ?? false}
-          .websitePasskeyPending=${this.websitePasskeyPending}
+          .websitePasskeyPending=${this.websitePasskeyPending || this.httpAuthPending || this.pending}
           .httpAuthEnabled=${this.settings?.httpAuth.enabled ?? false}
           .httpAuthAllowedOrigins=${this.settings?.httpAuth.allowedOrigins ?? []}
           .httpAuthPolicyValid=${this.settings?.httpAuth.valid ?? false}
-          .httpAuthPending=${this.httpAuthPending}
+          .httpAuthPending=${this.httpAuthPending || this.websitePasskeyPending || this.pending}
           .shortcut=${this.autofillShortcut}
-          ?pending=${this.pending || this.locked || this.policyRefreshPending}
+          ?pending=${this.pending || this.websitePasskeyPending || this.httpAuthPending || this.locked || this.policyRefreshPending}
           .status=${this.autofillStatus}
         ></vw-autofill-section>`;
       case 'generator':
@@ -1749,6 +1857,9 @@ export class VwOptionsApp extends LitElement {
           .recoveryUnavailable=${this.transferRecoveryUnavailable}
           .awaitingImportPassword=${this.awaitingImportPassword}
           .importPreview=${this.importPreview}
+          .importResult=${this.importResult}
+          .accountEmail=${this.accountEmail}
+          .serverUrl=${this.settings?.serverUrl ?? ''}
           .recoveryStatus=${this.transferRecoveryStatus}
           .status=${this.dataStatus}
         ></vw-data-section>`;
@@ -1763,11 +1874,14 @@ export class VwOptionsApp extends LitElement {
         .items=${RAIL}
         .selected=${this.selected}
         .version=${this.deps.extensionVersion()}
+        .accountEmail=${this.accountEmail}
+        .serverUrl=${this.settings?.serverUrl ?? ''}
         @vw-nav-change=${(e: CustomEvent<{ id: string }>) => this.onNav(e)}
         @vw-logout=${() => void this.handleLogout()}
         @vw-connection-save=${(e: CustomEvent<ConnectionSaveDetail>) => void this.handleConnectionSave(e)}
         @vw-sync-now=${() => void this.handleSync()}
         @vw-autofill-save=${(e: CustomEvent<AutofillSaveDetail>) => void this.handleAutofillSave(e)}
+        @vw-settings-refresh=${() => void this.handleSettingsRefresh()}
         @vw-toolbar-badge-save=${(e: CustomEvent<ToolbarBadgeSaveDetail>) => void this.handleToolbarBadgeSave(e)}
         @vw-website-passkey-save=${(e: CustomEvent<WebsitePasskeySaveDetail>) => void this.handleWebsitePasskeySave(e)}
         @vw-http-auth-save=${(e: CustomEvent<HttpAuthSaveDetail>) => void this.handleHttpAuthSave(e)}
@@ -1786,6 +1900,7 @@ export class VwOptionsApp extends LitElement {
         @vw-import-preview-confirm=${() => void this.handleImportConfirm()}
         @vw-import-preview-cancel=${() => this.handleImportCancel()}
         @vw-transfer-recovery-clear=${() => void this.handleTransferRecoveryClear()}
+        @vw-transfer-recovery-sync=${() => void this.handleTransferRecoverySync()}
         @vw-delete-local=${() => void this.handleDeleteLocal()}
       >
         ${this.renderSection() ?? nothing}

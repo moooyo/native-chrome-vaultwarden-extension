@@ -107,6 +107,7 @@ export class VwSshKeyEditor extends LitElement {
   private moveSelection = new Set<string>();
   private createVault: CreateVaultSelection | undefined;
   private createCollectionSelection = new Set<string>();
+  private validationFocus: string | undefined;
 
   constructor() {
     super();
@@ -131,32 +132,34 @@ export class VwSshKeyEditor extends LitElement {
     controlStyles,
     css`
       :host { display:flex; flex:1; min-height:0; flex-direction:column; background:var(--vw-panel); }
-      .head { display:flex; align-items:center; gap:8px; min-height:48px; padding:7px 12px; border-bottom:1px solid var(--vw-line-1); }
-      .head h1 { margin:0; flex:1; min-width:0; font-size:14px; font-weight:600; color:var(--vw-ink); }
-      .scroll { flex:1; min-height:0; overflow-y:auto; padding:10px 14px 16px; scrollbar-width:thin; }
-      .section { padding:0 0 12px; margin:0 0 12px; border-bottom:1px solid var(--vw-line-1); }
+      .head { display:flex; align-items:center; gap:8px; flex:none; min-height:52px; padding:8px 14px; border-bottom:1px solid var(--vw-line-1); }
+      .head h1 { margin:0; flex:1; min-width:0; font-size:16px; font-weight:600; color:var(--vw-ink); }
+      .editor-form { display:flex; flex:1; flex-direction:column; min-height:0; margin:0; }
+      .scroll { flex:1; min-height:0; overflow-y:auto; padding:18px 18px 24px; scrollbar-width:thin; scroll-padding:16px; }
+      .section { padding:0 0 18px; margin:0 0 18px; border-bottom:1px solid var(--vw-line-1); }
       .section:last-child { margin-bottom:0; border-bottom:0; }
-      .section-title { display:flex; align-items:center; gap:7px; margin:0 0 9px; color:var(--vw-muted); font-size:11px; font-weight:600; }
+      .section-title { display:flex; align-items:center; gap:7px; margin:0 0 12px; color:var(--vw-ink); font-size:13px; font-weight:600; }
       .section-title svg { width:14px; height:14px; }
-      .field { display:flex; flex-direction:column; gap:5px; margin-top:9px; }
+      .field { display:flex; flex-direction:column; gap:6px; margin-top:14px; }
       .field:first-of-type { margin-top:0; }
-      .label { color:var(--vw-muted); font-size:11px; }
+      .label { color:var(--vw-text-2); font-size:12px; }
       .input, .textarea, .field-type {
         width:100%; box-sizing:border-box; border:1px solid var(--vw-line-2); border-radius:var(--vw-radius-input);
-        background:var(--vw-fill-2); color:var(--vw-ink); font:12px/1.45 var(--vw-font-ui);
+        background:var(--vw-panel); color:var(--vw-ink); font:13px/1.5 var(--vw-font-ui);
       }
-      .input, .field-type { min-height:32px; padding:0 10px; }
+      .input, .field-type { min-height:38px; padding:0 11px; }
       .textarea { min-height:74px; resize:vertical; padding:8px 10px; }
       .textarea.key { min-height:112px; font-family:var(--vw-font-mono); overflow-wrap:anywhere; }
       .input:focus, .textarea:focus, .field-type:focus { outline:none; border-color:var(--vw-accent); box-shadow:var(--vw-focus); }
-      .toggle-row { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:34px; border-top:1px solid var(--vw-line-1); }
+      .input[aria-invalid="true"], .textarea[aria-invalid="true"] { border-color:var(--vw-danger); }
+      .toggle-row { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:44px; border-top:1px solid var(--vw-line-1); }
       .toggle-row:first-of-type { border-top:0; }
       .toggle-row span { color:var(--vw-text-3); font-size:12px; }
       vw-segmented { display:block; width:100%; margin-bottom:10px; }
       .key-preview { display:flex; flex-direction:column; gap:7px; padding:9px 10px; border:1px solid var(--vw-line-2); border-radius:var(--vw-radius-input); background:var(--vw-fill-2); }
       .key-preview code { overflow-wrap:anywhere; color:var(--vw-ink); font:11px/1.5 var(--vw-font-mono); }
       .key-preview .fingerprint { color:var(--vw-teal-text); }
-      .hint { margin:7px 0 0; color:var(--vw-muted); font-size:11px; line-height:1.45; }
+      .hint { margin:8px 0 0; color:var(--vw-text-3); font-size:12px; line-height:1.5; }
       .actions { display:flex; gap:8px; margin-top:10px; }
       .actions .btn { flex:1; min-width:0; }
       .wide { width:100%; }
@@ -173,10 +176,38 @@ export class VwSshKeyEditor extends LitElement {
       .check { display:flex; align-items:center; gap:8px; color:var(--vw-text-3); font-size:12px; }
       .check input { width:15px; height:15px; accent-color:var(--vw-accent); }
       .status { display:block; margin-bottom:10px; }
+      .disclosure { border-bottom:1px solid var(--vw-line-1); }
+      .disclosure summary { display:flex; align-items:center; gap:10px; padding:16px 0; cursor:pointer; list-style:none; }
+      .disclosure summary::-webkit-details-marker { display:none; }
+      .disclosure summary > svg { flex:none; width:16px; height:16px; color:var(--vw-accent); }
+      .disclosure summary .summary-copy { display:flex; flex:1; flex-direction:column; min-width:0; gap:3px; }
+      .disclosure summary strong { color:var(--vw-ink); font-size:13px; font-weight:600; }
+      .disclosure summary small { color:var(--vw-text-3); font-size:11px; line-height:1.5; overflow-wrap:anywhere; }
+      .disclosure summary .disclosure-chevron { display:inline-flex; color:var(--vw-chevron); transition:transform var(--vw-dur-fast); }
+      .disclosure summary .disclosure-chevron svg { width:16px; height:16px; }
+      .disclosure[open] > summary .disclosure-chevron { transform:rotate(180deg); }
+      .disclosure summary:focus-visible { outline:none; box-shadow:var(--vw-focus); border-radius:var(--vw-radius-small); }
+      .disclosure-body { padding:0 0 18px; }
+      .disclosure-body > .section { padding:0; margin:0; border:0; }
+      .disclosure-body > .section-title, .disclosure-body > .section > .section-title { display:none; }
+      .disclosure-body .btn { margin-top:12px; }
+      .disclosure-body .actions .btn { margin-top:0; }
+      .disclosure-body .hint + .checks { margin-top:12px; }
+      .editor-footer { flex:none; padding:12px 18px; border-top:1px solid var(--vw-line-2); background:var(--vw-panel); }
+      .footer-actions { display:flex; align-items:center; justify-content:flex-end; gap:10px; }
+      .footer-actions .btn { min-height:38px; }
+      .footer-note { flex:1; margin:0; color:var(--vw-text-3); font-size:11px; line-height:1.5; }
+      .confirm-context { margin:16px 0; border-block:1px solid var(--vw-line-1); }
+      .confirm-context div { display:grid; grid-template-columns:92px minmax(0,1fr); gap:12px; padding:10px 0; }
+      .confirm-context dt { color:var(--vw-text-3); font-size:12px; }
+      .confirm-context dd { margin:0; color:var(--vw-ink); font-size:12px; overflow-wrap:anywhere; }
+      .confirm-context code { font:11px/1.5 var(--vw-font-mono); }
       .unavailable { padding:18px 14px; color:var(--vw-muted); font-size:12px; line-height:1.5; text-align:center; }
       vw-dialog p { margin:0; color:var(--vw-text-2); font-size:12.5px; line-height:1.5; }
       button:focus-visible { outline:none; box-shadow:var(--vw-focus); }
       @media (max-width:340px) { .custom { grid-template-columns:76px minmax(0,1fr) auto 28px; } }
+      @media (max-width:420px) { .footer-actions { flex-wrap:wrap; } .footer-note { flex-basis:100%; } }
+      @media (prefers-reduced-motion:reduce) { .disclosure summary .disclosure-chevron { transition:none; } }
     `,
   ];
 
@@ -223,12 +254,26 @@ export class VwSshKeyEditor extends LitElement {
   }
 
   protected override updated(): void {
-    if (this.mode !== 'create') return;
-    const value = this.createVault?.kind === 'personal'
-      ? 'personal'
-      : this.createVault?.organizationId ?? '';
-    const select = this.renderRoot.querySelector<HTMLSelectElement>('[data-create-vault]');
-    if (select && select.value !== value) select.value = value;
+    if (this.mode === 'create') {
+      const value = this.createVault?.kind === 'personal'
+        ? 'personal'
+        : this.createVault?.organizationId ?? '';
+      const select = this.renderRoot.querySelector<HTMLSelectElement>('[data-create-vault]');
+      if (select && select.value !== value) select.value = value;
+    }
+    if (this.validationFocus) {
+      const target = this.renderRoot.querySelector<HTMLElement>(this.validationFocus);
+      this.validationFocus = undefined;
+      if (target) {
+        let ancestor = target.parentElement;
+        while (ancestor) {
+          if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+          ancestor = ancestor.parentElement;
+        }
+        target.focus();
+        target.scrollIntoView?.({ block: 'nearest' });
+      }
+    }
   }
 
   private signature(): string {
@@ -239,6 +284,7 @@ export class VwSshKeyEditor extends LitElement {
     this.generation += 1;
     this.fileReadGeneration = undefined;
     this.validationError = undefined;
+    this.validationFocus = undefined;
     this.replaceConfirmationOpen = false;
     this.moveSelection = new Set();
     this.createVault = undefined;
@@ -254,6 +300,12 @@ export class VwSshKeyEditor extends LitElement {
   private patch(patch: Partial<FormState>): void {
     this.form = { ...this.form, ...patch };
     this.validationError = undefined;
+    this.requestUpdate();
+  }
+
+  private reportValidationError(message: string, selector: string): void {
+    this.validationError = message;
+    this.validationFocus = selector;
     this.requestUpdate();
   }
 
@@ -383,7 +435,7 @@ export class VwSshKeyEditor extends LitElement {
       return { kind: 'personal' };
     }
     if (this.createVault?.kind !== 'organization') {
-      this.validationError = t('editor.chooseVaultError');
+      this.reportValidationError(t('editor.chooseVaultError'), '[data-create-vault]');
       return undefined;
     }
     const valid = this.writableCreateCollections(this.createVault.organizationId);
@@ -392,7 +444,7 @@ export class VwSshKeyEditor extends LitElement {
       .map((collection) => collection.id);
     if (collectionIds.length === 0
         || collectionIds.length !== this.createCollectionSelection.size) {
-      this.validationError = t('editor.chooseCollectionError');
+      this.reportValidationError(t('editor.chooseCollectionError'), '[data-create-collections] input');
       return undefined;
     }
     return {
@@ -450,8 +502,7 @@ export class VwSshKeyEditor extends LitElement {
   private collectMetadata(): SshKeyMetadataInput | undefined {
     const name = this.form.name.trim();
     if (!name) {
-      this.validationError = t('ssh.error.nameRequired');
-      this.requestUpdate();
+      this.reportValidationError(t('ssh.error.nameRequired'), '[data-name]');
       return undefined;
     }
     const fields: DecryptedField[] = [];
@@ -493,8 +544,7 @@ export class VwSshKeyEditor extends LitElement {
     }
     const privateKey = this.privateKeyValue();
     if (!privateKey.trim()) {
-      this.validationError = t('ssh.error.privateKeyRequired');
-      this.requestUpdate();
+      this.reportValidationError(t('ssh.error.privateKeyRequired'), '[data-private-key]');
       return;
     }
     emit<SshCreateImportDetail>(this, 'vw-ssh-create-import', { metadata, privateKey, target });
@@ -510,8 +560,9 @@ export class VwSshKeyEditor extends LitElement {
 
   private openReplaceConfirmation(): void {
     if (this.pending || !this.available || !this.privateKeyValue().trim()) {
-      if (!this.privateKeyValue().trim()) this.validationError = t('ssh.error.privateKeyRequired');
-      this.requestUpdate();
+      if (!this.privateKeyValue().trim()) {
+        this.reportValidationError(t('ssh.error.privateKeyRequired'), '[data-private-key]');
+      }
       return;
     }
     this.validationError = undefined;
@@ -541,7 +592,7 @@ export class VwSshKeyEditor extends LitElement {
     const file = input.files?.[0];
     if (!file || this.pending) return;
     if (file.size > MAX_PRIVATE_KEY_FILE_BYTES) {
-      this.validationError = t('ssh.error.fileTooLarge');
+      this.reportValidationError(t('ssh.error.fileTooLarge'), '[data-choose-key-file]');
       input.value = '';
       this.requestUpdate();
       return;
@@ -556,7 +607,9 @@ export class VwSshKeyEditor extends LitElement {
       if (target) target.value = privateKey;
       this.validationError = undefined;
     } catch {
-      if (this.isConnected && generation === this.generation) this.validationError = t('ssh.error.fileRead');
+      if (this.isConnected && generation === this.generation) {
+        this.reportValidationError(t('ssh.error.fileRead'), '[data-choose-key-file]');
+      }
     } finally {
       input.value = '';
       if (this.isConnected && this.fileReadGeneration === generation) {
@@ -617,8 +670,7 @@ export class VwSshKeyEditor extends LitElement {
   private moveToOrganization(): void {
     if (!this.cipherId || this.pending || this.moveSelection.size === 0) return;
     if (this.hasUnsavedChanges) {
-      this.validationError = t('editor.saveBeforeMove');
-      this.requestUpdate();
+      this.reportValidationError(t('editor.saveBeforeMove'), '[data-save-ssh-metadata]');
       return;
     }
     const collectionIds = [...this.moveSelection];
@@ -697,23 +749,47 @@ export class VwSshKeyEditor extends LitElement {
   }
 
   private renderMetadata(): TemplateResult {
-    const folders = [{ id: '', name: t('ssh.noFolder') }, ...this.folders];
     return html`
       <section class="section" data-metadata>
         <h2 class="section-title">${uiIcon('edit')}<span>${t('ssh.metadata')}</span></h2>
-        <label class="field"><span class="label">${t('editor.name')}</span><input class="input" data-name .value=${this.form.name} ?disabled=${this.pending} @input=${(event: Event) => this.patch({ name: (event.target as HTMLInputElement).value })} /></label>
+        <label class="field"><span class="label">${t('editor.name')} *</span><input class="input" data-name required aria-invalid=${this.validationError === t('ssh.error.nameRequired') ? 'true' : 'false'} .value=${this.form.name} ?disabled=${this.pending} @input=${(event: Event) => this.patch({ name: (event.target as HTMLInputElement).value })} /></label>
         <label class="field"><span class="label">${t('detail.notes')}</span><textarea class="textarea" data-notes .value=${this.form.notes} ?disabled=${this.pending} @input=${(event: Event) => this.patch({ notes: (event.target as HTMLTextAreaElement).value })}></textarea></label>
+      </section>
+    `;
+  }
+
+  private ownerLabel(): string {
+    const organizationId = this.mode === 'create'
+      ? this.createVault?.kind === 'organization' ? this.createVault.organizationId : undefined
+      : this.summary?.organizationId;
+    if (organizationId) {
+      return this.orgPermissions.find((organization) => organization.id === organizationId)?.name
+        ?? t('ssh.organization');
+    }
+    return this.mode === 'create' && !this.createVault ? t('editor.chooseVault') : t('editor.personalVault');
+  }
+
+  private renderSettings(): TemplateResult {
+    const folders = [{ id: '', name: t('ssh.noFolder') }, ...this.folders];
+    const folder = folders.find(({ id }) => id === this.form.folderId)?.name ?? t('ssh.noFolder');
+    return html`
+      <details class="disclosure" data-ssh-settings>
+        <summary>${uiIcon('folder')}<span class="summary-copy"><strong>${t('ssh.settings')}</strong><small>${this.ownerLabel()} · ${folder}</small></span><span class="disclosure-chevron">${uiIcon('chevronDown')}</span></summary>
+        <div class="disclosure-body">
+        ${this.renderCreateTarget()}
         <label class="field"><span class="label">${t('editor.folder')}</span><select class="field-type" data-folder .value=${this.form.folderId} ?disabled=${this.pending} @change=${(event: Event) => this.patch({ folderId: (event.target as HTMLSelectElement).value })}>${folders.map((folder) => html`<option value=${folder.id}>${folder.name}</option>`)}</select></label>
         <div class="toggle-row"><span>${t('editor.favorite')}</span><vw-toggle data-favorite .checked=${this.form.favorite} ?disabled=${this.pending} @vw-toggle-change=${(event: CustomEvent<{ checked: boolean }>) => this.patch({ favorite: event.detail.checked })}></vw-toggle></div>
         <div class="toggle-row"><span>${t('editor.reprompt')}</span><vw-toggle data-reprompt .checked=${this.form.reprompt} ?disabled=${this.pending} @vw-toggle-change=${(event: CustomEvent<{ checked: boolean }>) => this.patch({ reprompt: event.detail.checked })}></vw-toggle></div>
-      </section>
+        </div>
+      </details>
     `;
   }
 
   private renderCustomFields(): TemplateResult {
     return html`
-      <section class="section" data-custom-fields>
-        <h2 class="section-title">${uiIcon('sliders')}<span>${t('detail.customFields')}</span></h2>
+      <details class="disclosure" data-custom-fields>
+        <summary>${uiIcon('sliders')}<span class="summary-copy"><strong>${t('detail.customFields')}</strong><small>${this.form.fields.length ? t('ssh.customFieldCount', { count: this.form.fields.length }) : t('ssh.customFieldsHint')}</small></span><span class="disclosure-chevron">${uiIcon('chevronDown')}</span></summary>
+        <div class="disclosure-body">
         <div class="custom-list">
           ${this.form.fields.map((field, index) => html`
             <div class="custom" data-ssh-field data-field-type=${field.type}>
@@ -753,14 +829,15 @@ export class VwSshKeyEditor extends LitElement {
           `)}
         </div>
         <button type="button" class="btn outline" data-add-field ?disabled=${this.pending} @click=${() => this.addField()}>${uiIcon('plus')}<span>${t('editor.addField')}</span></button>
-      </section>
+        </div>
+      </details>
     `;
   }
 
   private renderPrivateInput(purpose: 'import' | 'replace'): TemplateResult {
     const reading = this.fileReadGeneration === this.generation;
     return html`
-      <label class="field"><span class="label">${t('ssh.privateKey')}</span><textarea class="textarea key" data-private-key autocomplete="off" spellcheck="false" ?disabled=${this.pending || reading} placeholder=${t('ssh.privateKeyPlaceholder')}></textarea></label>
+      <label class="field"><span class="label">${t('ssh.privateKey')}</span><textarea class="textarea key" data-private-key aria-invalid=${this.validationError === t('ssh.error.privateKeyRequired') ? 'true' : 'false'} autocomplete="off" spellcheck="false" ?disabled=${this.pending || reading} placeholder=${t('ssh.privateKeyPlaceholder')}></textarea></label>
       <div class="actions">
         <button type="button" class="btn outline upload" data-choose-key-file ?disabled=${this.pending || reading} @click=${() => this.renderRoot.querySelector<HTMLInputElement>('[data-key-file]')?.click()}>
           ${uiIcon('file')}<span>${reading ? t('ssh.readingKey') : t('ssh.chooseKeyFile')}</span>
@@ -770,7 +847,14 @@ export class VwSshKeyEditor extends LitElement {
           ? html`<button type="button" class="btn danger" data-replace-key ?disabled=${this.pending || reading || !this.available} @click=${() => this.openReplaceConfirmation()}>${uiIcon('refresh')}<span>${t('ssh.replaceKey')}</span></button>`
           : nothing}
       </div>
+      <p class="hint">${t('ssh.importFileHint')}</p>
       <p class="hint">${t(purpose === 'replace' ? 'ssh.replaceHint' : 'ssh.importHint')}</p>
+      <button type="button" class="btn ghost" data-clear-private-key ?disabled=${this.pending || reading} @click=${() => {
+        this.clearPrivateInputs();
+        this.validationError = undefined;
+        this.requestUpdate();
+        this.renderRoot.querySelector<HTMLTextAreaElement>('[data-private-key]')?.focus();
+      }}>${t('ssh.clearPrivateInput')}</button>
     `;
   }
 
@@ -782,7 +866,8 @@ export class VwSshKeyEditor extends LitElement {
     return html`
       <section class="section" data-create-method>
         <h2 class="section-title">${uiIcon('key')}<span>${t('ssh.keyMaterial')}</span></h2>
-        <vw-segmented .options=${options} .value=${this.createMethod} .height=${30} @vw-segmented-change=${(event: CustomEvent<{ id: string }>) => {
+        <vw-segmented .options=${options} .value=${this.createMethod} .height=${36} @vw-segmented-change=${(event: CustomEvent<{ id: string }>) => {
+          if (this.pending) return;
           this.createMethod = event.detail.id === 'import' ? 'import' : 'generate';
           this.validationError = undefined;
           this.clearPrivateInputs();
@@ -798,13 +883,15 @@ export class VwSshKeyEditor extends LitElement {
   private renderPublicPreview(): TemplateResult | typeof nothing {
     if (!this.publicDetails) return nothing;
     return html`
-      <section class="section" data-public-preview>
-        <h2 class="section-title">${uiIcon('fingerprint')}<span>${t('ssh.currentPublicKey')}</span></h2>
+      <details class="disclosure" data-public-preview>
+        <summary>${uiIcon('fingerprint')}<span class="summary-copy"><strong>${t('ssh.currentPublicKey')}</strong><small>${t('ssh.publicKeySummary')}</small></span><span class="disclosure-chevron">${uiIcon('chevronDown')}</span></summary>
+        <div class="disclosure-body">
         <div class="key-preview">
           ${this.publicDetails.keyFingerprint ? html`<code class="fingerprint">${this.publicDetails.keyFingerprint}</code>` : nothing}
           ${this.publicDetails.publicKey ? html`<code>${this.publicDetails.publicKey}</code>` : nothing}
         </div>
-      </section>
+        </div>
+      </details>
     `;
   }
 
@@ -814,45 +901,65 @@ export class VwSshKeyEditor extends LitElement {
       const options = this.collections.filter((collection) => collection.organizationId === this.summary!.organizationId);
       if (!options.length) return nothing;
       return html`
-        <section class="section" data-ssh-collections>
-          <h2 class="section-title">${uiIcon('folder')}<span>${t('ssh.collections')}</span></h2>
+        <details class="disclosure" data-ssh-collections>
+          <summary>${uiIcon('folder')}<span class="summary-copy"><strong>${t('ssh.collections')}</strong><small>${this.ownerLabel()}</small></span><span class="disclosure-chevron">${uiIcon('chevronDown')}</span></summary>
+          <div class="disclosure-body">
           <div class="checks">${options.map((collection) => html`<label class="check"><input type="checkbox" value=${collection.id} .checked=${this.collectionSelection.has(collection.id)} ?disabled=${this.pending || !this.canChangeCollectionMembership(collection)} @change=${(event: Event) => this.toggleCollection(collection.id, (event.target as HTMLInputElement).checked)} /><span>${collection.name}</span></label>`)}</div>
           <button type="button" class="btn outline" data-save-ssh-collections ?disabled=${this.pending || !options.some((collection) => this.canChangeCollectionMembership(collection))} @click=${() => this.saveCollections()}>${uiIcon('check')}<span>${t('ssh.saveCollections')}</span></button>
-        </section>
+          <p class="hint">${t('ssh.collectionsHint')}</p>
+          </div>
+        </details>
       `;
     }
     if (this.summary.archivedDate || this.summary.deletedDate) return nothing;
     if (!this.collections.length) return nothing;
     const orgNames = new Map(this.orgPermissions.map((org) => [org.id, org.name]));
     return html`
-      <section class="section" data-ssh-move>
-        <h2 class="section-title">${uiIcon('folder')}<span>${t('ssh.moveToOrganization')}</span></h2>
+      <details class="disclosure" data-ssh-move>
+        <summary>${uiIcon('folder')}<span class="summary-copy"><strong>${t('ssh.moveToOrganization')}</strong><small>${t('editor.personalVault')}</small></span><span class="disclosure-chevron">${uiIcon('chevronDown')}</span></summary>
+        <div class="disclosure-body">
         <p class="hint">${t('ssh.moveHint')}</p>
         <div class="checks">${this.collections.map((collection) => html`<label class="check"><input type="checkbox" value=${collection.id} .checked=${this.moveSelection.has(collection.id)} ?disabled=${this.pending} @change=${(event: Event) => this.toggleMoveCollection(collection, (event.target as HTMLInputElement).checked)} /><span>${orgNames.get(collection.organizationId) ?? t('ssh.organization')} · ${collection.name}</span></label>`)}</div>
         <button type="button" class="btn outline" data-move-ssh ?disabled=${this.pending || this.moveSelection.size === 0} @click=${() => this.moveToOrganization()}>${uiIcon('folder')}<span>${t('ssh.moveKey')}</span></button>
-      </section>
+        </div>
+      </details>
     `;
   }
 
   private renderReplacement(): TemplateResult {
     return html`
-      <section class="section" data-replacement>
-        <h2 class="section-title">${uiIcon('refresh')}<span>${t('ssh.replaceKey')}</span></h2>
+      <details class="disclosure" data-replacement>
+        <summary>${uiIcon('refresh')}<span class="summary-copy"><strong>${t('ssh.replaceKey')}</strong><small>${t('ssh.replacementSummary')}</small></span><span class="disclosure-chevron">${uiIcon('chevronDown')}</span></summary>
+        <div class="disclosure-body">
         ${this.renderPrivateInput('replace')}
-      </section>
+        </div>
+      </details>
     `;
   }
 
   private renderConfirmation(): TemplateResult | typeof nothing {
     if (!this.replaceConfirmationOpen) return nothing;
+    const itemName = this.summary?.name ?? this.cipher?.name ?? this.form.name;
+    const selectedCollections = this.collections
+      .filter((collection) => collection.organizationId === this.summary?.organizationId
+        && this.summary?.collectionIds?.includes(collection.id))
+      .map((collection) => collection.name)
+      .join(', ');
     return html`
-      <vw-dialog .open=${true} .heading=${t('ssh.replaceConfirmTitle')} @vw-dialog-close=${(event: CustomEvent<{ reason: string }>) => {
+      <vw-dialog .open=${true} .heading=${t('ssh.replaceConfirmItem', { name: itemName })} @vw-dialog-close=${(event: CustomEvent<{ reason: string }>) => {
         event.stopPropagation();
         if (event.detail.reason === 'confirm') this.confirmReplacement(); else this.closeReplacement();
       }}>
         <p>${t('ssh.replaceConfirm')}</p>
+        <dl class="confirm-context">
+          <div><dt>${t('editor.name')}</dt><dd>${itemName}</dd></div>
+          <div><dt>${t('editor.vault')}</dt><dd>${this.ownerLabel()}${selectedCollections ? html` · ${selectedCollections}` : nothing}</dd></div>
+          ${this.publicDetails?.keyFingerprint ? html`<div><dt>${t('ssh.fingerprint')}</dt><dd><code>${this.publicDetails.keyFingerprint}</code></dd></div>` : nothing}
+        </dl>
+        <p>${t('ssh.replaceHint')}</p>
+        <p class="hint">${t('ssh.deployHint')}</p>
         <button slot="actions" type="button" class="btn ghost" data-cancel-replace @click=${() => this.renderRoot.querySelector<VwDialog>('vw-dialog')?.requestClose('dismiss')}>${t('common.cancel')}</button>
-        <button slot="actions" type="button" class="btn danger" data-confirm-replace ?disabled=${this.pending} @click=${() => this.renderRoot.querySelector<VwDialog>('vw-dialog')?.requestClose('confirm')}>${t('ssh.replaceKey')}</button>
+        <button slot="actions" type="button" class="btn danger" data-confirm-replace ?disabled=${this.pending} @click=${() => this.renderRoot.querySelector<VwDialog>('vw-dialog')?.requestClose('confirm')}>${t('ssh.replaceConfirmAction', { name: itemName })}</button>
       </vw-dialog>
     `;
   }
@@ -863,16 +970,29 @@ export class VwSshKeyEditor extends LitElement {
     }
     return html`
       ${this.renderHeader()}
-      <main class="scroll">
-        ${this.status ? html`<vw-status-message class="status" .tone=${this.status.tone} .icon=${this.status.tone === 'success' ? 'checkCircle' : 'alert'} .message=${this.status.message}></vw-status-message>` : nothing}
-        ${this.validationError ? html`<vw-status-message class="status" tone="danger" .icon=${'alert'} .message=${this.validationError}></vw-status-message>` : nothing}
-        ${this.renderCreateTarget()}
-        ${this.renderMetadata()}
-        ${this.renderCustomFields()}
-        ${this.mode === 'create'
-          ? html`${this.renderCreateMethod()}<button type="button" class="btn primary wide" data-create-ssh ?disabled=${this.pending} @click=${() => this.submitCreate()}>${uiIcon(this.createMethod === 'generate' ? 'wand' : 'key')}<span>${t(this.createMethod === 'generate' ? 'ssh.generateAndSave' : 'ssh.importAndSave')}</span></button>`
-          : html`${this.renderPublicPreview()}<button type="button" class="btn primary wide" data-save-ssh-metadata ?disabled=${this.pending} @click=${() => this.submitMetadata()}>${uiIcon('check')}<span>${t('ssh.saveMetadata')}</span></button>${this.renderOrganization()}${this.renderReplacement()}`}
-      </main>
+      <form class="editor-form" novalidate @submit=${(event: SubmitEvent) => {
+        event.preventDefault();
+        if (this.mode === 'create') this.submitCreate(); else this.submitMetadata();
+      }}>
+        <main class="scroll">
+          ${this.renderMetadata()}
+          ${this.mode === 'create' ? this.renderCreateMethod() : this.renderPublicPreview()}
+          ${this.renderCustomFields()}
+          ${this.renderSettings()}
+          ${this.mode === 'edit' ? html`${this.renderOrganization()}${this.renderReplacement()}` : html`<p class="hint">${t('ssh.deployHint')}</p>`}
+        </main>
+        <footer class="editor-footer">
+          ${this.status ? html`<vw-status-message class="status" .tone=${this.status.tone} .icon=${this.status.tone === 'success' ? 'checkCircle' : 'alert'} .message=${this.status.message}></vw-status-message>` : nothing}
+          ${this.validationError ? html`<vw-status-message class="status" tone="danger" .icon=${'alert'} .message=${this.validationError}></vw-status-message>` : nothing}
+          <div class="footer-actions">
+            <p class="footer-note">${this.mode === 'create' ? `${this.ownerLabel()} · ${t('ssh.unsavedDraft')}` : t('ssh.metadataOnlyHint')}</p>
+            <button type="button" class="btn ghost" ?disabled=${this.pending} @click=${() => emit(this, 'vw-item-back')}>${t('common.cancel')}</button>
+            ${this.mode === 'create'
+              ? html`<button type="submit" class="btn primary" data-create-ssh ?disabled=${this.pending || this.fileReadGeneration === this.generation}>${uiIcon(this.createMethod === 'generate' ? 'wand' : 'key')}<span>${t(this.createMethod === 'generate' ? 'ssh.generateAndSave' : 'ssh.importAndSave')}</span></button>`
+              : html`<button type="submit" class="btn primary" data-save-ssh-metadata ?disabled=${this.pending}>${uiIcon('check')}<span>${t('ssh.saveMetadata')}</span></button>`}
+          </div>
+        </footer>
+      </form>
       ${this.renderConfirmation()}
     `;
   }

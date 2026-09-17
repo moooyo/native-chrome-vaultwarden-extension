@@ -16,6 +16,8 @@ import type {
 import {
   CARD_FILL_ROLES,
   IDENTITY_FILL_ROLES,
+  normalizeFillRoles,
+  type FillRole,
 } from '../core/vault/fill-roles.js';
 import {
   digestLoginCustomTargetPlan,
@@ -44,6 +46,7 @@ import { fillLoginForm } from './fill.js';
 import { commitLoginCustomAssignments } from './login-custom-fields.js';
 import { computeFillProjection, type FillProjection } from './focused-fill.js';
 import { createStagedFillCommit } from './staged-fill.js';
+import { createStructuredFillUndo, type StructuredFieldWrite, type StructuredFillUndo } from './structured-fill-undo.js';
 import {
   createAutofillDetectionContext,
   type AutofillDetectionContext,
@@ -84,6 +87,7 @@ export type FrameStructuredCommitRequest =
       expectedFrameUrl: string;
       expectedGeneration: number;
       roles: readonly CardFillRole[];
+      selectedRoles?: readonly CardFillRole[];
       data: CardFillData;
     }
   | {
@@ -92,6 +96,7 @@ export type FrameStructuredCommitRequest =
       expectedFrameUrl: string;
       expectedGeneration: number;
       roles: readonly IdentityFillRole[];
+      selectedRoles?: readonly IdentityFillRole[];
       data: IdentityFillData;
     };
 
@@ -104,6 +109,10 @@ export interface FrameAutofillController {
   commitLogin(request: FrameLoginCommitRequest): Promise<TabFillOutcome>;
   /** Re-detect and fill a card/identity only when every structural binding still matches. */
   commitStructured(request: FrameStructuredCommitRequest): TabFillOutcome;
+  /** Capture reviewed field values locally; those values never cross the worker boundary. */
+  prepareStructuredSelection(formId: string, generation: number, selectedRoles: readonly FillRole[]): boolean;
+  clearStructuredSelection(): void;
+  takeStructuredUndo(): StructuredFillUndo | undefined;
 }
 
 interface LoginTarget {
@@ -156,6 +165,45 @@ export function createFrameAutofillController(options: FrameAutofillControllerOp
   const privateIds = new WeakMap<HTMLElement, Map<FrameAutofillForm['kind'], PrivateFormIdentity>>();
   let lastFocusedFormId: string | undefined;
   let focusedAt: number | undefined;
+  let pendingSelection: {
+    readonly target: CardTarget | IdentityTarget;
+    readonly generation: number;
+    readonly frameUrl: string;
+    readonly roles: readonly FillRole[];
+    readonly values: ReadonlyMap<FillFieldElement, string>;
+    readonly expiresAt: number;
+  } | undefined;
+  let structuredUndo: StructuredFillUndo | undefined;
+
+  function clearStructuredSelection(): void {
+    pendingSelection = undefined;
+    structuredUndo?.dispose();
+    structuredUndo = undefined;
+  }
+
+  function prepareStructuredSelection(formId: string, expectedGeneration: number, selectedRoles: readonly FillRole[]): boolean {
+    pendingSelection = undefined;
+    structuredUndo?.dispose();
+    structuredUndo = undefined;
+    if (!controllerIsCurrent(options)) return false;
+    const state = readState();
+    const target = state.targets.find((entry) => entry.metadata.formId === formId);
+    if (state.generation !== expectedGeneration || !target || target.kind === 'login' || !allFillFieldsLive(target.detected)) return false;
+    const roles = normalizeFillRoles(target.kind, selectedRoles);
+    if (!roles || !sameRoles(roles, selectedRoles) || roles.some((role) => !target.detected.fields.has(role))) return false;
+    pendingSelection = {
+      target,
+      generation: state.generation,
+      frameUrl: options.frameUrl(),
+      roles,
+      values: new Map(roles.map((role) => {
+        const field = target.detected.fields.get(role)!;
+        return [field, field.value];
+      })),
+      expiresAt: options.now() + 120_000,
+    };
+    return true;
+  }
 
   function noteFocus(field: FillFieldElement): void {
     const state = readState();
@@ -220,6 +268,10 @@ export function createFrameAutofillController(options: FrameAutofillControllerOp
   }
 
   function commitStructured(request: FrameStructuredCommitRequest): TabFillOutcome {
+    const selection = pendingSelection;
+    pendingSelection = undefined;
+    structuredUndo?.dispose();
+    structuredUndo = undefined;
     if (!controllerIsCurrent(options) || options.frameUrl() !== request.expectedFrameUrl) {
       return { status: 'target_changed' };
     }
@@ -232,8 +284,27 @@ export function createFrameAutofillController(options: FrameAutofillControllerOp
     if (!target || target.kind === 'login' || !allFillFieldsLive(target.detected)) {
       return { status: 'target_changed' };
     }
+    const selectedRoles = request.selectedRoles ?? request.roles;
+    const normalized = normalizeFillRoles(request.kind, selectedRoles);
+    if (!normalized || !sameRoles(normalized, selectedRoles)
+        || selectedRoles.some((role) => !target.detected.fields.has(role))) return { status: 'target_changed' };
+    if (request.selectedRoles !== undefined && (!selection
+        || selection.generation !== state.generation
+        || selection.frameUrl !== request.expectedFrameUrl
+        || selection.expiresAt <= options.now()
+        || !sameFillTarget(selection.target, target)
+        || !sameRoles(selection.roles, selectedRoles))) return { status: 'target_changed' };
+    const values = request.selectedRoles !== undefined ? new Map(selection!.values) : undefined;
+    const writes: StructuredFieldWrite[] = [];
+    const onWrite = (write: StructuredFieldWrite): void => {
+      writes.push(write);
+      // Once a field is written, page formatters may normalize it. Only untouched reviewed values
+      // gate later writes; the undo receipt independently compares the exact native write value.
+      values?.delete(write.element);
+    };
     const staged = createStagedFillCommit(() => {
       if (!controllerIsCurrent(options) || options.frameUrl() !== request.expectedFrameUrl) return false;
+      if (values && [...values].some(([field, expected]) => field.value !== expected)) return false;
       const currentState = readState();
       if (currentState.generation !== request.expectedGeneration) return false;
       const current = currentState.targets.find((candidate) => (
@@ -246,20 +317,34 @@ export function createFrameAutofillController(options: FrameAutofillControllerOp
         && allFillFieldsLive(current.detected),
       );
     });
+    // Filter actual element assignments as well as wire data: composite full-name/address/expiry
+    // data keys can otherwise accidentally populate an unselected field that shares those keys.
+    const selectedRoleSet = new Set<FillRole>(selectedRoles);
+    const selectedForm = { ...target.detected, fields: new Map([...target.detected.fields].filter(([role]) => selectedRoleSet.has(role))) };
+    const finish = (filled: boolean): TabFillOutcome => {
+      if (staged.stale || !staged.isCurrent()) return { status: 'target_changed' };
+      if (!filled) return { status: 'no_fillable_target' };
+      if (request.selectedRoles !== undefined) {
+        structuredUndo = createStructuredFillUndo(writes, () => {
+          if (!controllerIsCurrent(options) || options.frameUrl() !== request.expectedFrameUrl) return false;
+          const state = readState();
+          if (state.generation !== request.expectedGeneration) return false;
+          const current = state.targets.find((entry) => entry.kind === request.kind && entry.metadata.formId === request.formId);
+          return Boolean(current && current.kind !== 'login' && sameFillTarget(target, current) && allFillFieldsLive(current.detected));
+        }, options.now);
+      }
+      return { status: 'filled' };
+    };
     if (request.kind === 'card') {
       if (target.kind !== 'card' || !sameRoles(target.metadata.roles, request.roles)) {
         return { status: 'target_changed' };
       }
-      const filled = fillCardForm(target.detected, request.data, staged);
-      if (staged.stale || !staged.isCurrent()) return { status: 'target_changed' };
-      return filled ? { status: 'filled' } : { status: 'no_fillable_target' };
+      return finish(fillCardForm(selectedForm, request.data, staged, onWrite));
     }
     if (target.kind !== 'identity' || !sameRoles(target.metadata.roles, request.roles)) {
       return { status: 'target_changed' };
     }
-    const filled = fillIdentityForm(target.detected, request.data, staged);
-    if (staged.stale || !staged.isCurrent()) return { status: 'target_changed' };
-    return filled ? { status: 'filled' } : { status: 'no_fillable_target' };
+    return finish(fillIdentityForm(selectedForm, request.data, staged, onWrite));
   }
 
   function readState(): { readonly generation: number; readonly targets: readonly FrameTarget[] } {
@@ -322,7 +407,14 @@ export function createFrameAutofillController(options: FrameAutofillControllerOp
       : { ...metadata };
   }
 
-  return { noteFocus, inspect, commitLogin, commitStructured };
+  return {
+    noteFocus, inspect, commitLogin, commitStructured, prepareStructuredSelection, clearStructuredSelection,
+    takeStructuredUndo: () => {
+      const receipt = structuredUndo;
+      structuredUndo = undefined;
+      return receipt;
+    },
+  };
 }
 
 function controllerIsCurrent(options: FrameAutofillControllerOptions): boolean {

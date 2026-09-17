@@ -9,8 +9,8 @@ export interface SegmentedOption {
 }
 
 /**
- * `vw-segmented` — the MiYu segmented control (generator mode 随机/易记/PIN, Send type 文本/文件,
- * theme 浅色/深色/跟随系统). Container is a filled pill; the active tab is a raised white chip.
+ * `vw-segmented` provides compact mode selection for the generator, Send type, and appearance.
+ * A quiet filled track groups its options; a bordered white selection indicates the active mode.
  * Emits `vw-segmented-change` with `{ id }`.
  */
 export class VwSegmented extends LitElement {
@@ -32,7 +32,7 @@ export class VwSegmented extends LitElement {
     super();
     this.options = [];
     this.value = '';
-    this.height = 27;
+    this.height = 32;
     this.label = '';
     this.disabled = false;
   }
@@ -43,34 +43,43 @@ export class VwSegmented extends LitElement {
       :host { display: block; }
       .track {
         display: flex;
-        gap: 2px;
-        padding:2px;
-        border-radius:18px;
+        gap: 3px;
+        padding:3px;
+        border: 1px solid var(--vw-line-1);
+        border-radius:var(--vw-radius-control);
         background:var(--vw-fill);
       }
       button {
+        appearance: none;
         flex: 1;
+        min-width: 0;
+        min-height: 28px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        border: none;
-        border-radius:16px;
+        padding: 3px 9px;
+        border: 1px solid transparent;
+        border-radius:var(--vw-radius-xs);
         background: transparent;
         color: var(--vw-text-3);
         font-family: var(--vw-font-ui);
-        font-size: 11.5px;
+        font-size: 12px;
+        line-height: 1.4;
         font-weight: 500;
         cursor: pointer;
         transition: background-color var(--vw-dur-fast), color var(--vw-dur-fast);
       }
       button[aria-selected='true'] {
-        background:var(--pc);
-        color:var(--onpc);
-        font-weight:500;
-        box-shadow:none;
+        background:var(--vw-card);
+        border-color:var(--vw-line-1);
+        color:var(--vw-accent);
+        font-weight:600;
+        box-shadow:var(--vw-seg-shadow);
       }
-      button:disabled { cursor: default; opacity: 0.5; }
-      button:focus-visible { outline: none; box-shadow: var(--vw-focus); }
+      button:hover:not(:disabled):not([aria-selected='true']) { background: var(--vw-row-hover); color: var(--vw-ink); }
+      button:disabled { cursor: default; color: var(--vw-disabled-fg); }
+      button:focus-visible { outline: 2px solid var(--vw-accent); outline-offset: 1px; }
+      @media (prefers-reduced-motion: reduce) { button { transition: none; } }
     `,
   ];
 

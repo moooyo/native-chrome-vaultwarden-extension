@@ -15,7 +15,7 @@ export interface OptionsNavItem {
 }
 
 /**
- * The MiYu options shell: a 236px sidebar (logo + version badge + nav + quick controls) and a content
+ * The MiYu options shell: a 184px sidebar (logo + version badge + nav + quick controls) and a content
  * column (eyebrow + section title + slotted section). It is the page ROOT's visual frame, so it
  * composes `paletteTokens` and mirrors the theme onto its host via `AppearanceController`, letting
  * the whole options tree re-theme at runtime. The sidebar footer holds three quick controls — a
@@ -27,11 +27,15 @@ export class VwOptionsShell extends LitElement {
     items: { attribute: false },
     selected: { type: String },
     version: { type: String },
+    accountEmail: { type: String },
+    serverUrl: { type: String },
   };
 
   declare items: OptionsNavItem[];
   declare selected: string;
   declare version: string;
+  declare accountEmail: string;
+  declare serverUrl: string;
 
   private i18n = new LocalizeController(this);
   private appearance = new AppearanceController(this);
@@ -41,6 +45,8 @@ export class VwOptionsShell extends LitElement {
     this.items = [];
     this.selected = '';
     this.version = '';
+    this.accountEmail = '';
+    this.serverUrl = '';
   }
 
   static override styles = [
@@ -50,27 +56,32 @@ export class VwOptionsShell extends LitElement {
       :host { display:flex; min-height:100vh; background:var(--vw-options-bg); color:var(--vw-ink); }
 
       .sidebar {
-        width: 212px;
+        width: 184px;
         flex: none;
         box-sizing: border-box;
         display: flex;
         flex-direction: column;
-        padding: 18px 10px 14px;
+        padding: 24px 12px 16px;
+        border-right: 1px solid var(--vw-line-1);
+        background: var(--vw-panel);
+        position: sticky;
+        top: 0;
+        height: 100vh;
       }
-      .brand { display:flex; align-items:center; gap:9px; padding:0 10px 18px; }
-      .brand .name { font-size:15px; font-weight:500; color:var(--vw-ink); }
+      .brand { display:flex; align-items:center; gap:9px; padding:0 8px 28px; flex-wrap:wrap; }
+      .brand .name { font-size:16px; font-weight:650; color:var(--vw-ink); letter-spacing:.01em; }
       .badge {
         margin-left: auto; font-family: var(--vw-font-mono); font-size: 10px; color: var(--vw-muted);
         background:var(--vw-fill); border-radius:6px; padding:2px 6px;
       }
       nav { display:flex; flex-direction:column; gap:2px; }
       .nav-item {
-        display:flex; align-items:center; gap:12px; height:40px; padding:0 14px; border:0; border-radius:20px;
+        display:flex; align-items:center; gap:10px; height:40px; padding:0 12px; border:0; border-radius:8px;
         background:transparent; color:var(--vw-text-2); font-family:inherit; font-size:13px; text-align:left;
         cursor: pointer; transition: background-color var(--vw-dur-fast);
       }
       .nav-item:hover { background: var(--vw-row-hover); }
-      .nav-item.on { background:var(--pc); color:var(--onpc); font-weight:500; }
+      .nav-item.on { background:var(--vw-accent-soft, var(--pc)); color:var(--vw-accent); font-weight:600; }
       .nav-icon { width:18px; height:18px; display:inline-flex; flex:none; }
       .nav-icon svg { width:18px; height:18px; }
       .nav-item:focus-visible { outline: none; box-shadow: var(--vw-focus); }
@@ -112,14 +123,21 @@ export class VwOptionsShell extends LitElement {
       .foot-logout:focus-visible { outline: none; box-shadow: var(--vw-focus); }
       .foot-logout svg { width: 16px; height: 16px; flex: none; }
 
-      .content { flex:1; min-width:0; overflow-y:auto; }
-      .inner { max-width:580px; margin:0; padding:28px 36px 44px; }
-      .eyebrow { display:none; }
-      .title { margin:0 0 18px; color:var(--vw-ink); font-size:22px; font-weight:400; letter-spacing:0; }
-      .section { display:flex; flex-direction:column; gap:8px; animation:mvIn .2s ease-out; }
+      .content { flex:1; min-width:0; }
+      .inner { max-width:960px; margin:0 auto; padding:36px 40px 64px; }
+      .eyebrow { margin-bottom:8px; font-size:12px; color:var(--vw-muted); }
+      .title { margin:0 0 24px; color:var(--vw-ink); font-size:26px; font-weight:600; letter-spacing:-.02em; }
+      .section { display:flex; flex-direction:column; gap:16px; animation:mvIn .16s ease-out; }
+      .account-scope { display:flex; align-items:center; gap:12px; padding:12px 16px; margin-bottom:24px; border:1px solid var(--vw-line-1); border-radius:8px; background:var(--vw-card); }
+      .account-scope svg { width:18px; height:18px; flex:none; color:var(--vw-accent); }
+      .scope-copy { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 14px; min-width:0; }
+      .scope-copy strong { font-size:13px; font-weight:600; overflow-wrap:anywhere; }
+      .scope-copy span { font-size:12px; color:var(--vw-muted); overflow-wrap:anywhere; }
+      @media (prefers-reduced-motion:reduce) { .section { animation:none; } }
       @media (max-width:720px) {
         :host { display:block; }
-        .sidebar { width:100%; padding-bottom:8px; }
+        .sidebar { width:100%; padding:16px 12px 8px; position:static; height:auto; border-right:0; border-bottom:1px solid var(--vw-line-1); }
+        .brand { padding-bottom:16px; }
         nav { flex-direction:row; overflow-x:auto; scrollbar-width:thin; scrollbar-color:var(--vw-scrollbar) transparent; }
         nav::-webkit-scrollbar { height:4px; }
         nav::-webkit-scrollbar-thumb { border-radius:2px; background:var(--vw-scrollbar); }
@@ -130,7 +148,8 @@ export class VwOptionsShell extends LitElement {
         .foot-controls { flex:1; }
         .lang { margin-left:0; }
         .foot-logout { width:auto; margin-left:auto; white-space:nowrap; }
-        .inner { padding:22px 18px 36px; }
+        .inner { padding:24px 18px 36px; }
+        .title { font-size:23px; }
       }
     `,
   ];
@@ -211,7 +230,7 @@ export class VwOptionsShell extends LitElement {
       <aside class="sidebar">
         <div class="brand">
           <vw-logo variant="sidebar"></vw-logo>
-          <span class="name">${t('common.brand')} ${t('options.eyebrow')}</span>
+          <span class="name">${t('common.brand')}</span>
           ${this.version ? html`<span class="badge">v${this.version}</span>` : nothing}
         </div>
         <nav>
@@ -236,6 +255,12 @@ export class VwOptionsShell extends LitElement {
         <div class="inner">
           <div class="eyebrow">${t('options.eyebrow')}</div>
           <h1 class="title">${this.currentLabel()}</h1>
+          ${this.accountEmail ? html`
+            <div class="account-scope" data-account-scope>
+              ${uiIcon('user')}
+              <div class="scope-copy"><strong>${this.accountEmail}</strong><span>${this.serverUrl}</span></div>
+            </div>
+          ` : nothing}
           ${keyed(this.selected, html`<div class="section"><slot></slot></div>`)}
         </div>
       </div>

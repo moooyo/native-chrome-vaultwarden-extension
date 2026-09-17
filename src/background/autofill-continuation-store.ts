@@ -81,6 +81,7 @@ export type AutofillContinuationAction =
             readonly formId: string;
             readonly generation: number;
             readonly roles: readonly FillRole[];
+            readonly selectedRoles?: readonly FillRole[];
           };
     };
 
@@ -480,15 +481,20 @@ function safeKeyboardBinding(value: unknown): Extract<AutofillContinuationAction
     });
   }
   if ((value.purpose === 'card' || value.purpose === 'identity')
-      && keys(value, ['formId', 'generation', 'purpose', 'roles', 'runtimeIncarnation'])) {
+      && keys(value, ['formId', 'generation', 'purpose', 'roles', 'runtimeIncarnation',
+        ...('selectedRoles' in value ? ['selectedRoles'] : [])])) {
     const roles = normalizeFillRoles(value.purpose, value.roles);
     if (!roles) throw new TypeError('Keyboard action roles are invalid');
+    const selectedRoles = 'selectedRoles' in value
+      ? selectedStructuredRoles(value.purpose, value.selectedRoles, roles)
+      : undefined;
     return Object.freeze({
       purpose: value.purpose,
       runtimeIncarnation: incarnation,
       formId: text(value.formId, 'formId'),
       generation: nonNegativeInteger(value.generation, 'generation'),
       roles: Object.freeze([...roles]),
+      ...(selectedRoles === undefined ? {} : { selectedRoles }),
     });
   }
   throw new TypeError('Keyboard action binding is invalid');
@@ -509,13 +515,35 @@ function tabTarget(value: unknown): TabSuggestionTarget {
     return Object.freeze({ ...common, kind: value.kind, customPlanDigest: text(value.customPlanDigest, 'customPlanDigest') });
   }
   if ((value.kind === 'card' || value.kind === 'identity')
-      && keys(value, ['documentId', 'formId', 'frameId', 'generation', 'kind', 'roles', 'runtimeIncarnation'])
+      && keys(value, ['documentId', 'formId', 'frameId', 'generation', 'kind', 'roles', 'runtimeIncarnation',
+        ...('selectedRoles' in value ? ['selectedRoles'] : [])])
       && Array.isArray(value.roles) && value.roles.every((role) => typeof role === 'string')) {
     const roles = normalizeFillRoles(value.kind, value.roles);
     if (!roles) throw new TypeError('Autofill target roles are invalid');
-    return Object.freeze({ ...common, kind: value.kind, roles: Object.freeze([...roles]) }) as TabSuggestionTarget;
+    const selectedRoles = 'selectedRoles' in value
+      ? selectedStructuredRoles(value.kind, value.selectedRoles, roles)
+      : undefined;
+    return Object.freeze({
+      ...common,
+      kind: value.kind,
+      roles: Object.freeze([...roles]),
+      ...(selectedRoles === undefined ? {} : { selectedRoles }),
+    }) as TabSuggestionTarget;
   }
   throw new TypeError('Autofill target is invalid');
+}
+
+function selectedStructuredRoles(
+  kind: FillKind,
+  value: unknown,
+  roles: readonly FillRole[],
+): readonly FillRole[] {
+  const selected = normalizeFillRoles(kind, value);
+  if (!Array.isArray(value) || !selected || selected.length !== value.length
+      || selected.some((role, index) => role !== value[index] || !roles.includes(role))) {
+    throw new TypeError('Autofill selected roles are invalid');
+  }
+  return Object.freeze([...selected]);
 }
 
 function actionMatchesSource(action: AutofillContinuationAction, source: AutofillContinuationSource): boolean {

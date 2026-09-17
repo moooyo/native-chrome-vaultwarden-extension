@@ -91,6 +91,7 @@ export interface PopupBrowser {
   getActiveTabUrl?(): Promise<string | undefined>;
   captureVisibleTab(): Promise<string>;
   openOptions(): Promise<void>;
+  openWorkspace?(): Promise<void>;
   openReceive(): Promise<void>;
   openUrl(url: string): Promise<void>;
 }

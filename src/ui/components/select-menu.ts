@@ -1,4 +1,4 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from './tokens.js';
 import { uiIcon } from './icon.js';
 import { emit } from './emit.js';
@@ -34,24 +34,25 @@ export class VwSelect extends LitElement {
   static override styles = [
     themeTokens,
     css`
-      :host { display: inline-block; }
-      .wrap { position: relative; display: inline-flex; align-items: center; }
+      :host { display: inline-block; max-width: 100%; min-width: 0; }
+      .wrap { position: relative; display: inline-flex; align-items: center; max-width: 100%; }
       select {
         appearance: none;
         -webkit-appearance: none;
         height: 40px;
         min-width: 92px;
-        padding: 0 30px 0 11px;
+        max-width: 100%;
+        padding: 0 34px 0 11px;
         border: 1px solid var(--vw-line-3);
-        border-radius:20px;
+        border-radius:var(--vw-radius-control);
         background:var(--vw-card);
         color: var(--vw-ink);
         font-family: var(--vw-font-ui);
-        font-size: 12px;
+        font-size: 13px;
         cursor: pointer;
       }
       select:hover { background: var(--vw-fill-2); }
-      select:focus-visible { outline: none; box-shadow: var(--vw-focus); }
+      select:focus-visible { outline: 2px solid var(--vw-accent); outline-offset: 2px; border-color: var(--vw-accent); }
       .chev {
         position: absolute;
         right: 10px;
@@ -72,7 +73,7 @@ export class VwSelect extends LitElement {
   protected override render() {
     return html`
       <div class="wrap">
-        <select aria-label=${this.label || 'select'} .value=${this.value} @change=${this.onChange}>
+        <select aria-label=${this.label || nothing} .value=${this.value} @change=${this.onChange}>
           ${this.options.map(
             (opt) => html`<option value=${opt.value} ?selected=${opt.value === this.value}>${opt.label}</option>`,
           )}

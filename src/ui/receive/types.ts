@@ -15,6 +15,7 @@ export interface ReceiveDeps {
   requestOrigins(originPatterns: readonly string[]): Promise<OriginPermissionGrant>;
   removeOrigin(originPattern: string): Promise<boolean>;
   download(bytes: Uint8Array, fileName: string): void;
+  writeClipboard?(text: string): Promise<void>;
 }
 
 export interface OriginPermissionGrant {
@@ -57,7 +58,7 @@ export interface ReceiveFileReadyState {
   /** A validated cross-origin URL waiting for a fresh user gesture to request host permission. */
   pendingDownloadUrl?: string;
   message?: string;
-  messageTone?: 'info' | 'danger';
+  messageTone?: 'info' | 'danger' | 'success';
 }
 
 export interface ReceiveTextReadyState {

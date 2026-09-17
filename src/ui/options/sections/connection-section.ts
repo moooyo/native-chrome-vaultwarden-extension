@@ -3,6 +3,7 @@ import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
+import { settingsSectionStyles } from './section-styles.js';
 import '../../components/setting-card.js';
 import '../../components/status-message.js';
 import type { ConnectionSaveDetail, SectionStatus } from '../types.js';
@@ -52,24 +53,24 @@ export class VwConnectionSection extends LitElement {
 
   static override styles = [
     themeTokens,
+    settingsSectionStyles,
     css`
-      :host { display: flex; flex-direction: column; gap: 8px; }
 
       /* Account identity card */
-      .account { display:flex; align-items:center; gap:14px; padding:14px 16px; background:var(--vw-card); border:1px solid var(--vw-line-1); border-radius:16px; }
-      .avatar { width:40px; height:40px; border-radius:50%; background:#7c4dff; color:#fff; display:grid; place-items:center; font-size:17px; font-weight:500; flex:none; }
+      .account { display:flex; align-items:center; gap:14px; padding:24px; border-bottom:1px solid var(--vw-line-1); }
+      .avatar { width:44px; height:44px; border-radius:50%; background:var(--vw-accent-soft, var(--pc)); color:var(--vw-accent); display:grid; place-items:center; font-size:17px; font-weight:600; flex:none; }
       .account-text { flex: 1; min-width: 0; }
-      .account-name { font-size:14px; font-weight:500; color:var(--vw-ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .account-sub { margin-top: 2px; font-size: 11.5px; color: var(--vw-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .account-name { font-size:16px; font-weight:600; color:var(--vw-ink); overflow-wrap:anywhere; }
+      .account-sub { margin-top: 4px; font-size: 12px; color: var(--vw-muted); line-height:1.6; overflow-wrap:anywhere; }
 
       /* Server URL control */
       .server-control { display: flex; gap: 8px; width: 100%; }
-      .url-input { flex: 1; min-width: 0; height: 30px; padding: 0 11px; border: 1px solid var(--vw-line-3); border-radius: var(--vw-radius-input); background: var(--vw-card); color: var(--vw-ink); font-family: var(--vw-font-ui); font-size: 13px; }
+      .url-input { flex: 1; min-width: 0; height: 40px; box-sizing:border-box; padding: 0 12px; border: 1px solid var(--vw-line-3); border-radius: var(--vw-radius-input); background: var(--vw-card); color: var(--vw-ink); font-family: var(--vw-font-ui); font-size: 13px; }
       .url-input::placeholder { color: var(--vw-placeholder); }
       .url-input:focus { outline: none; border-color: var(--vw-accent); box-shadow: var(--vw-focus); }
 
       /* Buttons */
-      .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; padding: 0 14px; border: 1px solid transparent; border-radius: var(--vw-radius-input); font-family: var(--vw-font-ui); font-size: 12.5px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: background-color var(--vw-dur-fast), border-color var(--vw-dur-fast); }
+      .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; padding: 0 14px; border: 1px solid transparent; border-radius: var(--vw-radius-input); font-family: var(--vw-font-ui); font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: background-color var(--vw-dur-fast), border-color var(--vw-dur-fast); }
       .btn:disabled { opacity: 0.5; cursor: default; }
       .btn:focus-visible { outline: none; box-shadow: var(--vw-focus); }
       .btn svg { width: 14px; height: 14px; }
@@ -85,6 +86,8 @@ export class VwConnectionSection extends LitElement {
       @keyframes vw-spin { to { transform: rotate(360deg); } }
 
       .status { margin-top: 6px; }
+      .settings-sheet > .status { display:block; margin:16px 24px; }
+      @media(prefers-reduced-motion:reduce) { .ico.spin svg { animation:none; } }
     `,
   ];
 
@@ -122,7 +125,9 @@ export class VwConnectionSection extends LitElement {
     const raw = this.renderRoot.querySelector<HTMLInputElement>('[data-server-url]')?.value ?? '';
     let normalized: string;
     try {
-      normalized = new URL(raw).toString();
+      const url = new URL(raw);
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('Invalid server protocol');
+      normalized = url.toString();
     } catch {
       this.validationError = t('auth.serverUrl');
       return;
@@ -148,14 +153,17 @@ export class VwConnectionSection extends LitElement {
   protected override render() {
     const displayName = this.accountName || this.accountEmail || t('popup.account');
     return html`
+      <div class="settings-sheet">
       <div class="account" data-account>
         <div class="avatar" aria-hidden="true">${this.avatarInitial()}</div>
         <div class="account-text">
           <div class="account-name">${displayName}</div>
           <div class="account-sub">${this.accountSubtitle(displayName)}</div>
+          ${this.serverUrl ? html`<div class="account-sub" data-account-server>${this.serverUrl}</div>` : nothing}
         </div>
-        <button type="button" class="btn account-sync" data-manage @click=${() => this.syncNow()}>${uiIcon('refresh')}<span>${t('options.account.syncNow')}</span></button>
       </div>
+
+      ${this.renderStatus()}
 
       <vw-setting-card stacked heading=${t('options.account.serverLabel')} description=${t('options.account.serverDesc')}>
         <div class="server-control">
@@ -167,6 +175,9 @@ export class VwConnectionSection extends LitElement {
             autocomplete="off"
             spellcheck="false"
             placeholder="https://vault.example.com"
+            aria-label=${t('options.account.serverLabel')}
+            aria-invalid=${this.validationError ? 'true' : 'false'}
+            ?disabled=${this.pending}
             .value=${this.serverUrl}
           />
           <button type="button" class="btn ink" data-save ?disabled=${this.pending} @click=${() => this.saveServerUrl()}>
@@ -186,7 +197,7 @@ export class VwConnectionSection extends LitElement {
         <span style="color:var(--grn);font-size:12px;font-weight:500">${t('options.account.enabled')}</span>
       </vw-setting-card>
 
-      ${this.renderStatus()}
+      </div>
     `;
   }
 }

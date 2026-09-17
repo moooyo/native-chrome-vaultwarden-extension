@@ -44,8 +44,9 @@ export class VwSyncBar extends LitElement {
       .bar {
         display:flex;
         align-items:center;
-        height:48px;
-        padding:0 10px 0 14px;
+        min-height:48px;
+        padding:7px 10px 7px 16px;
+        gap:8px;
         border-top:1px solid var(--vw-line-1);
         background:var(--vw-panel);
       }
@@ -53,30 +54,36 @@ export class VwSyncBar extends LitElement {
         flex:1;
         min-width:0;
         color:var(--vw-muted);
-        font-family:var(--vw-font-mono);
-        font-size:9.5px;
-        white-space:nowrap;
+        font-size:11px;
+        line-height:1.5;
+        overflow-wrap:anywhere;
       }
       .actions { display:flex; align-items:center; gap:2px; }
       button {
+        appearance:none;
         display:grid;
         place-items:center;
         width:34px;
         height:34px;
         border:0;
-        border-radius:17px;
+        border-radius:var(--vw-radius-control);
         background:transparent;
         color:var(--vw-text-2);
         cursor:pointer;
+        padding:0;
+        flex:none;
+        transition:background-color var(--vw-dur-fast),color var(--vw-dur-fast);
       }
-      button:hover { background:var(--vw-icon-hover); }
-      button:disabled { opacity:.5; cursor:default; }
+      button:hover:not(:disabled) { background:var(--vw-icon-hover); }
+      button:disabled { color:var(--vw-disabled-fg); cursor:default; }
       button.active { background:var(--pc); color:var(--onpc); }
-      button.add { margin-left:3px; border-radius:12px; background:var(--p); color:var(--onp); }
-      button.add:hover { background:var(--vw-primary-bg-hover); }
-      button:focus-visible { outline:none; box-shadow:var(--vw-focus); }
+      button.add { margin-left:3px; background:var(--p); color:var(--onp); }
+      button.add:hover:not(:disabled) { background:var(--vw-primary-bg-hover); }
+      button.add:disabled { background:var(--vw-disabled-bg); color:var(--vw-disabled-fg); }
+      button:focus-visible { outline:2px solid var(--vw-accent); outline-offset:2px; }
       button svg { width:18px; height:18px; }
       button.add svg { width:20px; height:20px; }
+      @media(prefers-reduced-motion:reduce) { button { transition:none; } }
     `,
   ];
 
@@ -103,7 +110,7 @@ export class VwSyncBar extends LitElement {
     const hint = this.syncHint();
     return html`
       <div class="bar">
-        <span class="hint" title=${hint}>${hint}</span>
+        <span class="hint" role="status" aria-live="polite" title=${hint}>${hint}</span>
         <div class="actions">
           <button type="button" class=${this.generatorActive ? 'active' : ''} title=${t('popup.generator')} aria-label=${t('popup.generator')} aria-pressed=${this.generatorActive ? 'true' : 'false'} ?disabled=${this.disabled} @click=${() => this.fire('vw-generator-toggle')}>${uiIcon('wand')}</button>
           <button type="button" class=${this.totpActive ? 'active' : ''} title=${t('popup.authenticator')} aria-label=${t('popup.authenticator')} aria-pressed=${this.totpActive ? 'true' : 'false'} ?disabled=${this.disabled} @click=${() => this.fire('vw-open-totp')}>${uiIcon('clock')}</button>

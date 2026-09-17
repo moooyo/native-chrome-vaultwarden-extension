@@ -4,6 +4,7 @@ import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
 import { uiIcon } from '../../components/icon.js';
 import { LocalizeController, t } from '../../i18n/index.js';
+import { authIdentityStyles, renderAuthIdentity, type AuthIdentityDisplay } from '../auth/auth-identity.js';
 import {
   MAX_PIN_UTF16_CODE_UNITS,
   pinConstraintViolation,
@@ -17,8 +18,7 @@ import type { DetailStatus, PinSetDetail } from '../types.js';
  * length locally and emits `vw-pin-set` / `vw-pin-remove` — the root performs `auth.setPin` /
  * `auth.disablePin`. No secret is retained beyond the input.
  *
- * Visually it is a MiYu settings panel: a header with a back control, a card, MiYu inputs, an ink
- * primary set button, and a danger remove action when a PIN is already configured.
+ * The settings surface keeps the active vault identity and the device-scoped PIN rules together.
  */
 export class VwPinView extends LitElement {
   static override properties = {
@@ -27,6 +27,7 @@ export class VwPinView extends LitElement {
     requireMasterPasswordOnRestart: { type: Boolean },
     pending: { type: Boolean },
     status: { attribute: false },
+    identity: { attribute: false },
     validationError: { state: true },
   };
 
@@ -35,6 +36,7 @@ export class VwPinView extends LitElement {
   declare requireMasterPasswordOnRestart: boolean;
   declare pending: boolean;
   declare status: DetailStatus | undefined;
+  declare identity: AuthIdentityDisplay | undefined;
   declare validationError: string | undefined;
 
   private i18n = new LocalizeController(this);
@@ -46,33 +48,43 @@ export class VwPinView extends LitElement {
     this.requireMasterPasswordOnRestart = true;
     this.pending = false;
     this.status = undefined;
+    this.identity = undefined;
     this.validationError = undefined;
   }
 
   static override styles = [
     themeTokens,
     controlStyles,
+    authIdentityStyles,
     css`
       :host {
         display: block;
+        min-width: 0;
+        color: var(--vw-ink);
+        background: var(--vw-panel);
       }
       .head {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 6px 0 12px;
+        padding: 6px 0 16px;
       }
       .head h1 {
         margin: 0;
-        font-size: 15px;
+        font-size: 18px;
         font-weight: 600;
+        line-height: 1.4;
+        letter-spacing: -0.015em;
         color: var(--vw-ink);
       }
       .card {
-        padding: 14px;
+        padding: 16px 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 16px;
       }
       .row {
         display: flex;
@@ -97,7 +109,7 @@ export class VwPinView extends LitElement {
       .row-text {
         display: flex;
         flex-direction: column;
-        gap: 1px;
+        gap: 4px;
         min-width: 0;
       }
       .row-title {
@@ -111,9 +123,22 @@ export class VwPinView extends LitElement {
         color: var(--vw-muted);
       }
       .hint {
-        font-size: 11.5px;
-        color: var(--vw-faint);
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--vw-muted);
       }
+      .field {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        gap: 7px;
+      }
+      .field-label {
+        color: var(--vw-text-2);
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .input[aria-invalid='true'] { border-color: var(--vw-danger-border); }
       .check-row {
         display: flex;
         align-items: flex-start;
@@ -145,7 +170,7 @@ export class VwPinView extends LitElement {
   }
 
   private emitRemove(): void {
-    if (this.pending) return;
+    if (this.pending || !this.allowed) return;
     emit(this, 'vw-pin-remove');
   }
 
@@ -212,23 +237,28 @@ export class VwPinView extends LitElement {
     return html`
       <div class="card">
         <span class="section-label">${t('auth.pinEnabledDesc')}</span>
-        <input
-          class="input"
-          data-pin
-          type="password"
-          autocomplete="off"
-          maxlength=${MAX_PIN_UTF16_CODE_UNITS}
-          placeholder=${t('auth.pin')}
-          ?disabled=${this.pending}
-          @keydown=${(e: KeyboardEvent) => this.onKeydown(e)}
-        />
-        <span class="hint">${t('auth.pinRange')}</span>
+        <label class="field">
+          <span class="field-label">${t('auth.pin')}</span>
+          <input
+            class="input"
+            data-pin
+            type="password"
+            autocomplete="off"
+            maxlength=${MAX_PIN_UTF16_CODE_UNITS}
+            aria-invalid=${this.validationError ? 'true' : 'false'}
+            aria-describedby="pin-hint"
+            ?disabled=${this.pending || !this.allowed}
+            @input=${() => { this.validationError = undefined; }}
+            @keydown=${(e: KeyboardEvent) => this.onKeydown(e)}
+          />
+          <span id="pin-hint" class="hint">${t('auth.pinRange')}</span>
+        </label>
         <label class="check-row">
           <input
             data-require-restart
             type="checkbox"
             .checked=${this.requireMasterPasswordOnRestart}
-            ?disabled=${this.pending}
+            ?disabled=${this.pending || !this.allowed}
             @change=${(event: Event) => {
               this.requireMasterPasswordOnRestart = (event.target as HTMLInputElement).checked;
             }}
@@ -239,7 +269,7 @@ export class VwPinView extends LitElement {
           type="button"
           class="btn primary block"
           data-set
-          ?disabled=${this.pending}
+          ?disabled=${this.pending || !this.allowed}
           @click=${() => this.setPin()}
         >
           ${uiIcon('lock')}<span>${t('auth.setPin')}</span>
@@ -277,6 +307,7 @@ export class VwPinView extends LitElement {
         </button>
         <h1>${t('auth.usePin')}</h1>
       </div>
+      ${renderAuthIdentity(this.identity)}
       ${!this.allowed ? this.renderManaged() : this.enabled ? this.renderEnabled() : this.renderSetForm()}
       ${this.renderStatus()}
     `;

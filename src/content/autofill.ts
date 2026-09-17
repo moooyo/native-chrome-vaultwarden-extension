@@ -69,6 +69,7 @@ import {
   type FillProjection,
 } from './focused-fill.js';
 import { createAutofillPopover } from './popover.js';
+import { createStructuredPreview, positionStructuredPreview } from './ui/structured-preview-element.js';
 import {
   claimInlineSurface,
   inlineSurfaceScope,
@@ -163,6 +164,9 @@ let focusedFillQueueGeneration = 0;
 let focusedFillQueue: Promise<void> = Promise.resolve();
 const focusedFillCycle = new FocusedFillCycle();
 let restoredAutofillFocusTargets = new WeakSet<HTMLElement>();
+const structuredCandidates = new WeakMap<ReturnType<typeof createAutofillPopover>, ReadonlyMap<string, FillItemCandidate>>();
+let dismissStructuredPreview: (() => void) | undefined;
+let structuredFillInFlight: { readonly runtime: AutofillRuntime; readonly token: symbol } | undefined;
 
 // The suspended document keeps only navigation metadata and a one-shot hook. The runtime and all
 // target, grant, continuation, capture, and surface state are destroyed before this is armed.
@@ -370,6 +374,7 @@ function teardownRuntime(): void {
     for (const timer of runtime.surfaceTimers) window.clearTimeout(timer);
     runtime.surfaceTimers.clear();
   }
+  frameController?.clearStructuredSelection();
   activeRuntime = undefined;
   frameController = undefined;
   clearContextTargets();
@@ -570,11 +575,18 @@ function installRuntimePageListeners(runtime: AutofillRuntime): () => void {
   const onSameDocumentNavigation = (): void => {
     if (activeRuntime === runtime) refreshRuntimeForUrlChange(runtime);
   };
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (activeRuntime !== runtime || !event.isTrusted || event.defaultPrevented || event.key !== 'Escape') return;
+    if (dismissables.size === 0) return;
+    event.preventDefault();
+    dismissOtherSurfaces();
+  };
   const view = ownerDocument.defaultView;
   view?.addEventListener('message', onWindowMessage, false);
   view?.addEventListener('pagehide', onPageHide, { once: true });
   view?.addEventListener('popstate', onSameDocumentNavigation, false);
   view?.addEventListener('hashchange', onSameDocumentNavigation, false);
+  ownerDocument.addEventListener('keydown', onKeyDown, false);
   return () => {
     stopContextMenu();
     stopFocus();
@@ -583,6 +595,7 @@ function installRuntimePageListeners(runtime: AutofillRuntime): () => void {
     view?.removeEventListener('pagehide', onPageHide, false);
     view?.removeEventListener('popstate', onSameDocumentNavigation, false);
     view?.removeEventListener('hashchange', onSameDocumentNavigation, false);
+    ownerDocument.removeEventListener('keydown', onKeyDown, false);
   };
 }
 
@@ -1006,6 +1019,10 @@ function attachPopover(getFrameUrl: FrameUrlProvider, form: DetectedLoginForm): 
     onSelect: (cipherId) => {
       void fillSelected(getFrameUrl, form, cipherId, popover);
     },
+    onDismiss: () => {
+      releaseAutofillSurface(popover);
+      unregisterDismissable(popover.element);
+    },
   });
   popover.element.dataset.vwPopoverFor = form.id;
   popoverRegistry.set(form.id, popover);
@@ -1023,6 +1040,10 @@ function attachStructuredPopover(getFrameUrl: FrameUrlProvider, form: DetectedFi
     },
     onSelect: (cipherId) => {
       void fillStructuredSelected(getFrameUrl, form, cipherId, popover);
+    },
+    onDismiss: () => {
+      releaseAutofillSurface(popover);
+      unregisterDismissable(popover.element);
     },
   });
   popoverRegistry.set(form.id, popover);
@@ -1104,9 +1125,10 @@ async function fillSelected(
   ));
   settleClientEventAck(login.data, filled);
   if (filled) {
-    popover.showFilled();
+    const receiptCurrent = popover.showFilled();
     // Show the filled confirmation briefly, then dismiss the panel.
     scheduleRuntimeTimeout(runtime, () => {
+      if (receiptCurrent && !receiptCurrent()) return;
       releaseAutofillSurface(popover);
       popover.hide();
       unregisterDismissable(popover.element);
@@ -1142,6 +1164,7 @@ async function loadStructuredCandidates(
     popover.showStatus('Unexpected autofill response');
     return;
   }
+  structuredCandidates.set(popover, new Map(response.data.map((candidate) => [candidate.id, candidate])));
   popover.showCandidates(response.data.map((candidate) => ({
     id: candidate.id,
     name: candidate.name,
@@ -1159,6 +1182,10 @@ async function fillStructuredSelected(
 ): Promise<void> {
   const runtime = activeRuntime;
   if (!runtime) return;
+  if (structuredFillInFlight?.runtime === runtime) {
+    popover.showStatus('正在处理填充，请稍后重试。');
+    return;
+  }
   const config = await refreshClientConfig(runtime);
   if (activeRuntime !== runtime || !config.inlineSuggestions || !popover.element.isConnected) return;
   const epoch = runtime.epoch;
@@ -1167,27 +1194,70 @@ async function fillStructuredSelected(
     popover.showStatus('Form is no longer available');
     return;
   }
-  const outcome = await requestStructuredFill(runtime, cipherId, form);
-  if (
-    activeRuntime !== runtime
-    || runtime.epoch !== epoch
-    || !runtime.config.inlineSuggestions
-    || !popover.element.isConnected
-  ) return;
-  if (!outcome.ok) {
-    popover.showStatus(outcome.message);
-    return;
-  }
-  if (getFrameUrl() !== frameUrl) {
-    popover.showStatus('Page changed before autofill');
-    return;
-  }
-  popover.showFilled();
-  scheduleRuntimeTimeout(runtime, () => {
-    releaseAutofillSurface(popover);
-    popover.hide();
-    unregisterDismissable(popover.element);
-  }, FILLED_DISMISS_MS);
+  const target = captureStructuredTarget(form);
+  const candidate = structuredCandidates.get(popover)?.get(cipherId);
+  if (!target || !candidate) return;
+  const values = new Map([...form.fields].map(([role, field]) => [role, { field, value: field.value }]));
+  dismissStructuredPreview?.();
+  releaseAutofillSurface(popover);
+  popover.hide();
+  unregisterDismissable(popover.element);
+  const scope = inlineSurfaceScope(form.anchor);
+  const current = (): boolean => activeRuntime === runtime && runtime.epoch === epoch
+    && runtime.config.inlineSuggestions && getFrameUrl() === frameUrl && isCurrentStructuredForm(runtime, form);
+  const close = (): void => {
+    if (dismissStructuredPreview === close) {
+      dismissStructuredPreview = undefined;
+      frameController?.clearStructuredSelection();
+    }
+    unregisterDismissable(preview.element);
+    releaseInlineSurface(scope, preview.element);
+    preview.remove();
+  };
+  const preview = createStructuredPreview({
+    anchor: form.anchor,
+    kind: form.kind,
+    itemName: candidate.name,
+    site: new URL(frameUrl).hostname,
+    fields: target.roles.map((role) => ({ role, hasValue: values.get(role)!.value.trim().length > 0 })),
+    onDismiss: close,
+    onConfirm: (roles) => {
+      if (structuredFillInFlight?.runtime === runtime) {
+        preview.showError('正在处理填充，请稍后重试。');
+        return;
+      }
+      const flight = { runtime, token: Symbol('structured-fill') };
+      structuredFillInFlight = flight;
+      void (async () => {
+        try {
+          if (!current() || dismissStructuredPreview !== close || roles.some((role) => {
+            const captured = values.get(role);
+            return !captured || captured.field.value !== captured.value;
+          })) {
+            preview.showError('表单内容已变化，请关闭并重新选择字段。');
+            return;
+          }
+          const outcome = await requestStructuredFill(runtime, cipherId, form, undefined, { roles, target });
+          if (!current() || !preview.element.isConnected) { close(); return; }
+          if (!outcome.ok) { preview.showError(outcome.message); return; }
+          const receipt = ensureFrameController().takeStructuredUndo();
+          if (receipt) preview.showReceipt(receipt);
+          else preview.showError('填充状态已变化，请检查表单内容。');
+          positionStructuredPreview(preview.element, form.anchor);
+        } catch {
+          if (preview.element.isConnected) preview.showError('暂时无法填充，请关闭后重试。');
+        } finally {
+          if (dismissStructuredPreview === close) frameController?.clearStructuredSelection();
+          if (structuredFillInFlight === flight) structuredFillInFlight = undefined;
+        }
+      })();
+    },
+  });
+  dismissStructuredPreview = close;
+  if (!claimInlineSurface(scope, preview.element, close, 1)) { close(); return; }
+  dismissOtherSurfaces(preview.element);
+  registerDismissable(preview.element, form.anchor.closest('form') ?? form.anchor, close);
+  positionStructuredPreview(preview.element, form.anchor);
 }
 
 function isAutofillCandidates(data: unknown[]): data is AutofillCandidate[] {
@@ -1491,9 +1561,23 @@ async function requestStructuredFill(
   cipherId: string,
   form: DetectedFillForm,
   keyboard?: ClaimedKeyboardGrant,
+  selection?: { readonly roles: readonly FillRole[]; readonly target: ContentStructuredAutofillTarget },
 ): Promise<IntentOutcome<void>> {
-  const target = captureStructuredTarget(form);
+  let target = captureStructuredTarget(form);
   if (!target) return { ok: false, message: 'Autofill target changed' };
+  if (selection) {
+    if (!equalStructuredTarget(target, selection.target)) return { ok: false, message: 'Autofill target changed' };
+    const roles = normalizeFillRoles(target.kind, selection.roles);
+    const capturedRoles = new Set<FillRole>(target.roles);
+    if (!roles || !equalFillRoles(target.kind, roles, selection.roles)
+        || roles.some((role) => !capturedRoles.has(role))) return { ok: false, message: 'Autofill target changed' };
+    target = target.kind === 'card'
+      ? { ...target, selectedRoles: normalizeFillRoles('card', roles)! }
+      : { ...target, selectedRoles: normalizeFillRoles('identity', roles)! };
+    if (!ensureFrameController().prepareStructuredSelection(target.formId, target.generation, roles)) {
+      return { ok: false, message: 'Autofill target changed' };
+    }
+  }
   if (
     keyboard
     && (
@@ -1542,7 +1626,9 @@ function equalStructuredTarget(
     && first.formId === second.formId
     && first.generation === second.generation
     && first.roles.length === second.roles.length
-    && first.roles.every((role, index) => role === second.roles[index]);
+    && first.roles.every((role, index) => role === second.roles[index])
+    && (first.selectedRoles === undefined) === (second.selectedRoles === undefined)
+    && (first.selectedRoles === undefined || equalFillRoles(first.kind, first.selectedRoles, second.selectedRoles));
 }
 
 function captureStructuredTarget(form: DetectedFillForm): ContentStructuredAutofillTarget | undefined {
@@ -2069,6 +2155,12 @@ function registerAutofillFocusRestore(target: HTMLElement): () => void {
   return () => { restoredAutofillFocusTargets.delete(target); };
 }
 
+function restoreInlineFieldFocus(target: HTMLElement): void {
+  if (!target.isConnected || document.activeElement === target) return;
+  const clear = registerAutofillFocusRestore(target);
+  try { target.focus({ preventScroll: true }); } finally { clear(); }
+}
+
 async function handleAutofillFocus(runtime: AutofillRuntime, field: FillFieldElement): Promise<void> {
   const snapshot = runtime.documentController.snapshot();
   const projection = computeFillProjection(snapshot);
@@ -2184,7 +2276,7 @@ function registerDismissable(host: HTMLElement, keep: HTMLElement, dismiss: () =
  *  their `keep` is the whole form — so without this, focusing a second field in the same form would
  *  stack panels instead of replacing them. `except` is skipped so re-focusing a panel's own form (e.g.
  *  moving between a login's username and password) doesn't tear down the panel in use. */
-function dismissOtherSurfaces(except: HTMLElement): void {
+function dismissOtherSurfaces(except?: HTMLElement): void {
   for (const [host, entry] of [...dismissables]) {
     if (host === except) continue;
     dismissables.delete(host);
@@ -2197,8 +2289,8 @@ function unregisterDismissable(host: HTMLElement): void {
 }
 
 /** After a successful fill/save the confirmation bar shows briefly, then the whole panel auto-dismisses
- *  so it never lingers over the form. Shared 1s delay for login / 2FA / generator. */
-const FILLED_DISMISS_MS = 1000;
+ *  so it never lingers over the form. Shared 3s delay for login, verification codes, and generation. */
+const FILLED_DISMISS_MS = 3000;
 
 function handleTrustedPointerDown(target: EventTarget): void {
   if (!(target instanceof Node)) return;
@@ -2454,6 +2546,7 @@ async function attachTotpPanel(id: string, totpInput: HTMLInputElement): Promise
         itemUser: selectedChoice.candidate.username ?? '',
         code,
         remaining,
+        period: currentTotp?.period ?? 30,
       });
     };
     const startSelectionTimer = (choice: (typeof choices)[number], generation: number): void => {
@@ -2528,6 +2621,10 @@ async function attachTotpPanel(id: string, totpInput: HTMLInputElement): Promise
     };
     const panel = createTotpPanel({
       anchor: totpInput,
+      onDismiss: () => {
+        removeTotp(id);
+        restoreInlineFieldFocus(totpInput);
+      },
       onSelect: selectCandidate,
       onChooseOther: () => {
         if (!targetAuthorityCurrent()) { removeTotp(id); return; }
@@ -2559,7 +2656,9 @@ async function attachTotpPanel(id: string, totpInput: HTMLInputElement): Promise
         panel.showFilled();
         stopTotp(id);
         // Show the verification-code confirmation briefly, then dismiss the panel.
-        scheduleRuntimeTimeout(runtime, () => removeTotp(id), FILLED_DISMISS_MS);
+        scheduleRuntimeTimeout(runtime, () => {
+          if (totpPanels.get(id)?.panel === panel) removeTotp(id);
+        }, FILLED_DISMISS_MS);
       },
       onCopy: () => {
         if (!code || !selectionCurrent(selectionGeneration)) return;
@@ -2630,6 +2729,7 @@ const genPanels = new Map<string, { panel: GeneratePanel; input: HTMLInputElemen
 const generatedSaveAttempts = new Set<string>();
 
 function teardownInlineSurfaces(): void {
+  dismissStructuredPreview?.();
   for (const popover of popoverRegistry.values()) {
     unregisterDismissable(popover.element);
     releaseAutofillSurface(popover);
@@ -2792,6 +2892,18 @@ function attachGeneratePanel(target: DetectedRegistrationField): void {
 
   const panel = createGeneratePanel({
     anchor: target.anchor,
+    onDismiss: () => {
+      panel.remove();
+      if (genPanels.get(target.id)?.panel === panel) genPanels.delete(target.id);
+      unregisterDismissable(panel.element);
+      restoreInlineFieldFocus(target.input);
+    },
+    onMode: (mode) => {
+      if (!canTune()) return;
+      state.mode = mode;
+      regen();
+      push();
+    },
     // Editing the username must NOT re-render (it would reset the field and drop the caret) — just
     // record it; the next push (regen/rule change) re-renders with the recorded value.
     onUsername: (value) => { if (isCurrentGenerator(true)) state.username = value; },
@@ -3133,6 +3245,7 @@ export function handleFrameAutofillMessage(
       kind: message.kind,
       formId: message.formId,
       roles: [...message.roles],
+      ...(message.selectedRoles ? { selectedRoles: [...message.selectedRoles] } : {}),
       expectedFrameUrl: message.expectedFrameUrl,
       expectedGeneration: message.expectedGeneration,
       data: message.data,
@@ -3142,6 +3255,7 @@ export function handleFrameAutofillMessage(
     kind: message.kind,
     formId: message.formId,
     roles: [...message.roles],
+    ...(message.selectedRoles ? { selectedRoles: [...message.selectedRoles] } : {}),
     expectedFrameUrl: message.expectedFrameUrl,
     expectedGeneration: message.expectedGeneration,
     data: message.data,
@@ -3911,6 +4025,11 @@ function isFrameAutofillMessage(value: unknown): value is FrameAutofillMessage {
   if (value.type !== 'autofill.commitStructuredFill'
       || (value.kind !== 'card' && value.kind !== 'identity')
       || !isCanonicalCommandRoles(value.kind, 'form', value.roles)) return false;
+  if (Object.hasOwn(value, 'selectedRoles')) {
+    if (!isCanonicalCommandRoles(value.kind, 'form', value.selectedRoles)
+        || !(value.selectedRoles as readonly FillRole[]).every((role) => (value.roles as readonly FillRole[]).includes(role))) return false;
+    return isMinimalFillData(value.kind, value.selectedRoles, value.data);
+  }
   return isMinimalFillData(value.kind, value.roles, value.data);
 }
 

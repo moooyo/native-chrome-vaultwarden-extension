@@ -1,4 +1,4 @@
-import { LitElement, css, html, nothing } from 'lit';
+import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
 import { controlStyles } from '../../components/styles.js';
@@ -13,6 +13,7 @@ import {
   masterPasswordHintValidationError,
 } from '../../../core/policy/master-password-policy.js';
 import type { ChangeKdfDetail, ChangePasswordDetail, DetailStatus, RotateKeyDetail } from '../types.js';
+import { authIdentityStyles, renderAuthIdentity, type AuthIdentityDisplay } from '../auth/auth-identity.js';
 
 const MIN_KDF_ITERATIONS = 600_000;
 // Upper guard: a mistyped count (e.g. 100_000_000) would make every later unlock run PBKDF2 for
@@ -35,7 +36,8 @@ type ValidationField =
   | 'argon2-iterations'
   | 'argon2-memory'
   | 'argon2-parallelism'
-  | 'rotate-current-password';
+  | 'rotate-current-password'
+  | 'rotate-consent';
 
 /**
  * Account security (MiYu design): change the master password, change PBKDF2/Argon2id settings, or
@@ -52,6 +54,9 @@ export class VwAccountSecurityView extends LitElement {
     validationError: { state: true },
     validationField: { state: true },
     kdfType: { state: true },
+    identity: { attribute: false },
+    rotationAccepted: { state: true },
+    rotationHasPassword: { state: true },
   };
 
   declare pending: boolean;
@@ -60,6 +65,9 @@ export class VwAccountSecurityView extends LitElement {
   declare validationError: string | undefined;
   declare validationField: ValidationField | undefined;
   declare kdfType: 0 | 1;
+  declare identity: AuthIdentityDisplay | undefined;
+  private declare rotationAccepted: boolean;
+  private declare rotationHasPassword: boolean;
 
   private i18n = new LocalizeController(this);
 
@@ -71,11 +79,15 @@ export class VwAccountSecurityView extends LitElement {
     this.validationError = undefined;
     this.validationField = undefined;
     this.kdfType = 0;
+    this.identity = undefined;
+    this.rotationAccepted = false;
+    this.rotationHasPassword = false;
   }
 
   static override styles = [
     themeTokens,
     controlStyles,
+    authIdentityStyles,
     css`
       :host {
         display: flex;
@@ -87,12 +99,13 @@ export class VwAccountSecurityView extends LitElement {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 10px 14px;
+        padding: 16px 18px;
+        border-bottom: 1px solid var(--vw-line-1);
         flex: none;
       }
       .head h1 {
         margin: 0;
-        font-size: 14px;
+        font-size: 18px;
         font-weight: 600;
         color: var(--vw-ink);
       }
@@ -102,8 +115,8 @@ export class VwAccountSecurityView extends LitElement {
         overflow-y: auto;
         display: flex;
         flex-direction: column;
-        gap: 10px;
-        padding: 2px 14px 14px;
+        gap: 16px;
+        padding: 16px 18px;
         scrollbar-width: thin;
         scrollbar-color: var(--vw-scrollbar) transparent;
       }
@@ -120,7 +133,7 @@ export class VwAccountSecurityView extends LitElement {
       .form {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 10px;
       }
       .input.bordered {
         background: var(--vw-fill-2);
@@ -142,7 +155,7 @@ export class VwAccountSecurityView extends LitElement {
         gap: 10px;
         padding: 12px;
         border: 1px solid var(--vw-danger-border);
-        border-radius: var(--vw-radius-card);
+        border-radius: var(--vw-radius-control);
         background: var(--vw-danger-10);
         color: var(--vw-danger);
         font-size: 12.5px;
@@ -179,8 +192,16 @@ export class VwAccountSecurityView extends LitElement {
       }
       .field-label {
         color: var(--vw-text-3);
-        font-size: 10.5px;
+        font-size: 11.5px;
       }
+      .consent { display: flex; align-items: flex-start; gap: 9px; color: var(--vw-text-2); font-size: 12px; line-height: 1.5; }
+      .consent input { flex: none; margin: 3px 0 0; accent-color: var(--vw-accent); }
+      .consent[aria-invalid='true'] { color: var(--vw-danger); }
+      .field { display: grid; gap: 6px; }
+      .security-disclosure { border-top: 1px solid var(--vw-line-1); padding-top: 14px; }
+      .security-disclosure summary { color: var(--vw-text-2); font-size: 13px; font-weight: 500; cursor: pointer; }
+      .security-disclosure[open] summary { margin-bottom: 12px; }
+      .security-disclosure summary:focus-visible { outline: 2px solid var(--vw-accent); outline-offset: 4px; }
       .sr-only {
         position: absolute;
         width: 1px;
@@ -195,15 +216,44 @@ export class VwAccountSecurityView extends LitElement {
     `,
   ];
 
+  protected override willUpdate(changed: PropertyValues<this>): void {
+    if (!changed.has('identity')) return;
+    const previous = changed.get('identity') as AuthIdentityDisplay | undefined;
+    if (previous?.email !== this.identity?.email || previous?.server !== this.identity?.server) {
+      this.scrubPasswords();
+      this.rotationAccepted = false;
+      this.rotationHasPassword = false;
+      this.view = 'main';
+      this.clearValidationError();
+    }
+  }
+
+  override disconnectedCallback(): void {
+    this.scrubPasswords();
+    super.disconnectedCallback();
+  }
+
+  private scrubPasswords(): void {
+    for (const input of this.renderRoot.querySelectorAll<HTMLInputElement>('input[type="password"]')) {
+      input.value = '';
+    }
+  }
+
   private read(sel: string): string {
     return this.renderRoot.querySelector<HTMLInputElement>(sel)?.value ?? '';
   }
 
   private back(): void {
+    if (this.pending) return;
+    this.scrubPasswords();
     emit(this, 'vw-item-back');
   }
 
   private toMain(): void {
+    if (this.pending) return;
+    this.scrubPasswords();
+    this.rotationAccepted = false;
+    this.rotationHasPassword = false;
     this.view = 'main';
     this.clearValidationError();
   }
@@ -229,13 +279,13 @@ export class VwAccountSecurityView extends LitElement {
     const newPassword = this.read('[data-new]');
     const confirm = this.read('[data-confirm]');
     const masterPasswordHint = this.read('[data-hint]');
-    if (!currentPassword) { this.reject('current-password', '请输入当前主密码和新主密码'); return; } // TODO i18n
-    if (!newPassword) { this.reject('new-password', '请输入当前主密码和新主密码'); return; } // TODO i18n
+    if (!currentPassword) { this.reject('current-password', t('security.passwordsRequired')); return; }
+    if (!newPassword) { this.reject('new-password', t('security.passwordsRequired')); return; }
     if (newPassword.length < DEFAULT_MASTER_PASSWORD_MIN_LENGTH) {
       this.reject('new-password', t('auth.passwordMin', { min: DEFAULT_MASTER_PASSWORD_MIN_LENGTH }));
       return;
     }
-    if (newPassword !== confirm) { this.reject('confirm-password', '两次输入的新主密码不一致'); return; } // TODO i18n
+    if (newPassword !== confirm) { this.reject('confirm-password', t('auth.passwordMismatch')); return; }
     const hintError = masterPasswordHintValidationError(masterPasswordHint, newPassword);
     if (hintError === 'tooLong') {
       this.reject('password-hint', t('security.masterPasswordHintTooLong', {
@@ -258,11 +308,11 @@ export class VwAccountSecurityView extends LitElement {
     if (this.pending) return;
     this.clearValidationError();
     const currentPassword = this.read('[data-kdf-current]');
-    if (!currentPassword) { this.reject('kdf-current-password', '请输入当前主密码'); return; } // TODO i18n
+    if (!currentPassword) { this.reject('kdf-current-password', t('security.currentPasswordRequired')); return; }
     if (this.kdfType === 0) {
       const iterations = Number(this.read('[data-iterations]'));
-      if (!Number.isInteger(iterations) || iterations < MIN_KDF_ITERATIONS) { this.reject('pbkdf2-iterations', '迭代次数至少为 600000'); return; } // TODO i18n
-      if (iterations > MAX_KDF_ITERATIONS) { this.reject('pbkdf2-iterations', '迭代次数不能超过 2000000'); return; } // TODO i18n
+      if (!Number.isInteger(iterations) || iterations < MIN_KDF_ITERATIONS) { this.reject('pbkdf2-iterations', t('security.pbkdf2Minimum', { min: MIN_KDF_ITERATIONS })); return; }
+      if (iterations > MAX_KDF_ITERATIONS) { this.reject('pbkdf2-iterations', t('security.pbkdf2Maximum', { max: MAX_KDF_ITERATIONS })); return; }
       emit<ChangeKdfDetail>(this, 'vw-change-kdf', {
         currentPassword,
         kdf: { kdf: 0, kdfIterations: iterations },
@@ -274,13 +324,13 @@ export class VwAccountSecurityView extends LitElement {
     const memory = Number(this.read('[data-argon-memory]'));
     const parallelism = Number(this.read('[data-argon-parallelism]'));
     if (!Number.isInteger(iterations) || iterations < MIN_ARGON2_ITERATIONS || iterations > MAX_ARGON2_ITERATIONS) {
-      this.reject('argon2-iterations', 'Argon2 迭代次数必须在 2 到 10 之间'); return; // TODO i18n
+      this.reject('argon2-iterations', t('security.argon2IterationsRange', { min: MIN_ARGON2_ITERATIONS, max: MAX_ARGON2_ITERATIONS })); return;
     }
     if (!Number.isInteger(memory) || memory < MIN_ARGON2_MEMORY_MIB || memory > MAX_ARGON2_MEMORY_MIB) {
-      this.reject('argon2-memory', 'Argon2 内存必须在 16 到 1024 MiB 之间'); return; // TODO i18n
+      this.reject('argon2-memory', t('security.argon2MemoryRange', { min: MIN_ARGON2_MEMORY_MIB, max: MAX_ARGON2_MEMORY_MIB })); return;
     }
     if (!Number.isInteger(parallelism) || parallelism < MIN_ARGON2_PARALLELISM || parallelism > MAX_ARGON2_PARALLELISM) {
-      this.reject('argon2-parallelism', 'Argon2 并行度必须在 1 到 16 之间'); return; // TODO i18n
+      this.reject('argon2-parallelism', t('security.argon2ParallelismRange', { min: MIN_ARGON2_PARALLELISM, max: MAX_ARGON2_PARALLELISM })); return;
     }
     emit<ChangeKdfDetail>(this, 'vw-change-kdf', {
       currentPassword,
@@ -297,7 +347,15 @@ export class VwAccountSecurityView extends LitElement {
     if (this.pending) return;
     this.clearValidationError();
     const masterPassword = this.read('[data-rotate-current]');
-    if (!masterPassword) { this.reject('rotate-current-password', '请输入当前主密码'); return; } // TODO i18n
+    if (!masterPassword.trim()) { this.reject('rotate-current-password', t('security.currentPasswordRequired')); return; }
+    const consent = this.renderRoot.querySelector<HTMLInputElement>('[data-rotate-consent]');
+    if (!this.rotationAccepted || !consent?.checked) {
+      this.reject('rotate-consent', t('security.rotateKeyConsentRequired'));
+      return;
+    }
+    this.scrubPasswords();
+    this.rotationHasPassword = false;
+    this.rotationAccepted = false;
     emit<RotateKeyDetail>(this, 'vw-rotate-key', { masterPassword });
   }
 
@@ -319,11 +377,13 @@ export class VwAccountSecurityView extends LitElement {
         <h1>${t('security.rotateKey')}</h1>
       </div>
       <div class="content">
+        ${renderAuthIdentity(this.identity)}
         <div class="warning">
           ${uiIcon('alert')}
-          <span>${t('security.rotateKeyWarn')}。所有已登录设备需要重新登录，且此操作无法撤销。</span>
-          <!-- TODO i18n: second sentence -->
+          <span>${t('security.rotateKeyWarn')} ${t('security.rotateKeyImpact')}</span>
         </div>
+        <label class="field">
+        <span class="field-label">${t('security.currentPassword')}</span>
         <input
           class="input bordered"
           data-rotate-current
@@ -333,12 +393,19 @@ export class VwAccountSecurityView extends LitElement {
           aria-label=${t('security.currentPassword')}
           aria-invalid=${this.fieldInvalid('rotate-current-password') ? 'true' : 'false'}
           aria-describedby=${this.fieldInvalid('rotate-current-password') ? 'account-security-validation-error' : nothing}
+          ?disabled=${this.pending}
+          @input=${() => { this.rotationHasPassword = Boolean(this.read('[data-rotate-current]').trim()); this.clearValidationError(); }}
         />
+        </label>
+        <label class="consent" aria-invalid=${this.fieldInvalid('rotate-consent') ? 'true' : 'false'}>
+          <input type="checkbox" data-rotate-consent .checked=${this.rotationAccepted} ?disabled=${this.pending} @change=${(event: Event) => { this.rotationAccepted = (event.target as HTMLInputElement).checked; this.clearValidationError(); }} />
+          <span>${t('security.rotateKeyConsent')}</span>
+        </label>
         <div class="row">
-          <button type="button" class="btn danger" data-rotate-confirm ?disabled=${this.pending} @click=${() => this.confirmRotate()}>
+          <button type="button" class="btn danger" data-rotate-confirm ?disabled=${this.pending || !this.rotationHasPassword || !this.rotationAccepted} @click=${() => this.confirmRotate()}>
             ${uiIcon('key')}<span>${t('security.rotateKey')}</span>
           </button>
-          <button type="button" class="btn outline" data-rotate-cancel @click=${() => this.toMain()}>${t('common.cancel')}</button>
+          <button type="button" class="btn outline" data-rotate-cancel ?disabled=${this.pending} @click=${() => this.toMain()}>${t('common.cancel')}</button>
         </div>
         ${this.renderStatus()}
       </div>
@@ -354,8 +421,11 @@ export class VwAccountSecurityView extends LitElement {
         <h1>${t('popup.accountSecurity')}</h1>
       </div>
       <div class="content">
+        ${renderAuthIdentity(this.identity)}
         <vw-setting-card stacked emphasized heading=${t('security.changePassword.title')}>
           <div class="form">
+            <label class="field">
+            <span class="field-label">${t('security.currentPassword')}</span>
             <input
               class="input bordered"
               data-current
@@ -365,7 +435,11 @@ export class VwAccountSecurityView extends LitElement {
               aria-label=${t('security.currentPassword')}
               aria-invalid=${this.fieldInvalid('current-password') ? 'true' : 'false'}
               aria-describedby=${this.fieldInvalid('current-password') ? 'account-security-validation-error' : nothing}
+              ?disabled=${this.pending}
             />
+            </label>
+            <label class="field">
+            <span class="field-label">${t('security.newPassword')}</span>
             <input
               class="input bordered"
               data-new
@@ -377,7 +451,11 @@ export class VwAccountSecurityView extends LitElement {
               aria-label=${t('security.newPassword')}
               aria-invalid=${this.fieldInvalid('new-password') ? 'true' : 'false'}
               aria-describedby=${this.fieldInvalid('new-password') ? 'account-security-validation-error' : nothing}
+              ?disabled=${this.pending}
             />
+            </label>
+            <label class="field">
+            <span class="field-label">${t('security.confirmPassword')}</span>
             <input
               class="input bordered"
               data-confirm
@@ -389,7 +467,11 @@ export class VwAccountSecurityView extends LitElement {
               aria-label=${t('security.confirmPassword')}
               aria-invalid=${this.fieldInvalid('confirm-password') ? 'true' : 'false'}
               aria-describedby=${this.fieldInvalid('confirm-password') ? 'account-security-validation-error' : nothing}
+              ?disabled=${this.pending}
             />
+            </label>
+            <label class="field">
+            <span class="field-label">${t('security.masterPasswordHint')}</span>
             <input
               class="input bordered"
               data-hint
@@ -400,15 +482,21 @@ export class VwAccountSecurityView extends LitElement {
               aria-label=${t('security.masterPasswordHint')}
               aria-invalid=${this.fieldInvalid('password-hint') ? 'true' : 'false'}
               aria-describedby=${this.fieldInvalid('password-hint') ? 'account-security-validation-error' : nothing}
+              ?disabled=${this.pending}
             />
+            </label>
             <button type="button" class="btn primary wide" data-change-password ?disabled=${this.pending} @click=${() => this.changePassword()}>
               ${uiIcon('check')}<span>${t('security.changePassword.title')}</span>
             </button>
           </div>
         </vw-setting-card>
 
-        <vw-setting-card stacked emphasized heading=${t('security.changeKdf')} description=${this.kdfType === 0 ? 'PBKDF2' : 'Argon2id'}>
+        <details class="security-disclosure">
+        <summary>${t('security.changeKdf')}</summary>
+        <vw-setting-card stacked description=${this.kdfType === 0 ? 'PBKDF2' : 'Argon2id'}>
           <div class="form">
+            <label class="field">
+            <span class="field-label">${t('security.currentPassword')}</span>
             <input
               class="input bordered"
               data-kdf-current
@@ -418,7 +506,9 @@ export class VwAccountSecurityView extends LitElement {
               aria-label=${t('security.currentPassword')}
               aria-invalid=${this.fieldInvalid('kdf-current-password') ? 'true' : 'false'}
               aria-describedby=${this.fieldInvalid('kdf-current-password') ? 'account-security-validation-error' : nothing}
+              ?disabled=${this.pending}
             />
+            </label>
             <vw-segmented
               .options=${[{ id: 'pbkdf2', label: 'PBKDF2' }, { id: 'argon2id', label: 'Argon2id' }]}
               .value=${this.kdfType === 0 ? 'pbkdf2' : 'argon2id'}
@@ -491,11 +581,11 @@ export class VwAccountSecurityView extends LitElement {
               ${uiIcon('refresh')}<span>${t('common.save')}</span>
             </button>
           </div>
-          <!-- TODO i18n: KDF field labels and validation messages -->
         </vw-setting-card>
+        </details>
 
         <vw-setting-card stacked danger heading=${t('security.rotateKey')} description=${t('security.rotateKeyWarn')}>
-          <button type="button" class="btn danger wide" data-rotate ?disabled=${this.pending} @click=${() => { this.view = 'rotate'; this.clearValidationError(); }}>
+          <button type="button" class="btn danger wide" data-rotate ?disabled=${this.pending} @click=${() => { this.scrubPasswords(); this.rotationAccepted = false; this.rotationHasPassword = false; this.view = 'rotate'; this.clearValidationError(); }}>
             ${uiIcon('key')}<span>${t('security.rotateKey')}</span>
           </button>
         </vw-setting-card>

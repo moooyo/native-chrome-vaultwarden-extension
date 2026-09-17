@@ -91,8 +91,8 @@ export class VwImportPreview extends LitElement {
       .preview {
         display: flex;
         flex-direction: column;
-        gap: 14px;
-        padding: 18px;
+        gap: 20px;
+        padding: 24px;
         border: 1px solid var(--vw-line-1);
         border-radius: var(--vw-radius-small);
         background: var(--vw-card);
@@ -134,9 +134,9 @@ export class VwImportPreview extends LitElement {
         border-radius: var(--vw-radius-small);
         overflow: hidden;
       }
-      .count { min-width: 0; padding: 10px 8px; text-align: center; }
+      .count { min-width: 0; padding: 16px 12px; text-align: left; }
       .count + .count { border-left: 1px solid var(--vw-line-1); }
-      .count-value { display: block; color: var(--vw-ink); font-size: 17px; font-weight: 600; line-height: 1.2; }
+      .count-value { display: block; color: var(--vw-ink); font-size: 24px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
       .count-label { display: block; margin-top: 3px; color: var(--vw-muted); font-size: 10.5px; overflow-wrap: anywhere; }
 
       .notices { display: flex; flex-direction: column; gap: 7px; }
@@ -163,8 +163,9 @@ export class VwImportPreview extends LitElement {
       .omitted { color: var(--vw-muted); font-style: italic; }
       .clear { margin: 0; color: var(--vw-text-2); font-size: 11.5px; }
 
-      .actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
-      .btn { min-height: 34px; border-radius: var(--vw-radius-input); }
+      .actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 18px; border-top: 1px solid var(--vw-line-1); }
+      .btn { min-height: 38px; border-radius: var(--vw-radius-input); }
+      progress { width: 100%; height: 5px; accent-color: var(--vw-accent); }
 
       @media (max-width: 420px) {
         .meta { grid-template-columns: minmax(0, 1fr); }
@@ -255,11 +256,12 @@ export class VwImportPreview extends LitElement {
   }
 
   private confirm(): void {
-    if (!this.preview.canCommit) return;
+    if (this.pending || !this.preview.canCommit) return;
     emit(this, 'vw-import-preview-confirm');
   }
 
   private cancel(): void {
+    if (this.pending) return;
     emit(this, 'vw-import-preview-cancel');
   }
 
@@ -268,14 +270,15 @@ export class VwImportPreview extends LitElement {
     const groups = this.diagnosticGroups(preview);
     const hasDiagnostics = groups.some((group) => group.items.length > 0);
     return html`
-      <section class="preview" aria-labelledby="import-preview-title" aria-describedby="import-preview-description">
+      <section class="preview" aria-busy=${this.pending} aria-labelledby="import-preview-title" aria-describedby="import-preview-description">
         <header class="header">
           <span class="header-icon" aria-hidden="true">${uiIcon('file')}</span>
           <div class="heading">
-            <h2 id="import-preview-title">${t('options.data.preview.title')}</h2>
+            <h2 id="import-preview-title">${t(this.pending ? 'options.data.committing' : 'options.data.preview.title')}</h2>
             <p id="import-preview-description" class="description">${t('options.data.preview.description')}</p>
           </div>
         </header>
+        ${this.pending ? html`<progress aria-label=${t('options.data.committing')}></progress>` : nothing}
 
         <dl class="meta">
           <div class="meta-row">

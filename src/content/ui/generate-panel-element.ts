@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from 'lit';
 import { uiIcon } from '../../ui/components/icon.js';
 import { SIDE_PANEL_CSS, sideWrap } from './side-panel.js';
+import { INLINE_SURFACE_CSS } from './surface-theme.js';
 
 // TODO i18n: content-script surfaces are isolated from the extension i18n module, so these
 // user-facing strings are hardcoded in Chinese to match the 密屿/MiYu design.
@@ -33,11 +34,14 @@ export interface GeneratePanelViewState {
   managed: boolean;
   disabledReason: string;
   filledUser: string;
+  siteLabel?: string;
 }
 
 /** Privileged callbacks. Every click/input that reaches them is gated on `Event.isTrusted` in the
  *  template, so a page script cannot synthesize an event to tune, regenerate, use, edit, or save. */
 export interface GeneratePanelHandlers {
+  onMode?: (mode: 'password' | 'passphrase') => void;
+  onDismiss?: () => void;
   onUsername?: (value: string) => void;
   onLength?: (length: number) => void;
   onUppercase?: (on: boolean) => void;
@@ -59,100 +63,68 @@ export interface GeneratePanelHandlers {
  * on arbitrary host pages it cannot use the extension's `--vw-*` tokens, so the MiYu palette is defined
  * locally on `:host` (the surface host div) with a `prefers-color-scheme: dark` override.
  */
-export const GENERATE_PANEL_STYLES = `
-    :host { all: initial; }
-    :host {
-      --mi-panel:#fff; --mi-ink:#1f1f1f; --mi-muted:#747775; --mi-faint:#80868b; --mi-text-3:#474747;
-      --mi-teal:#0b57d0; --mi-teal-text:#0b57d0; --mi-teal-12:rgba(11,87,208,.12); --mi-teal-25:rgba(11,87,208,.25);
-      --mi-red:#c2185b; --mi-line:#e9eef6; --mi-line-3:#c4c7c5; --mi-fill-2:#f0f4f9;
-      --mi-row-hover:rgba(31,31,31,.07); --mi-ink-btn:#0b57d0; --mi-ink-btn-fg:#fff; --mi-shadow:0 8px 28px rgba(0,0,0,.2);
-    }
-    * { box-sizing: border-box; }
-    .box {
-      font:400 14px/1.4 "Roboto", "Segoe UI", system-ui, sans-serif;
-      color: var(--mi-ink); background: var(--mi-panel);
-      border: 1px solid var(--mi-line); border-radius: 14px; box-shadow: var(--mi-shadow);
-      width:236px; padding:11px 13px 13px; animation:mvFly .22s cubic-bezier(.2,.9,.3,1); transform-origin:left center;
-    }
-    @keyframes mvFly { from { opacity:0; transform:translateX(-12px); } to { opacity:1; transform:translateX(0); } }
-    .head { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
-    .brand { font-size: 11.5px; font-weight: 600; color: var(--mi-teal-text); }
-    .head .meta { margin-left: auto; font-size: 10.5px; font-weight: 600; color: var(--mi-teal-text); }
-    .logo { display:grid; place-items:center; width:16px; height:16px; border-radius:5px; background:#0b57d0; flex:none; }
-    .logo svg { width:11px; height:11px; fill:#fff; stroke:none; }
-    .glyph { position: relative; width: 8px; height: 8px; }
-    .ring { position: absolute; inset: 0; border: 1.5px solid #fff; border-radius: 50%; }
-    .dot { position: absolute; left: 3px; top: 3px; width: 2px; height: 2px; border-radius: 50%; background: #fff; }
-
-    .user { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-    .user .lab { font-size: 11.5px; color: var(--mi-text-3); flex: none; }
-    .user input { flex:1; min-width:0; height:30px; padding:0 9px; border:1px solid var(--mi-line-3); border-radius:8px; background:var(--mi-panel); color:var(--mi-ink); font:400 12px/1 "Roboto", "Segoe UI", system-ui, sans-serif; }
-    .user input:focus { outline: none; border-color: var(--mi-teal); box-shadow: 0 0 0 2px var(--mi-teal-12); }
-
-    .suggest { background:var(--mi-fill-2); border:1px solid var(--mi-line); border-radius:10px; padding:9px 11px; font-family:"Roboto Mono", ui-monospace, monospace; font-size:12.5px; line-height:1.55; word-break:break-all; }
-    .suggest .d { color: var(--mi-teal-text); }
-    .suggest .s { color: var(--mi-red); }
-
-    .len { display: flex; align-items: center; gap: 9px; margin: 10px 0 10px; }
-    .len .lab { font-size: 11.5px; color: var(--mi-text-3); flex: none; }
-    .len input[type=range] { flex: 1; accent-color: var(--mi-teal); }
-    .len .val { font-size: 11.5px; font-weight: 600; color: var(--mi-teal-text); min-width: 20px; text-align: right; }
-
-    /* Character sets — one pill per class, spread to fill the row, with regenerate at the end. */
-    .pills { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
-    .pill { height:26px; padding:0 8px; display:inline-flex; align-items:center; border-radius:13px; font:500 10.5px/1 "Roboto Mono", ui-monospace, monospace; cursor:pointer; background:transparent; color:var(--mi-muted); border:1px solid var(--mi-line-3); }
-    .pill.on { background: var(--mi-teal-12); color: var(--mi-teal-text); border-color: var(--mi-teal-25); }
-    .spacer { flex: 1; }
-    .refresh { width: 28px; height: 28px; flex: none; border: 1px solid var(--mi-line-3); border-radius: 8px; background: var(--mi-panel); color: #3F444E; display: grid; place-items: center; cursor: pointer; }
-    .refresh:hover { background: var(--mi-row-hover); }
-    .refresh svg { width: 13px; height: 13px; }
-
-    /* Per-class minimums — compact −/value/+ steppers. */
-    .mins { display: flex; gap: 10px; margin-bottom: 10px; }
-    .min { flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-    .min .lab { font-size: 11px; color: var(--mi-text-3); }
-    .step { display: inline-flex; align-items: center; border: 1px solid var(--mi-line-3); border-radius: 8px; overflow: hidden; }
-    .step button { width:22px; height:24px; border:0; background:transparent; color:var(--mi-text-3); font:400 15px/1 "Roboto", system-ui, sans-serif; cursor:pointer; }
-    .step button:hover { background: var(--mi-row-hover); color: var(--mi-ink); }
-    .step .val { min-width: 18px; text-align: center; font-size: 12px; font-weight: 600; color: var(--mi-ink); font-variant-numeric: tabular-nums; }
-
-    /* Avoid-ambiguous — a full-width checkbox pill. */
-    .ambig { width:100%; display:flex; align-items:center; gap:8px; height:30px; padding:0 10px; margin-bottom:10px; border:1px solid var(--mi-line-3); border-radius:9px; background:transparent; color:var(--mi-text-3); font:500 11.5px/1 "Roboto", "Segoe UI", system-ui, sans-serif; cursor:pointer; }
-    .ambig.on { background: var(--mi-teal-12); color: var(--mi-teal-text); border-color: var(--mi-teal-25); }
-    .ambig .check { display: inline-grid; place-items: center; width: 15px; height: 15px; border: 1.5px solid currentColor; border-radius: 4px; flex: none; }
-    .ambig .check svg { width: 11px; height: 11px; stroke-width: 2.6; }
-
-    .use { width:100%; height:38px; border:0; border-radius:19px; background:var(--mi-ink-btn); color:var(--mi-ink-btn-fg); font:500 12px/1 "Roboto", system-ui, sans-serif; cursor:pointer; }
-    .use:hover { background:#0842a0; }
-    .use:disabled, button:disabled, input:disabled { cursor:default; opacity:.62; }
-    .save-alert { margin:0 0 9px; color:var(--mi-red); font-size:10.5px; line-height:1.45; }
-    .foot { font-size: 10.5px; color: var(--mi-faint); margin-top: 8px; }
-    button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--mi-teal); }
-    svg { stroke-width: 1.7; }
-
-    .saved { display: flex; align-items: center; gap: 9px; }
-    .saved-ico { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--mi-teal-12); color: var(--mi-teal-text); flex: none; animation: mvPop .3s ease-out both; }
-    .saved-ico svg { width: 13px; height: 13px; stroke-width: 2.4; }
-    @keyframes mvPop { 0% { transform: scale(.4); opacity: 0; } 65% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
-    .saved .col { flex: 1; min-width: 0; }
-    .saved .t { font-size: 12px; font-weight: 600; color: var(--mi-ink); }
-    .saved .s { font-size: 10.5px; color: var(--mi-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    @media (prefers-color-scheme: dark) {
-      :host {
-        --mi-panel:#1f1f1f; --mi-ink:#e3e3e3; --mi-muted:#c4c7c5; --mi-faint:#8e918f; --mi-text-3:#c4c7c5;
-        --mi-teal:#a8c7fa; --mi-teal-text:#a8c7fa; --mi-teal-12:rgba(168,199,250,.16); --mi-teal-25:rgba(168,199,250,.3);
-        --mi-red:#ff8ab5; --mi-line:#2b2c2e; --mi-line-3:#47494c; --mi-fill-2:#242526;
-        --mi-row-hover:rgba(227,227,227,.09); --mi-ink-btn:#a8c7fa; --mi-ink-btn-fg:#062e6f; --mi-shadow:0 8px 28px rgba(0,0,0,.5);
-      }
-      .use:hover { background:#d3e3fd; }
-    }
-    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
-  ` + SIDE_PANEL_CSS;
-
+export const GENERATE_PANEL_STYLES = INLINE_SURFACE_CSS + SIDE_PANEL_CSS + `
+  .content { padding:16px; }
+  .mode-switch { display:flex; gap:3px; padding:3px; background:var(--mi-fill); border-radius:8px; margin-bottom:14px; }
+  .mode-switch button { flex:1; min-height:32px; border:0; border-radius:6px; background:transparent; color:var(--mi-muted); font-size:12px; }
+  .mode-switch button[aria-pressed="true"] { background:var(--mi-panel); color:var(--mi-teal-text); box-shadow:0 1px 4px #233c5212; font-weight:600; }
+  .user { display:flex; flex-direction:column; gap:7px; margin-bottom:14px; }
+  .lab { font-size:12px; color:var(--mi-muted); }
+  .user input { width:100%; min-width:0; height:38px; padding:0 11px; border:1px solid var(--mi-line-3); border-radius:8px; background:var(--mi-panel); color:var(--mi-ink); }
+  .suggest { display:block; background:var(--mi-fill); border:1px solid var(--mi-line); border-radius:8px; padding:13px 12px; font:400 16px/1.7 "Cascadia Code", "Consolas", ui-monospace, monospace; overflow-wrap:anywhere; }
+  .suggest .d { color:var(--mi-teal-text); }
+  .suggest .s { color:var(--mi-muted); }
+  .meta { color:var(--mi-faint); font-size:12px; margin:9px 0 14px; }
+  .value-actions { display:flex; gap:8px; }
+  .use, .refresh { min-height:38px; padding:8px 12px; border-radius:8px; font-size:13px; font-weight:500; }
+  .use { flex:1; border:1px solid var(--mi-ink-btn); background:var(--mi-ink-btn); color:var(--mi-ink-btn-fg); }
+  .use:hover { background:var(--mi-ink-hover); border-color:var(--mi-ink-hover); }
+  .refresh { display:flex; align-items:center; gap:6px; border:1px solid var(--mi-line-3); background:var(--mi-panel); color:var(--mi-muted); }
+  .refresh:hover { background:var(--mi-row-hover); }
+  .refresh svg { width:15px; height:15px; }
+  .len { display:flex; align-items:center; gap:10px; margin:17px 0 12px; }
+  .len input { flex:1; min-width:0; accent-color:var(--mi-teal); }
+  .len .val { min-width:24px; text-align:right; color:var(--mi-teal-text); font-variant-numeric:tabular-nums; }
+  .rules { margin-top:10px; border-top:1px solid var(--mi-inner); }
+  .rules summary { color:var(--mi-muted); cursor:pointer; padding:13px 0 3px; font-size:12px; }
+  .rules[open] summary { padding-bottom:13px; }
+  .pills { display:flex; gap:6px; margin-bottom:14px; }
+  .pill { flex:1; min-height:32px; padding:4px 6px; border:1px solid var(--mi-line-3); border-radius:6px; background:var(--mi-panel); color:var(--mi-muted); font:500 12px/1.4 "Consolas", ui-monospace, monospace; }
+  .pill.on { background:var(--mi-teal-12); color:var(--mi-teal-text); border-color:var(--mi-teal-25); }
+  .mins { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px; }
+  .min { display:grid; gap:7px; }
+  .step { display:flex; align-items:center; justify-content:space-between; border:1px solid var(--mi-line-3); border-radius:7px; }
+  .step button { border:0; width:34px; height:32px; background:transparent; font-size:16px; }
+  .step button:hover { background:var(--mi-row-hover); }
+  .step .val { font-variant-numeric:tabular-nums; font-size:12px; }
+  .ambig { display:flex; align-items:center; gap:8px; width:100%; min-height:34px; border:0; background:transparent; color:var(--mi-muted); padding:0; text-align:left; font-size:12px; }
+  .check { display:grid; place-items:center; width:16px; height:16px; border:1px solid var(--mi-line-3); border-radius:4px; }
+  .check svg { width:12px; height:12px; }
+  .ambig.on .check { background:var(--mi-ink-btn); color:var(--mi-ink-btn-fg); border-color:var(--mi-ink-btn); }
+  .save-alert { margin:0 0 12px; color:var(--mi-red); font-size:12px; line-height:1.65; }
+  .managed-note { margin:0 0 12px; color:var(--mi-muted); font-size:12px; }
+  .foot { border-top:1px solid var(--mi-inner); padding:10px 16px; font-size:11px; line-height:1.7; color:var(--mi-faint); }
+  .saved { display:flex; align-items:flex-start; gap:10px; padding:16px; }
+  .saved-ico { display:grid; place-items:center; flex:none; width:26px; height:26px; border-radius:8px; background:var(--mi-teal-12); color:var(--mi-success); animation:mi-receipt-enter 160ms var(--mi-ease); }
+  .saved-ico svg { width:16px; height:16px; }
+  .saved .col { display:flex; flex-direction:column; min-width:0; gap:5px; }
+  .saved .t { font-size:14px; font-weight:500; }
+  .saved .s { font-size:12px; color:var(--mi-muted); overflow-wrap:anywhere; line-height:1.65; }
+`;
 /** Render the generation panel for the given state. The page cannot forge the privileged events: each
  *  handler bails unless `event.isTrusted`. Mounts as a right-side panel (design 2c/3a-consistent). */
 export function renderGeneratePanel(state: GeneratePanelViewState, handlers: GeneratePanelHandlers): TemplateResult {
-  return sideWrap(html`<div class="box">${state.view === 'filled' ? renderFilled(state) : renderPanel(state, handlers)}</div>`);
+  return sideWrap(html`<div class="box" @keydown=${(event: KeyboardEvent) => {
+    if (event.isTrusted && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      handlers.onDismiss?.();
+    }
+  }}><div class="head">${logoGlyph()}<span class="brand">${state.siteLabel || '密屿 · 强密码建议'}</span>
+    <button type="button" class="panel-close" aria-label="关闭密码生成建议" @click=${(event: MouseEvent) => {
+      if (event.isTrusted) handlers.onDismiss?.();
+    }}>${uiIcon('close')}</button></div>
+    ${state.view === 'filled' ? renderFilled(state) : renderPanel(state, handlers)}</div>`);
 }
 
 function colorize(password: string) {
@@ -187,24 +159,34 @@ function renderPanel(state: GeneratePanelViewState, handlers: GeneratePanelHandl
     : `${state.strength} · ${state.length} 字符${state.symbols ? ' · 含符号' : ''}`;
   const controlsDisabled = state.managed || Boolean(state.disabledReason);
   return html`
-    <div class="head">
-      ${logoGlyph()}<span class="brand">密屿 · 强密码建议</span>
-      <span class="meta">${meta}</span>
-    </div>
+    <div class="content">
+    ${handlers.onMode ? html`<div class="mode-switch" aria-label="生成类型">
+      <button type="button" aria-pressed=${state.mode === 'password' ? 'true' : 'false'} ?disabled=${controlsDisabled}
+        @click=${(event: MouseEvent) => { if (event.isTrusted && !controlsDisabled) handlers.onMode?.('password'); }}>随机密码</button>
+      <button type="button" aria-pressed=${state.mode === 'passphrase' ? 'true' : 'false'} ?disabled=${controlsDisabled}
+        @click=${(event: MouseEvent) => { if (event.isTrusted && !controlsDisabled) handlers.onMode?.('passphrase'); }}>易记短语</button>
+    </div>` : nothing}
     <div class="user">
-      <span class="lab">用户名</span>
-      <input type="text" .value=${state.username} placeholder="用户名（可编辑）"
+      <label class="lab" for="mi-generated-username">用户名</label>
+      <input id="mi-generated-username" type="text" .value=${state.username} placeholder="用户名（可编辑）" autocomplete="off"
         @input=${(e: Event) => { if (e.isTrusted) handlers.onUsername?.((e.target as HTMLInputElement).value); }} />
     </div>
     ${state.disabledReason
       ? html`<p class="save-alert" data-generator-disabled>${state.disabledReason}</p>`
       : state.managed
-        ? html`<p class="foot" data-generator-managed>生成规则由组织管理</p>`
+        ? html`<p class="managed-note" data-generator-managed>生成规则由组织管理</p>`
         : nothing}
-    <div class="suggest">${colorize(state.password)}</div>
+    <output class="suggest" aria-label="生成的密码">${colorize(state.password)}</output>
+    <div class="meta">${meta}</div>
+    <div class="value-actions">
+      <button type="button" class="use" ?disabled=${Boolean(state.disabledReason) || !state.password}
+        @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onUse?.(); }}>使用此密码</button>
+      <button type="button" class="refresh" title="重新生成密码" ?disabled=${Boolean(state.disabledReason)}
+        @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onRegenerate?.(); }}>${uiIcon('refresh')}换一个</button>
+    </div>
     <div class="len">
-      <span class="lab">${state.mode === 'passphrase' ? '词数' : '长度'}</span>
-      <input type="range" min=${state.mode === 'passphrase' ? 3 : 8} max=${state.mode === 'passphrase' ? 20 : 128}
+      <label class="lab" for="mi-generated-length">${state.mode === 'passphrase' ? '词数' : '长度'}</label>
+      <input id="mi-generated-length" type="range" min=${state.mode === 'passphrase' ? 3 : 8} max=${state.mode === 'passphrase' ? 20 : 128}
         .value=${String(state.mode === 'passphrase' ? state.words : state.length)} ?disabled=${controlsDisabled}
         @input=${(e: Event) => {
           if (!e.isTrusted) return;
@@ -214,7 +196,7 @@ function renderPanel(state: GeneratePanelViewState, handlers: GeneratePanelHandl
         }} />
       <span class="val">${state.mode === 'passphrase' ? state.words : state.length}</span>
     </div>
-    <div class="pills">
+    <details class="rules"><summary>字符与高级规则</summary><div class="pills">
       ${state.mode === 'passphrase'
         ? html`
             ${pill('A-Z', state.capitalize, controlsDisabled, (on) => handlers.onCapitalize?.(on))}
@@ -226,9 +208,6 @@ function renderPanel(state: GeneratePanelViewState, handlers: GeneratePanelHandl
             ${pill('0-9', state.numbers, controlsDisabled, (on) => handlers.onNumbers?.(on))}
             ${pill('!@#$', state.symbols, controlsDisabled, (on) => handlers.onSymbols?.(on))}
           `}
-      <span class="spacer"></span>
-      <button type="button" class="refresh" title="换一个" ?disabled=${Boolean(state.disabledReason)}
-        @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onRegenerate?.(); }}>${uiIcon('refresh')}</button>
     </div>
     ${state.mode === 'password'
       ? html`
@@ -243,15 +222,14 @@ function renderPanel(state: GeneratePanelViewState, handlers: GeneratePanelHandl
           </button>
         `
       : nothing}
-    <button type="button" class="use" ?disabled=${Boolean(state.disabledReason)}
-      @click=${(e: MouseEvent) => { if (e.isTrusted) handlers.onUse?.(); }}>使用此密码</button>
+    </details></div>
     <div class="foot">填写后，将在网站提交时询问是否保存</div>
   `;
 }
 
 function renderFilled(state: GeneratePanelViewState): TemplateResult {
   return html`
-    <div class="saved">
+    <div class="saved" role="status" aria-live="polite" aria-atomic="true">
       <span class="saved-ico">${uiIcon('check')}</span>
       <span class="col">
         <span class="t">密码已填入</span>

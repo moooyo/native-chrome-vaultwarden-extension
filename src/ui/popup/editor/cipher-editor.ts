@@ -1,4 +1,4 @@
-import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
+import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import { live } from 'lit/directives/live.js';
 import { themeTokens } from '../../components/tokens.js';
 import { emit } from '../../components/emit.js';
@@ -46,32 +46,32 @@ import '../tools/generator-view.js';
 // Card/identity field labels are resolved lazily via `t()` so they re-localize with the active locale.
 const CARD_FORM: ReadonlyArray<readonly [keyof NonNullable<CipherInput['card']>, () => string]> = [
   ['cardholderName', () => t('detail.cardholder')],
-  ['brand', () => '品牌'], // TODO i18n
+  ['brand', () => t('detail.cardAlias')],
   ['number', () => t('detail.cardNumber')],
-  ['expMonth', () => '有效期（月）'], // TODO i18n
-  ['expYear', () => '有效期（年）'], // TODO i18n
+  ['expMonth', () => t('editor.expMonth')],
+  ['expYear', () => t('editor.expYear')],
   ['code', () => t('detail.cardCode')],
 ];
 
 const IDENTITY_FORM: ReadonlyArray<readonly [keyof NonNullable<CipherInput['identity']>, () => string]> = [
-  ['title', () => '称谓'], // TODO i18n
-  ['firstName', () => '名'], // TODO i18n
-  ['middleName', () => '中间名'], // TODO i18n
-  ['lastName', () => '姓'], // TODO i18n
+  ['title', () => t('detail.identityTitle')],
+  ['firstName', () => t('detail.firstName')],
+  ['middleName', () => t('detail.middleName')],
+  ['lastName', () => t('detail.lastName')],
   ['username', () => t('detail.username')],
-  ['company', () => '公司'], // TODO i18n
-  ['email', () => '邮箱'], // TODO i18n
-  ['phone', () => '电话'], // TODO i18n
-  ['address1', () => '地址 1'], // TODO i18n
-  ['address2', () => '地址 2'], // TODO i18n
-  ['address3', () => '地址 3'], // TODO i18n
-  ['city', () => '城市'], // TODO i18n
-  ['state', () => '省 / 州'], // TODO i18n
-  ['postalCode', () => '邮编'], // TODO i18n
-  ['country', () => '国家 / 地区'], // TODO i18n
-  ['ssn', () => '社会安全号'], // TODO i18n
-  ['passportNumber', () => '护照号'], // TODO i18n
-  ['licenseNumber', () => '驾照号'], // TODO i18n
+  ['company', () => t('detail.company')],
+  ['email', () => t('detail.email')],
+  ['phone', () => t('detail.phone')],
+  ['address1', () => t('detail.address1')],
+  ['address2', () => t('detail.address2')],
+  ['address3', () => t('detail.address3')],
+  ['city', () => t('detail.city')],
+  ['state', () => t('detail.state')],
+  ['postalCode', () => t('detail.postalCode')],
+  ['country', () => t('detail.country')],
+  ['ssn', () => t('detail.ssn')],
+  ['passportNumber', () => t('detail.passportNumber')],
+  ['licenseNumber', () => t('detail.licenseNumber')],
 ];
 
 /** The controlled form state the editor owns; every derived from `context.input` on (re)initialization. */
@@ -110,9 +110,8 @@ type CreateVaultSelection =
  * worker request, never receives a secret it did not already put in an editable input, and passes
  * every id inside a typed event detail — never an unsafe attribute.
  *
- * Reskinned to the MiYu design system: a single 372px column with a compact header (back + title +
- * ink Save), labeled fill-input field rows, `<vw-toggle>` flags, a `<vw-select>` folder picker, and a
- * danger delete action. All visible text goes through `t()`.
+ * Common fields lead a single draft; native disclosures reveal advanced settings in place.
+ * A fixed action bar keeps saving and local feedback available at every scroll position.
  */
 export class VwCipherEditor extends LitElement {
   static override properties = {
@@ -150,6 +149,7 @@ export class VwCipherEditor extends LitElement {
   private loadedKey: string | null = null;
   private appliedTotpCaptureRevision = -1;
   private existingFields = new WeakMap<DecryptedField, ExistingFieldMetadata>();
+  private openGroups = new Set<string>();
 
   constructor() {
     super();
@@ -189,13 +189,14 @@ export class VwCipherEditor extends LitElement {
         gap: 8px;
         flex: none;
         padding: 12px 14px 10px;
+        border-bottom: 1px solid var(--vw-line-1);
       }
       .title {
         flex: 1;
         min-width: 0;
         margin: 0;
         font-size: 15px;
-        font-weight: 500;
+        font-weight: 600;
         color: var(--vw-ink);
         overflow: hidden;
         text-overflow: ellipsis;
@@ -209,7 +210,7 @@ export class VwCipherEditor extends LitElement {
         height: 38px;
         padding: 0 17px;
         border: none;
-        border-radius: 19px;
+        border-radius: var(--vw-radius-control);
         background: var(--vw-primary-bg);
         color: var(--vw-primary-fg);
         font-family: var(--vw-font-ui);
@@ -237,10 +238,10 @@ export class VwCipherEditor extends LitElement {
         flex: 1;
         min-height: 0;
         overflow-y: auto;
-        padding: 4px 14px 16px;
+        padding: 16px 20px 24px;
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 0;
         scrollbar-width: thin;
         scrollbar-color: var(--vw-scrollbar) transparent;
       }
@@ -259,8 +260,8 @@ export class VwCipherEditor extends LitElement {
         gap: 6px;
       }
       .label {
-        font-size: 11px;
-        font-weight: 400;
+        font-size: 12px;
+        font-weight: 500;
         letter-spacing: 0;
         color: var(--vw-text-2);
       }
@@ -337,7 +338,7 @@ export class VwCipherEditor extends LitElement {
         align-self: flex-start;
         height: 32px;
         padding: 0 12px;
-        border: 1px dashed var(--vw-line-3);
+        border: 1px solid var(--vw-line-3);
         border-radius: var(--vw-radius-control);
         background: transparent;
         color: var(--vw-text-2);
@@ -523,6 +524,28 @@ export class VwCipherEditor extends LitElement {
         flex: 1;
         min-height: 0;
       }
+      .section-nav { display:flex; flex:none; gap:4px; overflow-x:auto; padding:8px 14px; border-bottom:1px solid var(--vw-line-1); scrollbar-width:thin; }
+      .section-nav button { appearance:none; flex:none; padding:7px 9px; border:0; border-radius:6px; background:transparent; color:var(--vw-text-2); font:500 11.5px/1.2 var(--vw-font-ui); cursor:pointer; }
+      .section-nav button:hover { background:var(--vw-row-hover); color:var(--p); }
+      .section-nav button:focus-visible, summary:focus-visible { outline:none; box-shadow:var(--vw-focus); }
+      .editor-group { display:flex; flex-direction:column; gap:16px; padding-bottom:20px; scroll-margin-top:12px; }
+      .group-title { margin:0; font-size:13px; font-weight:600; color:var(--vw-ink); }
+      .disclosure { flex:none; border-top:1px solid var(--vw-line-1); scroll-margin-top:12px; }
+      .disclosure > summary { display:flex; align-items:center; gap:8px; min-height:50px; list-style:none; cursor:pointer; color:var(--vw-ink); font-size:12.5px; font-weight:600; }
+      .disclosure > summary::-webkit-details-marker { display:none; }
+      .disclosure > summary > span:first-child { flex:1; }
+      .disclosure > summary svg { width:15px; height:15px; color:var(--vw-muted); transition:transform var(--vw-dur-fast); }
+      .disclosure[open] > summary svg { transform:rotate(90deg); }
+      .disclosure .count { font-size:11px; font-weight:400; font-variant-numeric:tabular-nums; color:var(--vw-muted); }
+      .disclosure-body { display:flex; flex-direction:column; gap:16px; padding:0 0 20px; }
+      .action-bar { flex:none; display:flex; align-items:center; gap:12px; padding:12px 20px; border-top:1px solid var(--vw-line-1); background:var(--vw-panel); }
+      .action-copy { min-width:0; flex:1; }
+      .action-copy .hint { font-size:11px; }
+      .action-bar .status { margin:0; }
+      .confirm { padding:12px; border:1px solid var(--vw-line-3); border-radius:10px; }
+      .confirm > span { flex-basis:100%; color:var(--vw-ink); overflow-wrap:anywhere; }
+      @media (prefers-reduced-motion:reduce) { .disclosure > summary svg { transition:none; } }
+      @media (max-width:420px) { .scroll { padding-inline:14px; } .action-bar { padding:10px 14px; } }
     `,
   ];
 
@@ -543,6 +566,7 @@ export class VwCipherEditor extends LitElement {
         this.generatorTarget = null;
         this.localError = undefined;
         this.confirmingDelete = false;
+        this.openGroups = new Set();
       }
     }
     const capture = this.totpCapture;
@@ -986,13 +1010,15 @@ export class VwCipherEditor extends LitElement {
     if (this.pending) return;
     const input = this.collectInput();
     if (!input.name) {
-      this.localError = '请输入名称'; // TODO i18n
+      this.localError = t('editor.nameRequired');
       this.requestUpdate();
+      void this.focusField('[data-field="name"]');
       return;
     }
     if (this.firstInvalidFieldName()) {
       this.localError = t('editor.customFieldNameRequired');
       this.requestUpdate();
+      void this.navigateToSection('custom-fields');
       return;
     }
     const target = this.context.mode !== 'edit' ? this.collectCreateTarget() : undefined;
@@ -1092,22 +1118,65 @@ export class VwCipherEditor extends LitElement {
 
   private textField(label: string, value: string, onInput: (v: string) => void, opts: { mono?: boolean; field?: string } = {}) {
     return html`
-      <div class="field">
+      <label class="field">
         <span class="label">${label}</span>
         <input class="input ${opts.mono ? 'mono' : ''}" data-field=${opts.field ?? label} .value=${value} ?disabled=${this.pending}
           @input=${(e: Event) => onInput((e.target as HTMLInputElement).value)} />
-      </div>
+      </label>
     `;
+  }
+
+  private async focusField(selector: string): Promise<void> {
+    await this.updateComplete;
+    this.renderRoot.querySelector<HTMLElement>(selector)?.focus();
+  }
+
+  private async navigateToSection(id: string): Promise<void> {
+    this.openGroups.add(id);
+    this.requestUpdate();
+    await this.updateComplete;
+    const section = this.renderRoot.querySelector<HTMLElement>(`#${id}`);
+    if (!section) return;
+    section.querySelector<HTMLElement>('summary, input, textarea, button')?.focus({ preventScroll: true });
+    section.scrollIntoView?.({
+      block: 'start',
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+  }
+
+  private renderDisclosure(id: string, label: string, body: TemplateResult, count?: number) {
+    return html`
+      <details class="disclosure" id=${id} ?open=${this.openGroups.has(id)} @toggle=${(event: Event) => {
+        const section = event.currentTarget as HTMLDetailsElement;
+        if (section.open) this.openGroups.add(id); else this.openGroups.delete(id);
+      }}>
+        <summary><span>${label}</span>${count ? html`<span class="count">${count}</span>` : nothing}${uiIcon('chevron')}</summary>
+        <div class="disclosure-body">${body}</div>
+      </details>
+    `;
+  }
+
+  private renderSectionNavigation() {
+    const groups = [
+      ['essentials', t('editor.essentials')],
+      ...(this.context.type === 1 ? [['websites', t('detail.uri')], ['totp', t('detail.totp')]] : []),
+      ...(this.context.type === 4 ? [['address', t('editor.address')], ['documents', t('editor.documents')]] : []),
+      ['custom-fields', t('detail.customFields')],
+      ['preferences', t('editor.preferences')],
+    ];
+    return html`<nav class="section-nav" aria-label=${t('editor.sectionNavigation')}>
+      ${groups.map(([id, label]) => html`<button type="button" data-section-jump=${id} @click=${() => this.navigateToSection(id!)}>${label}</button>`)}
+    </nav>`;
   }
 
   private renderLogin() {
     const f = this.form;
-    const revealLabel = t('detail.reveal');
+    const revealLabel = t(f.showPassword ? 'detail.hideValue' : 'detail.showValue', { name: t('detail.password') });
     return html`
       <div class="field">
         <span class="label">${t('detail.username')}</span>
         <div class="row">
-          <input class="input" data-username .value=${f.username} ?disabled=${this.pending}
+          <input class="input" data-username aria-label=${t('detail.username')} autocomplete="off" .value=${f.username} ?disabled=${this.pending}
             @input=${(e: Event) => this.patch({ username: (e.target as HTMLInputElement).value })} />
           <button
             type="button"
@@ -1123,7 +1192,7 @@ export class VwCipherEditor extends LitElement {
       <div class="field">
         <span class="label">${t('detail.password')}</span>
         <div class="row">
-          <input class="input mono" data-password type=${f.showPassword ? 'text' : 'password'} .value=${f.password} ?disabled=${this.pending}
+          <input class="input mono" data-password aria-label=${t('detail.password')} autocomplete="new-password" type=${f.showPassword ? 'text' : 'password'} .value=${f.password} ?disabled=${this.pending}
             @input=${(e: Event) => this.patch({ password: (e.target as HTMLInputElement).value })} />
           <button
             type="button"
@@ -1139,12 +1208,21 @@ export class VwCipherEditor extends LitElement {
             @click=${() => this.patch({ showPassword: !f.showPassword })}>${uiIcon(f.showPassword ? 'eyeOff' : 'eye')}</button>
         </div>
       </div>
+    `;
+  }
+
+  private renderLoginAdvanced() {
+    const f = this.form;
+    return html`
+      ${this.renderDisclosure('totp', t('detail.totp'), html`
       <div class="field">
         <span class="label">${t('detail.totp')}</span>
         <div class="row">
           <input
             class="input mono"
             data-field="totp"
+            aria-label=${t('detail.totp')}
+            autocomplete="off"
             .value=${f.totp}
             ?disabled=${this.pending}
             @input=${(event: Event) => this.patch({
@@ -1162,6 +1240,8 @@ export class VwCipherEditor extends LitElement {
           >${uiIcon('scan')}</button>
         </div>
       </div>
+      `)}
+      ${this.renderDisclosure('websites', t('detail.websites'), html`
       <div class="field">
         <span class="label">${t('detail.uri')}</span>
         <div class="uri-list">
@@ -1169,7 +1249,7 @@ export class VwCipherEditor extends LitElement {
             (u, i) => html`
               <div class="uri-entry" data-uri-entry=${i}>
                 <div class="row">
-                  <input class="input mono" data-uri=${i} placeholder="https://example.com" .value=${u.uri} ?disabled=${this.pending}
+                  <input class="input mono" data-uri=${i} aria-label=${t('detail.uri')} placeholder="https://example.com" .value=${u.uri} ?disabled=${this.pending}
                     @input=${(e: Event) => this.updateUri(i, (e.target as HTMLInputElement).value)} />
                   <button
                     type="button"
@@ -1212,6 +1292,7 @@ export class VwCipherEditor extends LitElement {
           @vw-select-change=${(event: CustomEvent<{ value: string }>) => this.updatePageLoadOverride(event.detail.value)}
         ></vw-select>
       </div>
+      `, f.uris.filter((uri) => uri.uri.trim()).length)}
     `;
   }
 
@@ -1268,15 +1349,26 @@ export class VwCipherEditor extends LitElement {
   }
 
   private renderCard() {
-    return html`${CARD_FORM.map(
+    return html`<div class="grid">${CARD_FORM.map(
       ([key, label]) => this.textField(label(), this.form.card[key] ?? '', (v) => this.patch({ card: { ...this.form.card, [key]: v } }), { field: `card.${key}` }),
-    )}`;
+    )}</div>`;
+  }
+
+  private renderIdentityFields(keys: readonly string[]) {
+    return html`<div class="grid">${IDENTITY_FORM.filter(([key]) => keys.includes(key)).map(
+      ([key, label]) => this.textField(label(), this.form.identity[key] ?? '', (v) => this.patch({ identity: { ...this.form.identity, [key]: v } }), { field: `identity.${key}` }),
+    )}</div>`;
   }
 
   private renderIdentity() {
-    return html`<div class="grid">${IDENTITY_FORM.map(
-      ([key, label]) => this.textField(label(), this.form.identity[key] ?? '', (v) => this.patch({ identity: { ...this.form.identity, [key]: v } }), { field: `identity.${key}` }),
-    )}</div>`;
+    return this.renderIdentityFields(['title', 'firstName', 'middleName', 'lastName', 'username', 'company', 'email', 'phone']);
+  }
+
+  private renderIdentityAdvanced() {
+    return html`
+      ${this.renderDisclosure('address', t('editor.address'), this.renderIdentityFields(['address1', 'address2', 'address3', 'city', 'state', 'postalCode', 'country']))}
+      ${this.renderDisclosure('documents', t('editor.documents'), this.renderIdentityFields(['ssn', 'passportNumber', 'licenseNumber']))}
+    `;
   }
 
   private renderTypeFields() {
@@ -1387,11 +1479,11 @@ export class VwCipherEditor extends LitElement {
     }
     const valueControl = field.type === 2
       ? html`<div class="cf-bool">
-          <span>${'值' /* TODO i18n */}</span>
+          <span>${t('ssh.fieldValue')}</span>
           <vw-toggle data-cf-value .checked=${field.value === 'true'} ?disabled=${this.pending}
             @vw-toggle-change=${(e: Event) => this.updateField(index, { value: (e as CustomEvent<{ checked: boolean }>).detail.checked ? 'true' : 'false' })}></vw-toggle>
         </div>`
-      : html`<input class="input cf-value ${field.type === 1 ? 'mono' : ''}" data-cf-value type=${field.type === 1 ? 'password' : 'text'} placeholder=${'值' /* TODO i18n */} .value=${field.value ?? ''} ?disabled=${this.pending}
+      : html`<input class="input cf-value ${field.type === 1 ? 'mono' : ''}" data-cf-value type=${field.type === 1 ? 'password' : 'text'} placeholder=${t('ssh.fieldValue')} .value=${field.value ?? ''} ?disabled=${this.pending}
           @input=${(e: Event) => this.updateField(index, { value: (e.target as HTMLInputElement).value })} />`;
     return html`
       <div class="cf" data-cf data-cf-type=${field.type}>
@@ -1495,19 +1587,22 @@ export class VwCipherEditor extends LitElement {
     `;
   }
 
+  private renderNotes() {
+    return html`<label class="field">
+      <span class="label">${t('detail.notes')}</span>
+      <textarea class="ta" data-notes ?disabled=${this.pending}
+        .value=${this.form.notes}
+        @input=${(event: Event) => this.patch({ notes: (event.target as HTMLTextAreaElement).value })}></textarea>
+    </label>`;
+  }
+
   private renderCommon() {
     const f = this.form;
     const folderOptions = [
-      { value: '', label: '无文件夹' /* TODO i18n */ },
+      { value: '', label: t('filter.noFolder') },
       ...this.context.folders.map((folder) => ({ value: folder.id, label: folder.name })),
     ];
     return html`
-      <div class="field">
-        <span class="label">${t('detail.notes')}</span>
-        <textarea class="ta" data-notes ?disabled=${this.pending}
-          .value=${f.notes}
-          @input=${(e: Event) => this.patch({ notes: (e.target as HTMLTextAreaElement).value })}></textarea>
-      </div>
       <div class="field">
         <span class="label">${t('editor.folder')}</span>
         <vw-select class="picker" data-folder .options=${folderOptions} .value=${f.folderId} label=${t('editor.folder')}
@@ -1523,7 +1618,6 @@ export class VwCipherEditor extends LitElement {
         <vw-toggle data-reprompt .checked=${f.reprompt} ?disabled=${this.pending}
           @vw-toggle-change=${(e: Event) => this.patch({ reprompt: (e as CustomEvent<{ checked: boolean }>).detail.checked })}></vw-toggle>
       </div>
-      ${this.renderCustomFields()}
     `;
   }
 
@@ -1532,14 +1626,14 @@ export class VwCipherEditor extends LitElement {
     if (this.context.mode !== 'edit' || !this.context.cipherId || orgCollections.length === 0) return nothing;
     return html`
       <div class="field org" data-collections>
-        <span class="label">${'集合' /* TODO i18n */}</span>
+        <span class="label">${t('editor.collections')}</span>
         <div class="checks">
           ${orgCollections.map(
             (c) => html`<label class="check-row"><input type="checkbox" data-collection value=${c.id} .checked=${this.collectionSel.has(c.id)} ?disabled=${this.pending || !this.canChangeCollectionMembership(c)}
               @change=${(e: Event) => this.toggleCollection(c.id, (e.target as HTMLInputElement).checked)} /><span>${c.name}</span></label>`,
           )}
         </div>
-        <button type="button" class="btn outline wide" data-save-collections ?disabled=${this.pending || !orgCollections.some((collection) => this.canChangeCollectionMembership(collection))} @click=${() => this.saveCollections()}>${uiIcon('check')}<span>${'更新集合' /* TODO i18n */}</span></button>
+        <button type="button" class="btn outline wide" data-save-collections ?disabled=${this.pending || !orgCollections.some((collection) => this.canChangeCollectionMembership(collection))} @click=${() => this.saveCollections()}>${uiIcon('check')}<span>${t('ssh.saveCollections')}</span></button>
       </div>
     `;
   }
@@ -1625,8 +1719,8 @@ export class VwCipherEditor extends LitElement {
     if (this.confirmingDelete) {
       return html`
         <div class="confirm" data-delete-confirm>
-          <span>${'将此条目移至回收站？' /* TODO i18n */}</span>
-          <button type="button" class="btn danger" data-delete-yes ?disabled=${this.pending} @click=${() => this.confirmDelete()}>${'移至回收站' /* TODO i18n */}</button>
+          <span>${t('editor.deleteNamedConfirm', { name: this.summary?.name ?? this.form.name })}</span>
+          <button type="button" class="btn danger" data-delete-yes ?disabled=${this.pending} @click=${() => this.confirmDelete()}>${t('common.delete')}</button>
           <button type="button" class="btn ghost" data-delete-no ?disabled=${this.pending} @click=${() => { this.confirmingDelete = false; this.requestUpdate(); }}>${t('common.cancel')}</button>
         </div>
       `;
@@ -1661,22 +1755,35 @@ export class VwCipherEditor extends LitElement {
       <div class="head">
         <button type="button" class="icon-btn" data-back title=${t('common.back')} aria-label=${t('common.back')} @click=${() => this.back()}>${uiIcon('back')}</button>
         <h1 class="title">${title}</h1>
-        <button type="button" class="save" data-save ?disabled=${this.pending} @click=${() => this.save()}>${uiIcon('check')}<span>${t('common.save')}</span></button>
       </div>
+      ${this.renderSectionNavigation()}
       <div class="scroll" data-scroll>
-        ${this.textField(t('editor.name'), this.form.name, (v) => this.patch({ name: v }), { field: 'name' })}
-        ${this.renderCreateTarget()}
-        ${this.renderTypeFields()}
-        ${this.renderCommon()}
-        ${this.renderCollections()}
-        ${this.renderMove()}
-        ${this.renderDelete()}
+        <section class="editor-group" id="essentials" aria-labelledby="essentials-title">
+          <h2 class="group-title" id="essentials-title">${t('editor.essentials')}</h2>
+          ${this.textField(t('editor.name'), this.form.name, (v) => this.patch({ name: v }), { field: 'name' })}
+          ${this.renderTypeFields()}
+          ${this.context.type === 2 ? this.renderNotes() : nothing}
+          ${this.renderCreateTarget()}
+        </section>
+        ${this.context.type === 1 ? this.renderLoginAdvanced() : nothing}
+        ${this.context.type === 4 ? this.renderIdentityAdvanced() : nothing}
+        ${this.context.type !== 2 ? this.renderDisclosure('notes', t('detail.notes'), this.renderNotes()) : nothing}
+        ${this.renderDisclosure('custom-fields', t('detail.customFields'), this.renderCustomFields(), this.form.fields.length)}
+        ${this.renderDisclosure('preferences', t('editor.preferences'), this.renderCommon())}
+        ${this.context.mode === 'edit' ? this.renderDisclosure('management', t('editor.manageItem'), html`
+          ${this.renderCollections()}${this.renderMove()}${this.renderDelete()}
+        `) : nothing}
+      </div>
+      <footer class="action-bar">
+        <div class="action-copy">
         ${this.localError
           ? html`<vw-status-message class="status" tone="danger" .icon=${'alert'} .message=${this.localError}></vw-status-message>`
           : this.status
           ? html`<vw-status-message class="status" .tone=${this.status.tone} .icon=${this.status.tone === 'success' ? 'checkCircle' : 'alert'} .message=${this.status.message}></vw-status-message>`
-          : nothing}
-      </div>
+          : html`<p class="hint">${t('editor.draftHint')}</p>`}
+        </div>
+        <button type="button" class="save" data-save ?disabled=${this.pending} @click=${() => this.save()}>${uiIcon(this.pending ? 'refresh' : 'check')}<span>${t(this.pending ? 'common.loading' : 'common.save')}</span></button>
+      </footer>
       ${this.renderGeneratorOverlay()}
     `;
   }

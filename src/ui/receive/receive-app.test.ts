@@ -447,6 +447,7 @@ describe('vw-receive-app email OTP access', () => {
 
     const beforeCooldownClick = tokenForms.length;
     expect(resendButton(app)?.disabled).toBe(true);
+    expect(resendButton(app)?.textContent).toMatch(/\d+\s*秒/);
     resendButton(app)!.click();
     await flushAsync();
     expect(tokenForms).toHaveLength(beforeCooldownClick);
@@ -465,6 +466,7 @@ describe('vw-receive-app email OTP access', () => {
     await settle(app);
     expect(app.state).toMatchObject({ status: 'otpRequired', resending: false });
     expect(resendButton(app)?.disabled).toBe(true);
+    expect(resendButton(app)?.textContent).toMatch(/(?:29|30)\s*秒/);
   });
 
   it('does not send email or OTP when the server only advertises legacy access', async () => {
@@ -537,6 +539,32 @@ describe('vw-receive-app text send', () => {
     await settle(app);
     expect(app.state).toMatchObject({ status: 'textReady', send: { hidden: true }, revealed: false });
     expect(app.shadowRoot!.textContent).not.toContain('not-before-click');
+  });
+
+  it('copies revealed text and hides it again without another access request', async () => {
+    const derived = await deriveSendKey(sendKey);
+    const raw = {
+      id: 'send-hidden', type: 0, name: await encryptToText('Private note', derived),
+      text: { text: await encryptToText('deliberately revealed', derived), hidden: true },
+    };
+    const stubs = makeDeps({ fetchImpl: async () => jsonRes(raw) });
+    const writeClipboard = vi.fn(async () => {});
+    const app = await mount({ ...stubs.deps, writeClipboard });
+    await accessFor(app, linkFor('hidden-copy'));
+    const requestCount = stubs.fetchCalls.length;
+    expect(app.shadowRoot!.querySelector('[data-copy-text]')).toBeNull();
+    revealTextButton(app)!.click();
+    await app.updateComplete;
+    app.shadowRoot!.querySelector<HTMLButtonElement>('[data-copy-text]')!.click();
+    await flushAsync();
+    await app.updateComplete;
+    expect(writeClipboard).toHaveBeenCalledWith('deliberately revealed');
+    expect(app.shadowRoot!.querySelector('[data-server-context]')?.textContent).toContain('vault.example');
+    app.shadowRoot!.querySelector<HTMLButtonElement>('[data-hide-text]')!.click();
+    await app.updateComplete;
+    expect(app.shadowRoot!.querySelector('[data-send-text]')).toBeNull();
+    expect(app.shadowRoot!.querySelector('[data-copy-text]')).toBeNull();
+    expect(stubs.fetchCalls).toHaveLength(requestCount);
   });
 
   it('sends the password hash once the user supplies one after password_required', async () => {
@@ -679,7 +707,7 @@ describe('vw-receive-app file send', () => {
     const [bytes, fileName] = stubs.download.mock.calls[0]!;
     expect(Array.from(bytes as Uint8Array)).toEqual([9, 8, 7, 6]);
     expect(fileName).toBe('secret.pdf');
-    expect(app.state).toMatchObject({ status: 'fileReady' });
+    expect(app.state).toMatchObject({ status: 'fileReady', messageTone: 'success' });
   });
 
   it('does not download twice on a rapid double click', async () => {
@@ -805,8 +833,12 @@ describe('vw-receive-app file send', () => {
     await settle(app);
     expect(stubs.download).toHaveBeenCalledTimes(1);
     expect(urlRequests).toBe(2);
-    expect(app.state).toMatchObject({ status: 'fileReady' });
-    expect((app.state as { message?: string }).message).toBeUndefined();
+    expect(app.state).toMatchObject({
+      status: 'fileReady',
+      messageTone: 'success',
+      message: '已开始下载，请在关闭此页前检查浏览器下载记录。',
+    });
+    expect((app.state as { message?: string }).message).not.toContain('下载失败');
   });
 
   it('returns an unsafe server-supplied URL to fileReady instead of getting stuck downloading', async () => {

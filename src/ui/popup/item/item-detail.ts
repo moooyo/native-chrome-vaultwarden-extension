@@ -170,31 +170,44 @@ export class VwItemDetail extends LitElement {
         height: 100%;
         min-height: 0;
         background: var(--vw-panel);
+        container: item-detail / inline-size;
       }
       .head {
         display: flex;
         flex: none;
         align-items: center;
         gap: 8px;
-        min-height: 54px;
-        padding: 7px 10px;
+        min-height: 70px;
+        padding: 10px 14px;
         border-bottom: 1px solid var(--vw-line-1);
       }
-      .head .icon-btn { flex: none; }
+      .head .icon-btn { flex: none; width: 32px; height: 32px; border-radius: var(--vw-radius-small); }
       .head-copy { flex: 1; min-width: 0; }
+      .item-mark {
+        display: grid;
+        flex: none;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        border: 1px solid var(--vw-teal-18);
+        border-radius: var(--vw-radius-small);
+        background: var(--vw-teal-10);
+        color: var(--vw-accent);
+      }
+      .item-mark svg { width: 19px; height: 19px; }
       .favorite-toggle[aria-pressed='true'] { color: var(--vw-sync-amber); }
       .favorite-toggle[aria-pressed='true'] svg { fill: currentColor; }
       h1 {
         margin: 0;
         overflow: hidden;
         color: var(--vw-ink);
-        font-size: 14px;
+        font-size: 16px;
         font-weight: 600;
         line-height: 1.25;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      .type { margin-top: 1px; color: var(--vw-muted); font-size: 10.5px; }
+      .type { margin-top: 4px; color: var(--vw-muted); font-size: 11px; }
       .body {
         flex: 1;
         min-height: 0;
@@ -209,35 +222,39 @@ export class VwItemDetail extends LitElement {
         background: var(--vw-scrollbar);
         background-clip: content-box;
       }
-      .status { display: block; margin: 10px 12px 0; }
-      .section { padding: 4px 14px 0; border-bottom: 1px solid var(--vw-line-1); }
+      .status { display: block; margin: 12px 20px 0; }
+      .section { padding: 14px 20px 10px; border-bottom: 1px solid var(--vw-line-1); }
       .section-title {
         display: flex;
         align-items: center;
         gap: 7px;
-        min-height: 35px;
+        min-height: 28px;
         margin: 0;
-        color: var(--vw-muted);
-        font-size: 11px;
+        color: var(--vw-text-2);
+        font-size: 12px;
         font-weight: 600;
       }
-      .section-title svg { width: 14px; height: 14px; color: var(--vw-text-2); }
+      .section-title svg { width: 14px; height: 14px; color: var(--vw-accent); }
       .field {
         display: grid;
-        grid-template-columns: minmax(84px, 32%) minmax(0, 1fr) auto;
+        grid-template-columns: minmax(0, 1fr) auto;
         align-items: center;
-        gap: 8px;
-        min-height: 42px;
-        padding: 6px 0;
+        column-gap: 12px;
+        row-gap: 4px;
+        min-height: 58px;
+        padding: 10px 0;
         border-top: 1px solid var(--vw-line-1);
       }
+      .section-title + .field, .section-title + .passkey-list > .field:first-child { border-top: 0; }
       .field.multiline { align-items: start; }
-      .label { color: var(--vw-muted); font-size: 11.5px; }
+      .label { grid-column: 1 / -1; color: var(--vw-muted); font-size: 11px; line-height: 1.4; }
       .value {
+        grid-column: 1;
         min-width: 0;
         overflow-wrap: anywhere;
         color: var(--vw-ink);
-        font-size: 12.5px;
+        font-size: 13px;
+        line-height: 1.6;
       }
       .value.mono { font-family: var(--vw-font-mono); font-size: 12px; }
       .value.masked {
@@ -246,29 +263,59 @@ export class VwItemDetail extends LitElement {
         user-select: none;
       }
       .value.pre { margin: 0; white-space: pre-wrap; }
-      .field-actions { display: flex; align-items: center; gap: 2px; }
+      .field-actions { display: flex; grid-column: 2; align-items: center; align-self: start; gap: 4px; }
+      .field-actions .icon-btn { width: 30px; height: 30px; border-radius: var(--vw-radius-small); }
       .field-actions .icon-btn svg { width: 14px; height: 14px; }
-      .location-field { grid-template-columns: minmax(84px, 32%) minmax(0, 1fr); }
+      .vault-location { padding: 12px 20px; border-bottom: 1px solid var(--vw-line-1); background: var(--vw-fill-2); }
+      .vault-location summary {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 28px;
+        color: var(--vw-text-2);
+        cursor: pointer;
+        list-style: none;
+        font-size: 11.5px;
+      }
+      .vault-location summary::-webkit-details-marker { display: none; }
+      .vault-location summary > svg { flex: none; width: 14px; height: 14px; color: var(--vw-accent); }
+      .location-owner { min-width: 0; overflow-wrap: anywhere; }
+      .location-caption { margin-left: auto; color: var(--vw-muted); font-size: 10.5px; }
+      .location-chevron { display: flex; flex: none; transition: transform var(--vw-dur-fast); }
+      .location-chevron svg { width: 13px; height: 13px; }
+      .vault-location[open] .location-chevron { transform: rotate(90deg); }
+      .location-field { grid-template-columns: minmax(78px, 30%) minmax(0, 1fr); min-height: 34px; padding: 7px 0; }
+      .location-field .label { grid-column: 1; }
+      .location-field .value { grid-column: 2; font-size: 11.5px; }
       a.value { color: var(--vw-teal-text); text-decoration: none; }
       a.value:hover { text-decoration: underline; }
       .totp-wrap { min-width: 0; }
       .totp-placeholder, .empty, .loading { color: var(--vw-muted); font-size: 12px; }
       .passkey-list { display: flex; flex-direction: column; }
+      .attachment-row { grid-template-columns: minmax(0, 1fr) auto; }
+      .attachment-row .attachment-name { grid-column: 1; font-size: 12px; color: var(--vw-ink); }
+      .attachment-row .attachment-size { grid-column: 1; grid-row: 2; color: var(--vw-muted); font-size: 11px; }
+      .attachment-row .field-actions { grid-column: 2; grid-row: 1 / 3; align-self: center; }
       .attachment-name { display: flex; min-width: 0; align-items: center; gap: 7px; }
       .attachment-name svg { width: 14px; height: 14px; flex: none; color: var(--vw-muted); }
       .attachment-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .history-field { grid-template-columns: minmax(0, 1fr) auto; }
+      .history-field { grid-template-columns: minmax(0, 1fr) auto; min-height: 42px; }
       .history-entry { grid-template-columns: minmax(0, 1fr) auto auto; }
+      .history-entry .field-actions { grid-column: 3; }
       .history-date { color: var(--vw-muted); font-size: 10.5px; white-space: nowrap; }
+      .btn { white-space: nowrap; }
+      .btn > svg { flex: none; width: 15px; height: 15px; }
       .section-actions {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         justify-content: space-between;
         gap: 8px;
         min-height: 48px;
         border-top: 1px solid var(--vw-line-1);
       }
-      .upload { position: relative; min-height: 34px; padding: 0 12px; font-size: 12px; }
+      .section-actions > .empty { flex: 1; min-width: 0; }
+      .upload { position: relative; flex: 0 0 auto; width: auto; min-width: max-content; min-height: 34px; margin-left: auto; padding: 0 12px; font-size: 12px; }
       .upload.disabled { cursor: default; opacity: 0.5; }
       .file-input {
         position: absolute;
@@ -281,26 +328,41 @@ export class VwItemDetail extends LitElement {
       }
       .primary-actions, .danger-zone, .lifecycle-actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 8px;
-        padding: 12px 14px;
+        padding: 12px 20px;
       }
+      .primary-actions { flex: none; border-top: 1px solid var(--vw-line-1); background: var(--vw-panel); }
       .primary-actions .btn { flex: 1; min-width: 0; }
-      .danger-zone { justify-content: flex-end; padding-top: 4px; }
-      .danger-zone .btn { min-height: 34px; padding: 0 13px; font-size: 12px; }
+      .management { padding: 14px 20px 20px; }
+      .danger-zone { justify-content: flex-start; padding: 6px 0 0; }
+      .danger-zone .btn { flex: 0 0 auto; min-width: max-content; min-height: 34px; padding: 0 13px; font-size: 12px; }
       .inactive-panel {
         display: flex;
-        min-height: 100%;
+        flex: none;
         flex-direction: column;
-        justify-content: center;
-        padding: 20px 14px;
+        padding: 12px 20px;
+        border-top: 1px solid var(--vw-line-1);
+        background: var(--vw-fill-2);
       }
-      .inactive-copy { margin: 0 auto 12px; color: var(--vw-muted); font-size: 12px; text-align: center; }
-      .lifecycle-actions { flex-direction: column; padding: 0; }
+      .inactive-copy { margin: 0 0 10px; color: var(--vw-muted); font-size: 11.5px; }
+      .lifecycle-actions { flex-wrap: wrap; padding: 0; }
+      .lifecycle-actions .btn { flex: 1 1 auto; min-width: max-content; padding-inline: 12px; font-size: 12px; }
       vw-dialog p { margin: 0; color: var(--vw-text-2); font-size: 12.5px; }
       vw-dialog .btn { min-height: 36px; padding: 0 14px; font-size: 12px; }
-      @media (max-width: 340px) {
-        .field { grid-template-columns: minmax(72px, 29%) minmax(0, 1fr) auto; }
+      .confirmation-context { margin: 14px 0 0; padding: 12px 0; border-block: 1px solid var(--vw-line-1); }
+      .confirmation-context > div { display: grid; grid-template-columns: minmax(76px, 30%) minmax(0, 1fr); gap: 12px; padding: 4px 0; }
+      .confirmation-context dt { color: var(--vw-muted); font-size: 11.5px; }
+      .confirmation-context dd { margin: 0; color: var(--vw-ink); font-size: 12px; overflow-wrap: anywhere; }
+      .confirmation-context strong { font-weight: 600; }
+      @container item-detail (max-width: 360px) {
+        .head { padding-inline: 8px; gap: 5px; }
+        .item-mark { display: none; }
+        .section, .vault-location, .management { padding-inline: 14px; }
         .primary-actions { flex-direction: column; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .location-chevron { transition: none; }
       }
     `,
   ];
@@ -815,6 +877,17 @@ export class VwItemDetail extends LitElement {
     }
   }
 
+  private typeIcon(): IconName {
+    switch (this.summary.type) {
+      case 1: return 'key';
+      case 2: return 'note';
+      case 3: return 'card';
+      case 4: return 'idcard';
+      case 5: return 'key';
+      default: return 'shield';
+    }
+  }
+
   private renderHeader(): TemplateResult {
     const editable = !this.isDeleted
       && !this.isUnsupported
@@ -834,8 +907,9 @@ export class VwItemDetail extends LitElement {
           aria-label=${t('common.back')}
           @click=${() => this.leave('vw-item-back')}
         >${uiIcon('back')}</button>
+        <span class="item-mark" aria-hidden="true">${uiIcon(this.typeIcon())}</span>
         <div class="head-copy">
-          <h1>${title}</h1>
+          <h1 title=${title}>${title}</h1>
           <div class="type">${this.typeLabel()}</div>
         </div>
         ${canToggleFavorite
@@ -899,9 +973,10 @@ export class VwItemDetail extends LitElement {
     title: string,
     icon: IconName,
     body: TemplateResult | typeof nothing | Array<TemplateResult | typeof nothing>,
+    group?: string,
   ): TemplateResult {
     return html`
-      <section class="section">
+      <section class="section" data-section=${group ?? nothing}>
         <h2 class="section-title">${uiIcon(icon)}<span>${title}</span></h2>
         ${body}
       </section>
@@ -973,10 +1048,7 @@ export class VwItemDetail extends LitElement {
   private renderVaultLocation(): TemplateResult {
     const metadata = this.presentationMetadata;
     const organizationId = this.summary.organizationId;
-    const owner = organizationId
-      ? this.presentationEntityName(organizationId, metadata?.organizations)
-        ?? t('detail.unknownOrganization')
-      : t('detail.personalVault');
+    const owner = this.ownerName();
     const folder = this.summary.folderId
       ? this.presentationEntityName(this.summary.folderId, metadata?.folders)
         ?? t('detail.unknownFolder')
@@ -988,11 +1060,27 @@ export class VwItemDetail extends LitElement {
           this.presentationCollectionName(id, organizationId, metadata?.collections)
           ?? t('detail.unknownCollection')
         )).join(', ');
-    return this.renderSection(t('detail.vaultLocation'), 'folder', [
-      this.renderLocationField('owner', t('detail.owner'), owner),
-      this.renderLocationField('folder', t('detail.folder'), folder),
-      this.renderLocationField('collections', t('detail.collections'), collections),
-    ]);
+    return html`
+      <details class="vault-location">
+        <summary>
+          ${uiIcon(organizationId ? 'shield' : 'lock')}
+          <span class="location-owner">${owner}</span>
+          <span class="location-caption">${t('detail.vaultLocation')}</span>
+          <span class="location-chevron" aria-hidden="true">${uiIcon('chevron')}</span>
+        </summary>
+        ${this.renderLocationField('owner', t('detail.owner'), owner)}
+        ${this.renderLocationField('folder', t('detail.folder'), folder)}
+        ${this.renderLocationField('collections', t('detail.collections'), collections)}
+      </details>
+    `;
+  }
+
+  private ownerName(): string {
+    const organizationId = this.summary.organizationId;
+    return organizationId
+      ? this.presentationEntityName(organizationId, this.presentationMetadata?.organizations)
+        ?? t('detail.unknownOrganization')
+      : t('detail.personalVault');
   }
 
   private renderUri(uri: string): TemplateResult {
@@ -1038,8 +1126,8 @@ export class VwItemDetail extends LitElement {
             data-reveal=${field}
             ?data-toggle-password=${password}
             aria-pressed=${shown ? 'true' : 'false'}
-            title=${t('detail.reveal')}
-            aria-label=${`${t('detail.reveal')} ${label}`}
+            title=${t(shown ? 'detail.hideValue' : 'detail.showValue', { name: label })}
+            aria-label=${t(shown ? 'detail.hideValue' : 'detail.showValue', { name: label })}
             ?disabled=${this.pending || loading}
             @click=${() => void this.toggleFieldReveal(key, field)}
           >${uiIcon(shown ? 'eyeOff' : 'eye')}</button>
@@ -1064,12 +1152,16 @@ export class VwItemDetail extends LitElement {
       this.allows('viewPassword')
         ? this.renderSecretField(t('detail.password'), 'password')
         : nothing,
-      ...this.summary.uris.map((uri) => this.renderUri(uri)),
     ];
     if (!this.isInactive && this.summary.hasTotp && this.allows('viewTotp')) {
       rows.push(this.renderTotp());
     }
-    return this.renderSection(t('editor.typeLogin'), 'user', rows);
+    return html`
+      ${this.renderSection(t('detail.credentials'), 'user', rows, 'credentials')}
+      ${this.summary.uris.length
+        ? this.renderSection(t('detail.websites'), 'globe', this.summary.uris.map((uri) => this.renderUri(uri)), 'websites')
+        : nothing}
+    `;
   }
 
   private renderTotp(): TemplateResult {
@@ -1116,13 +1208,13 @@ export class VwItemDetail extends LitElement {
       this.renderSecretField(t('detail.cardNumber'), 'card.number'),
       this.renderPlainField(t('detail.cardExpiry'), expiry),
       this.renderSecretField(t('detail.cardCode'), 'card.code'),
-    ]);
+    ], 'card');
   }
 
   private renderIdentity(): TemplateResult {
     const identity = this.cipher?.identity;
     if (!identity) return this.renderSection(t('editor.typeIdentity'), 'idcard', html`<p class="loading">${t('common.loading')}</p>`);
-    const plainFields: ReadonlyArray<readonly [string, keyof DecryptedIdentity, boolean?]> = [
+    const contactFields: ReadonlyArray<readonly [string, keyof DecryptedIdentity]> = [
       [t('detail.identityTitle'), 'title'],
       [t('detail.firstName'), 'firstName'],
       [t('detail.middleName'), 'middleName'],
@@ -1131,6 +1223,8 @@ export class VwItemDetail extends LitElement {
       [t('detail.company'), 'company'],
       [t('detail.email'), 'email'],
       [t('detail.phone'), 'phone'],
+    ];
+    const addressFields: ReadonlyArray<readonly [string, keyof DecryptedIdentity, boolean?]> = [
       [t('detail.address1'), 'address1', true],
       [t('detail.address2'), 'address2', true],
       [t('detail.address3'), 'address3', true],
@@ -1139,12 +1233,19 @@ export class VwItemDetail extends LitElement {
       [t('detail.postalCode'), 'postalCode'],
       [t('detail.country'), 'country'],
     ];
-    return this.renderSection(t('editor.typeIdentity'), 'idcard', [
-      ...plainFields.map(([label, key, multiline]) => this.renderPlainField(label, identity[key], { multiline: Boolean(multiline) })),
-      this.renderSecretField(t('detail.ssn'), 'identity.ssn'),
-      this.renderSecretField(t('detail.passportNumber'), 'identity.passportNumber'),
-      this.renderSecretField(t('detail.licenseNumber'), 'identity.licenseNumber'),
-    ]);
+    return html`
+      ${this.renderSection(t('detail.contactInformation'), 'user', contactFields.map(([label, key]) => this.renderPlainField(label, identity[key])), 'contact')}
+      ${addressFields.some(([, key]) => identity[key])
+        ? this.renderSection(t('detail.address'), 'globe', addressFields.map(([label, key, multiline]) => this.renderPlainField(label, identity[key], { multiline: Boolean(multiline) })), 'address')
+        : nothing}
+      ${this.allows('viewPassword')
+        ? this.renderSection(t('detail.identityDocuments'), 'idcard', [
+            this.renderSecretField(t('detail.ssn'), 'identity.ssn'),
+            this.renderSecretField(t('detail.passportNumber'), 'identity.passportNumber'),
+            this.renderSecretField(t('detail.licenseNumber'), 'identity.licenseNumber'),
+          ], 'documents')
+        : nothing}
+    `;
   }
 
   private renderNote(): TemplateResult {
@@ -1170,7 +1271,7 @@ export class VwItemDetail extends LitElement {
             <span class="label">${t('ssh.privateKey')}</span>
             <pre class="value pre mono ${shown ? '' : 'masked'}">${privateValue}</pre>
             <span class="field-actions">
-              <button type="button" class="icon-btn xs" data-reveal-ssh-private aria-pressed=${shown ? 'true' : 'false'} title=${t('detail.reveal')} aria-label=${`${t('detail.reveal')} ${t('ssh.privateKey')}`} ?disabled=${this.pending || loading} @click=${() => void this.toggleSshPrivateKey()}>${uiIcon(shown ? 'eyeOff' : 'eye')}</button>
+              <button type="button" class="icon-btn xs" data-reveal-ssh-private aria-pressed=${shown ? 'true' : 'false'} title=${t(shown ? 'detail.hideValue' : 'detail.showValue', { name: t('ssh.privateKey') })} aria-label=${t(shown ? 'detail.hideValue' : 'detail.showValue', { name: t('ssh.privateKey') })} ?disabled=${this.pending || loading} @click=${() => void this.toggleSshPrivateKey()}>${uiIcon(shown ? 'eyeOff' : 'eye')}</button>
               <button type="button" class="icon-btn xs" data-copy-ssh-private title=${t('common.copy')} aria-label=${`${t('common.copy')} ${t('ssh.privateKey')}`} ?disabled=${this.pending || loading} @click=${() => void this.copySshPrivateKey()}>${uiIcon('copy')}</button>
             </span>
           </div>
@@ -1217,8 +1318,8 @@ export class VwItemDetail extends LitElement {
                     class="icon-btn xs"
                     data-cf-reveal
                     aria-pressed=${shown ? 'true' : 'false'}
-                    title=${t('detail.reveal')}
-                    aria-label=${`${t('detail.reveal')} ${label}`}
+                    title=${t(shown ? 'detail.hideValue' : 'detail.showValue', { name: label })}
+                    aria-label=${t(shown ? 'detail.hideValue' : 'detail.showValue', { name: label })}
                     ?disabled=${this.pending || loading}
                     @click=${() => void this.toggleCustomReveal(index)}
                   >${uiIcon(shown ? 'eyeOff' : 'eye')}</button>
@@ -1321,9 +1422,9 @@ export class VwItemDetail extends LitElement {
       html`
         ${attachments.length
           ? attachments.map((attachment) => html`
-              <div class="field">
+              <div class="field attachment-row">
                 <span class="label attachment-name">${uiIcon('file')}<span>${attachment.fileName}</span></span>
-                <span class="value">${attachment.sizeName ?? attachment.size ?? ''}</span>
+                <span class="value attachment-size">${attachment.sizeName ?? attachment.size ?? ''}</span>
                 <span class="field-actions">
                   ${attachment.fileName !== '(undecryptable)'
                     ? html`<button
@@ -1410,8 +1511,8 @@ export class VwItemDetail extends LitElement {
               class="icon-btn xs"
               data-toggle-history
               aria-pressed=${this.history !== null ? 'true' : 'false'}
-              title=${t('detail.reveal')}
-              aria-label=${t('detail.passwordHistory')}
+              title=${t(this.history !== null ? 'detail.hideValue' : 'detail.showValue', { name: t('detail.passwordHistory') })}
+              aria-label=${t(this.history !== null ? 'detail.hideValue' : 'detail.showValue', { name: t('detail.passwordHistory') })}
               ?disabled=${this.pending || loading}
               @click=${() => void this.toggleHistory()}
             >${uiIcon(this.history !== null ? 'eyeOff' : 'eye')}</button>
@@ -1477,7 +1578,9 @@ export class VwItemDetail extends LitElement {
   private renderDangerZone(): TemplateResult | typeof nothing {
     if (this.displayMode !== 'active' || this.isUnsupported) return nothing;
     return html`
-      <div class="danger-zone">
+      <section class="management">
+        <h2 class="section-title">${t('detail.itemManagement')}</h2>
+        <div class="danger-zone">
         <button
           type="button"
           class="btn outline"
@@ -1499,7 +1602,8 @@ export class VwItemDetail extends LitElement {
             event.currentTarget as HTMLElement,
           )}
         >${uiIcon('trash')}<span>${t('detail.delete')}</span></button>` : nothing}
-      </div>
+        </div>
+      </section>
     `;
   }
 
@@ -1521,7 +1625,6 @@ export class VwItemDetail extends LitElement {
       ${this.renderPasskeys()}
       ${this.renderAttachments()}
       ${this.renderHistory()}
-      ${this.renderPrimaryActions()}
       ${this.renderDangerZone()}
     `;
   }
@@ -1631,6 +1734,21 @@ export class VwItemDetail extends LitElement {
         @vw-dialog-close=${(event: CustomEvent<{ reason: string }>) => this.handleConfirmationClose(event)}
       >
         <p>${message}</p>
+        <dl class="confirmation-context" data-confirmation-context>
+          <div>
+            <dt>${t('detail.sourceItem')}</dt>
+            <dd data-confirmation-item><strong>${this.summary.name}</strong></dd>
+          </div>
+          <div>
+            <dt>${t('detail.owner')}</dt>
+            <dd data-confirmation-owner>${this.ownerName()}</dd>
+          </div>
+          ${attachment
+            ? html`<div><dt>${t('detail.attachments')}</dt><dd data-confirmation-target>${confirmation.attachment.fileName}</dd></div>`
+            : passkey
+              ? html`<div><dt>${t('detail.passkey')}</dt><dd data-confirmation-target>${confirmation.name}</dd></div>`
+              : nothing}
+        </dl>
         <button
           slot="actions"
           type="button"
@@ -1655,7 +1773,11 @@ export class VwItemDetail extends LitElement {
             ? t('detail.clone')
           : passkey
             ? t('detail.deletePasskey')
-            : t('common.delete')}</button>
+            : permanent
+              ? t('detail.deletePermanently')
+              : attachment
+                ? t('detail.deleteAttachment')
+                : t('detail.delete')}</button>
       </vw-dialog>
     `;
   }
@@ -1668,15 +1790,15 @@ export class VwItemDetail extends LitElement {
         ${this.renderVaultLocation()}
         ${this.isUnsupported
           ? this.renderUnknownUnsupported()
-          : html`
-              ${this.renderNormalBody()}
-              ${this.displayMode === 'trash'
-                ? this.renderTrashBody()
-                : this.displayMode === 'archive'
-                  ? this.renderArchiveBody()
-                  : nothing}
-            `}
+          : this.renderNormalBody()}
       </main>
+      ${!this.isUnsupported
+        ? this.displayMode === 'trash'
+          ? this.renderTrashBody()
+          : this.displayMode === 'archive'
+            ? this.renderArchiveBody()
+            : this.renderPrimaryActions()
+        : nothing}
       ${this.renderConfirmation()}
     `;
   }

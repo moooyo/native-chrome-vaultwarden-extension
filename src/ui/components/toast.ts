@@ -1,12 +1,12 @@
-import { LitElement, css, html } from 'lit';
+import { LitElement, css, html, nothing } from 'lit';
 import { themeTokens } from './tokens.js';
 import { emit } from './emit.js';
 
-const TOAST_MS = 1900;
+const TOAST_MS = 3000;
 
 /**
- * `vw-toast` — the copy confirmation pill. The parent renders it with a `message` and listens for
- * `vw-toast-dismiss` to clear its state; the toast schedules its own auto-dismiss after 1.9s and
+ * `vw-toast` is a compact operation receipt. The parent renders a `message` and listens for
+ * `vw-toast-dismiss` to clear its state; the toast schedules its own auto-dismiss after 3s and
  * plays the `mvUp` entrance. `offset` sets the distance from the bottom of the positioned parent
  * (42 in the popup — above the sync bar, 18 elsewhere).
  */
@@ -34,27 +34,26 @@ export class VwToast extends LitElement {
         position: absolute;
         left: 50%;
         transform: translateX(-50%);
+        width: max-content;
+        max-width: calc(100% - 32px);
         z-index: 40;
         pointer-events: none;
       }
       .toast {
         display: inline-block;
-        max-width: 320px;
-        padding: 6px 13px;
-        border-radius: var(--vw-radius-dialog);
-        background: rgba(22, 24, 29, 0.92);
-        color: #fff;
-        font-size: 11.5px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        animation: mvUp 0.18s ease-out;
-      }
-      @media (prefers-color-scheme: dark) {
-        :host([data-dark]) .toast { background: rgba(242, 243, 245, 0.95); color: #16181d; }
+        max-width: 100%;
+        padding: 10px 14px;
+        border-radius: var(--vw-radius-control);
+        background: var(--inv);
+        color: var(--oninv);
+        font-size: 12px;
+        line-height: 1.6;
+        overflow-wrap: anywhere;
+        box-shadow: var(--vw-popup-shadow);
+        animation: mvUp var(--vw-dur) var(--vw-ease);
       }
       @keyframes mvUp {
-        from { opacity: 0; transform: translateY(8px); }
+        from { opacity: 0; transform: translateY(5px); }
         to { opacity: 1; transform: translateY(0); }
       }
       @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
@@ -62,10 +61,15 @@ export class VwToast extends LitElement {
   ];
 
   protected override updated(changed: Map<string, unknown>): void {
-    if (changed.has('message') && this.message) {
+    if (changed.has('offset') || changed.has('message')) {
       this.style.bottom = `${this.offset}px`;
+    }
+    if (changed.has('message')) {
       if (this.timer) clearTimeout(this.timer);
+      this.timer = undefined;
+      if (!this.message) return;
       this.timer = setTimeout(() => {
+        this.timer = undefined;
         emit(this, 'vw-toast-dismiss');
       }, TOAST_MS);
     }
@@ -77,7 +81,7 @@ export class VwToast extends LitElement {
   }
 
   protected override render() {
-    return html`<div class="toast" role="status">${this.message}</div>`;
+    return this.message ? html`<div class="toast" role="status" aria-live="polite" aria-atomic="true">${this.message}</div>` : nothing;
   }
 }
 

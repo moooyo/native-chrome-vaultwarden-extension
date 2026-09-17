@@ -7,3 +7,4 @@ release/
 .superpowers/brainstorm/
 test-results/
 playwright-report/
+.ui-workbench/

@@ -180,6 +180,39 @@ describe('fillTotpCode', () => {
     expect(inputs.map((input) => input.value)).toEqual(['', '', '', '', '', '']);
   });
 
+  it('preserves a later manual edit to a single code when undo is requested', () => {
+    document.body.innerHTML = '<form><input id="otp" autocomplete="one-time-code" maxlength="6"></form>';
+    const input = document.getElementById('otp') as HTMLInputElement;
+    expect(fillTotpCode(input, '123456')).toBe(true);
+    input.value = '654321';
+    expect(clearTotpCode(input, '123456')).toBe(false);
+    expect(input.value).toBe('654321');
+  });
+
+  it('undoes unchanged split digits while retaining a later edit', () => {
+    document.body.innerHTML = `<form><div>
+      <input autocomplete="one-time-code" maxlength="1"><input maxlength="1"><input maxlength="1">
+      <input maxlength="1"><input maxlength="1"><input maxlength="1">
+    </div></form>`;
+    const inputs = [...document.querySelectorAll<HTMLInputElement>('input')];
+    expect(fillTotpCode(inputs[0]!, '123456')).toBe(true);
+    inputs[2]!.value = '9';
+    expect(clearTotpCode(inputs[0]!, '123456')).toBe(true);
+    expect(inputs.map((input) => input.value)).toEqual(['', '', '9', '', '', '']);
+  });
+
+  it('preserves edits made to a later split field by an undo event', () => {
+    document.body.innerHTML = `<form><div>
+      <input autocomplete="one-time-code" maxlength="1"><input maxlength="1"><input maxlength="1">
+      <input maxlength="1"><input maxlength="1"><input maxlength="1">
+    </div></form>`;
+    const inputs = [...document.querySelectorAll<HTMLInputElement>('input')];
+    expect(fillTotpCode(inputs[0]!, '123456')).toBe(true);
+    inputs[0]!.addEventListener('input', () => { inputs[4]!.value = '8'; }, { once: true });
+    expect(clearTotpCode(inputs[0]!, '123456')).toBe(true);
+    expect(inputs.map((input) => input.value)).toEqual(['', '', '', '', '8', '']);
+  });
+
   it('supports component-enforced boxes when every input has one-time-code autocomplete', () => {
     document.body.innerHTML = `
       <form><div id="otp-group">

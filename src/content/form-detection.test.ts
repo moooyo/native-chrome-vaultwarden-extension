@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { registerExtensionOwnedShadowRoot } from './composed-tree.js';
 import {
   detectLoginForms,
   isFillableInput,
@@ -414,6 +415,59 @@ describe('form detection', () => {
 
     target.style.pointerEvents = 'none';
     hit.mockReturnValue(document.getElementById('owner'));
+    expect(isFillableInput(target)).toBe(false);
+  });
+
+  it('looks behind registered extension surfaces while preserving website overlay rejection', () => {
+    document.body.innerHTML = '<input id="target"><div id="cover"></div>';
+    const target = document.getElementById('target') as HTMLInputElement;
+    const cover = document.getElementById('cover')!;
+    const surface = document.createElement('div');
+    registerExtensionOwnedShadowRoot(surface.attachShadow({ mode: 'closed' }));
+    document.body.append(surface);
+    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue(rect());
+    vi.spyOn(document, 'elementFromPoint').mockReturnValue(surface);
+    const originalStackDescriptor = Object.getOwnPropertyDescriptor(document, 'elementsFromPoint');
+    const stack = vi.fn<(x: number, y: number) => Element[]>();
+    Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: stack });
+    try {
+      stack.mockReturnValue([surface, target, document.body]);
+      expect(isFillableInput(target)).toBe(true);
+      stack.mockReturnValue([surface, cover, target, document.body]);
+      expect(isFillableInput(target)).toBe(false);
+      cover.setAttribute('data-vw-structured-preview', '');
+      expect(isFillableInput(target)).toBe(false);
+      stack.mockReturnValue([target, surface]);
+      expect(isFillableInput(target)).toBe(false);
+      const forged = document.createElement('div');
+      forged.attachShadow({ mode: 'closed' });
+      forged.setAttribute('data-vw-structured-preview', '');
+      document.body.append(forged);
+      stack.mockReturnValue([surface, forged, target]);
+      expect(isFillableInput(target)).toBe(false);
+    } finally {
+      if (originalStackDescriptor) Object.defineProperty(document, 'elementsFromPoint', originalStackDescriptor);
+      else Reflect.deleteProperty(document, 'elementsFromPoint');
+    }
+  });
+
+  it('preserves website overlay rejection behind an extension surface in an open shadow tree', () => {
+    const pageHost = document.createElement('div');
+    const shadow = pageHost.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<input><div></div>';
+    document.body.append(pageHost);
+    const target = shadow.querySelector<HTMLInputElement>('input')!;
+    const cover = shadow.querySelector('div')!;
+    const surface = document.createElement('div');
+    registerExtensionOwnedShadowRoot(surface.attachShadow({ mode: 'closed' }));
+    document.body.append(surface);
+    const hit = vi.fn(() => surface);
+    const stack = vi.fn(() => [surface, target]);
+    Object.defineProperty(shadow, 'elementFromPoint', { configurable: true, value: hit });
+    Object.defineProperty(shadow, 'elementsFromPoint', { configurable: true, value: stack });
+    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue(rect());
+    expect(isFillableInput(target)).toBe(true);
+    stack.mockReturnValue([surface, cover, target]);
     expect(isFillableInput(target)).toBe(false);
   });
 

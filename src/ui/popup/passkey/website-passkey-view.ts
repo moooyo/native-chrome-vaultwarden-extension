@@ -5,6 +5,7 @@ import { controlStyles } from '../../components/styles.js';
 import { themeTokens } from '../../components/tokens.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import '../../components/status-message.js';
+import { authIdentityStyles, renderAuthIdentity, type AuthIdentityDisplay } from '../auth/auth-identity.js';
 
 export type WebsitePasskeyViewState = 'awaiting' | 'executing' | 'error';
 
@@ -60,9 +61,11 @@ export interface WebsitePasskeyFallbackDetail {
 export class VwWebsitePasskeyView extends LitElement {
   static override properties = {
     model: { attribute: false },
+    identity: { attribute: false },
   };
 
   declare model: WebsitePasskeyViewModel | undefined;
+  declare identity: AuthIdentityDisplay | undefined;
 
   private i18n = new LocalizeController(this);
   private focusedViewKey: string | undefined;
@@ -72,11 +75,13 @@ export class VwWebsitePasskeyView extends LitElement {
   constructor() {
     super();
     this.model = undefined;
+    this.identity = undefined;
   }
 
   static override styles = [
     themeTokens,
     controlStyles,
+    authIdentityStyles,
     css`
       :host {
         display: flex;
@@ -96,7 +101,7 @@ export class VwWebsitePasskeyView extends LitElement {
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 14px 16px 12px;
+        padding: 16px 18px;
         border-bottom: 1px solid var(--vw-line-1);
       }
       .mark {
@@ -118,7 +123,7 @@ export class VwWebsitePasskeyView extends LitElement {
       }
       h1 {
         margin: 0;
-        font-size: 14px;
+        font-size: 18px;
         font-weight: 600;
         letter-spacing: 0;
       }
@@ -131,7 +136,7 @@ export class VwWebsitePasskeyView extends LitElement {
         display: grid;
         grid-template-columns: 18px minmax(0, 1fr);
         gap: 2px 8px;
-        padding: 12px 16px;
+        padding: 12px 18px;
         border-bottom: 1px solid var(--vw-line-1);
         background: var(--vw-fill-2);
       }
@@ -144,12 +149,11 @@ export class VwWebsitePasskeyView extends LitElement {
       }
       .origin {
         min-width: 0;
-        overflow: hidden;
+        overflow-wrap: anywhere;
         color: var(--vw-ink);
         font-size: 12.5px;
         font-weight: 600;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        unicode-bidi: plaintext;
       }
       .rp {
         min-width: 0;
@@ -164,8 +168,8 @@ export class VwWebsitePasskeyView extends LitElement {
         flex: 1;
         min-height: 0;
         flex-direction: column;
-        gap: 9px;
-        padding: 12px 16px;
+        gap: 16px;
+        padding: 16px 18px;
         overflow-y: auto;
         scrollbar-color: var(--vw-scrollbar) transparent;
         scrollbar-width: thin;
@@ -179,7 +183,7 @@ export class VwWebsitePasskeyView extends LitElement {
       .choices {
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 0;
       }
       .choice {
         display: grid;
@@ -187,10 +191,11 @@ export class VwWebsitePasskeyView extends LitElement {
         align-items: center;
         gap: 9px;
         width: 100%;
-        min-height: 48px;
-        padding: 7px 9px;
-        border: 1px solid var(--vw-line-2);
-        border-radius: var(--vw-radius-chip);
+        min-height: 58px;
+        padding: 10px 9px;
+        border: 0;
+        border-bottom: 1px solid var(--vw-line-1);
+        border-radius: 0;
         background: var(--vw-card);
         color: var(--vw-ink);
         font-family: var(--vw-font-ui);
@@ -202,6 +207,7 @@ export class VwWebsitePasskeyView extends LitElement {
         border-color: var(--vw-line-3);
         background: var(--vw-row-hover);
       }
+      .choice:focus-visible { outline: 2px solid var(--vw-accent); outline-offset: -2px; }
       .choice:disabled {
         cursor: default;
         opacity: 0.55;
@@ -235,12 +241,12 @@ export class VwWebsitePasskeyView extends LitElement {
         white-space: nowrap;
       }
       .choice-name {
-        font-size: 12.5px;
+        font-size: 13px;
         font-weight: 600;
       }
       .choice-user {
         color: var(--vw-muted);
-        font-size: 10.5px;
+        font-size: 11.5px;
       }
       .execution {
         display: flex;
@@ -527,6 +533,7 @@ export class VwWebsitePasskeyView extends LitElement {
             `
           : nothing}
         <main class="content">
+          ${renderAuthIdentity(this.identity)}
           ${model.state === 'error'
             ? html`<vw-status-message
                 tone="danger"

@@ -6,12 +6,19 @@ import { VwPopupApp } from './app.js';
 import { safeWebUrl } from './utils.js';
 
 const app = document.createElement('vw-popup-app') as VwPopupApp;
+const workspace = new URLSearchParams(window.location.search).get('workspace') === '1';
+app.workspace = workspace;
+document.documentElement.classList.toggle('workspace', workspace);
+document.body.classList.toggle('workspace', workspace);
 app.request = sendRequest;
 app.browser = {
   getActiveTabId: async () => (await browser.tabs.query({ active: true, currentWindow: true }))[0]?.id,
   getActiveTabUrl: async () => (await browser.tabs.query({ active: true, currentWindow: true }))[0]?.url,
   captureVisibleTab: () => browser.tabs.captureVisibleTab(undefined, { format: 'png' }),
   openOptions: () => browser.runtime.openOptionsPage(),
+  openWorkspace: async () => {
+    await browser.tabs.create({ url: browser.runtime.getURL('ui/popup/popup.html?workspace=1') });
+  },
   openReceive: async () => {
     await browser.tabs.create({ url: browser.runtime.getURL('ui/receive/receive.html') });
   },
@@ -24,16 +31,11 @@ app.browser = {
 };
 document.getElementById('app')?.append(app);
 
-// Fit the popup to the ACTUAL popup-window height. The frame is a fixed 560px (popup.css); on a short
-// screen Chrome caps the popup window below 560 and shows its own window scrollbar to reach the clipped
-// bottom (the scrollbar is on the popup window, not the DOM, so CSS overflow:hidden can't suppress it).
-// Match the document height to window.innerHeight so the document never exceeds the window — the inner
-// list/editor scrollers then own all scrolling. Guarded so a transient tiny innerHeight during initial
-// sizing can never collapse the popup (that was the v0.0.15 `100vh` failure): only shrink when the
-// window is genuinely 120–559px, otherwise keep the 560px design height.
+// The action popup needs a definite height during Chrome's initial autosizing. Only shrink it for
+// a genuinely constrained window; the explicit full-tab workspace follows the available viewport.
 function fitPopupHeight(): void {
   const ih = window.innerHeight;
-  const px = `${ih >= 120 && ih < 560 ? ih : 560}px`;
+  const px = `${workspace ? ih : ih >= 120 && ih < 600 ? ih : 600}px`;
   if (document.body.style.height === px) return;
   document.documentElement.style.height = px;
   document.body.style.height = px;

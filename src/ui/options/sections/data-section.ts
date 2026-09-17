@@ -12,6 +12,7 @@ import {
   canClearVaultTransferRecovery,
   type VaultTransferExportFormat,
   type VaultTransferRecoveryStatus,
+  type VaultTransferImportResultMessage,
 } from '../../../messaging/vault-transfer-port.js';
 import type { SanitizedImportPreviewViewModel } from './import-preview.js';
 
@@ -34,6 +35,9 @@ export class VwDataSection extends LitElement {
     status: { attribute: false },
     awaitingImportPassword: { type: Boolean },
     importPreview: { attribute: false },
+    importResult: { attribute: false },
+    accountEmail: { type: String },
+    serverUrl: { type: String },
     recoveryStatus: { attribute: false },
     recoveryPending: { type: Boolean },
     recoveryUnavailable: { type: Boolean },
@@ -51,6 +55,9 @@ export class VwDataSection extends LitElement {
   declare status: SectionStatus | undefined;
   declare awaitingImportPassword: boolean;
   declare importPreview: SanitizedImportPreviewViewModel | undefined;
+  declare importResult: VaultTransferImportResultMessage | undefined;
+  declare accountEmail: string;
+  declare serverUrl: string;
   declare recoveryStatus: VaultTransferRecoveryStatus | undefined;
   declare recoveryPending: boolean;
   declare recoveryUnavailable: boolean;
@@ -71,6 +78,9 @@ export class VwDataSection extends LitElement {
     this.status = undefined;
     this.awaitingImportPassword = false;
     this.importPreview = undefined;
+    this.importResult = undefined;
+    this.accountEmail = '';
+    this.serverUrl = '';
     this.recoveryStatus = undefined;
     this.recoveryPending = false;
     this.recoveryUnavailable = false;
@@ -86,9 +96,9 @@ export class VwDataSection extends LitElement {
   static override styles = [
     themeTokens,
     css`
-      :host { display: flex; flex-direction: column; gap: 8px; }
+      :host { display: flex; flex-direction: column; gap: 16px; }
       .btn-primary {
-        display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 15px;
+        display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; padding: 8px 16px;
         border: none; border-radius: var(--vw-radius-input);
         background: var(--vw-primary-bg); color: var(--vw-primary-fg);
         font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
@@ -96,42 +106,57 @@ export class VwDataSection extends LitElement {
       .btn-primary:hover:not(:disabled) { background: var(--vw-primary-bg-hover); }
       .btn-primary svg { width: 14px; height: 14px; }
       .btn-outline {
-        height: 32px; padding: 0 14px; border: 1px solid var(--vw-line-3);
+        min-height: 38px; padding: 8px 14px; border: 1px solid var(--vw-line-3);
         border-radius: var(--vw-radius-input); background: var(--vw-card); color: var(--vw-text-4);
         font-family: inherit; font-size: 12.5px; cursor: pointer;
       }
       .btn-outline:hover:not(:disabled) { background: var(--vw-row-hover); }
       .btn-danger {
-        height: 32px; padding: 0 14px; border: 1px solid var(--vw-danger-border);
+        min-height: 38px; padding: 8px 14px; border: 1px solid var(--vw-danger-border);
         border-radius: var(--vw-radius-input); background: var(--vw-card); color: var(--vw-danger);
         font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
       }
       .btn-danger:hover:not(:disabled) { background: var(--vw-danger-10); }
       .btn-primary:disabled, .btn-outline:disabled, .btn-danger:disabled { opacity: 0.5; cursor: default; }
       .pwd {
-        height: 32px; width: 180px; box-sizing: border-box; padding: 0 11px;
+        height: 40px; width: 100%; box-sizing: border-box; padding: 0 12px;
         border: 1px solid var(--vw-line-3); border-radius: var(--vw-radius-input);
         background: var(--vw-card); color: var(--vw-ink); font-family: inherit; font-size: 12px;
       }
       .pwd::placeholder { color: var(--vw-placeholder); }
       .pwd:focus { outline: none; border-color: var(--vw-accent); }
       .hidden-file { display: none; }
-      .recovery-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+      .recovery-actions { display: flex; flex-direction: column; align-items: stretch; gap: 16px; width: 100%; padding-top: 16px; border-top: 1px solid var(--vw-line-1); }
       .recovery-confirm { display: inline-flex; align-items: flex-start; gap: 8px; color: var(--vw-text-4); font-size: 12px; line-height: 1.45; }
       .recovery-confirm input { margin: 2px 0 0; flex: none; accent-color: var(--vw-danger); }
       .csv-confirm { display: inline-flex; align-items: flex-start; gap: 8px; color: var(--vw-text-4); font-size: 12px; line-height: 1.45; }
       .csv-confirm input { margin: 2px 0 0; flex: none; accent-color: var(--vw-accent); }
-      .recovery-buttons { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+      .recovery-buttons { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; flex: none; }
       .recovery-counts { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--vw-text-3); font-size: 11.5px; }
       .import-password-controls { display: flex; align-items: center; gap: 8px; }
       .password-actions { display: inline-flex; align-items: center; gap: 8px; }
-      .export-controls { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(160px, 220px) minmax(160px, 220px) auto; gap: 8px; align-items: center; width: 100%; }
+      .export-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: end; width: 100%; }
+      .export-format { grid-column: 1 / -1; }
+      .export-field { display: flex; flex-direction: column; min-width: 0; gap: 7px; color: var(--vw-text-2); font-size: 12px; }
+      .export-submit { grid-column: 1 / -1; display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid var(--vw-line-1); }
+      .transfer-target { display: flex; flex-wrap: wrap; gap: 10px 28px; align-items: center; padding: 14px 18px; border: 1px solid var(--vw-line-1); border-radius: var(--vw-radius-card); background: var(--vw-card); }
+      .transfer-target span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+      .transfer-target small { color: var(--vw-muted); font-size: 11px; }
+      .transfer-target strong { font-size: 12px; font-weight: 500; color: var(--vw-ink); overflow-wrap: anywhere; }
+      .result-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border-block: 1px solid var(--vw-line-1); padding-block: 16px; gap: 12px; }
+      .result-counts div { display: flex; flex-direction: column-reverse; gap: 6px; }
+      .result-counts dt { font-size: 12px; color: var(--vw-muted); }
+      .result-counts dd { margin: 0; font-size: 24px; line-height: 1.2; color: var(--vw-ink); font-variant-numeric: tabular-nums; }
+      .recovery-help { padding: 14px 16px; border: 1px solid var(--vw-line-1); border-radius: var(--vw-radius-card); }
+      .recovery-help summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--vw-text-2); }
+      .recovery-help p { color: var(--vw-muted); line-height: 1.6; font-size: 12px; }
+      .recovery-review-actions { display: flex; flex-wrap: wrap; gap: 8px; }
       .export-encryption { display: grid; grid-template-columns: minmax(140px, auto) minmax(260px, 1fr); gap: 10px; align-items: center; }
       .export-encryption-label { color: var(--vw-text-3); font-size: 11.5px; font-weight: 600; }
       .export-target { display: grid; grid-template-columns: minmax(140px, auto) minmax(260px, 1fr); gap: 10px; align-items: center; }
       .export-target label { color: var(--vw-text-3); font-size: 11.5px; font-weight: 600; }
       .export-target select {
-        min-width: 0; height: 32px; padding: 0 10px; border: 1px solid var(--vw-line-3);
+        min-width: 0; height: 40px; padding: 0 10px; border: 1px solid var(--vw-line-3);
         border-radius: var(--vw-radius-input); background: var(--vw-card); color: var(--vw-ink);
         font: inherit; font-size: 12px;
       }
@@ -147,6 +172,7 @@ export class VwDataSection extends LitElement {
         .password-actions { justify-content: flex-end; }
         .pwd, vw-segmented { width: 100%; min-width: 0; }
         .btn-primary { justify-content: center; }
+        .result-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }
     `,
   ];
@@ -327,6 +353,19 @@ export class VwDataSection extends LitElement {
             ? t('options.data.recovery.clearable')
             : t('options.data.recovery.blocked')}
         ></vw-status-message>
+        <div class="recovery-review-actions">
+          <button type="button" class="btn-outline" data-recovery-sync
+            ?disabled=${this.locked || this.pending || this.recoveryPending}
+            @click=${() => this.emit('vw-transfer-recovery-sync')}>${t('options.data.recovery.syncReview')}</button>
+        </div>
+        <details class="recovery-help" data-recovery-unresolved>
+          <summary>${t('options.data.recovery.notFoundTitle')}</summary>
+          <p>${t('options.data.recovery.notFoundHint')}</p>
+          <p>${t('options.data.recovery.unknownHint')}</p>
+          <button type="button" class="btn-outline" data-recovery-keep
+            ?disabled=${this.locked || this.pending || this.recoveryPending}
+            @click=${() => this.cancelRecoveryClear()}>${t('options.data.recovery.keep')}</button>
+        </details>
         <div class="recovery-actions">
           <label class="recovery-confirm">
             <input
@@ -397,13 +436,40 @@ export class VwDataSection extends LitElement {
     return nothing;
   }
 
+  private renderImportResult() {
+    const result = this.importResult;
+    if (!result) return nothing;
+    const { committed, rejected, skipped, outcomeUnknown } = result.counts;
+    const complete = result.status === 'completed';
+    const unknown = result.status === 'outcome_unknown' || outcomeUnknown > 0;
+    return html`
+      <vw-setting-card stacked emphasized data-import-result
+        heading=${t(complete ? 'options.data.result.completeTitle' : unknown ? 'options.data.result.unknownTitle' : 'options.data.result.partialTitle')}
+        description=${t('options.data.result.totalOperations', { count: committed + rejected + skipped + outcomeUnknown })}>
+        <dl class="result-counts">
+          <div><dt>${t('options.data.result.committedCount')}</dt><dd data-result-committed>${committed}</dd></div>
+          <div><dt>${t('options.data.result.unknownCount')}</dt><dd data-result-unknown>${outcomeUnknown}</dd></div>
+          <div><dt>${t('options.data.result.rejectedCount')}</dt><dd data-result-rejected>${rejected}</dd></div>
+          <div><dt>${t('options.data.result.skippedCount')}</dt><dd data-result-skipped>${skipped}</dd></div>
+        </dl>
+        ${!complete ? html`<vw-status-message tone="warning" .message=${t('options.data.preview.noWholeRetry')}></vw-status-message>` : nothing}
+      </vw-setting-card>
+    `;
+  }
+
   protected override render() {
     const heading = this.awaitingImportPassword ? t('options.data.importPassword') : t('options.data.import');
     const description = this.awaitingImportPassword ? t('options.data.importPasswordDesc') : t('options.data.importDesc');
     const transferBlocked = this.locked || this.pending || this.recoveryPending
       || this.awaitingImportPassword || this.importPreview !== undefined;
-    const importBlocked = transferBlocked || this.recoveryUnavailable || this.hasRecoveryBarrier();
+    const importBlocked = this.locked || this.pending || this.recoveryPending
+      || this.recoveryUnavailable || this.hasRecoveryBarrier();
     return html`
+      ${this.accountEmail || this.serverUrl ? html`<div class="transfer-target" data-transfer-target>
+        <span><small>${t('options.data.targetAccount')}</small><strong>${this.accountEmail}</strong></span>
+        <span><small>${t('options.data.targetServer')}</small><strong>${this.serverUrl}</strong></span>
+      </div>` : nothing}
+      ${this.renderImportResult()}
       ${this.renderRecovery()}
       ${this.importPreview
         ? html`<vw-import-preview .preview=${this.importPreview} .pending=${this.pending}></vw-import-preview>`
@@ -467,6 +533,8 @@ export class VwDataSection extends LitElement {
               <span class="export-encryption-label">${t('options.data.exportEncryptionType')}</span>
               <vw-segmented
                 data-export-encryption
+                .label=${t('options.data.exportEncryptionType')}
+                .disabled=${transferBlocked}
                 .options=${[
                   { id: 'account', label: t('options.data.exportEncryptionAccount') },
                   { id: 'file', label: t('options.data.exportEncryptionFile') },
@@ -477,8 +545,11 @@ export class VwDataSection extends LitElement {
             </div>`
           : nothing}
         <div class="export-controls" ?inert=${transferBlocked} aria-disabled=${transferBlocked ? 'true' : 'false'}>
+          <div class="export-format">
           <vw-segmented
             data-export-format
+            .label=${t('options.data.preview.format')}
+            .disabled=${transferBlocked}
             .options=${[
               { id: 'json', label: t('options.data.exportFormatJson') },
               { id: 'encrypted-json', label: t('options.data.exportFormatEncryptedJson') },
@@ -492,19 +563,24 @@ export class VwDataSection extends LitElement {
             .value=${this.exportFormat}
             @vw-segmented-change=${(event: CustomEvent<{ id: string }>) => this.selectExportFormat(event.detail.id)}
           ></vw-segmented>
+          </div>
+          <label class="export-field"><span>${t('options.data.exportVerificationPassword')}</span>
           <input class="pwd" data-export-secret data-export-master-password type="password" autocomplete="current-password"
             aria-label=${t('options.data.exportVerificationPassword')}
             placeholder=${t('options.data.exportVerificationPassword')} ?disabled=${transferBlocked} />
+          </label>
           ${this.exportFormat === 'encrypted-json' && this.exportEncryptionType === 'file'
-            ? html`<input class="pwd" data-export-secret data-export-file-password type="password" autocomplete="new-password"
+            ? html`<label class="export-field"><span>${t('options.data.exportFilePassword')}</span><input class="pwd" data-export-secret data-export-file-password type="password" autocomplete="new-password"
                 aria-label=${t('options.data.exportFilePassword')}
-                placeholder=${t('options.data.exportFilePassword')} ?disabled=${transferBlocked} />`
-            : html`<span></span>`}
+                placeholder=${t('options.data.exportFilePassword')} ?disabled=${transferBlocked} /></label>`
+            : nothing}
+          <div class="export-submit">
           <button type="button" class="btn-primary" data-export
             ?disabled=${transferBlocked || (this.exportFormat === 'csv' && !this.csvConfirmed)}
             @click=${() => this.exportVault()}>
             ${uiIcon('download')}<span>${t('options.data.exportBtn')}</span>
           </button>
+          </div>
         </div>
       </vw-setting-card>
 

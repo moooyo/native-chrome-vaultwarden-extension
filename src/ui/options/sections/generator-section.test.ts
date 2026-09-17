@@ -7,7 +7,7 @@ vi.mock('webextension-polyfill', () => ({
 
 import './generator-section.js';
 import type { VwGeneratorSection } from './generator-section.js';
-import { getPrefs, initPrefs, setPref } from '../../prefs.js';
+import { getPrefs, initPrefs, setPref, setPrefs } from '../../prefs.js';
 
 afterEach(() => document.body.replaceChildren());
 beforeEach(async () => { await initPrefs(); });
@@ -26,7 +26,7 @@ describe('vw-generator-section', () => {
     expect(range.min).toBe('5');
     expect(range.max).toBe('128');
     expect(el.shadowRoot!.querySelectorAll('vw-toggle')).toHaveLength(5);
-    expect(el.shadowRoot!.querySelectorAll('input[type="number"]')).toHaveLength(2);
+    expect(el.shadowRoot!.querySelectorAll('input[type="number"]')).toHaveLength(3);
   });
 
   it('updates the length pref from the slider', async () => {
@@ -70,5 +70,64 @@ describe('vw-generator-section', () => {
       detail: { checked: false }, bubbles: true, composed: true,
     }));
     expect(getPrefs().genAvoidAmbiguous).toBe(false);
+  });
+
+  it('allows exact length input and preserves the current value when the input is invalid', async () => {
+    const el = await mount();
+    const input = el.shadowRoot!.querySelector<HTMLInputElement>('[data-length]')!;
+    input.value = '32';
+    input.dispatchEvent(new Event('change'));
+    await el.updateComplete;
+    expect(getPrefs().genLength).toBe(32);
+
+    input.value = '4';
+    input.dispatchEvent(new Event('change'));
+    await el.updateComplete;
+    expect(getPrefs().genLength).toBe(32);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(el.shadowRoot!.querySelector('#length-error')!.textContent).not.toBe('');
+
+    input.value = '40';
+    input.dispatchEvent(new Event('change'));
+    await el.updateComplete;
+    expect(getPrefs().genLength).toBe(40);
+    expect(input.getAttribute('aria-invalid')).toBe('false');
+  });
+
+  it('explains incompatible defaults before the user opens the generator', async () => {
+    const el = await mount();
+    setPrefs({ genLength: 5, genMinNumbers: 9, genMinSpecial: 9 }, false);
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('[data-configuration-error]')!.textContent).toContain('20');
+
+    setPrefs({ genLowercase: false, genUppercase: false, genNumbers: false, genSymbols: false }, false);
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector('[data-configuration-error]')!.textContent).not.toContain('20');
+    expect(el.shadowRoot!.querySelector('[data-configuration-error]')!.textContent).not.toBe('');
+  });
+
+  it('reports invalid minimum counts without replacing the current preference', async () => {
+    const el = await mount();
+    const input = el.shadowRoot!.querySelector<HTMLInputElement>('[data-min-special]')!;
+    input.value = '1.5';
+    input.dispatchEvent(new Event('change'));
+    await el.updateComplete;
+    expect(getPrefs().genMinSpecial).toBe(1);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(el.shadowRoot!.querySelector('#symbols-error')!.textContent).not.toBe('');
+  });
+
+  it('clears an invalid exact length when the slider returns to the current preference', async () => {
+    const el = await mount();
+    const input = el.shadowRoot!.querySelector<HTMLInputElement>('[data-length]')!;
+    input.value = '4';
+    input.dispatchEvent(new Event('change'));
+    await el.updateComplete;
+    const range = el.shadowRoot!.querySelector<HTMLInputElement>('input[type="range"]')!;
+    range.value = '20';
+    range.dispatchEvent(new Event('input'));
+    await el.updateComplete;
+    expect(input.value).toBe('20');
+    expect(input.getAttribute('aria-invalid')).toBe('false');
   });
 });

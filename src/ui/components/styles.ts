@@ -9,42 +9,52 @@ import { css } from 'lit';
 export const controlStyles = css`
   /* Buttons -------------------------------------------------------------------------------- */
   .btn {
+    appearance: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    min-height: 40px;
-    padding: 0 18px;
+    min-height: 38px;
+    max-width: 100%;
+    padding: 8px 14px;
     border: 1px solid transparent;
-    border-radius: 20px;
+    border-radius: var(--vw-radius-control);
     background: transparent;
     color: var(--vw-ink);
     font-family: var(--vw-font-ui);
     font-size: 13px;
-    font-weight: 500;
-    white-space: nowrap;
+    font-weight: 600;
+    line-height: 1.4;
+    text-align: center;
     cursor: pointer;
     transition: background-color var(--vw-dur-fast), border-color var(--vw-dur-fast), color var(--vw-dur-fast);
   }
-  .btn:disabled { opacity: 0.5; cursor: default; }
+  .btn:disabled {
+    opacity: 1;
+    color: var(--vw-disabled-fg);
+    border-color: var(--vw-disabled-border);
+    background: var(--vw-disabled-bg);
+    box-shadow: none;
+    cursor: default;
+  }
 
-  .btn.primary {
+  .btn.primary:not(:disabled) {
     background: var(--vw-primary-bg);
     color: var(--vw-primary-fg);
   }
   .btn.primary:hover:not(:disabled) { background: var(--vw-primary-bg-hover); }
 
-  .btn.outline {
+  .btn.outline:not(:disabled) {
     border-color: var(--vw-line-3);
     background: var(--vw-card);
-    color: var(--vw-text-4);
+    color: var(--vw-text-2);
   }
   .btn.outline:hover:not(:disabled) { background: var(--vw-row-hover); }
 
-  .btn.ghost { color: var(--vw-text-2); }
+  .btn.ghost:not(:disabled) { color: var(--vw-text-2); }
   .btn.ghost:hover:not(:disabled) { background: var(--vw-icon-hover); }
 
-  .btn.danger {
+  .btn.danger:not(:disabled) {
     border-color: var(--vw-danger-border);
     background: var(--vw-card);
     color: var(--vw-danger);
@@ -53,19 +63,23 @@ export const controlStyles = css`
 
   /* Icon buttons --------------------------------------------------------------------------- */
   .icon-btn {
+    appearance: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    padding: 0;
     border: none;
-    border-radius: 20px;
+    border-radius: var(--vw-radius-control);
     background: transparent;
     color: var(--vw-text-2);
     cursor: pointer;
     transition: background-color var(--vw-dur-fast), color var(--vw-dur-fast);
   }
-  .icon-btn:hover { background: var(--vw-icon-hover); }
+  .icon-btn:hover:not(:disabled) { background: var(--vw-icon-hover); }
+  .icon-btn:disabled { color: var(--vw-disabled-fg); cursor: default; }
   .icon-btn.sm { width: 26px; height: 26px; border-radius: var(--vw-radius-small); color: var(--vw-muted); }
   .icon-btn.xs { width: 24px; height: 24px; border-radius: var(--vw-radius-small); }
   .icon-btn svg { width: 15px; height: 15px; }
@@ -75,17 +89,24 @@ export const controlStyles = css`
   /* Inputs --------------------------------------------------------------------------------- */
   .input {
     width: 100%;
-    height: 44px;
-    padding: 0 14px;
+    min-width: 0;
+    height: 40px;
+    padding: 9px 11px;
     border: 1px solid var(--vw-line-3);
-    border-radius: 10px;
+    border-radius: var(--vw-radius-input);
     background: var(--vw-card);
     color: var(--vw-ink);
     font-family: var(--vw-font-ui);
-    font-size: 13px;
+    font-size: 14px;
+    line-height: 1.5;
+    transition: border-color var(--vw-dur-fast), box-shadow var(--vw-dur-fast);
   }
   .input::placeholder { color: var(--vw-placeholder); }
   .input:focus { outline: none; border-color: var(--vw-accent); box-shadow: var(--vw-focus); }
+  .input:disabled { color: var(--vw-disabled-fg); background: var(--vw-disabled-bg); cursor: default; }
+  .input[readonly] { background: var(--vw-fill-2); color: var(--vw-text-2); }
+  .input[aria-invalid='true'] { border-color: var(--vw-danger); }
+  textarea.input { height: auto; min-height: 96px; resize: vertical; }
 
   .input.bordered {
     background: var(--vw-card);
@@ -102,12 +123,12 @@ export const controlStyles = css`
 
   /* Focus ---------------------------------------------------------------------------------- */
   :focus-visible {
-    outline: none;
-    box-shadow: var(--vw-focus);
+    outline: 2px solid var(--vw-accent);
+    outline-offset: 2px;
   }
 
   /* Scrollbar ------------------------------------------------------------------------------ */
-  .scroll { overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--vw-scrollbar) transparent; }
+  .scroll { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--vw-scrollbar) transparent; }
   .scroll::-webkit-scrollbar { width: 6px; }
   .scroll::-webkit-scrollbar-thumb {
     background: var(--vw-scrollbar);
@@ -116,4 +137,11 @@ export const controlStyles = css`
     background-clip: content-box;
   }
   .scroll::-webkit-scrollbar-track { background: transparent; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .btn:active:not(:disabled) { transform: translateY(1px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .btn, .icon-btn, .input { transition: none; }
+  }
 `;

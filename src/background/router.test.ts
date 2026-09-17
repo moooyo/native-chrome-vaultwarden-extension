@@ -4674,6 +4674,67 @@ describe('router', () => {
     expect(fill).not.toHaveBeenCalled();
   });
 
+  it('preserves the explicit structured selection through issue and redemption', async () => {
+    const fill = vi.fn(async () => ({ status: 'filled' as const }));
+    const router = createRouter({
+      auth: {},
+      vault: { findFillItems: vi.fn(async () => [{ id: 'card-1', name: 'Card', favorite: false }]) },
+      tabAutofill: { getSuggestions: vi.fn(), fill },
+      settings: intentSettings(),
+    });
+    const target = { ...STRUCTURED_TARGET, selectedRoles: ['number'] as const };
+    const token = intentId(await router.handle({
+      type: 'autofill.issueStructuredIntent', cipherId: 'card-1', target,
+    }, CONTENT_CONTEXT));
+
+    await expect(router.handle({
+      type: 'autofill.redeemStructuredIntent', intentId: token, target,
+    }, CONTENT_CONTEXT)).resolves.toEqual({ ok: true, data: { outcome: { status: 'filled' } } });
+    expect(fill).toHaveBeenCalledWith(7, 'card-1', {
+      ...target, frameId: 0, documentId: 'doc-1',
+    }, expect.any(Function));
+  });
+
+  it.each([
+    ['empty', []],
+    ['duplicate', ['number', 'number']],
+    ['noncanonical', ['code', 'number']],
+    ['outside the structure', ['cardholderName']],
+    ['cross-kind', ['email']],
+    ['explicit undefined', undefined],
+  ])('refuses an invalid %s selection before reading candidate metadata', async (_label, selectedRoles) => {
+    const findFillItems = vi.fn(async () => [{ id: 'card-1', name: 'Card', favorite: false }]);
+    const router = createRouter({ auth: {}, vault: { findFillItems }, settings: intentSettings() });
+
+    await expect(router.handle({
+      type: 'autofill.issueStructuredIntent', cipherId: 'card-1',
+      target: { ...STRUCTURED_TARGET, selectedRoles } as never,
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
+    expect(findFillItems).not.toHaveBeenCalled();
+  });
+
+  it('consumes a narrowed structured capability when redemption tries to restore all roles', async () => {
+    const fill = vi.fn(async () => ({ status: 'filled' as const }));
+    const router = createRouter({
+      auth: {},
+      vault: { findFillItems: vi.fn(async () => [{ id: 'card-1', name: 'Card', favorite: false }]) },
+      tabAutofill: { getSuggestions: vi.fn(), fill },
+      settings: intentSettings(),
+    });
+    const target = { ...STRUCTURED_TARGET, selectedRoles: ['number'] as const };
+    const token = intentId(await router.handle({
+      type: 'autofill.issueStructuredIntent', cipherId: 'card-1', target,
+    }, CONTENT_CONTEXT));
+
+    await expect(router.handle({
+      type: 'autofill.redeemStructuredIntent', intentId: token, target: STRUCTURED_TARGET,
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
+    await expect(router.handle({
+      type: 'autofill.redeemStructuredIntent', intentId: token, target,
+    }, CONTENT_CONTEXT)).resolves.toMatchObject({ ok: false, error: { code: 'denied' } });
+    expect(fill).not.toHaveBeenCalled();
+  });
+
   it('rejects a malformed or reprompt-protected structured selection before issuing a capability', async () => {
     const findFillItems = vi.fn(async () => [{ id: 'card-1', name: 'Card', favorite: false, reprompt: true }]);
     const router = createRouter({ auth: {}, vault: { findFillItems }, settings: intentSettings() });

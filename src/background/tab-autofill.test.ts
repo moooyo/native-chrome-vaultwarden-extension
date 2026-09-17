@@ -448,6 +448,34 @@ describe('tab autofill coordinator', () => {
       expect(deps.getFrame).toHaveBeenCalledTimes(2);
     });
 
+    it('binds reprompt approval to the exact structured field selection', async () => {
+      const target: Extract<TabSuggestionTarget, { kind: 'card' }> = {
+        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 8,
+        roles: ['number', 'exp', 'code'],
+      };
+      const deps = makeDeps({
+        sendToFrame: vi.fn(async () => inspection([cardForm('card-form', ['number', 'exp', 'code'])], 8)),
+      });
+      const coordinator = createTabAutofillCoordinator(deps);
+      const allFields = await coordinator.resolveRepromptBinding(7, target);
+      const explicitAll = await coordinator.resolveRepromptBinding(7, {
+        ...target, selectedRoles: ['number', 'exp', 'code'],
+      });
+      const numberOnly = await coordinator.resolveRepromptBinding(7, { ...target, selectedRoles: ['number'] });
+      const expirationOnly = await coordinator.resolveRepromptBinding(7, { ...target, selectedRoles: ['exp'] });
+
+      expect(allFields).toBeDefined();
+      expect(explicitAll).toBeDefined();
+      expect(numberOnly).toBeDefined();
+      expect(expirationOnly).toBeDefined();
+      expect(new Set([
+        allFields?.targetKey, explicitAll?.targetKey, numberOnly?.targetKey, expirationOnly?.targetKey,
+      ]).size).toBe(4);
+      expect(await coordinator.resolveRepromptBinding(7, { ...target, selectedRoles: ['number'] }))
+        .toEqual(numberOnly);
+    });
+
     it('fails closed when the target document is stale or the tab is ineligible', async () => {
       const stale = createTabAutofillCoordinator(makeDeps({
         getFrame: vi.fn(async () => documentFrame(0, TOP_URL, 'doc-new')),
@@ -988,6 +1016,121 @@ describe('tab autofill coordinator', () => {
       });
     });
 
+    it.each([
+      {
+        label: 'card number', kind: 'card',
+        roles: ['number', 'exp', 'code'], selectedRoles: ['number'],
+        data: { number: '4111111111111111' },
+      },
+      {
+        label: 'card expiration alias', kind: 'card',
+        roles: ['number', 'exp', 'code'], selectedRoles: ['exp'],
+        data: { expMonth: '09', expYear: '2030' },
+      },
+      {
+        label: 'identity name alias', kind: 'identity',
+        roles: ['fullName', 'email', 'phone'], selectedRoles: ['fullName'],
+        data: { firstName: 'Ada', middleName: 'Byron', lastName: 'Lovelace' },
+      },
+      {
+        label: 'identity email', kind: 'identity',
+        roles: ['fullName', 'email', 'phone'], selectedRoles: ['email'],
+        data: { email: 'ada@example.com' },
+      },
+    ] as const)('releases only the selected $label while committing the full inspected structure', async (selection) => {
+      const target = {
+        kind: selection.kind, frameId: 0, documentId: 'doc-A', formId: 'selected-form',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 8,
+        roles: selection.roles, selectedRoles: selection.selectedRoles,
+      } as TabSuggestionTarget;
+      const getFillData = vi.fn(async () => ({
+        cardholderName: 'Ada Lovelace', number: '4111111111111111', code: '123',
+        expMonth: '09', expYear: '2030',
+        title: 'Countess', firstName: 'Ada', middleName: 'Byron', lastName: 'Lovelace',
+        email: 'ada@example.com', phone: '+441234567890', address1: 'must-not-cross',
+      }));
+      const form = {
+        kind: selection.kind, formId: 'selected-form', visible: true, roles: [...selection.roles],
+      } as FrameAutofillForm;
+      const sendToFrame = vi.fn(async (_tabId, _target, message: FrameAutofillMessage) => (
+        message.type === 'autofill.inspectFrame' ? inspection([form], 8) : { status: 'filled' }
+      ));
+      const deps = makeDeps({ getFillData, sendToFrame });
+
+      await expect(createTabAutofillCoordinator(deps).fill(7, 'selected-item', target))
+        .resolves.toEqual({ status: 'filled' });
+
+      expect(getFillData).toHaveBeenCalledWith(
+        'selected-item', selection.kind, selection.selectedRoles, undefined, expect.any(Function),
+      );
+      expect(sendToFrame).toHaveBeenNthCalledWith(2, 7, { frameId: 0, documentId: 'doc-A' }, {
+        type: 'autofill.commitStructuredFill',
+        kind: selection.kind,
+        formId: 'selected-form',
+        roles: selection.roles,
+        selectedRoles: selection.selectedRoles,
+        expectedFrameUrl: TOP_URL,
+        expectedRuntimeIncarnation: RUNTIME_INCARNATION,
+        expectedGeneration: 8,
+        data: selection.data,
+      });
+    });
+
+    it.each([false, true])('keeps all-fields behavior with an explicit selection: %s', async (explicitSelection) => {
+      const roles = ['number', 'exp', 'code'] as const;
+      const target: TabSuggestionTarget = {
+        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 8, roles,
+        ...(explicitSelection ? { selectedRoles: roles } : {}),
+      };
+      const data = { number: '4111111111111111', expMonth: '09', expYear: '2030', code: '123' };
+      const getFillData = vi.fn(async () => ({ ...data, email: 'must-not-cross@example.com' }));
+      const sendToFrame = vi.fn(async (_tabId, _target, message: FrameAutofillMessage) => (
+        message.type === 'autofill.inspectFrame'
+          ? inspection([cardForm('card-form', [...roles])], 8)
+          : { status: 'filled' }
+      ));
+      const deps = makeDeps({ getFillData, sendToFrame });
+
+      await expect(createTabAutofillCoordinator(deps).fill(7, 'card-1', target))
+        .resolves.toEqual({ status: 'filled' });
+      expect(getFillData).toHaveBeenCalledWith('card-1', 'card', roles, undefined, expect.any(Function));
+      expect(sendToFrame.mock.calls[1]?.[2]).toEqual({
+        type: 'autofill.commitStructuredFill', kind: 'card', formId: 'card-form', roles,
+        ...(explicitSelection ? { selectedRoles: roles } : {}),
+        expectedFrameUrl: TOP_URL,
+        expectedRuntimeIncarnation: RUNTIME_INCARNATION,
+        expectedGeneration: 8,
+        data,
+      });
+    });
+
+    it('retains the original selection when the caller mutates its target during inspection', async () => {
+      const roles: Array<'number' | 'exp' | 'code'> = ['number', 'exp', 'code'];
+      const selectedRoles: Array<'number' | 'exp' | 'code'> = ['number'];
+      const target: TabSuggestionTarget = {
+        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 8, roles, selectedRoles,
+      };
+      const getFillData = vi.fn(async () => ({ number: '4111111111111111', code: '123' }));
+      const sendToFrame = vi.fn(async (_tabId, _target, message: FrameAutofillMessage) => {
+        if (message.type === 'autofill.inspectFrame') {
+          selectedRoles.push('code');
+          roles.pop();
+          return inspection([cardForm('card-form', ['number', 'exp', 'code'])], 8);
+        }
+        return { status: 'filled' };
+      });
+      const deps = makeDeps({ getFillData, sendToFrame });
+
+      await expect(createTabAutofillCoordinator(deps).fill(7, 'card-1', target))
+        .resolves.toEqual({ status: 'filled' });
+      expect(getFillData).toHaveBeenCalledWith('card-1', 'card', ['number'], undefined, expect.any(Function));
+      expect(sendToFrame.mock.calls[1]?.[2]).toMatchObject({
+        roles: ['number', 'exp', 'code'], selectedRoles: ['number'], data: { number: '4111111111111111' },
+      });
+    });
+
     it('expands only the identity fullName composite into its three backing fields', async () => {
       const target: TabSuggestionTarget = {
         kind: 'identity', frameId: 0, documentId: 'doc-A', formId: 'identity-form',
@@ -1051,6 +1194,64 @@ describe('tab autofill coordinator', () => {
       await expect(createTabAutofillCoordinator(deps).fill(7, 'card-1', target))
         .resolves.toEqual({ status: 'target_changed' });
       expect(getFillData).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['removed unselected field', ['number', 'exp']],
+      ['added unselected field', ['cardholderName', 'number', 'exp', 'code']],
+    ] as const)('rejects a form with an %s even when the selected field still matches', async (_label, freshRoles) => {
+      const target: TabSuggestionTarget = {
+        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 8,
+        roles: ['number', 'exp', 'code'], selectedRoles: ['number'],
+      };
+      const deps = makeDeps({
+        sendToFrame: vi.fn(async () => inspection([cardForm('card-form', [...freshRoles])], 8)),
+      });
+
+      await expect(createTabAutofillCoordinator(deps).fill(7, 'card-1', target))
+        .resolves.toEqual({ status: 'target_changed' });
+      expect(deps.getFillData).not.toHaveBeenCalled();
+      expect(deps.sendToFrame).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ['empty', []],
+      ['duplicate', ['number', 'number']],
+      ['non-canonical order', ['code', 'number']],
+      ['unknown', ['number', 'ssn']],
+      ['cross-kind', ['email']],
+      ['outside the inspected structure', ['cardholderName']],
+      ['alias backing field outside the structure', ['expMonth']],
+      ['explicitly undefined', undefined],
+      ['non-array', 'number'],
+    ] as const)('rejects a %s selected-role list before browser or vault access', async (_label, selectedRoles) => {
+      const target = {
+        kind: 'card', frameId: 0, documentId: 'doc-A', formId: 'card-form',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 8,
+        roles: ['number', 'exp', 'code'], selectedRoles,
+      } as unknown as TabSuggestionTarget;
+      const deps = makeDeps();
+
+      await expect(createTabAutofillCoordinator(deps).fill(7, 'card-1', target))
+        .resolves.toEqual({ status: 'target_changed' });
+      expect(deps.sessionGate.capture).not.toHaveBeenCalled();
+      expect(deps.getTab).not.toHaveBeenCalled();
+      expect(deps.getFillData).not.toHaveBeenCalled();
+    });
+
+    it('does not allow an identity backing-field selection to replace the detected fullName alias', async () => {
+      const target: TabSuggestionTarget = {
+        kind: 'identity', frameId: 0, documentId: 'doc-A', formId: 'identity-form',
+        runtimeIncarnation: RUNTIME_INCARNATION, generation: 8,
+        roles: ['fullName', 'email'], selectedRoles: ['firstName'],
+      };
+      const deps = makeDeps();
+
+      await expect(createTabAutofillCoordinator(deps).fill(7, 'identity-1', target))
+        .resolves.toEqual({ status: 'target_changed' });
+      expect(deps.getTab).not.toHaveBeenCalled();
+      expect(deps.getFillData).not.toHaveBeenCalled();
     });
 
     it.each([

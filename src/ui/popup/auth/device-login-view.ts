@@ -5,6 +5,7 @@ import { controlStyles } from '../../components/styles.js';
 import { themeTokens } from '../../components/tokens.js';
 import { LocalizeController, t } from '../../i18n/index.js';
 import '../../components/status-message.js';
+import { authIdentityStyles, renderAuthIdentity, type AuthIdentityDisplay } from './auth-identity.js';
 
 /** Exactly five independently rendered words used to compare both sides of a device login. */
 export type DeviceLoginFingerprint = readonly [string, string, string, string, string];
@@ -176,9 +177,10 @@ function crossedCountdownAnnouncement(previous: number, next: number): boolean {
  * cryptographic material in the DOM.
  */
 export class VwDeviceLoginView extends LitElement {
-  static override properties = { model: { attribute: false } };
+  static override properties = { model: { attribute: false }, identity: { attribute: false } };
 
   declare model: DeviceLoginViewModel | undefined;
+  declare identity: AuthIdentityDisplay | undefined;
 
   private i18n = new LocalizeController(this);
   private activeContextKey: string | undefined;
@@ -191,9 +193,10 @@ export class VwDeviceLoginView extends LitElement {
   constructor() {
     super();
     this.model = undefined;
+    this.identity = undefined;
   }
 
-  static override styles = [themeTokens, controlStyles, css`
+  static override styles = [themeTokens, controlStyles, authIdentityStyles, css`
     :host {
       display: flex;
       flex: 1;
@@ -221,7 +224,7 @@ export class VwDeviceLoginView extends LitElement {
       gap: 10px;
       min-width: 0;
       min-height: 62px;
-      padding: 10px 16px;
+      padding: 16px 18px;
       border-bottom: 1px solid var(--vw-line-1);
     }
     .head-mark,
@@ -239,7 +242,7 @@ export class VwDeviceLoginView extends LitElement {
     h1, h2, p { margin: 0; }
     h1 {
       overflow-wrap: anywhere;
-      font-size: 14px;
+      font-size: 18px;
       font-weight: 600;
       letter-spacing: 0;
       line-height: 1.3;
@@ -256,8 +259,8 @@ export class VwDeviceLoginView extends LitElement {
       min-width: 0;
       min-height: 0;
       flex-direction: column;
-      gap: 12px;
-      padding: 14px 16px;
+      gap: 16px;
+      padding: 16px 18px;
       overflow-x: hidden;
       overflow-y: auto;
       scrollbar-color: var(--vw-scrollbar) transparent;
@@ -332,7 +335,7 @@ export class VwDeviceLoginView extends LitElement {
     .fingerprint-title svg { width: 14px; height: 14px; }
     .fingerprint-words {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
       gap: 6px;
       margin: 0;
       padding: 0;
@@ -396,7 +399,7 @@ export class VwDeviceLoginView extends LitElement {
       display: flex;
       min-width: 0;
       flex-direction: column;
-      gap: 7px;
+      gap: 0;
       margin: 0;
       padding: 0;
       list-style: none;
@@ -410,8 +413,9 @@ export class VwDeviceLoginView extends LitElement {
       min-width: 0;
       min-height: 62px;
       padding: 8px 9px;
-      border: 1px solid var(--vw-line-2);
-      border-radius: 8px;
+      border: 0;
+      border-bottom: 1px solid var(--vw-line-1);
+      border-radius: 0;
       background: var(--vw-card);
       color: var(--vw-ink);
       font-family: var(--vw-font-ui);
@@ -422,6 +426,7 @@ export class VwDeviceLoginView extends LitElement {
       border-color: var(--vw-line-3);
       background: var(--vw-row-hover);
     }
+    .request-row:focus-visible { position: relative; outline: 2px solid var(--vw-accent); outline-offset: -2px; }
     .request-row:disabled { cursor: default; opacity: 0.55; }
     .request-icon { width: 34px; height: 34px; }
     .request-icon svg,
@@ -836,6 +841,7 @@ export class VwDeviceLoginView extends LitElement {
       >
         ${this.renderHead(labels.approverListTitle, labels.approverListDescription, 'idcard')}
         <main class="content">
+          ${renderAuthIdentity(this.identity)}
           ${this.renderBusy(model)}
           ${this.renderNotice(model)}
           ${model.requests.length > 0
@@ -865,6 +871,7 @@ export class VwDeviceLoginView extends LitElement {
       >
         ${this.renderHead(labels.approverDetailTitle, labels.compareFingerprintHint, 'shield')}
         <main class="content">
+          ${renderAuthIdentity(this.identity)}
           ${this.renderBusy(model)}
           ${this.renderNotice(model)}
           ${expired

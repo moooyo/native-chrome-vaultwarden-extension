@@ -12,23 +12,25 @@ export interface NoticeState {
 /**
  * Styles for the self-dismissing notice bar. Because the surface lives in a closed shadow root on
  * arbitrary host pages it cannot use the extension's `--vw-*` tokens, so its colors are hardcoded
- * locally with a `prefers-color-scheme: dark` override (the pill inverts to a light fill with ink
- * text in dark). Styled as a compact 密屿/MiYu toast pill (bottom-center).
+ * locally with a `prefers-color-scheme: dark` override. The compact MiYu notice uses a quiet
+ * white surface and blue accent at the bottom center, without assuming success or failure.
  */
 export const NOTICE_STYLES = `
     :host { all: initial; }
+    * { box-sizing: border-box; }
     .bar {
-      position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 2147483647;
-      max-width: min(360px, calc(100vw - 32px)); padding: 8px 14px;
-      font:500 11.5px/1.5 "Roboto", "Segoe UI", system-ui, sans-serif;
-      color:#f5eff7; background:#322f35; border-radius:10px;
-      box-shadow:0 8px 22px rgba(20,24,32,.18);
+      position: fixed; left: 50%; bottom: max(20px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 2147483647;
+      width: max-content; max-width: min(400px, calc(100vw - 32px)); padding: 12px 16px;
+      font:500 12px/1.6 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+      color:#253650; background:#ffffff; border:1px solid #dce6f4; border-left:3px solid #155ed7; border-radius:10px;
+      box-shadow:0 8px 26px rgba(30,53,89,.12), 0 2px 6px rgba(30,53,89,.05);
       overflow-wrap: anywhere; word-break: break-word;
-      animation: mvUp .18s ease-out;
+      -webkit-font-smoothing: antialiased;
+      animation: mvUp .18s cubic-bezier(.2,.8,.2,1);
     }
     @keyframes mvUp { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
     @media (prefers-color-scheme: dark) {
-      .bar { color:#1f1f1f; background:#e3e3e3; box-shadow:0 8px 22px rgba(0,0,0,.4); }
+      .bar { color:#edf3ff; background:#172238; border-color:#33445f; border-left-color:#8eb9ff; box-shadow:0 8px 26px rgba(0,0,0,.3); }
     }
     @media (prefers-reduced-motion: reduce) { .bar { animation: none; } }
   `;
@@ -38,7 +40,7 @@ export const NOTICE_STYLES = `
  * instead of overflowing.
  */
 export function renderNotice(state: NoticeState): TemplateResult {
-  return html`<div class="bar">${state.message}</div>`;
+  return html`<div class="bar" role="status" aria-live="polite" aria-atomic="true">${state.message}</div>`;
 }
 
 export interface NoticeHandle {

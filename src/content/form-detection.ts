@@ -1,4 +1,5 @@
 import { isAutofillIgnored } from './autofill-ignore.js';
+import { isExtensionOwnedSurfaceHost } from './composed-tree.js';
 import {
   classifyCardField,
   hasCardFieldEvidence,
@@ -791,11 +792,20 @@ export function isElementInteractable(element: HTMLElement): boolean {
   const root = element.getRootNode();
   const pointRoot = hasElementFromPoint(root) ? root : ownerDocument;
   if (!hasElementFromPoint(pointRoot)) return !hasLayout;
-  const hit = pointRoot.elementFromPoint(
-    rect.left + rect.width / 2,
-    rect.top + rect.height / 2,
-  );
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  let hit = pointRoot.elementFromPoint(x, y);
   if (!hit) return !hasLayout;
+  if (isExtensionOwnedSurfaceHost(hit)) {
+    // A review panel may cover a field on small viewports. Inspect the same paint stack behind
+    // internally registered extension hosts; any website overlay still blocks the target.
+    const stackRoot = pointRoot as Node & Partial<Pick<Document, 'elementsFromPoint'>>;
+    if (typeof stackRoot.elementsFromPoint !== 'function') return false;
+    const stack = stackRoot.elementsFromPoint(x, y);
+    if (stack[0] !== hit) return false;
+    hit = stack.slice(0, 32).find((element) => !isExtensionOwnedSurfaceHost(element)) ?? null;
+    if (!hit) return false;
+  }
   return isPermittedCenterHit(element, hit);
 }
 

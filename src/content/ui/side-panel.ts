@@ -1,5 +1,5 @@
 // Shared side-mounted-panel treatment for the autofill surfaces that hang to the RIGHT of the focused
-// input (design 2c login match, 3a 2FA) — connected to it by a short line + a moss dot, never occluding
+// input (login match and verification code) with a restrained field connector, never occluding
 // the form. The panel template is wrapped with `sideWrap`; the factory positions the host with
 // `repositionSidePanel`. When there is no room on the right the panel falls back to below the input and
 // the connector is hidden via `:host([data-pos="below"])`.
@@ -15,12 +15,13 @@ const CONN_Y = 20;
 export const SIDE_PANEL_CSS = `
     .side { display: flex; align-items: flex-start; }
     .conn { position: relative; flex: none; width: ${CONN_W}px; align-self: stretch; }
-    .conn::before { content: ''; position: absolute; left: 0; top: ${CONN_Y}px; width: ${CONN_W}px; height: 1.5px; background: rgba(22,24,29,.22); }
-    .conn-dot { position:absolute; left:0; top:${CONN_Y - 3.5}px; width:7px; height:7px; border-radius:50%; background:var(--mi-teal); }
+    .conn::before { content: ''; position: absolute; left: 0; top: ${CONN_Y}px; width: ${CONN_W}px; height: 1px; background: var(--mi-line); }
+    .conn-dot { position:absolute; left:0; top:${CONN_Y - 2}px; width:4px; height:4px; border-radius:50%; background:var(--mi-teal); }
+    .side .box { max-width:calc(100vw - 40px); }
     :host([data-pos="below"]) .side { display: block; }
     :host([data-pos="below"]) .conn { display: none; }
-    @media (prefers-color-scheme: dark) { .conn::before { background: rgba(255,255,255,.18); } }
-    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
+    :host([data-pos="below"]) .box { max-width:calc(100vw - 24px); }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition:none!important; } }
   `;
 
 /** Wrap a surface's `.box` template with the connector, so it renders as `[dot——line] [box]`. */

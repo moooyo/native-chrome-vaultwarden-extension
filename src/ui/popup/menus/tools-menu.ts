@@ -52,11 +52,12 @@ export class VwToolsMenu extends LitElement {
       }
       .anchor {
         position: absolute;
-        top: 36px;
+        top: 39px;
         right: 0;
         z-index: 20;
       }
       .trigger {
+        appearance: none;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -64,15 +65,17 @@ export class VwToolsMenu extends LitElement {
         height: 32px;
         padding: 0;
         border: 0;
-        border-radius: 50%;
+        border-radius: var(--vw-radius-control);
         background: transparent;
         color: var(--vw-text-2);
         cursor: pointer;
+        transition: background-color var(--vw-dur-fast), color var(--vw-dur-fast);
       }
-      .trigger:hover { background: var(--vw-icon-hover); }
-      .trigger:disabled { opacity:.5; cursor:default; }
-      .trigger:focus-visible { outline: none; box-shadow: var(--vw-focus); }
+      .trigger:hover:not(:disabled), .trigger[aria-expanded='true'] { background: var(--pc); color: var(--onpc); }
+      .trigger:disabled { color:var(--vw-disabled-fg); cursor:default; }
+      .trigger:focus-visible { outline: 2px solid var(--vw-accent); outline-offset: 2px; }
       .trigger svg { width: 17px; height: 17px; }
+      @media(prefers-reduced-motion:reduce) { .trigger { transition:none; } }
     `,
   ];
 

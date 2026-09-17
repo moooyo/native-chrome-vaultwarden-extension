@@ -2,6 +2,8 @@ import { LitElement, css, html, nothing, type PropertyValues } from 'lit';
 import { themeTokens } from './tokens.js';
 import { controlStyles } from './styles.js';
 import { emit } from './emit.js';
+import { uiIcon } from './icon.js';
+import { LocalizeController, t } from '../i18n/index.js';
 
 export type DialogCloseReason = 'escape' | 'backdrop' | 'dismiss' | string;
 
@@ -18,6 +20,8 @@ export type DialogCloseReason = 'escape' | 'backdrop' | 'dismiss' | string;
  * - The previously focused element is restored when the dialog closes.
  */
 export class VwDialog extends LitElement {
+  private i18n = new LocalizeController(this);
+
   static override properties = {
     open: { type: Boolean },
     heading: { type: String },
@@ -48,36 +52,64 @@ export class VwDialog extends LitElement {
     controlStyles,
     css`
       dialog {
-        border: none;
-        border-radius: var(--vw-radius-shell);
+        border: 1px solid var(--vw-line-2);
+        border-radius: var(--vw-radius-dialog);
         padding: 0;
         background: var(--vw-panel);
         color: var(--vw-ink);
-        max-width: min(90vw, 420px);
+        width: min(440px, calc(100vw - 32px));
+        max-width: none;
+        max-height: calc(100dvh - 32px);
+        overflow: hidden;
+        box-shadow: var(--vw-dialog-shadow);
       }
       dialog::backdrop {
-        background: rgb(15 20 32 / 45%);
+        background: var(--veil);
       }
       .surface {
         display: flex;
         flex-direction: column;
-        gap: 12px;
-        padding: 16px;
+        gap: 18px;
+        max-height: inherit;
+        padding: 24px;
       }
       .dialog-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 12px;
+        flex: none;
       }
       .dialog-header h2 {
         margin: 0;
-        font-size: 15px;
+        font-size: 20px;
+        font-weight: 600;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
       }
+      .dialog-dismiss { width: 30px; height: 30px; align-self: flex-start; }
+      .dialog-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
       .dialog-actions {
         display: flex;
         justify-content: flex-end;
+        flex-wrap: wrap;
+        flex: none;
         gap: 8px;
+        padding-top: 16px;
+        border-top: 1px solid var(--vw-line-1);
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        dialog[open] { animation: dialog-enter var(--vw-dur) var(--vw-ease); }
+        dialog[open]::backdrop { animation: backdrop-enter var(--vw-dur-fast) ease-out; }
+      }
+      @keyframes dialog-enter {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes backdrop-enter { from { opacity: 0; } to { opacity: 1; } }
+      @media (max-width: 420px) {
+        .surface { padding: 20px; }
+        .dialog-header h2 { font-size: 18px; }
       }
     `,
   ];
@@ -204,11 +236,12 @@ export class VwDialog extends LitElement {
               ? html`
                   <button
                     type="button"
-                    class="icon-button dialog-dismiss"
-                    aria-label="Close"
+                    class="icon-btn dialog-dismiss"
+                    aria-label=${t('common.close')}
+                    title=${t('common.close')}
                     @click=${() => this.requestClose('dismiss')}
                   >
-                    ×
+                    ${uiIcon('close')}
                   </button>
                 `
               : nothing}

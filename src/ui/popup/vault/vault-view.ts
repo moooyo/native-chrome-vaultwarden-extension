@@ -36,10 +36,6 @@ const CATEGORIES: ReadonlyArray<{ id: CategoryId; key: MessageKey }> = [
 
 const DOTS = '••••••••••••';
 
-/** How many leading rows carry the staggered entrance delay. Rows past this animate immediately, so
- *  a long list (each row starts at opacity:0) never leaves later rows invisible for seconds. */
-const STAGGER_LIMIT = 12;
-
 /** Which category an item belongs to. TOTP is a facet of logins that carry a TOTP secret. */
 function matchesCategory(item: CipherSummary, category: CategoryId): boolean {
   switch (category) {
@@ -120,6 +116,7 @@ export class VwVaultView extends LitElement {
     extras: { attribute: false },
     status: { attribute: false },
     currentDomain: { type: String },
+    compactDetails: { type: Boolean, attribute: 'compact-details' },
   };
 
   declare items: CipherSummary[];
@@ -132,6 +129,8 @@ export class VwVaultView extends LitElement {
   declare extras: DetailExtras | undefined;
   declare status: DetailStatus | undefined;
   declare currentDomain: string;
+  /** Popup rows may expand inline; a workspace opens the adjacent detail pane instead. */
+  declare compactDetails: boolean;
 
   private i18n = new LocalizeController(this);
   private revealed = false;
@@ -159,6 +158,7 @@ export class VwVaultView extends LitElement {
     this.extras = undefined;
     this.status = undefined;
     this.currentDomain = '';
+    this.compactDetails = true;
   }
 
   static override styles = [
@@ -167,7 +167,7 @@ export class VwVaultView extends LitElement {
       :host { display:flex; flex-direction:column; min-height:0; flex:1; background:var(--vw-panel); }
       .search {
         display:flex; align-items:center; gap:9px; height:40px; margin:10px 14px 0; padding:0 13px;
-        border-radius:20px; background:var(--vw-fill); flex:none; transition:box-shadow var(--vw-dur-fast);
+        border:1px solid var(--vw-line-3); border-radius:10px; background:var(--vw-card); flex:none; transition:box-shadow var(--vw-dur-fast);
       }
       .search:focus-within { box-shadow:var(--vw-focus); }
       .search svg { width:17px; height:17px; color:var(--vw-text-2); flex:none; }
@@ -199,7 +199,6 @@ export class VwVaultView extends LitElement {
       }
       .chip:hover { background:var(--vw-row-hover); }
       .chip.on { background:var(--pc); color:var(--onpc); border-color:transparent; }
-      .chip.on::before { content:'✓'; font-size:11px; }
 
       .list { flex:1; min-height:0; overflow-y:auto; padding:0 8px 8px; scrollbar-width:thin; scrollbar-color:var(--vw-scrollbar) transparent; }
       .list::-webkit-scrollbar { width:6px; }
@@ -207,13 +206,13 @@ export class VwVaultView extends LitElement {
       .group-label { font-size:11px; font-weight:500; color:var(--vw-muted); padding:8px 9px 4px; }
       .group-label.main { padding-top:9px; }
 
-      .hero { margin:3px 4px 6px; padding:12px; border-radius:16px; background:linear-gradient(135deg, var(--pc), var(--sfc) 90%); }
+      .hero { margin:3px 4px 10px; padding:12px; border:1px solid var(--vw-line-1); border-radius:12px; background:var(--vw-fill); }
       .hero-head { display:flex; align-items:center; gap:9px; }
       .hero-site { width:34px; height:34px; display:grid; place-items:center; flex:none; border-radius:11px; background:var(--sf); color:var(--onpc); font-weight:500; }
       .hero-copy { min-width:0; flex:1; }
       .hero-domain { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--onpc); font-size:13px; font-weight:500; }
       .hero-meta { margin-top:1px; color:var(--vw-text-2); font-size:11px; }
-      .hero-accounts { margin:9px 0 10px; border-block:1px solid var(--vw-line-1); }
+      .hero-accounts { margin:9px 0 0; border-top:1px solid var(--vw-line-1); }
       .hero-account { display:flex; align-items:center; gap:4px; min-height:var(--vw-list-row-min, 46px); padding:2px; }
       .hero-account + .hero-account { border-top:1px solid var(--vw-line-1); }
       .hero-account-main {
@@ -230,11 +229,12 @@ export class VwVaultView extends LitElement {
       .hero-account .fill-pill { margin-right:5px; }
       .fill-pill { height:28px; padding:0 11px; border:0; border-radius:14px; background:var(--pc); color:var(--onpc); font:500 11.5px/1 var(--vw-font-ui); cursor:pointer; flex:none; }
       .fill-pill:hover { filter:brightness(.97); }
-      .row { display:flex; align-items:center; min-height:var(--vw-list-row-min, 46px); border-radius:12px; animation:mvStag .24s ease-out both; }
-      .row:hover, .row.selected { background:var(--vw-row-hover); }
+      .row { display:flex; align-items:center; width:100%; min-height:var(--vw-list-row-min, 52px); border-radius:8px; transition:background-color var(--vw-dur-fast); }
+      .row:hover { background:var(--vw-row-hover); }
+      .row.selected { background:var(--pc); box-shadow:inset 3px 0 0 var(--p); }
       .row-main {
         display:flex; align-items:center; gap:10px; flex:1; min-width:0; min-height:var(--vw-list-row-min, 46px); padding:var(--vw-list-row-padding-block, 5px) 8px;
-        border:0; border-radius:12px; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer;
+        appearance:none; border:0; border-radius:8px; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer;
       }
       .row-main[aria-disabled="true"] { cursor:default; }
       .tile { width:32px; height:32px; border-radius:10px; display:grid; place-items:center; color:#fff; font-size:13px; font-weight:500; flex:none; }
@@ -258,7 +258,7 @@ export class VwVaultView extends LitElement {
       .row-lifecycle:disabled { cursor:default; opacity:.55; }
       .row-lifecycle svg { width:14px; height:14px; }
       .chev { width:15px; height:15px; color:var(--vw-chevron); flex:none; display:inline-flex; transition:transform var(--vw-dur-fast); }
-      .row.selected .chev { transform:rotate(90deg); }
+      .row.expanded .chev { transform:rotate(90deg); }
 
       .empty { padding:48px 20px; text-align:center; color:var(--vw-muted); font-size:12.5px; }
       .card { margin:1px 4px 8px; padding:11px 13px; display:flex; flex-direction:column; gap:9px; border:0; border-radius:0 0 12px 12px; background:var(--sfcl); animation:mvGrow .15s ease-out; transform-origin:top; }
@@ -266,14 +266,14 @@ export class VwVaultView extends LitElement {
       .field-row { display:flex; align-items:center; gap:6px; }
       .field-val { flex:1; min-width:0; color:var(--vw-ink); font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .field-val.mono { font-family:var(--vw-font-mono); font-size:12px; }
-      .field-val.masked { filter:blur(4px); user-select:none; }
+      .field-val.masked { color:var(--vw-muted); letter-spacing:.08em; user-select:none; }
       .icon-sm { width:28px; height:28px; border:0; border-radius:9px; display:grid; place-items:center; color:var(--vw-muted); background:var(--sfc); cursor:pointer; flex:none; }
       .icon-sm:hover { background:var(--sfch); }
       .icon-sm svg { width:14px; height:14px; }
       .actions { display:flex; gap:7px; margin-top:2px; }
-      .btn-primary { flex:1; height:34px; border:0; border-radius:17px; background:var(--p); color:var(--onp); font:500 12px/1 var(--vw-font-ui); cursor:pointer; }
+      .btn-primary { flex:1; height:34px; border:0; border-radius:var(--vw-radius-control); background:var(--p); color:var(--onp); font:500 12px/1 var(--vw-font-ui); cursor:pointer; }
       .btn-primary:hover { background:var(--vw-primary-bg-hover); }
-      .btn-outline { height:34px; padding:0 14px; border:0; border-radius:17px; background:var(--pc); color:var(--onpc); font:500 12px/1 var(--vw-font-ui); cursor:pointer; }
+      .btn-outline { height:34px; padding:0 14px; border:1px solid var(--vw-line-3); border-radius:var(--vw-radius-control); background:var(--vw-card); color:var(--onpc); font:500 12px/1 var(--vw-font-ui); cursor:pointer; }
       .btn-outline:hover { filter:brightness(.97); }
       .btn-outline:only-child { flex:1; }
 
@@ -296,7 +296,7 @@ export class VwVaultView extends LitElement {
   }
 
   protected override willUpdate(changed: Map<string, unknown>): void {
-    if (changed.has('selectedCipherId') || changed.has('extras') || changed.has('mode')) {
+    if (changed.has('selectedCipherId') || changed.has('extras') || changed.has('mode') || changed.has('compactDetails')) {
       this.detailGeneration++;
       this.resetDetailState();
     }
@@ -307,9 +307,9 @@ export class VwVaultView extends LitElement {
   }
 
   protected override updated(changed: Map<string, unknown>): void {
-    if (changed.has('selectedCipherId') || changed.has('extras') || changed.has('mode')) {
+    if (changed.has('selectedCipherId') || changed.has('extras') || changed.has('mode') || changed.has('compactDetails')) {
       const item = this.selected();
-      if (this.mode === 'active'
+      if (this.compactDetails && this.mode === 'active'
         && item?.hasTotp
         && summaryAllowsCipherAccess(item, 'viewTotp')
         && this.extras) {
@@ -639,9 +639,7 @@ export class VwVaultView extends LitElement {
     return html`
       ${showSuggestions ? this.renderSuggestionGroup() : nothing}
       <div class="group-label main">${mainLabel}</div>
-      ${items.map((item, i) =>
-        this.renderItem(item, false, undefined, i < STAGGER_LIMIT ? `calc(${i} * 40ms + 120ms)` : undefined),
-      )}
+      ${items.map((item) => this.renderItem(item, false))}
     `;
   }
 
@@ -714,22 +712,24 @@ export class VwVaultView extends LitElement {
       : nothing;
   }
 
-  private renderItem(item: CipherSummary, isSuggestion: boolean, suggestion?: TabAutofillSuggestion, rowDelay?: string) {
-    if (isUnsupported(item)) return this.renderUnsupportedItem(item, rowDelay);
+  private renderItem(item: CipherSummary, isSuggestion: boolean, suggestion?: TabAutofillSuggestion) {
+    if (isUnsupported(item)) return this.renderUnsupportedItem(item);
 
-    const expanded = this.mode === 'active' && this.selectedCipherId === item.id;
+    const selected = this.selectedCipherId === item.id;
+    const expanded = this.compactDetails && this.mode === 'active' && selected;
     // Row navigation still opens protected detail, while an explicit Fill button records a continuation
     // that resumes automatically after the worker issues a one-time reprompt proof.
     const needsReprompt = item.reprompt === true || suggestion?.reprompt === true;
-    const needsFullDetail = needsReprompt || item.type === 5;
+    const needsFullDetail = !this.compactDetails || needsReprompt || item.type === 5;
     const title = itemTitle(item);
     return html`
       <div>
-        <div class="row ${expanded ? 'selected' : ''}" style=${rowDelay ? `animation-delay:${rowDelay}` : nothing}>
+        <div class="row ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}">
           <button
             type="button"
             class="row-main"
-            aria-expanded=${expanded ? 'true' : 'false'}
+            aria-expanded=${needsFullDetail ? nothing : String(expanded)}
+            aria-current=${!this.compactDetails && selected ? 'true' : nothing}
             @click=${() => {
               if (this.mode !== 'active' || needsFullDetail) this.emit('vw-item-open', { cipherId: item.id });
               else this.toggleItem(item.id);
@@ -757,7 +757,7 @@ export class VwVaultView extends LitElement {
                   : this.emit('vw-item-fill', { cipherId: item.id })}
               >${t('list.fill')}</button>`
             : nothing}
-          ${this.mode === 'active' && !needsFullDetail && !isSuggestion && item.type === 1
+          ${this.mode === 'active' && !needsFullDetail && expanded && !isSuggestion && item.type === 1
             ? html`
                 <button
                   type="button"
@@ -775,11 +775,11 @@ export class VwVaultView extends LitElement {
     `;
   }
 
-  private renderUnsupportedItem(item: CipherSummary, rowDelay?: string) {
+  private renderUnsupportedItem(item: CipherSummary) {
     const title = itemTitle(item);
     return html`
       <div>
-        <div class="row" style=${rowDelay ? `animation-delay:${rowDelay}` : nothing}>
+        <div class="row">
           <div class="row-main" aria-disabled="true">
             <span class="tile" style=${`background:${tileColor(item.id)}`}>${tileInitial(title)}</span>
             <span class="meta">

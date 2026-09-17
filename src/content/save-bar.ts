@@ -55,7 +55,7 @@ export function createSaveBar(options: SaveBarOptions): SaveBar {
     },
   };
 
-  // The bar positions itself via fixed CSS (top-center), so there is nothing to measure or reposition;
+  // The bar positions itself via fixed CSS (top-right), so there is nothing to measure or reposition;
   // rendering is synchronous, so the DOM is final on return.
   const draw = (): void => {
     surface.render(renderSaveBar(state, handlers));
@@ -83,7 +83,7 @@ export function createSaveBar(options: SaveBarOptions): SaveBar {
     state.view = 'saved';
     state.statusMessage = options.successMessage ?? '已保存到密屿';
     draw();
-    removeTimer = window.setTimeout(remove, 1000);
+    removeTimer = window.setTimeout(remove, 3000);
   }
 
   return { remove };

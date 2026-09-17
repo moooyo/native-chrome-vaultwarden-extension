@@ -2,7 +2,7 @@ import type {
   AutofillSecretPurpose,
   ContentStructuredAutofillTarget,
 } from '../messaging/protocol.js';
-import { normalizeFillRoles } from '../core/vault/fill-roles.js';
+import { normalizeFillRoles, type FillKind, type FillRole } from '../core/vault/fill-roles.js';
 import {
   isLoginCustomPlanDigest,
   parseLoginCustomTargetPlan,
@@ -385,24 +385,46 @@ function canonicalStructuredTarget(value: ContentStructuredAutofillTarget): Cont
     const roles = normalizeFillRoles(value.kind, value.roles);
     if (!roles || roles.length !== value.roles.length
         || roles.some((role, index) => role !== value.roles[index])) return undefined;
+    const selectedRoles = 'selectedRoles' in value
+      ? canonicalSelectedRoles(value.kind, value.selectedRoles, roles)
+      : undefined;
+    if ('selectedRoles' in value && !selectedRoles) return undefined;
     return Object.freeze({
       kind: value.kind,
       runtimeIncarnation,
       formId,
       generation,
       roles: Object.freeze([...roles]),
+      ...(selectedRoles === undefined ? {} : { selectedRoles }),
     });
   }
   const roles = normalizeFillRoles(value.kind, value.roles);
   if (!roles || roles.length !== value.roles.length
       || roles.some((role, index) => role !== value.roles[index])) return undefined;
+  const selectedRoles = 'selectedRoles' in value
+    ? canonicalSelectedRoles(value.kind, value.selectedRoles, roles)
+    : undefined;
+  if ('selectedRoles' in value && !selectedRoles) return undefined;
   return Object.freeze({
     kind: value.kind,
     runtimeIncarnation,
     formId,
     generation,
     roles: Object.freeze([...roles]),
+    ...(selectedRoles === undefined ? {} : { selectedRoles }),
   });
+}
+
+function canonicalSelectedRoles<Role extends FillRole>(
+  kind: FillKind,
+  value: unknown,
+  roles: readonly Role[],
+): readonly Role[] | undefined {
+  const selected = normalizeFillRoles(kind, value);
+  if (!Array.isArray(value) || !selected || selected.length !== value.length
+      || selected.some((role, index) => role !== value[index]
+        || !roles.some((structuralRole) => structuralRole === role))) return undefined;
+  return Object.freeze(roles.filter((role) => selected.includes(role)));
 }
 
 function copyGrant<SessionLease, AccountLease, PolicyLease>(

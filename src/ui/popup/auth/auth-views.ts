@@ -13,6 +13,7 @@ import type {
   PasswordHintEmailDetail,
   PasswordHintStatus,
 } from './password-hint-view.js';
+import { authIdentityStyles, renderAuthIdentity, type AuthIdentityDisplay } from './auth-identity.js';
 import {
   DEFAULT_MASTER_PASSWORD_MIN_LENGTH,
   MASTER_PASSWORD_HINT_MAX_LENGTH,
@@ -200,6 +201,7 @@ export class VwAuthViews extends LitElement {
     passwordHintEmail: { attribute: false },
     passwordHintStatus: { attribute: false },
     passwordHintMessage: { attribute: false },
+    identity: { attribute: false },
   };
 
   declare mode: AuthViewMode;
@@ -222,6 +224,7 @@ export class VwAuthViews extends LitElement {
   declare passwordHintEmail: string;
   declare passwordHintStatus: PasswordHintStatus | undefined;
   declare passwordHintMessage: string | undefined;
+  declare identity: AuthIdentityDisplay | undefined;
 
   private i18n = new LocalizeController(this);
 
@@ -251,11 +254,13 @@ export class VwAuthViews extends LitElement {
     this.passwordHintEmail = '';
     this.passwordHintStatus = undefined;
     this.passwordHintMessage = undefined;
+    this.identity = undefined;
   }
 
   static override styles = [
     themeTokens,
     controlStyles,
+    authIdentityStyles,
     css`
       :host {
         display: flex;
@@ -263,6 +268,7 @@ export class VwAuthViews extends LitElement {
         height: 100%;
         min-height: 0;
         overflow: hidden;
+        background: var(--vw-panel);
       }
 
       /* Shared column for login / register / two-factor ------------------------------------ */
@@ -272,19 +278,22 @@ export class VwAuthViews extends LitElement {
         overflow-y: auto;
         display: flex;
         flex-direction: column;
-        gap: 14px;
-        padding: 26px 28px;
+        gap: 20px;
+        padding: 24px 28px;
+        overflow-x: hidden;
         box-sizing: border-box;
+        animation: auth-enter 160ms ease-out;
       }
       .head {
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 8px;
       }
       .brand {
         display: flex;
         align-items: center;
         gap: 8px;
+        margin-bottom: 16px;
       }
       .brand-spacer {
         flex: 1;
@@ -293,8 +302,8 @@ export class VwAuthViews extends LitElement {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 28px;
-        height: 28px;
+        width: 32px;
+        height: 32px;
         border: none;
         border-radius: var(--vw-radius-chip);
         background: transparent;
@@ -325,33 +334,40 @@ export class VwAuthViews extends LitElement {
       }
       .title {
         margin: 0;
-        font-size: 16px;
+        font-size: 22px;
         font-weight: 600;
+        line-height: 1.35;
+        letter-spacing: -0.025em;
         color: var(--vw-ink);
       }
       .subtitle {
         margin: 0;
-        font-size: 12px;
+        font-size: 13px;
+        line-height: 1.55;
         color: var(--vw-muted);
       }
 
       form {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 16px;
+        min-width: 0;
       }
       .field {
         display: flex;
         flex-direction: column;
-        gap: 6px;
+        gap: 7px;
+        min-width: 0;
       }
       .field-label {
         font-size: 12px;
-        color: var(--vw-muted);
+        font-weight: 500;
+        color: var(--vw-text-2);
       }
       .hint {
         margin: 0;
         font-size: 12px;
+        line-height: 1.55;
         color: var(--vw-muted);
       }
       .full {
@@ -360,11 +376,11 @@ export class VwAuthViews extends LitElement {
 
       .select {
         width: 100%;
-        height: 36px;
-        padding: 0 10px;
-        border: 1px solid transparent;
+        height: 40px;
+        padding: 0 12px;
+        border: 1px solid var(--vw-line-3);
         border-radius: var(--vw-radius-control);
-        background: var(--vw-fill);
+        background: var(--vw-panel);
         color: var(--vw-ink);
         font-family: var(--vw-font-ui);
         font-size: 13px;
@@ -372,6 +388,7 @@ export class VwAuthViews extends LitElement {
       .select:focus {
         outline: none;
         border-color: var(--vw-accent);
+        box-shadow: var(--vw-focus);
       }
 
       .remember-row {
@@ -389,7 +406,7 @@ export class VwAuthViews extends LitElement {
         align-self: center;
         border: none;
         background: none;
-        padding: 2px 4px;
+        padding: 6px 4px;
         color: var(--vw-teal-text);
         font-family: var(--vw-font-ui);
         font-size: 12px;
@@ -398,141 +415,137 @@ export class VwAuthViews extends LitElement {
       .link:hover {
         text-decoration: underline;
       }
+      .link:focus-visible, .locked-logout:focus-visible, .pin-btn:focus-visible {
+        outline: none;
+        border-radius: var(--vw-radius-control);
+        box-shadow: var(--vw-focus);
+      }
       .link:disabled {
         opacity: 0.5;
         cursor: default;
         text-decoration: none;
       }
+      .alternate-methods {
+        border-top: 1px solid var(--vw-line-1);
+        padding-top: 14px;
+      }
+      .alternate-methods summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 32px;
+        color: var(--vw-text-2);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        list-style: none;
+      }
+      .alternate-methods summary::-webkit-details-marker { display: none; }
+      .alternate-methods summary::after { content: '+'; font-size: 18px; font-weight: 400; }
+      .alternate-methods[open] summary::after { content: '−'; }
+      .alternate-methods summary:focus-visible {
+        outline: none;
+        border-radius: var(--vw-radius-control);
+        box-shadow: var(--vw-focus);
+      }
+      .alternate-actions { display: grid; gap: 8px; padding-top: 10px; }
 
-      /* Locked (unlock) screen — the primary, pixel-specced surface ------------------------- */
+      /* The locked view shows identity context without suggesting that secret data is loaded. */
       .locked {
-        position:relative;
-        flex:1;
-        min-height:0;
-        overflow:hidden;
-        background:var(--vw-panel);
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+        background: var(--vw-panel);
       }
-      .vault-ghost { position:absolute; inset:18px 14px; display:flex; flex-direction:column; gap:10px; filter:blur(8px); opacity:.66; }
-      .ghost-head { height:40px; border-radius:20px; background:var(--vw-fill); }
-      .ghost-card { height:126px; border-radius:16px; background:linear-gradient(135deg, var(--pc), var(--sfc)); }
-      .ghost-row { height:48px; border-radius:12px; background:var(--vw-fill); }
-      .privacy-veil { position:absolute; inset:0; background:var(--veil); backdrop-filter:blur(18px) saturate(1.3); }
       .locked-inner {
-        position:relative;
-        z-index:1;
-        height:100%;
-        display:flex;
-        flex-direction:column;
-        align-items:center;
-        justify-content:center;
-        gap:12px;
-        padding:30px;
-        text-align:center;
-        animation:mvIn .22s ease-out;
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: safe center;
+        gap: 20px;
+        padding: 32px 28px;
+        box-sizing: border-box;
+        animation: auth-enter 160ms ease-out;
       }
+      .locked-head {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+      }
+      .locked-head vw-logo { margin-bottom: 8px; }
+      .locked .auth-identity { width: 100%; box-sizing: border-box; }
       .locked-title {
         margin: 0;
-        font-size: 16px;
-        font-weight: 500;
+        font-size: 24px;
+        font-weight: 600;
+        line-height: 1.3;
+        letter-spacing: -0.025em;
         color: var(--vw-ink);
       }
       .locked-sub {
-        margin:-7px 0 8px;
-        max-width:270px;
-        font-size:11.5px;
-        color:var(--vw-text-2);
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--vw-muted);
       }
       .locked-form {
-        display:flex;
-        flex-direction:row;
-        align-items:center;
-        gap:8px;
-        width:100%;
-        max-width:310px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        width: 100%;
       }
       .locked-input {
-        flex:1;
-        min-width:0;
-        height:42px;
-        padding:0 15px;
-        border:1px solid var(--vw-line-3);
-        border-radius:21px;
-        background:color-mix(in srgb, var(--vw-panel) 88%, transparent);
-        color:var(--vw-ink);
-        font:400 13px/1 var(--vw-font-ui);
+        width: 100%;
+        min-width: 0;
+        height: 42px;
+        padding: 0 12px;
+        box-sizing: border-box;
+        border: 1px solid var(--vw-line-3);
+        border-radius: var(--vw-radius-control);
+        background: var(--vw-panel);
+        color: var(--vw-ink);
+        font: 400 13px/1 var(--vw-font-ui);
       }
       .locked-input::placeholder {
         color: var(--vw-placeholder);
       }
       .locked-input:focus {
         outline: none;
-        border-color:var(--vw-accent);
-        box-shadow:var(--vw-focus);
+        border-color: var(--vw-accent);
+        box-shadow: var(--vw-focus);
       }
       .locked-btn {
-        display:grid;
-        place-items:center;
-        width:42px;
-        height:42px;
-        flex:none;
-        border:0;
-        border-radius:50%;
-        background:var(--p);
-        color:var(--onp);
-        font:500 0/1 var(--vw-font-ui);
-        cursor:pointer;
-        transition:background-color var(--vw-dur-fast);
+        width: 100%;
+        min-height: 42px;
       }
-      .locked-btn::after { content:'→'; font-size:18px; }
-      .locked-btn:hover:not(:disabled) {
-        background: var(--vw-primary-bg-hover);
-      }
-      .locked-btn:disabled {
-        opacity: 0.5;
-        cursor: default;
-      }
-
       .pin-row {
-        display:flex;
-        gap:8px;
-        width:100%;
-        max-width:310px;
-        margin-top:2px;
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+        width: 100%;
+        padding-top: 18px;
+        border-top: 1px solid var(--vw-line-1);
+      }
+      .pin-row .field {
+        flex: 1;
       }
       .pin-input {
         flex: 1;
       }
       .pin-btn {
         flex: none;
-        width:42px;
-        height:42px;
-        border-radius: 50%;
-        border:0;
-        background:var(--p);
-        color:var(--onp);
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        transition: background-color var(--vw-dur-fast);
-      }
-      .pin-btn:hover:not(:disabled) {
-        background:var(--vw-primary-bg-hover);
-      }
-      .pin-btn:disabled {
-        opacity: 0.5;
-        cursor: default;
-      }
-      .pin-btn svg {
-        width: 18px;
-        height: 18px;
+        min-height: 42px;
       }
 
       .locked-logout {
-        margin-top:4px;
+        align-self: center;
+        margin-top: 0;
         border: none;
         background: none;
-        padding: 2px 4px;
+        padding: 6px 4px;
         color:var(--vw-text-2);
         font-family: var(--vw-font-ui);
         font-size: 12px;
@@ -548,8 +561,20 @@ export class VwAuthViews extends LitElement {
       }
 
       .status {
-        width:100%;
-        max-width:310px;
+        width: 100%;
+        min-width: 0;
+      }
+      @keyframes auth-enter {
+        from { opacity: 0; transform: translateY(4px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .auth, .locked-inner { animation: none; }
+        .head-icon { transition: none; }
+      }
+      @media (max-width: 340px) {
+        .auth, .locked-inner { padding-right: 18px; padding-left: 18px; }
+        .pin-row { flex-direction: column; align-items: stretch; }
       }
     `,
   ];
@@ -606,6 +631,7 @@ export class VwAuthViews extends LitElement {
         <h1 class="title">${title}</h1>
         ${subtitle ? html`<p class="subtitle">${subtitle}</p>` : nothing}
       </div>
+      ${renderAuthIdentity(this.identity)}
     `;
   }
 
@@ -644,7 +670,7 @@ export class VwAuthViews extends LitElement {
 
   private renderRememberForgetSlot() {
     if (this.deviceForgotten) {
-      return html`<p class="hint">此设备已不再被记住。<!-- TODO i18n --></p>`;
+      return html`<p class="hint">${t('auth.deviceForgotten')}</p>`;
     }
     if (this.deviceRemembered) {
       return html`
@@ -672,7 +698,7 @@ export class VwAuthViews extends LitElement {
     `;
     return html`
       <div class="auth">
-        ${this.renderBrandHead(t('auth.loginTitle'), '登录到你的密钥库', settingsGear)/* TODO i18n subtitle */}
+        ${this.renderBrandHead(t('auth.loginTitle'), t('auth.loginSubtitle'), settingsGear)}
         <form @submit=${(event: Event) => {
           event.preventDefault();
           if (this.ssoRequired) this.startSsoLogin();
@@ -703,28 +729,41 @@ export class VwAuthViews extends LitElement {
                 </label>
                 <button type="submit" class="btn primary full" ?disabled=${this.pending}>${t('auth.login')}</button>
               `}
-          <button
-            type="button"
-            class=${`btn ${this.ssoRequired ? 'primary' : 'outline'} full`}
-            data-sso-login
-            ?disabled=${this.pending}
-            @click=${() => this.startSsoLogin()}
-          >${uiIcon('globe')}<span>${t('auth.sso.start')}</span></button>
-          ${this.ssoRequired ? nothing : html`
+          ${this.ssoRequired ? html`
             <button
               type="button"
-              class="btn outline full"
-              data-account-passkey
+              class="btn primary full"
+              data-sso-login
               ?disabled=${this.pending}
-              @click=${() => this.emit('vw-auth-account-passkey-start')}
-            >${uiIcon('passkey')}<span>${t('auth.accountPasskey.start')}</span></button>
-            <button
-              type="button"
-              class="btn outline full"
-              data-device-login
-              ?disabled=${this.pending}
-              @click=${() => this.startDeviceLogin()}
-            >${uiIcon('idcard')}<span>${t('auth.deviceLogin.start')}</span></button>
+              @click=${() => this.startSsoLogin()}
+            >${uiIcon('globe')}<span>${t('auth.sso.start')}</span></button>
+          ` : html`
+            <details class="alternate-methods">
+              <summary>${t('auth.otherLoginMethods')}</summary>
+              <div class="alternate-actions">
+                <button
+                  type="button"
+                  class="btn outline full"
+                  data-account-passkey
+                  ?disabled=${this.pending}
+                  @click=${() => this.emit('vw-auth-account-passkey-start')}
+                >${uiIcon('passkey')}<span>${t('auth.accountPasskey.start')}</span></button>
+                <button
+                  type="button"
+                  class="btn outline full"
+                  data-sso-login
+                  ?disabled=${this.pending}
+                  @click=${() => this.startSsoLogin()}
+                >${uiIcon('globe')}<span>${t('auth.sso.start')}</span></button>
+                <button
+                  type="button"
+                  class="btn outline full"
+                  data-device-login
+                  ?disabled=${this.pending}
+                  @click=${() => this.startDeviceLogin()}
+                >${uiIcon('idcard')}<span>${t('auth.deviceLogin.start')}</span></button>
+              </div>
+            </details>
           `}
           ${this.renderError()}
         </form>
@@ -1150,30 +1189,32 @@ export class VwAuthViews extends LitElement {
   private renderPinUnlock() {
     return html`
       <div class="pin-row">
-        <input
-          id="pinUnlockInput"
-          class="locked-input pin-input"
-          type="password"
-          autocomplete="off"
-          maxlength=${MAX_PIN_UTF16_CODE_UNITS}
-          placeholder=${t('auth.pin')}
-          ?disabled=${this.pending}
-          @keydown=${(event: KeyboardEvent) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              this.submitPinUnlock();
-            }
-          }}
-        />
+        <label class="field" for="pinUnlockInput">
+          <span class="field-label">${t('auth.pin')}</span>
+          <input
+            id="pinUnlockInput"
+            class="locked-input pin-input"
+            type="password"
+            autocomplete="off"
+            maxlength=${MAX_PIN_UTF16_CODE_UNITS}
+            ?disabled=${this.pending}
+            @keydown=${(event: KeyboardEvent) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                this.submitPinUnlock();
+              }
+            }}
+          />
+        </label>
         <button
           type="button"
-          class="pin-btn"
+          class="btn outline pin-btn"
           aria-label=${t('auth.usePin')}
           title=${t('auth.usePin')}
           ?disabled=${this.pending}
           @click=${() => this.submitPinUnlock()}
         >
-          ${uiIcon('fingerprint')}
+          ${t('auth.usePin')}
         </button>
       </div>
     `;
@@ -1181,14 +1222,14 @@ export class VwAuthViews extends LitElement {
 
   private renderUnlock() {
     return html`
-      <div class="locked">
-        <div class="vault-ghost" aria-hidden="true"><span class="ghost-head"></span><span class="ghost-card"></span><span class="ghost-row"></span><span class="ghost-row"></span><span class="ghost-row"></span></div>
-        <div class="privacy-veil" aria-hidden="true"></div>
+      <div class="locked" aria-busy=${this.pending ? 'true' : 'false'}>
         <div class="locked-inner">
-          <vw-logo variant="hero"></vw-logo>
-          <h1 class="locked-title">${t('auth.welcomeBack')}</h1>
-          <p class="locked-sub">${t('auth.lockedPrivacy')}</p>
-          ${this.pinEnabled ? this.renderPinUnlock() : nothing}
+          <div class="locked-head">
+            <vw-logo variant="hero"></vw-logo>
+            <h1 class="locked-title">${t('auth.welcomeBack')}</h1>
+            <p class="locked-sub">${t('auth.lockedPrivacy')}</p>
+          </div>
+          ${renderAuthIdentity(this.identity)}
           <form
             class="locked-form"
             aria-label=${t('auth.masterPasswordUnlock')}
@@ -1197,21 +1238,24 @@ export class VwAuthViews extends LitElement {
               this.emit('vw-auth-unlock-submit', { masterPassword: this.inputValue('unlockPassword') } satisfies UnlockSubmitDetail);
             }}
           >
-            <input
-              id="unlockPassword"
-              class="locked-input"
-              type="password"
-              autocomplete="current-password"
-              placeholder=${t('auth.masterPasswordUnlock')}
-              required
-              ?disabled=${this.pending}
-            />
-            <button type="submit" class="locked-btn" title=${t('auth.unlock')} aria-label=${t('auth.unlock')} ?disabled=${this.pending}>${t('auth.unlock')}</button>
+            <label class="field" for="unlockPassword">
+              <span class="field-label">${t('auth.masterPassword')}</span>
+              <input
+                id="unlockPassword"
+                class="locked-input"
+                type="password"
+                autocomplete="current-password"
+                required
+                ?disabled=${this.pending}
+              />
+            </label>
+            <button type="submit" class="btn primary locked-btn" title=${t('auth.unlock')} aria-label=${t('auth.unlock')} ?disabled=${this.pending}>${t('auth.unlock')}</button>
           </form>
           ${this.error ? html`<div class="status">${this.renderError()}</div>` : nothing}
           ${this.notice
             ? html`<div class="status"><vw-status-message tone="info" .icon=${'passkey'} .message=${this.notice}></vw-status-message></div>`
             : nothing}
+          ${this.pinEnabled ? this.renderPinUnlock() : nothing}
           <button type="button" class="locked-logout" ?disabled=${this.pending} @click=${() => this.emit('vw-auth-logout')}>
             ${t('auth.logout')}
           </button>
@@ -1291,6 +1335,7 @@ export class VwAuthViews extends LitElement {
       case 'passwordHint':
         return html`
           <vw-password-hint-view
+            .identity=${this.identity}
             .email=${this.passwordHintEmail}
             .pending=${this.pending}
             .error=${this.error}

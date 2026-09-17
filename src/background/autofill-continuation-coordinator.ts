@@ -270,21 +270,7 @@ export class AutofillContinuationCoordinator {
       frameRuntimeIncarnation: grant.runtimeIncarnation,
       frameUrl: grant.frameUrl,
     };
-    const binding = grant.binding.purpose === 'login'
-      ? {
-          purpose: grant.binding.purpose,
-          runtimeIncarnation: grant.runtimeIncarnation,
-          customPlanDigest: grant.binding.customPlanDigest,
-        } as const
-      : grant.binding.purpose === 'totp'
-        ? { purpose: grant.binding.purpose, runtimeIncarnation: grant.runtimeIncarnation } as const
-        : {
-            purpose: grant.binding.purpose,
-            runtimeIncarnation: grant.runtimeIncarnation,
-            formId: grant.binding.structuredTarget.formId,
-            generation: grant.binding.structuredTarget.generation,
-            roles: grant.binding.structuredTarget.roles,
-          } as const;
+    const binding = keyboardContinuationBinding(grant.binding, grant.runtimeIncarnation);
     return this.#stage(source, {
       kind: 'keyboard_reprompt',
       cipherId,
@@ -433,6 +419,7 @@ export class AutofillContinuationCoordinator {
         || envelope.action.binding.runtimeIncarnation !== callerRuntimeIncarnation
         || proof.runtimeIncarnation !== callerRuntimeIncarnation
         || !liveKeyboardBindingMatchesRuntime(proof.binding, callerRuntimeIncarnation)
+        || !sameKeyboardContinuationBinding(proof.binding, callerRuntimeIncarnation, envelope.action.binding)
         || !await urlMatchesDigest(caller.url, envelope.source.frameUrlDigest)
         || !await this.#sourceCurrent(envelope.source)) return undefined;
     try { this.#assertFreshAuthorities(proof); } catch { return undefined; }
@@ -675,7 +662,8 @@ export class AutofillContinuationCoordinator {
     if (!pendingBinding || pendingBinding.expiresAt <= (this.#deps.now?.() ?? Date.now())) return;
     if (pendingBinding.runtimeIncarnation !== frameRuntimeIncarnation
         || envelope.action.binding.runtimeIncarnation !== frameRuntimeIncarnation
-        || !liveKeyboardBindingMatchesRuntime(pendingBinding.binding, frameRuntimeIncarnation)) return;
+        || !liveKeyboardBindingMatchesRuntime(pendingBinding.binding, frameRuntimeIncarnation)
+        || !sameKeyboardContinuationBinding(pendingBinding.binding, frameRuntimeIncarnation, envelope.action.binding)) return;
     this.#pruneKeyboardProofs();
     this.#keyboardProofs.set(envelope.continuationId, Object.freeze({
       envelope,
@@ -1161,6 +1149,34 @@ function liveKeyboardBindingMatchesRuntime(
 ): boolean {
   return (binding.purpose !== 'card' && binding.purpose !== 'identity')
     || binding.structuredTarget.runtimeIncarnation === runtimeIncarnation;
+}
+
+function keyboardContinuationBinding(
+  binding: KeyboardGrantValue['binding'],
+  runtimeIncarnation: string,
+): Extract<AutofillContinuationAction, { kind: 'keyboard_reprompt' }>['binding'] {
+  if (binding.purpose === 'login') {
+    return { purpose: binding.purpose, runtimeIncarnation, customPlanDigest: binding.customPlanDigest };
+  }
+  if (binding.purpose === 'totp') return { purpose: binding.purpose, runtimeIncarnation };
+  const target = binding.structuredTarget;
+  return {
+    purpose: binding.purpose,
+    runtimeIncarnation,
+    formId: target.formId,
+    generation: target.generation,
+    roles: [...target.roles],
+    ...(target.selectedRoles === undefined ? {} : { selectedRoles: [...target.selectedRoles] }),
+  };
+}
+
+/** The durable confirmation and the live one-time proof must authorize the same field selection. */
+function sameKeyboardContinuationBinding(
+  binding: KeyboardGrantValue['binding'],
+  runtimeIncarnation: string,
+  expected: Extract<AutofillContinuationAction, { kind: 'keyboard_reprompt' }>['binding'],
+): boolean {
+  return canonicalJson(keyboardContinuationBinding(binding, runtimeIncarnation)) === canonicalJson(expected);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

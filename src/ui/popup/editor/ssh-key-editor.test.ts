@@ -67,6 +67,31 @@ beforeEach(() => setLocale('en', false));
 afterEach(() => document.body.replaceChildren());
 
 describe('vw-ssh-key-editor create', () => {
+  it('keeps saving outside the scroll area and focuses the missing required name', async () => {
+    const el = await mount();
+    const save = q<HTMLButtonElement>(el, '[data-create-ssh]');
+    expect(save.closest('footer')).not.toBeNull();
+    expect(save.closest('main')).toBeNull();
+    expect(el.shadowRoot!.querySelectorAll('form')).toHaveLength(1);
+    save.click();
+    await el.updateComplete;
+    expect(el.shadowRoot!.activeElement).toBe(q(el, '[data-name]'));
+    expect(q(el, '[data-name]').getAttribute('aria-invalid')).toBe('true');
+    expect(q(el, 'footer vw-status-message')).not.toBeNull();
+  });
+
+  it('opens saved-location settings when an available vault must be chosen', async () => {
+    const el = await mount();
+    el.personalCreationAllowed = false;
+    await el.updateComplete;
+    input(el, '[data-name]', 'Deploy key');
+    expect(q<HTMLDetailsElement>(el, '[data-ssh-settings]').open).toBe(false);
+    q<HTMLButtonElement>(el, '[data-create-ssh]').click();
+    await el.updateComplete;
+    expect(q<HTMLDetailsElement>(el, '[data-ssh-settings]').open).toBe(true);
+    expect(el.shadowRoot!.activeElement).toBe(q(el, '[data-create-vault]'));
+  });
+
   it('emits a dedicated generate command without private key material', async () => {
     const el = await mount();
     input(el, '[data-name]', 'Deploy key');
@@ -219,6 +244,26 @@ describe('vw-ssh-key-editor create', () => {
 });
 
 describe('vw-ssh-key-editor edit', () => {
+  it('names the persisted item, owner, and fingerprint in replacement confirmation', async () => {
+    const el = await mount('edit');
+    el.summary = sshSummary({ organizationId: 'org-1', collectionIds: ['collection-1'] });
+    el.collections = [{ id: 'collection-1', name: 'Infrastructure', organizationId: 'org-1', canAssignItems: true }];
+    el.orgPermissions = [{ id: 'org-1', name: 'Platform', canCreateCollections: false, canEditCollections: false, canDeleteCollections: false, canManageCollections: false }];
+    await el.updateComplete;
+    input(el, '[data-name]', 'Unsaved new name');
+    input(el, '[data-private-key]', 'PRIVATE-REPLACEMENT');
+    q<HTMLButtonElement>(el, '[data-replace-key]').click();
+    await el.updateComplete;
+    const dialog = q<HTMLElement & { heading: string }>(el, 'vw-dialog');
+    expect(dialog.heading).toBe('Replace the key for Deploy key?');
+    expect(dialog.textContent).toContain('Platform');
+    expect(dialog.textContent).toContain('Infrastructure');
+    expect(dialog.textContent).toContain('SHA256:test');
+    expect(dialog.textContent).not.toContain('PRIVATE-REPLACEMENT');
+    expect(dialog.textContent).not.toContain('Unsaved new name');
+    expect(q<HTMLButtonElement>(el, '[data-confirm-replace]').textContent).toBe('Replace key for Deploy key');
+  });
+
   it('emits metadata without any private key property', async () => {
     const el = await mount('edit');
     const received = vi.fn();

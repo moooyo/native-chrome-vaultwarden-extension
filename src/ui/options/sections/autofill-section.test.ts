@@ -50,6 +50,53 @@ describe('vw-autofill-section', () => {
     setLocale('zh-CN', false);
   });
 
+  it('keeps website drafts while switching task tabs with the keyboard', async () => {
+    const el = await mount();
+    q<HTMLButtonElement>(el, '[data-tab="rules"]').click();
+    await el.updateComplete;
+    const input = q<HTMLTextAreaElement>(el, '[data-blocked-domains]');
+    input.value = 'draft.example';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    q<HTMLButtonElement>(el, '[data-tab="rules"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+    await el.updateComplete;
+    expect(q(el, '[data-tab="passkeys"]').getAttribute('aria-selected')).toBe('true');
+    expect(q(el, '[data-tab="rules"]').getAttribute('tabindex')).toBe('-1');
+    expect(q<HTMLElement>(el, '[data-blocked-domains]').closest('vw-setting-card')?.hidden).toBe(true);
+    q<HTMLButtonElement>(el, '[data-tab="rules"]').click();
+    await el.updateComplete;
+    expect(q<HTMLTextAreaElement>(el, '[data-blocked-domains]').value).toBe('draft.example');
+  });
+
+  it('keeps HTTP authentication off until an allowed origin is saved', async () => {
+    const el = await mount();
+    const save = vi.fn();
+    el.addEventListener('vw-http-auth-save', save);
+    q<HTMLButtonElement>(el, '[data-tab="http"]').click();
+    await el.updateComplete;
+    expect(q<HTMLElement & { disabled: boolean }>(el, '[data-http-auth]').disabled).toBe(true);
+    expect(q(el, '[data-http-auth-empty-hint]')).toBeTruthy();
+    q(el, '[data-http-auth]').dispatchEvent(new CustomEvent('vw-toggle-change', { detail: { checked: true } }));
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('retries a failed save without changing the currently effective policy', async () => {
+    const el = await mount({ inlineSuggestions: true });
+    const save = vi.fn();
+    el.addEventListener('vw-autofill-save', (event) => save((event as CustomEvent<AutofillSaveDetail>).detail));
+    q(el, '[data-inline]').dispatchEvent(new CustomEvent('vw-toggle-change', { detail: { checked: false } }));
+    el.pending = true;
+    await el.updateComplete;
+    expect(q(el, '.save-feedback').getAttribute('data-state')).toBe('saving');
+    expect(q<HTMLElement & { checked: boolean }>(el, '[data-inline]').checked).toBe(true);
+    el.pending = false;
+    el.status = { tone: 'danger', message: 'Save failed' };
+    await el.updateComplete;
+    q<HTMLButtonElement>(el, '[data-retry-save]').click();
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls[1]?.[0]).toEqual(save.mock.calls[0]?.[0]);
+    expect(el.inlineSuggestions).toBe(true);
+  });
+
   it('renders the complete controlled policy', async () => {
     const el = await mount({ inlineSuggestions: false, pageLoadFill: true });
     expect(q(el, '[data-strategy]')).toBeTruthy();

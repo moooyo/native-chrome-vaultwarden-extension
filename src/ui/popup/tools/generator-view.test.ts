@@ -759,12 +759,13 @@ describe('vw-generator-view copy, history and back', () => {
     const el = await mount({ history: [{ generatedAt: 1, type: 'password', value: 'old-secret' }] });
     const clear = vi.fn();
     el.addEventListener('vw-history-clear', clear);
-    const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
-    Object.defineProperty(window, 'confirm', { value: confirm, configurable: true });
-
     await click(el, '[data-history-clear]');
     expect(clear).not.toHaveBeenCalled();
+    await click(el, '[data-history-clear-cancel]');
+    expect(clear).not.toHaveBeenCalled();
     await click(el, '[data-history-clear]');
+    expect(clear).not.toHaveBeenCalled();
+    await click(el, '[data-history-clear-confirm]');
     expect(clear).toHaveBeenCalledOnce();
   });
 });

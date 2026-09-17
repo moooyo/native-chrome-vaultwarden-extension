@@ -107,7 +107,7 @@ export class VwVaultFilters extends LitElement {
       .tabs {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        height: 34px;
+        height: 40px;
         border-bottom: 1px solid var(--vw-line-1);
       }
       .tab {
@@ -142,7 +142,7 @@ export class VwVaultFilters extends LitElement {
         align-items: center;
         justify-content: space-between;
         min-height: 34px;
-        padding: 4px 10px 4px 12px;
+        padding: 7px 12px;
         border-bottom: 1px solid var(--vw-line-1);
       }
       .manage-copy {
@@ -183,7 +183,7 @@ export class VwVaultFilters extends LitElement {
       .filter-row {
         display: flex;
         align-items: center;
-        min-height: 34px;
+        min-height: 40px;
         border-bottom: 1px solid var(--vw-line-1);
       }
       .filter-row:last-child {
@@ -198,12 +198,13 @@ export class VwVaultFilters extends LitElement {
         align-items: center;
         gap: 8px;
         min-width: 0;
-        min-height: 33px;
+        min-height: 39px;
         padding: 0 12px;
         border: 0;
+        appearance: none;
         background: transparent;
         color: var(--vw-text-2);
-        font: 400 12px/1.2 var(--vw-font-ui);
+        font: 400 12.5px/1.3 var(--vw-font-ui);
         text-align: left;
         cursor: pointer;
       }
@@ -229,6 +230,7 @@ export class VwVaultFilters extends LitElement {
         height: 16px;
       }
       .row-name {
+        flex: 1;
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
